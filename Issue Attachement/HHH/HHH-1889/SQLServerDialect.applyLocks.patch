@@ -1,0 +1,410 @@
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/Dialect.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/Dialect.java	(revision 10842)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -37,6 +37,7 @@
+ import org.hibernate.sql.ANSICaseFragment;
+ import org.hibernate.sql.ANSIJoinFragment;
+ import org.hibernate.sql.CaseFragment;
++import org.hibernate.sql.ForUpdateFragment;
+ import org.hibernate.sql.JoinFragment;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ReflectHelper;
+@@ -1427,4 +1428,18 @@
+ 		return "";
+ 	}
+ 
++	/**
++	 * Modifies the given SQL by applying the appropriate
++	 * updates for the specified lock modes and key columns.
++	 *
++	 * @param sql the SQL string to modify
++	 * @param aliasedLockModes a map of lock modes indexed by aliased table names.
++	 * @param keyColumnNames a map of key columns indexed by aliased table names.
++	 * @return the modified SQL string.
++	 */
++	public String applyLocksToSql(String sql, Map aliasedLockModes, Map keyColumnNames)
++	{
++		return sql + new ForUpdateFragment( this, aliasedLockModes, keyColumnNames ).toFragmentString();
++	}
++
+ }
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/SQLServerDialect.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/SQLServerDialect.java	(revision 10842)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/dialect/SQLServerDialect.java	(working copy)
+@@ -2,18 +2,13 @@
+ package org.hibernate.dialect;
+ 
+ import java.sql.Types;
+-import java.util.List;
+-import java.util.ArrayList;
++import java.util.Map;
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.LockMode;
+-import org.hibernate.QueryException;
+-import org.hibernate.engine.Mapping;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.type.Type;
++import org.hibernate.sql.InlineUpdateLockModifier;
+ import org.hibernate.dialect.function.SQLFunctionTemplate;
+ import org.hibernate.dialect.function.StandardSQLFunction;
+-import org.hibernate.dialect.function.SQLFunction;
+ import org.hibernate.dialect.function.AnsiTrimEmulationFunction;
+ 
+ /**
+@@ -111,4 +106,10 @@
+ 		return "select current_timestamp";
+ 	}
+ 
++	public String applyLocksToSql(String sql, Map aliasedLockModes,
++		Map keyColumnNames)
++	{
++		return new InlineUpdateLockModifier()
++			.applyLocks(this, aliasedLockModes, keyColumnNames, sql);
++	}
+ }
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/sql/InlineUpdateLockModifier.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/sql/InlineUpdateLockModifier.java	(revision 0)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/sql/InlineUpdateLockModifier.java	(revision 0)
+@@ -0,0 +1,49 @@
++package org.hibernate.sql;
++
++import java.util.Iterator;
++import java.util.Map;
++import java.util.Map.Entry;
++
++import org.hibernate.LockMode;
++import org.hibernate.dialect.Dialect;
++
++/**
++ * Applies inline update lock hints for databases that require lock hints
++ * connected to the table.
++ */
++public class InlineUpdateLockModifier
++{
++
++	private static final String SPACE = " ";
++
++	/**
++	 * Applies the appropriate lock hint to each alias in the table.
++	 *
++	 * @param dialect The dialect which provides the lock hints.
++	 * @param aliasedLockModes a map of lock modes indexed by table aliases.
++	 * @param keyColumnNames a map of primary key column names indexed by table aliases.
++	 * @param sql the SQL string to be modified.
++	 * @return the modified SQL string.
++	 */
++	public String applyLocks(Dialect dialect, Map aliasedLockModes, Map keyColumnNames, String sql)
++	{
++		Iterator aliasedLocksIter = aliasedLockModes.entrySet().iterator();
++		StringBuffer buffer = new StringBuffer(sql);
++		while (aliasedLocksIter.hasNext())
++		{
++			final Entry entry = (Entry) aliasedLocksIter.next();
++			final LockMode lockMode = (LockMode) entry.getValue();
++			if ( lockMode.greaterThan(LockMode.READ) ) {
++				final String alias = (String) entry.getKey();
++				// KLUDGE: Use regular expressions
++				final String pattern = SPACE + alias + SPACE;
++				int index = buffer.indexOf(pattern);
++				if (index > -1) {
++					buffer.replace(++index, index+alias.length(), dialect.appendLockHint(lockMode, alias));
++				}
++			}
++		}
++		return buffer.toString();
++	}
++
++}
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/hql/classic/QueryTranslatorImpl.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/hql/classic/QueryTranslatorImpl.java	(revision 10842)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/hql/classic/QueryTranslatorImpl.java	(working copy)
+@@ -40,7 +40,6 @@
+ import org.hibernate.persister.entity.Loadable;
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.persister.entity.Queryable;
+-import org.hibernate.sql.ForUpdateFragment;
+ import org.hibernate.sql.JoinFragment;
+ import org.hibernate.sql.QuerySelect;
+ import org.hibernate.transform.ResultTransformer;
+@@ -245,7 +244,7 @@
+ 	public Type[] getReturnTypes() {
+ 		return actualReturnTypes;
+ 	}
+-	
++
+ 	public String[] getReturnAliases() {
+ 		// return aliases not supported in classic translator!
+ 		return NO_RETURN_ALIASES;
+@@ -917,11 +916,11 @@
+ 
+ 		}
+ 		catch ( SQLException sqle ) {
+-			throw JDBCExceptionHelper.convert( 
++			throw JDBCExceptionHelper.convert(
+ 					getFactory().getSQLExceptionConverter(),
+ 					sqle,
+ 					"could not execute query using iterate",
+-					getSQLString() 
++					getSQLString()
+ 				);
+ 		}
+ 
+@@ -1031,7 +1030,7 @@
+ 					keyColumnNames.put( names[i], persisters[i].getIdentifierColumnNames() );
+ 				}
+ 			}
+-			result = sql + new ForUpdateFragment( dialect, aliasedLockModes, keyColumnNames ).toFragmentString();
++			result = dialect.applyLocksToSql(sql, aliasedLockModes, keyColumnNames);
+ 		}
+ 		logQuery( queryString, result );
+ 		return result;
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/hql/QueryLoader.java	(revision 10846)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/hql/QueryLoader.java	(working copy)
+@@ -182,7 +182,7 @@
+ 			}
+ 		}
+ 
+-		//NONE, because its the requested lock mode, not the actual! 
++		//NONE, because its the requested lock mode, not the actual!
+ 		defaultLockModes = ArrayHelper.fillArray(LockMode.NONE, size);
+ 
+ 	}
+@@ -279,7 +279,7 @@
+ 			for ( int i = 0; i < entityAliases.length; i++ ) {
+ 				LockMode lockMode = (LockMode) lockModes.get( entityAliases[i] );
+ 				if ( lockMode == null ) {
+-					//NONE, because its the requested lock mode, not the actual! 
++					//NONE, because its the requested lock mode, not the actual!
+ 					lockMode = LockMode.NONE;
+ 				}
+ 				lockModeArray[i] = lockMode;
+@@ -321,7 +321,7 @@
+ 				}
+ 			}
+ 
+-			return sql + new ForUpdateFragment( dialect, aliasedLockModes, keyColumnNames ).toFragmentString();
++			return dialect.applyLocksToSql(sql, aliasedLockModes, keyColumnNames);
+ 
+ 		}
+ 	}
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/criteria/CriteriaLoader.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/criteria/CriteriaLoader.java	(revision 10842)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/criteria/CriteriaLoader.java	(working copy)
+@@ -21,7 +21,6 @@
+ import org.hibernate.loader.OuterJoinLoader;
+ import org.hibernate.persister.entity.Loadable;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+-import org.hibernate.sql.ForUpdateFragment;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.Type;
+ 
+@@ -33,8 +32,8 @@
+  */
+ public class CriteriaLoader extends OuterJoinLoader {
+ 
+-	//TODO: this class depends directly upon CriteriaImpl, 
+-	//      in the impl package ... add a CriteriaImplementor 
++	//TODO: this class depends directly upon CriteriaImpl,
++	//      in the impl package ... add a CriteriaImplementor
+ 	//      interface
+ 
+ 	//NOTE: unlike all other Loaders, this one is NOT
+@@ -48,49 +47,49 @@
+ 	private final String[] userAliases;
+ 
+ 	public CriteriaLoader(
+-			final OuterJoinLoadable persister, 
+-			final SessionFactoryImplementor factory, 
+-			final CriteriaImpl criteria, 
++			final OuterJoinLoadable persister,
++			final SessionFactoryImplementor factory,
++			final CriteriaImpl criteria,
+ 			final String rootEntityName,
+ 			final Map enabledFilters)
+ 	throws HibernateException {
+ 		super(factory, enabledFilters);
+ 
+ 		translator = new CriteriaQueryTranslator(
+-				factory, 
+-				criteria, 
+-				rootEntityName, 
++				factory,
++				criteria,
++				rootEntityName,
+ 				CriteriaQueryTranslator.ROOT_SQL_ALIAS
+ 			);
+ 
+ 		querySpaces = translator.getQuerySpaces();
+-		
++
+ 		CriteriaJoinWalker walker = new CriteriaJoinWalker(
+-				persister, 
++				persister,
+ 				translator,
+-				factory, 
+-				criteria, 
+-				rootEntityName, 
++				factory,
++				criteria,
++				rootEntityName,
+ 				enabledFilters
+ 			);
+ 
+ 		initFromWalker(walker);
+-		
++
+ 		userAliases = walker.getUserAliases();
+ 		resultTypes = walker.getResultTypes();
+ 
+ 		postInstantiate();
+ 
+ 	}
+-	
+-	public ScrollableResults scroll(SessionImplementor session, ScrollMode scrollMode) 
++
++	public ScrollableResults scroll(SessionImplementor session, ScrollMode scrollMode)
+ 	throws HibernateException {
+ 		QueryParameters qp = translator.getQueryParameters();
+ 		qp.setScrollMode(scrollMode);
+ 		return scroll(qp, resultTypes, null, session);
+ 	}
+ 
+-	public List list(SessionImplementor session) 
++	public List list(SessionImplementor session)
+ 	throws HibernateException {
+ 		return list( session, translator.getQueryParameters(), querySpaces, resultTypes );
+ 
+@@ -121,9 +120,9 @@
+ 		return querySpaces;
+ 	}
+ 
+-	protected String applyLocks(String sqlSelectString, Map lockModes, Dialect dialect) 
++	protected String applyLocks(String sqlSelectString, Map lockModes, Dialect dialect)
+ 	throws QueryException {
+-		
++
+ 		if ( lockModes==null || lockModes.size()==0 ) {
+ 			return sqlSelectString;
+ 		}
+@@ -134,14 +133,13 @@
+ 			if ( dialect.forUpdateOfColumns() ) {
+ 				keyColumnNames = new HashMap();
+ 				for ( int i=0; i<entityAliases.length; i++ ) {
+-					keyColumnNames.put( 
+-							entityAliases[i], 
+-							persisters[i].getIdentifierColumnNames() 
++					keyColumnNames.put(
++							entityAliases[i],
++							persisters[i].getIdentifierColumnNames()
+ 						);
+ 				}
+ 			}
+-			return sqlSelectString + 
+-				new ForUpdateFragment(dialect, lockModes, keyColumnNames).toFragmentString();
++			return dialect.applyLocksToSql(sqlSelectString, lockModes, keyColumnNames);
+ 		}
+ 	}
+ 
+@@ -160,7 +158,7 @@
+ 	protected boolean isSubselectLoadingEnabled() {
+ 		return hasSubselectLoadableCollections();
+ 	}
+-	
++
+ 	protected List getResultList(List results, ResultTransformer resultTransformer) {
+ 		return translator.getRootCriteria().getResultTransformer()
+ 				.transformList(results);
+Index: D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/AbstractEntityJoinWalker.java
+===================================================================
+--- D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/AbstractEntityJoinWalker.java	(revision 10842)
++++ D:/eclipse_for_hibernate/workspace/Hibernate-3.2-SVN/src/org/hibernate/loader/AbstractEntityJoinWalker.java	(working copy)
+@@ -20,14 +20,14 @@
+ /**
+  * Abstract walker for walkers which begin at an entity (criteria
+  * queries and entity loaders).
+- * 
++ *
+  * @author Gavin King
+  */
+ public abstract class AbstractEntityJoinWalker extends JoinWalker {
+ 
+ 	private final OuterJoinLoadable persister;
+ 	private String alias;
+-	
++
+ 	public AbstractEntityJoinWalker(OuterJoinLoadable persister, SessionFactoryImplementor factory, Map enabledFilters) {
+ 		super( factory, enabledFilters );
+ 		this.persister = persister;
+@@ -39,25 +39,25 @@
+ 		final String orderByString,
+ 		final LockMode lockMode)
+ 	throws MappingException {
+-		
++
+ 		walkEntityTree( persister, getAlias() );
+-		
++
+ 		List allAssociations = new ArrayList();
+ 		allAssociations.addAll(associations);
+-		allAssociations.add( new OuterJoinableAssociation( 
++		allAssociations.add( new OuterJoinableAssociation(
+ 				persister.getEntityType(),
+-				null, 
+-				null, 
+-				alias, 
+-				JoinFragment.LEFT_OUTER_JOIN, 
++				null,
++				null,
++				alias,
++				JoinFragment.LEFT_OUTER_JOIN,
+ 				getFactory(),
+ 				CollectionHelper.EMPTY_MAP
+ 			) );
+-		
++
+ 		initPersisters(allAssociations, lockMode);
+ 		initStatementString( whereString, orderByString, lockMode);
+ 	}
+-	
++
+ 	protected final void initProjection(
+ 		final String projectionString,
+ 		final String whereString,
+@@ -77,7 +77,7 @@
+ 	throws MappingException {
+ 		initStatementString(null, condition, orderBy, "", lockMode);
+ 	}
+-	
++
+ 	private void initStatementString(
+ 			final String projection,
+ 			final String condition,
+@@ -90,16 +90,16 @@
+ 		suffixes = BasicLoader.generateSuffixes( joins+1 );
+ 
+ 		JoinFragment ojf = mergeOuterJoins( associations );
+-		
++
+ 		Select select = new Select( getDialect() )
+ 			.setLockMode(lockMode)
+ 			.setSelectClause(
+-					projection==null ? 
+-							persister.selectFragment( alias, suffixes[joins] ) + selectString(associations) : 
++					projection==null ?
++							persister.selectFragment( alias, suffixes[joins] ) + selectString(associations) :
+ 							projection
+ 			)
+ 			.setFromClause(
+-				persister.fromTableFragment(alias) +
++				getDialect().appendLockHint(lockMode, persister.fromTableFragment(alias)) +
+ 				persister.fromJoinFragment(alias, true, true)
+ 			)
+ 			.setWhereClause(condition)

@@ -1,0 +1,250 @@
+ndex: src/net/sf/hibernate/loader/AbstractEntityLoader.java
+===================================================================
+retrieving revision 1.6.2.16
+diff -u -r1.6.2.16 AbstractEntityLoader.java
+--- src/net/sf/hibernate/loader/AbstractEntityLoader.java	15 Nov 2003 09:49:06 -0000	1.6.2.16
++++ src/net/sf/hibernate/loader/AbstractEntityLoader.java	27 Nov 2003 23:28:31 -0000
+@@ -159,4 +159,7 @@
+ 		return mappingDefault;
+ 	}
+ 
++	public String toString() {
++		return getClass().getName() + " for " + getPersister().getClassName();
++	}
+ }
+Index: src/net/sf/hibernate/mapping/Column.java
+===================================================================
+retrieving revision 1.12.2.3
+diff -u -r1.12.2.3 Column.java
+--- src/net/sf/hibernate/mapping/Column.java	6 Nov 2003 13:43:22 -0000	1.12.2.3
++++ src/net/sf/hibernate/mapping/Column.java	27 Nov 2003 23:28:32 -0000
+@@ -165,6 +165,12 @@
+ 		this.quoted = quoted;
+ 	}
+ 
++	/* (non-Javadoc)
++	 * @see java.lang.Object#toString()
++	 */
++	public String toString() {
++		return getClass().getName() + " for " + name + ":" + sqlType;
++	}
+ }
+ 
+ 
+Index: src/net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+retrieving revision 1.33.2.54
+diff -u -r1.33.2.54 AbstractEntityPersister.java
+--- src/net/sf/hibernate/persister/AbstractEntityPersister.java	27 Nov 2003 14:51:52 -0000	1.33.2.54
++++ src/net/sf/hibernate/persister/AbstractEntityPersister.java	27 Nov 2003 23:28:33 -0000
+@@ -134,6 +134,7 @@
+ 	private final boolean hasEmbeddedIdentifier;
+ 	private final String identifierPropertyName;
+ 	private final String[] identifierColumnNames;
++	private final String[] identifierColumnAliases;
+ 	private final Cascades.IdentifierValue unsavedIdentifierValue;
+ 	private final Type identifierType;
+ 	private final Setter identifierSetter;
+@@ -183,7 +184,7 @@
+ 	public String identifierSelectFragment(String name, String suffix) {
+ 		return new SelectFragment()
+ 			.setSuffix(suffix)
+-			.addColumns( name, getIdentifierColumnNames() )
++			.addColumns( name, getIdentifierColumnNames(), identifierColumnAliases )
+ 			.toFragmentString()
+ 			.substring(2); //strip leading ", "
+ 	}
+@@ -600,12 +601,14 @@
+ 		
+ 		int idColumnSpan = model.getIdentifier().getColumnSpan();
+ 		identifierColumnNames = new String[idColumnSpan];
++		identifierColumnAliases = new String[idColumnSpan];
+ 		
+ 		iter = idValue.getColumnIterator();
+ 		int i=0;
+ 		while ( iter.hasNext() ) {
+ 			Column col = (Column) iter.next();
+ 			identifierColumnNames[i] = col.getQuotedName(dialect);
++			identifierColumnAliases[i] = col.getAlias(); // getAlias() handles quotes
+ 			i++;
+ 		}
+ 				
+@@ -856,7 +859,7 @@
+ 		
+ 		if ( isPolymorphic() ) subclassPropertyAliases.put( 
+ 			ENTITY_CLASS, 
+-			new String[] { getDiscriminatorColumnName() } 
++			new String[] { getDiscriminatorAlias() } 
+ 		);
+ 
+ 	}
+@@ -1037,7 +1040,9 @@
+ 
+ 	public String[] getIdentifierAliases(String suffix) {
+ 		// NOTE: this assumes something about how propertySelectFragment is implemented by the subclass!
+-		return new Alias(suffix).toUnquotedAliasStrings( getIdentifierColumnNames() );
++		// was toUnqotedAliasStrings( getIdentiferColumnNames() ) before - now tried
++		// to remove that unqoting and missing aliases..
++		return new Alias(suffix).toAliasStrings( identifierColumnAliases );
+ 	}
+ 
+ 	public String[] getPropertyAliases(String suffix, int i) {
+@@ -1047,11 +1052,15 @@
+ 
+ 	public String getDiscriminatorAlias(String suffix) {	
+ 		// NOTE: this assumes something about how propertySelectFragment is implemented by the subclass!
++		// was toUnqotedAliasStrings( getdiscriminatorColumnName() ) before - now tried
++		// to remove that unqoting and missing aliases..		
+ 		return hasSubclasses() ?
+-			new Alias(suffix).toUnquotedAliasString( getDiscriminatorColumnName() ) :
++			new Alias(suffix).toAliasString( getDiscriminatorAlias() ) :
+ 			null;
+ 	}
+ 
++	abstract public String getDiscriminatorAlias();
++
+ 	public Object loadByUniqueKey(String propertyName, Serializable uniqueKey, SessionImplementor session)
+ 	throws HibernateException, SQLException {	
+ 		return ( (EntityLoader) uniqueKeyLoaders.get(propertyName) ).loadByUniqueKey(session, uniqueKey);
+@@ -1206,6 +1215,7 @@
+ 	public String toString() {
+ 		return getClass().getName() + " for class: " + className;
+ 	}
++	
+ }
+ 
+ 
+Index: src/net/sf/hibernate/persister/EntityPersister.java
+===================================================================
+retrieving revision 1.38.2.31
+diff -u -r1.38.2.31 EntityPersister.java
+--- src/net/sf/hibernate/persister/EntityPersister.java	21 Nov 2003 11:45:29 -0000	1.38.2.31
++++ src/net/sf/hibernate/persister/EntityPersister.java	27 Nov 2003 23:28:35 -0000
+@@ -94,6 +94,7 @@
+ 	private final HashMap subclassesByDiscriminatorValue = new HashMap();
+ 	private final boolean forceDiscriminator;	
+ 	private final String discriminatorColumnName;
++	private final String discriminatorAlias;
+ 	private final Type discriminatorType;
+ 	private final Object discriminatorSQLValue;
+ 	
+@@ -144,6 +145,10 @@
+ 		return discriminatorColumnName;
+ 	}
+ 	
++	public String getDiscriminatorAlias() {
++		return discriminatorAlias;
++	}
++	
+ 	public int enableJoinedFetch(int i) {
+ 		return subclassPropertyEnableJoinedFetch[i];
+ 	}
+@@ -293,7 +298,7 @@
+ 			.addColumns( getIdentifierColumnNames() )
+ 			.addColumns(subclassColumnClosure, subclassColumnAliasClosure)
+ 			.addColumns(subclassFormulaClosure, subclassFormulaAliasClosure);
+-		if ( hasSubclasses() ) select.addColumn( getDiscriminatorColumnName() );
++		if ( hasSubclasses() ) select.addColumn( getDiscriminatorColumnName() , getDiscriminatorAlias() );
+ 		return select.addCondition( getIdentifierColumnNames(), "=?" ).toStatementString();
+ 	}
+ 	
+@@ -752,7 +757,9 @@
+ 			Value d = model.getDiscriminator();
+ 			if (d==null) throw new MappingException("discriminator mapping required for polymorphic persistence");
+ 			forceDiscriminator = model.isForceDiscriminator();
+-			discriminatorColumnName = ( (Column) d.getColumnIterator().next() ).getQuotedName( getDialect() );
++			Column column = ( (Column) d.getColumnIterator().next() );
++			discriminatorColumnName = column.getQuotedName( getDialect() );
++			discriminatorAlias = column.getAlias();
+ 			discriminatorType = model.getDiscriminator().getType();
+ 			if ( model.isDiscriminatorValueNull() ) {
+ 				discriminatorValue = NULL_DISCRIMINATOR;
+@@ -780,6 +787,7 @@
+ 		else {
+ 			forceDiscriminator = false;
+ 			discriminatorColumnName = null;
++			discriminatorAlias = null;
+ 			discriminatorType = null;
+ 			discriminatorValue = null;
+ 			discriminatorSQLValue = null;
+@@ -966,7 +974,7 @@
+ 		
+ 		if ( innerJoin && ( forceDiscriminator || isInherited() ) ) {
+ 			InFragment frag = new InFragment()
+-				.setColumn( name, getDiscriminatorColumnName() );
++				.setColumn( name, getDiscriminatorColumnName());
+ 			Class[] subclasses = getSubclassClosure();
+ 			for ( int i=0; i<subclasses.length; i++ ) {
+ 				frag.addValue(
+@@ -1007,7 +1015,7 @@
+ 		
+ 		SelectFragment frag = new SelectFragment()
+ 			.setSuffix(suffix);
+-		if ( hasSubclasses() ) frag.addColumn( name, getDiscriminatorColumnName() );
++		if ( hasSubclasses() ) frag.addColumn( name, getDiscriminatorColumnName(),  getDiscriminatorAlias() );
+ 		return frag.addColumns(name, subclassColumnClosure, subclassColumnAliasClosure)
+ 			.addFormulas(name, subclassFormulaTemplateClosure, subclassFormulaAliasClosure)
+ 			.toFragmentString();
+Index: src/net/sf/hibernate/persister/NormalizedEntityPersister.java
+===================================================================
+retrieving revision 1.32.2.35
+diff -u -r1.32.2.35 NormalizedEntityPersister.java
+--- src/net/sf/hibernate/persister/NormalizedEntityPersister.java	21 Nov 2003 11:45:29 -0000	1.32.2.35
++++ src/net/sf/hibernate/persister/NormalizedEntityPersister.java	27 Nov 2003 23:28:37 -0000
+@@ -113,7 +113,7 @@
+ 	
+ 	private final DiscriminatorType discriminatorType;
+ 	private final String discriminatorSQLString;
+-	private final String discriminatorColumnName;
++	private final String discriminatorColumnName;	
+ 	private final String sqlConcreteSelectString;
+ 	private final String sqlVersionSelectString;
+ 	
+@@ -141,6 +141,10 @@
+ 		return discriminatorColumnName;
+ 	}
+ 	
++	public String getDiscriminatorAlias() {
++		return getDiscriminatorColumnName(); // is always "clazz_", so just use columnname
++	}
++	
+ 	public Type getSubclassPropertyType(int i) {
+ 		return subclassPropertyTypeClosure[i];
+ 	}
+@@ -1159,7 +1163,7 @@
+ 		if ( hasSubclasses() ) {
+ 			return ", " + 
+ 				discriminatorFragment(alias)
+-					.setReturnColumnName( getDiscriminatorColumnName(), suffix )
++					.setReturnColumnName( getDiscriminatorAlias(), suffix )
+ 					.toFragmentString() + 
+ 				frag.toFragmentString();
+ 		}
+@@ -1209,6 +1213,7 @@
+ 	protected String[] getActualPropertyColumnNames(int i) {
+ 		return propertyColumnNames[i];
+ 	}
++	
+ 
+ }
+ 
+Index: test/org/hibernate/test/ABC.hbm.xml
+===================================================================
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 ABC.hbm.xml
+--- test/org/hibernate/test/ABC.hbm.xml	8 Nov 2003 02:25:29 -0000	1.1.2.1
++++ test/org/hibernate/test/ABC.hbm.xml	27 Nov 2003 23:28:40 -0000
+@@ -3,10 +3,11 @@
+ <hibernate-mapping>
+ 
+ 	<class name="org.hibernate.test.A" discriminator-value="0">
+-		<id name = "id" unsaved-value = "null">
++		<id name = "id" column="idwithreallylongname123456789" unsaved-value = "null">
+ 			<generator class="increment"/>
+ 		</id>
+-		<discriminator column="clazz" type="integer" not-null="false"/>
++		<!-- clazzdiscriminatorwithlongname -->
++		<discriminator column="clazzdiscriminatorwithlongname" type="integer" not-null="false"/>
+ 		<property name="name"/>
+ 		<subclass name="org.hibernate.test.B" discriminator-value="-1">
+ 			<property name="count" column="count_"/>

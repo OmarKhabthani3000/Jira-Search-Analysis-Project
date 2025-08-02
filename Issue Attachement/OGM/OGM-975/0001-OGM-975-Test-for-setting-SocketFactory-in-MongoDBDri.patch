@@ -1,0 +1,97 @@
+From 84009bf292298a40554e408664e83c59ee17d7d8 Mon Sep 17 00:00:00 2001
+From: Davide D'Alto <davide@hibernate.org>
+Date: Wed, 27 Jan 2016 10:26:46 +0000
+Subject: [PATCH] OGM-975 Test for setting SocketFactory in MongoDBDriver
+
+---
+ .../impl/MongoDBConfigurationTest.java             | 41 +++++++++++++++++-----
+ 1 file changed, 33 insertions(+), 8 deletions(-)
+
+diff --git a/mongodb/src/test/java/org/hibernate/ogm/datastore/mongodb/configuration/impl/MongoDBConfigurationTest.java b/mongodb/src/test/java/org/hibernate/ogm/datastore/mongodb/configuration/impl/MongoDBConfigurationTest.java
+index 422e43c..fa3621e 100644
+--- a/mongodb/src/test/java/org/hibernate/ogm/datastore/mongodb/configuration/impl/MongoDBConfigurationTest.java
++++ b/mongodb/src/test/java/org/hibernate/ogm/datastore/mongodb/configuration/impl/MongoDBConfigurationTest.java
+@@ -6,32 +6,42 @@
+  */
+ package org.hibernate.ogm.datastore.mongodb.configuration.impl;
+ 
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNotNull;
++
+ import java.util.HashMap;
+ import java.util.Map;
+ 
+-import com.mongodb.MongoClientOptions;
+-import com.mongodb.WriteConcern;
+-import org.junit.Before;
+-import org.junit.Test;
++import javax.net.SocketFactory;
+ 
+ import org.hibernate.boot.registry.classloading.internal.ClassLoaderServiceImpl;
+ import org.hibernate.ogm.cfg.OgmProperties;
++import org.hibernate.ogm.datastore.mongodb.MongoDBProperties;
+ import org.hibernate.ogm.options.navigation.impl.OptionsContextImpl;
+ import org.hibernate.ogm.options.navigation.source.impl.OptionValueSources;
+ import org.hibernate.ogm.options.spi.OptionsContext;
+ import org.hibernate.ogm.util.configurationreader.spi.ConfigurationPropertyReader;
++import org.junit.Before;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.mockito.Mock;
++import org.mockito.runners.MockitoJUnitRunner;
+ 
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.assertNotNull;
++import com.mongodb.MongoClientOptions;
++import com.mongodb.WriteConcern;
+ 
+ /**
+  * @author Hardy Ferentschik
+  */
++@RunWith(MockitoJUnitRunner.class)
+ public class MongoDBConfigurationTest {
+-	private Map<String, String> configProperties;
++	private Map<String, Object> configProperties;
+ 	private ConfigurationPropertyReader propertyReader;
+ 	private OptionsContext globalOptions;
+ 
++	@Mock
++	private SocketFactory socketFactory;
++
+ 	@Before
+ 	public void setUp() {
+ 		configProperties = new HashMap<>();
+@@ -60,9 +70,21 @@ public void testDefaultServerSelectionTimeoutIsApplied() {
+ 	}
+ 
+ 	@Test
++	public void testSocketFactory() {
++		configProperties.put( driverOption( "serverSelectionTimeout" ), socketFactory );
++		MongoClientOptions clientOptions = createMongoClientOptions();
++
++		assertEquals(
++				"Unexpected socket factory",
++				socketFactory,
++				clientOptions.getSocketFactory()
++		);
++	}
++
++	@Test
+ 	public void testCustomServerSelectionTimeoutIsApplied() {
+ 		int expectedTimeout = 1000;
+-		configProperties.put( "hibernate.ogm.mongodb.driver.serverSelectionTimeout", String.valueOf( expectedTimeout ) );
++		configProperties.put( driverOption( "serverSelectionTimeout" ), String.valueOf( expectedTimeout ) );
+ 		MongoClientOptions clientOptions = createMongoClientOptions();
+ 
+ 		assertEquals(
+@@ -84,4 +106,7 @@ private MongoClientOptions createMongoClientOptions() {
+ 		return clientOptions;
+ 	}
+ 
++	private static String driverOption(String option) {
++		return MongoDBProperties.MONGO_DRIVER_SETTINGS_PREFIX + "." + option;
++	}
+ }
+-- 
+2.5.0
+

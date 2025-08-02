@@ -1,0 +1,281 @@
+From 9f370a10e84c1965b0a99676b584f6bc686f1286 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Yoann=20Rodi=C3=A8re?= <yoann.rodiere@openwide.fr>
+Date: Wed, 2 Apr 2014 17:36:35 +0200
+Subject: [PATCH] Test case for HSEARCH-1583
+
+---
+ .../CollectionOfStringsFieldBridge.java            | 60 +++++++++++++++
+ ...endingMappedSupperclassWithCollectionField.java | 31 ++++++++
+ ...edCollectionFieldCollectionUpdateEventTest.java | 88 ++++++++++++++++++++++
+ .../MappedSuperclassWithCollectionField.java       | 58 ++++++++++++++
+ 4 files changed, 237 insertions(+)
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/engine/optimizations/CollectionOfStringsFieldBridge.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/engine/optimizations/EntityExtendingMappedSupperclassWithCollectionField.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/engine/optimizations/InheritedCollectionFieldCollectionUpdateEventTest.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/engine/optimizations/MappedSuperclassWithCollectionField.java
+
+diff --git a/orm/src/test/java/org/hibernate/search/test/engine/optimizations/CollectionOfStringsFieldBridge.java b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/CollectionOfStringsFieldBridge.java
+new file mode 100644
+index 0000000..c071502
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/CollectionOfStringsFieldBridge.java
+@@ -0,0 +1,60 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2011, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.engine.optimizations;
++
++import java.util.Collection;
++
++import org.apache.lucene.document.Document;
++import org.hibernate.search.bridge.FieldBridge;
++import org.hibernate.search.bridge.LuceneOptions;
++import org.hibernate.search.bridge.StringBridge;
++
++public class CollectionOfStringsFieldBridge implements FieldBridge, StringBridge {
++
++	@Override
++	public String objectToString(Object object) {
++		if ( object == null ) {
++			return null;
++		}
++		if ( !( object instanceof String ) ) {
++			throw new IllegalArgumentException( "This FieldBridge only supports String objects." );
++		}
++		return object.toString();
++	}
++
++	@Override
++	public void set(String name, Object value, Document document, LuceneOptions luceneOptions) {
++		if ( value == null ) {
++			return;
++		}
++		if ( !( value instanceof Collection ) ) {
++			throw new IllegalArgumentException( "This FieldBridge only supports collections." );
++		}
++		Collection<?> objects = (Collection<?>) value;
++
++		for ( Object object : objects ) {
++			luceneOptions.addFieldToDocument( name, objectToString( object ), document );
++		}
++	}
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/engine/optimizations/EntityExtendingMappedSupperclassWithCollectionField.java b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/EntityExtendingMappedSupperclassWithCollectionField.java
+new file mode 100644
+index 0000000..8ebdb96
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/EntityExtendingMappedSupperclassWithCollectionField.java
+@@ -0,0 +1,31 @@
++/* 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * JBoss, Home of Professional Open Source
++ * Copyright 2014 Red Hat Inc. and/or its affiliates and other contributors
++ * as indicated by the @authors tag. All rights reserved.
++ * See the copyright.txt in the distribution for a
++ * full listing of individual contributors.
++ *
++ * This copyrighted material is made available to anyone wishing to use,
++ * modify, copy, or redistribute it subject to the terms and conditions
++ * of the GNU Lesser General Public License, v. 2.1.
++ * This program is distributed in the hope that it will be useful, but WITHOUT A
++ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++ * PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
++ * You should have received a copy of the GNU Lesser General Public License,
++ * v.2.1 along with this distribution; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
++ * MA  02110-1301, USA.
++ */
++package org.hibernate.search.test.engine.optimizations;
++
++import javax.persistence.Entity;
++
++import org.hibernate.search.annotations.Indexed;
++
++@Entity
++@Indexed
++public class EntityExtendingMappedSupperclassWithCollectionField extends MappedSuperclassWithCollectionField {
++
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/engine/optimizations/InheritedCollectionFieldCollectionUpdateEventTest.java b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/InheritedCollectionFieldCollectionUpdateEventTest.java
+new file mode 100644
+index 0000000..d04f3c8
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/InheritedCollectionFieldCollectionUpdateEventTest.java
+@@ -0,0 +1,88 @@
++/*
++ * JBoss, Home of Professional Open Source
++ * Copyright 2011 Red Hat Inc. and/or its affiliates and other contributors
++ * as indicated by the @authors tag. All rights reserved.
++ * See the copyright.txt in the distribution for a
++ * full listing of individual contributors.
++ *
++ * This copyrighted material is made available to anyone wishing to use,
++ * modify, copy, or redistribute it subject to the terms and conditions
++ * of the GNU Lesser General Public License, v. 2.1.
++ * This program is distributed in the hope that it will be useful, but WITHOUT A
++ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++ * PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
++ * You should have received a copy of the GNU Lesser General Public License,
++ * v.2.1 along with this distribution; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
++ * MA  02110-1301, USA.
++ */
++
++package org.hibernate.search.test.engine.optimizations;
++
++import java.util.List;
++
++import org.apache.lucene.index.Term;
++import org.apache.lucene.search.TermQuery;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.search.FullTextQuery;
++import org.hibernate.search.FullTextSession;
++import org.hibernate.search.Search;
++import org.hibernate.search.test.SearchTestCase;
++import org.hibernate.search.test.util.TestForIssue;
++import org.junit.Test;
++
++/**
++ * Verify that updates to collections defined in a @MappedSuperclass actually trigger a re-indexing.
++ */
++@TestForIssue(jiraKey = "HSEARCH-1583")
++public class InheritedCollectionFieldCollectionUpdateEventTest extends SearchTestCase {
++
++	@Test
++	public void test() {
++		Session session = openSession();
++		FullTextSession fullTextSession = Search.getFullTextSession( session );
++		try {
++			Transaction transaction = session.beginTransaction();
++
++			EntityExtendingMappedSupperclassWithCollectionField entity = new EntityExtendingMappedSupperclassWithCollectionField();
++			entity.getCollection().add( "1" );
++			session.persist( entity );
++			transaction.commit();
++			session.clear();
++
++			assertEquals( 1, searchByItem( fullTextSession, "1" ).size() );
++			session.clear();
++
++			transaction = session.beginTransaction();
++
++			entity = (EntityExtendingMappedSupperclassWithCollectionField) session.get(
++					EntityExtendingMappedSupperclassWithCollectionField.class, entity.getId() );
++			entity.getCollection().add( "2" );
++			session.save( entity );
++			transaction.commit();
++			session.clear();
++
++			assertEquals( 1, searchByItem( fullTextSession, "2" ).size() );
++		}
++		finally {
++			session.close();
++		}
++	}
++
++	@SuppressWarnings("unchecked")
++	private List<EntityExtendingMappedSupperclassWithCollectionField> searchByItem(FullTextSession fullTextSession,
++			String itemValue) {
++		FullTextQuery query = fullTextSession.createFullTextQuery(
++				new TermQuery( new Term( "collection", itemValue ) ),
++				EntityExtendingMappedSupperclassWithCollectionField.class );
++		return query.list();
++	}
++
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class[] { MappedSuperclassWithCollectionField.class,
++				EntityExtendingMappedSupperclassWithCollectionField.class };
++	}
++
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/engine/optimizations/MappedSuperclassWithCollectionField.java b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/MappedSuperclassWithCollectionField.java
+new file mode 100644
+index 0000000..3703d94
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/engine/optimizations/MappedSuperclassWithCollectionField.java
+@@ -0,0 +1,58 @@
++/* 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * JBoss, Home of Professional Open Source
++ * Copyright 2014 Red Hat Inc. and/or its affiliates and other contributors
++ * as indicated by the @authors tag. All rights reserved.
++ * See the copyright.txt in the distribution for a
++ * full listing of individual contributors.
++ *
++ * This copyrighted material is made available to anyone wishing to use,
++ * modify, copy, or redistribute it subject to the terms and conditions
++ * of the GNU Lesser General Public License, v. 2.1.
++ * This program is distributed in the hope that it will be useful, but WITHOUT A
++ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++ * PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
++ * You should have received a copy of the GNU Lesser General Public License,
++ * v.2.1 along with this distribution; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
++ * MA  02110-1301, USA.
++ */
++package org.hibernate.search.test.engine.optimizations;
++
++import java.util.ArrayList;
++import java.util.Collection;
++
++import javax.persistence.ElementCollection;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.MappedSuperclass;
++
++import org.hibernate.search.annotations.Analyze;
++import org.hibernate.search.annotations.Field;
++import org.hibernate.search.annotations.FieldBridge;
++
++@MappedSuperclass
++public class MappedSuperclassWithCollectionField {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++
++	@ElementCollection
++	@Field(bridge = @FieldBridge(impl = CollectionOfStringsFieldBridge.class), analyze = Analyze.NO)
++	private Collection<String> collection = new ArrayList<String>();
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public Collection<String> getCollection() {
++		return collection;
++	}
++
++}
+-- 
+1.9.1
+
+

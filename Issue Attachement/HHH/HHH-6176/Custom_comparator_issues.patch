@@ -1,0 +1,795 @@
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedSortedSetEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedSortedSetEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedSortedSetEntity.java	(revision )
+@@ -0,0 +1,100 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.sortedSet;
++
++import org.hibernate.envers.Audited;
++
++import java.util.SortedSet;
++import java.util.TreeSet;
++
++/**
++ * Entity with custom-ordered SortedSet
++ *
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++@Audited
++public class NotAnnotatedSortedSetEntity {
++    private Integer id;
++    private String data;
++    private SortedSet<NotAnnotatedStrTestEntity> sortedSet = new TreeSet<NotAnnotatedStrTestEntity>(NotAnnotatedStrTestEntityComparator.INSTANCE);
++
++    public NotAnnotatedSortedSetEntity() {
++    }
++
++    public NotAnnotatedSortedSetEntity(Integer id, String data) {
++        this.id = id;
++        this.data = data;
++    }
++
++    public NotAnnotatedSortedSetEntity(String data) {
++        this.data = data;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public SortedSet<NotAnnotatedStrTestEntity> getSortedSet() {
++        return sortedSet;
++    }
++
++    public void setSortedSet(SortedSet<NotAnnotatedStrTestEntity> sortedSet) {
++        this.sortedSet = sortedSet;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof NotAnnotatedSortedSetEntity)) return false;
++
++        NotAnnotatedSortedSetEntity that = (NotAnnotatedSortedSetEntity) o;
++
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (data != null ? data.hashCode() : 0);
++        return result;
++    }
++
++    public String toString() {
++        return "SetOwnedEntity(id = " + id + ", data = " + data + ")";
++    }
++}
+\ No newline at end of file
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/entities/StrTestEntityComparator.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/entities/StrTestEntityComparator.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/entities/StrTestEntityComparator.java	(revision )
+@@ -0,0 +1,12 @@
++package org.hibernate.envers.test.entities;
++
++import java.util.Comparator;
++
++public class StrTestEntityComparator implements Comparator<StrTestEntity> {
++    public static final StrTestEntityComparator INSTANCE = new StrTestEntityComparator();
++
++    @Override
++    public int compare(StrTestEntity o1, StrTestEntity o2) {
++        return o1.getStr().compareTo(o2.getStr());
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/SortedSetWithCustomComparatorSessionTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/SortedSetWithCustomComparatorSessionTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/SortedSetWithCustomComparatorSessionTest.java	(revision )
+@@ -0,0 +1,185 @@
++package org.hibernate.envers.test.integration.sortedSet;
++
++import org.hibernate.MappingException;
++import org.hibernate.envers.test.AbstractOneSessionTest;
++import org.hibernate.envers.test.Priority;
++import org.hibernate.testing.FailureExpected;
++import org.junit.Test;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++import java.util.Arrays;
++import java.util.Iterator;
++import java.util.SortedSet;
++
++import static org.junit.Assert.assertEquals;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++public class SortedSetWithCustomComparatorSessionTest extends AbstractOneSessionTest {
++
++    private Integer id1;
++    private Integer id2;
++    private Integer id3;
++    private Integer id4;
++
++    protected void initMappings() throws MappingException, URISyntaxException {
++        URL url = Thread.currentThread().getContextClassLoader().getResource("mappings/sortedSet/mappings.hbm.xml");
++        config.addFile(new File(url.toURI()));
++    }
++
++    @Test
++    @Priority(10)
++    public void initData() {
++        NotAnnotatedSortedSetEntity entity1 = new NotAnnotatedSortedSetEntity(1, "sortedSet1");
++
++        // Revision 1
++        getSession().getTransaction().begin();
++
++        getSession().persist(entity1);
++
++        getSession().getTransaction().commit();
++
++        // Revision 2
++
++        getSession().getTransaction().begin();
++
++        entity1 = (NotAnnotatedSortedSetEntity) getSession().get(NotAnnotatedSortedSetEntity.class, 1);
++        final NotAnnotatedStrTestEntity strTestEntity1 = new NotAnnotatedStrTestEntity("abc");
++        getSession().persist(strTestEntity1);
++        id1 = strTestEntity1.getId();
++        entity1.getSortedSet().add(strTestEntity1);
++
++        getSession().getTransaction().commit();
++
++        // Revision 3
++        getSession().getTransaction().begin();
++
++        entity1 = (NotAnnotatedSortedSetEntity) getSession().get(NotAnnotatedSortedSetEntity.class, 1);
++        final NotAnnotatedStrTestEntity strTestEntity2 = new NotAnnotatedStrTestEntity("aaa");
++        getSession().persist(strTestEntity2);
++        id2 = strTestEntity2.getId();
++        entity1.getSortedSet().add(strTestEntity2);
++
++        getSession().getTransaction().commit();
++
++        // Revision 4
++        getSession().getTransaction().begin();
++
++        entity1 = (NotAnnotatedSortedSetEntity) getSession().get(NotAnnotatedSortedSetEntity.class, 1);
++        final NotAnnotatedStrTestEntity strTestEntity3 = new NotAnnotatedStrTestEntity("aba");
++        getSession().persist(strTestEntity3);
++        id3 = strTestEntity3.getId();
++        entity1.getSortedSet().add(strTestEntity3);
++
++        getSession().getTransaction().commit();
++
++        // Revision 5
++        getSession().getTransaction().begin();
++
++        entity1 = (NotAnnotatedSortedSetEntity) getSession().get(NotAnnotatedSortedSetEntity.class, 1);
++        final NotAnnotatedStrTestEntity strTestEntity4 = new NotAnnotatedStrTestEntity("aac");
++        getSession().persist(strTestEntity4);
++        id4 = strTestEntity4.getId();
++        entity1.getSortedSet().add(strTestEntity4);
++
++        getSession().getTransaction().commit();
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++        assertEquals(Arrays.asList(1, 2, 3, 4, 5), getAuditReader().getRevisions(NotAnnotatedSortedSetEntity.class, 1));
++        assertEquals(Arrays.asList(2), getAuditReader().getRevisions(NotAnnotatedStrTestEntity.class, id1));
++        assertEquals(Arrays.asList(3), getAuditReader().getRevisions(NotAnnotatedStrTestEntity.class, id2));
++        assertEquals(Arrays.asList(4), getAuditReader().getRevisions(NotAnnotatedStrTestEntity.class, id3));
++        assertEquals(Arrays.asList(5), getAuditReader().getRevisions(NotAnnotatedStrTestEntity.class, id4));
++    }
++
++    @Test
++    public void testCurrentStateOfEntity1() {
++        final NotAnnotatedSortedSetEntity entity1 = (NotAnnotatedSortedSetEntity) getSession().get(NotAnnotatedSortedSetEntity.class, 1);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        final SortedSet<NotAnnotatedStrTestEntity> sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(4, sortedSet.size());
++        final Iterator<NotAnnotatedStrTestEntity> iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id4, "aac");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++    }
++
++    private void checkStrTestEntity(NotAnnotatedStrTestEntity entity, Integer id, String sortKey) {
++        assertEquals(id, entity.getId());
++        assertEquals(sortKey, entity.getStr());
++    }
++
++    @Test
++    @FailureExpected(message = "Envers doesn't support custom comparators yet", jiraKey = "UPDATE_THAT")
++    public void testHistoryOfEntity1() throws Exception {
++        NotAnnotatedSortedSetEntity entity1 = getAuditReader().find(NotAnnotatedSortedSetEntity.class, 1, 1);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        SortedSet<NotAnnotatedStrTestEntity> sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(0, sortedSet.size());
++
++        entity1 = getAuditReader().find(NotAnnotatedSortedSetEntity.class, 1, 2);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(1, sortedSet.size());
++        Iterator<NotAnnotatedStrTestEntity> iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(NotAnnotatedSortedSetEntity.class, 1, 3);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(2, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(NotAnnotatedSortedSetEntity.class, 1, 4);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(3, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(NotAnnotatedSortedSetEntity.class, 1, 5);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(NotAnnotatedStrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(4, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id4, "aac");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++    }
++
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntityComparator.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntityComparator.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntityComparator.java	(revision )
+@@ -0,0 +1,12 @@
++package org.hibernate.envers.test.integration.sortedSet;
++
++import java.util.Comparator;
++
++public class NotAnnotatedStrTestEntityComparator implements Comparator<NotAnnotatedStrTestEntity> {
++    public static final NotAnnotatedStrTestEntityComparator INSTANCE = new NotAnnotatedStrTestEntityComparator();
++
++    @Override
++    public int compare(NotAnnotatedStrTestEntity o1, NotAnnotatedStrTestEntity o2) {
++        return o1.getStr().compareTo(o2.getStr());
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/sortedSet/NotAnnotatedStrTestEntity.java	(revision )
+@@ -0,0 +1,86 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.sortedSet;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++@Audited
++public class NotAnnotatedStrTestEntity {
++    private Integer id;
++    private String str;
++
++    public NotAnnotatedStrTestEntity() {
++    }
++
++    public NotAnnotatedStrTestEntity(String str, Integer id) {
++        this.str = str;
++        this.id = id;
++    }
++
++    public NotAnnotatedStrTestEntity(String str) {
++        this.str = str;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getStr() {
++        return str;
++    }
++
++    public void setStr(String str) {
++        this.str = str;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof NotAnnotatedStrTestEntity)) return false;
++
++        NotAnnotatedStrTestEntity that = (NotAnnotatedStrTestEntity) o;
++
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++        if (str != null ? !str.equals(that.str) : that.str != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (str != null ? str.hashCode() : 0);
++        return result;
++    }
++
++    public String toString() {
++        return "STE(id = " + id + ", str = " + str + ")";
++    }
++}
+\ No newline at end of file
+Index: hibernate-envers/src/test/resources/mappings/sortedSet/mappings.hbm.xml
+===================================================================
+--- hibernate-envers/src/test/resources/mappings/sortedSet/mappings.hbm.xml	(revision )
++++ hibernate-envers/src/test/resources/mappings/sortedSet/mappings.hbm.xml	(revision )
+@@ -0,0 +1,31 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++    <class name="org.hibernate.envers.test.integration.sortedSet.NotAnnotatedStrTestEntity">
++
++        <id name="id" type="integer">
++            <generator class="native"/>
++        </id>
++        <property name="str" type="string" not-null="true"/>
++
++    </class>
++
++    <class name="org.hibernate.envers.test.integration.sortedSet.NotAnnotatedSortedSetEntity">
++
++        <id name="id" column="ID_PERSON" type="integer">
++            <generator class="assigned"/>
++        </id>
++
++        <property name="data" type="string" not-null="true"/>
++
++        <set name="sortedSet"
++             sort="org.hibernate.envers.test.integration.sortedSet.NotAnnotatedStrTestEntityComparator">
++            <key column="SORTED_SET"/>
++            <many-to-many class="org.hibernate.envers.test.integration.sortedSet.NotAnnotatedStrTestEntity"/>
++        </set>
++
++    </class>
++
++</hibernate-mapping>
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/manytomany/SortedSetWithCustomComparatorEntityTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/manytomany/SortedSetWithCustomComparatorEntityTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/manytomany/SortedSetWithCustomComparatorEntityTest.java	(revision )
+@@ -0,0 +1,211 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.manytomany;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.Priority;
++import org.hibernate.envers.test.entities.StrTestEntity;
++import org.hibernate.envers.test.entities.StrTestEntityComparator;
++import org.hibernate.envers.test.entities.manytomany.SortedSetEntity;
++import org.hibernate.testing.FailureExpected;
++import org.junit.Test;
++
++import javax.persistence.EntityManager;
++import java.util.Arrays;
++import java.util.Iterator;
++import java.util.SortedSet;
++
++import static org.junit.Assert.assertEquals;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++public class SortedSetWithCustomComparatorEntityTest extends AbstractEntityTest {
++
++    private Integer id1;
++    private Integer id2;
++    private Integer id3;
++    private Integer id4;
++
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(StrTestEntity.class);
++        cfg.addAnnotatedClass(SortedSetEntity.class);
++    }
++
++    @Test
++    @Priority(10)
++    public void initData() {
++        EntityManager em = getEntityManager();
++
++        SortedSetEntity entity1 = new SortedSetEntity(1, "sortedSet1");
++
++        // Revision 1
++        em.getTransaction().begin();
++
++        em.persist(entity1);
++
++        em.getTransaction().commit();
++
++        // Revision 2
++
++        em.getTransaction().begin();
++
++        entity1 = em.find(SortedSetEntity.class, 1);
++        final StrTestEntity strTestEntity1 = new StrTestEntity("abc");
++        em.persist(strTestEntity1);
++        id1 = strTestEntity1.getId();
++        entity1.getSortedSet().add(strTestEntity1);
++
++        em.getTransaction().commit();
++
++        // Revision 3
++        em.getTransaction().begin();
++
++        entity1 = em.find(SortedSetEntity.class, 1);
++        final StrTestEntity strTestEntity2 = new StrTestEntity("aaa");
++        em.persist(strTestEntity2);
++        id2 = strTestEntity2.getId();
++        entity1.getSortedSet().add(strTestEntity2);
++
++        em.getTransaction().commit();
++
++        // Revision 4
++        em.getTransaction().begin();
++
++        entity1 = em.find(SortedSetEntity.class, 1);
++        final StrTestEntity strTestEntity3 = new StrTestEntity("aba");
++        em.persist(strTestEntity3);
++        id3 = strTestEntity3.getId();
++        entity1.getSortedSet().add(strTestEntity3);
++
++        em.getTransaction().commit();
++
++        // Revision 5
++        em.getTransaction().begin();
++
++        entity1 = em.find(SortedSetEntity.class, 1);
++        final StrTestEntity strTestEntity4 = new StrTestEntity("aac");
++        em.persist(strTestEntity4);
++        id4 = strTestEntity4.getId();
++        entity1.getSortedSet().add(strTestEntity4);
++
++        em.getTransaction().commit();
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++        assertEquals(Arrays.asList(1, 2, 3, 4, 5), getAuditReader().getRevisions(SortedSetEntity.class, 1));
++        assertEquals(Arrays.asList(2), getAuditReader().getRevisions(StrTestEntity.class, id1));
++        assertEquals(Arrays.asList(3), getAuditReader().getRevisions(StrTestEntity.class, id2));
++        assertEquals(Arrays.asList(4), getAuditReader().getRevisions(StrTestEntity.class, id3));
++        assertEquals(Arrays.asList(5), getAuditReader().getRevisions(StrTestEntity.class, id4));
++    }
++
++    @Test
++    public void testCurrentStateOfEntity1() {
++        final SortedSetEntity entity1 = getEntityManager().find(SortedSetEntity.class, 1);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        final SortedSet<StrTestEntity> sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(4, sortedSet.size());
++        final Iterator<StrTestEntity> iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id4, "aac");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++    }
++
++    private void checkStrTestEntity(StrTestEntity entity, Integer id, String sortKey) {
++        assertEquals(id, entity.getId());
++        assertEquals(sortKey, entity.getStr());
++    }
++
++    @Test
++    @FailureExpected(message = "Envers doesn't support custom comparators yet", jiraKey = "UPDATE_THAT")
++    public void testHistoryOfEntity1() throws Exception {
++        SortedSetEntity entity1 = getAuditReader().find(SortedSetEntity.class, 1, 1);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        SortedSet<StrTestEntity> sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(0, sortedSet.size());
++
++        entity1 = getAuditReader().find(SortedSetEntity.class, 1, 2);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(1, sortedSet.size());
++        Iterator<StrTestEntity> iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(SortedSetEntity.class, 1, 3);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(2, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(SortedSetEntity.class, 1, 4);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(3, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++
++        entity1 = getAuditReader().find(SortedSetEntity.class, 1, 5);
++
++        assertEquals("sortedSet1", entity1.getData());
++        assertEquals(Integer.valueOf(1), entity1.getId());
++
++        sortedSet = entity1.getSortedSet();
++        assertEquals(StrTestEntityComparator.class, sortedSet.comparator().getClass());
++        assertEquals(4, sortedSet.size());
++        iterator = sortedSet.iterator();
++        checkStrTestEntity(iterator.next(), id2, "aaa");
++        checkStrTestEntity(iterator.next(), id4, "aac");
++        checkStrTestEntity(iterator.next(), id3, "aba");
++        checkStrTestEntity(iterator.next(), id1, "abc");
++    }
++
++}
+\ No newline at end of file
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/entities/manytomany/SortedSetEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/entities/manytomany/SortedSetEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/entities/manytomany/SortedSetEntity.java	(revision )
+@@ -0,0 +1,114 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.entities.manytomany;
++
++import org.hibernate.annotations.Sort;
++import org.hibernate.annotations.SortType;
++import org.hibernate.envers.Audited;
++import org.hibernate.envers.test.entities.StrTestEntity;
++import org.hibernate.envers.test.entities.StrTestEntityComparator;
++
++import javax.persistence.Entity;
++import javax.persistence.Id;
++import javax.persistence.ManyToMany;
++import java.util.SortedSet;
++import java.util.TreeSet;
++
++/**
++ * Entity with custom-ordered SortedSet
++ *
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++@Entity
++public class SortedSetEntity {
++    @Id
++    private Integer id;
++
++    @Audited
++    private String data;
++
++    @Audited
++    @ManyToMany
++    @Sort(type = SortType.COMPARATOR, comparator = StrTestEntityComparator.class)
++    private SortedSet<StrTestEntity> sortedSet = new TreeSet<StrTestEntity>(StrTestEntityComparator.INSTANCE);
++
++    public SortedSetEntity() {
++    }
++
++    public SortedSetEntity(Integer id, String data) {
++        this.id = id;
++        this.data = data;
++    }
++
++    public SortedSetEntity(String data) {
++        this.data = data;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public SortedSet<StrTestEntity> getSortedSet() {
++        return sortedSet;
++    }
++
++    public void setSortedSet(SortedSet<StrTestEntity> sortedSet) {
++        this.sortedSet = sortedSet;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof SortedSetEntity)) return false;
++
++        SortedSetEntity that = (SortedSetEntity) o;
++
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (data != null ? data.hashCode() : 0);
++        return result;
++    }
++
++    public String toString() {
++        return "SetOwnedEntity(id = " + id + ", data = " + data + ")";
++    }
++}
+\ No newline at end of file

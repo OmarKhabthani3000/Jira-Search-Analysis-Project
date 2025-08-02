@@ -1,0 +1,632 @@
+Index: src/main/java/org/hibernate/annotations/TypeDef.java
+===================================================================
+--- src/main/java/org/hibernate/annotations/TypeDef.java	(revision 17625)
++++ src/main/java/org/hibernate/annotations/TypeDef.java	(working copy)
+@@ -37,9 +37,9 @@
+ @Target({TYPE, PACKAGE})
+ @Retention(RUNTIME)
+ public @interface TypeDef {
+-	String name();
+-
+-	Class typeClass();
+-
++	String name() default "";
++	Class<?> typeClass();
++	Class<?> defaultForType() default void.class;
++	
+ 	Parameter[] parameters() default {};
+ }
+Index: src/main/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17625)
++++ src/main/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -1005,10 +1005,22 @@
+ 		for (Parameter param : defAnn.parameters()) {
+ 			params.setProperty( param.name(), param.value() );
+ 		}
+-		log.info( "Binding type definition: {}", defAnn.name() );
+-		mappings.addTypeDef( defAnn.name(), defAnn.typeClass().getName(), params );
++		
++		if (BinderHelper.isDefault(defAnn.name()) && defAnn.defaultForType().equals(void.class)) {
++			throw new AnnotationException("Either name or defaultForType attribute should be set in a TypeDef");
++		}
++		
++		if (!BinderHelper.isDefault(defAnn.name())) {
++			log.info( "Binding type definition: {}", defAnn.name() );
++			mappings.addTypeDef( defAnn.name(), defAnn.typeClass().getName(), params );
++		}
++		if (!defAnn.defaultForType().equals(void.class)) {
++			log.info( "Binding type definition: {}", defAnn.defaultForType().getName() );
++			mappings.addTypeDef( defAnn.defaultForType().getName(), defAnn.typeClass().getName(), params );
++		}
+ 	}
+-
++		
++		
+ 	private static void bindDiscriminatorToPersistentClass(
+ 			RootClass rootClass,
+ 			Ejb3DiscriminatorColumn discriminatorColumn, Map<String, Join> secondaryTables,
+@@ -1365,12 +1377,13 @@
+ 			propBinder.setHolder( propertyHolder ); //PropertyHolderBuilder.buildPropertyHolder(rootClass)
+ 			propBinder.setProperty( property );
+ 			propBinder.setReturnedClass( inferredData.getPropertyClass() );
+-
+ 			propBinder.setMappings( mappings );
++			
+ 			Property prop = propBinder.bind();
++			propBinder.getSimpleValueBinder().setVersionField(true);
+ 			rootClass.setVersion( prop );
++			
+ 			SimpleValue simpleValue = (SimpleValue) prop.getValue();
+-			if ( !simpleValue.isTypeSpecified() ) simpleValue.setTypeName( "integer" );
+ 			simpleValue.setNullValue( "undefined" );
+ 			rootClass.setOptimisticLockMode( Versioning.OPTIMISTIC_LOCK_VERSION );
+ 			log.debug(
+Index: src/main/java/org/hibernate/cfg/AnnotationConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationConfiguration.java	(revision 17625)
++++ src/main/java/org/hibernate/cfg/AnnotationConfiguration.java	(working copy)
+@@ -283,7 +283,7 @@
+ 			AnnotationBinder.bindDefaults( createExtendedMappings() );
+ 			isDefaultProcessed = true;
+ 		}
+-
++ 
+ 		//process entities
+ 		if ( precedence == null ) precedence = getProperties().getProperty( ARTEFACT );
+ 		if ( precedence == null ) precedence = DEFAULT_PRECEDENCE;
+@@ -312,10 +312,19 @@
+ 		caches.clear();
+ 		try {
+ 			inSecondPass = true;
+-			processFkSecondPassInOrder();
+ 			Iterator iter = secondPasses.iterator();
+ 			while ( iter.hasNext() ) {
+ 				SecondPass sp = (SecondPass) iter.next();
++				//do the second pass of simple value types first and remove them
++				if ( sp instanceof SetSimpleValueTypeSecondPass ) {
++					sp.doSecondPass( classes );
++					iter.remove();
++				}
++			}
++			processFkSecondPassInOrder();
++			iter = secondPasses.iterator();
++			while ( iter.hasNext() ) {
++				SecondPass sp = (SecondPass) iter.next();
+ 				//do the second pass of fk before the others and remove them
+ 				if ( sp instanceof CreateKeySecondPass ) {
+ 					sp.doSecondPass( classes );
+@@ -1111,6 +1120,11 @@
+ 			defaultNamedGenerators.add( generator.getName() );
+ 		}
+ 
++		public boolean isInSecondPass() {
++			return inSecondPass; 
++		}
++		
++		
+ 		public IdGenerator getGenerator(String name) {
+ 			return getGenerator( name, null );
+ 		}
+Index: src/main/java/org/hibernate/cfg/annotations/PropertyBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/annotations/PropertyBinder.java	(revision 17625)
++++ src/main/java/org/hibernate/cfg/annotations/PropertyBinder.java	(working copy)
+@@ -61,6 +61,8 @@
+ 	private boolean insertable = true;
+ 	private boolean updatable = true;
+ 	private String cascade;
++	private SimpleValueBinder simpleValueBinder;
++	
+ 	/*
+ 	 * property can be null
+ 	 * prefer propertyName to property.getName() since some are overloaded
+@@ -133,15 +135,15 @@
+ 		String containerClassName = holder == null ?
+ 				null :
+ 				holder.getClassName();
+-		SimpleValueBinder value = new SimpleValueBinder();
+-		value.setMappings( mappings );
+-		value.setPropertyName( name );
+-		value.setReturnedClassName( returnedClassName );
+-		value.setColumns( columns );
+-		value.setPersistentClassName( containerClassName );
+-		value.setType( property, returnedClass );
+-		value.setMappings( mappings );
+-		SimpleValue propertyValue = value.make();
++		simpleValueBinder = new SimpleValueBinder();
++		simpleValueBinder.setMappings( mappings );
++		simpleValueBinder.setPropertyName( name );
++		simpleValueBinder.setReturnedClassName( returnedClassName );
++		simpleValueBinder.setColumns( columns );
++		simpleValueBinder.setPersistentClassName( containerClassName );
++		simpleValueBinder.setType( property, returnedClass );
++		simpleValueBinder.setMappings( mappings );
++		SimpleValue propertyValue = simpleValueBinder.make();
+ 		setValue( propertyValue );
+ 		Property prop = make();
+ 		holder.addProperty( prop, columns );
+@@ -214,4 +216,9 @@
+ 	public void setReturnedClass(XClass returnedClass) {
+ 		this.returnedClass = returnedClass;
+ 	}
++
++	public SimpleValueBinder getSimpleValueBinder() {
++		return simpleValueBinder;
++	}
++	
+ }
+Index: src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(revision 17625)
++++ src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(working copy)
+@@ -42,6 +42,7 @@
+ import org.hibernate.cfg.Ejb3Column;
+ import org.hibernate.cfg.ExtendedMappings;
+ import org.hibernate.cfg.NotYetImplementedException;
++import org.hibernate.cfg.SetSimpleValueTypeSecondPass;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.type.ByteArrayBlobType;
+@@ -68,7 +69,17 @@
+ 	private Properties typeParameters = new Properties();
+ 	private ExtendedMappings mappings;
+ 	private Table table;
++	private SimpleValue simpleValue;
++	private boolean isVersionField;
++	
++	public boolean isVersionField() {
++		return isVersionField;
++	}
+ 
++	public void setVersionField(boolean isVersionField) {
++		this.isVersionField = isVersionField;
++	}
++
+ 	public void setPropertyName(String propertyName) {
+ 		this.propertyName = propertyName;
+ 	}
+@@ -216,7 +227,7 @@
+ 	public void setExplicitType(String explicitType) {
+ 		this.explicitType = explicitType;
+ 	}
+-
++	
+ 	//FIXME raise an assertion failure  if setExplicitType(String) and setExplicitType(Type) are use at the same time
+ 	public void setExplicitType(Type typeAnn) {
+ 		if ( typeAnn != null ) {
+@@ -238,16 +249,35 @@
+ 	}
+ 
+ 	public SimpleValue make() {
++				
+ 		validate();
+ 		log.debug( "building SimpleValue for {}", propertyName );
+ 		if ( table == null ) {
+ 			table = columns[0].getTable();
+ 		}
+-		SimpleValue simpleValue = new SimpleValue( table );
+-		return fillSimpleValue( simpleValue );
++		simpleValue = new SimpleValue( table );
++		
++		for (Ejb3Column column : columns) {
++			column.linkWithValue( simpleValue );
++		}
++		
++		boolean isInSecondPass = mappings.isInSecondPass();
++		if (!isInSecondPass) {
++			//Defer this to the second pass
++			SetSimpleValueTypeSecondPass secondPass = new SetSimpleValueTypeSecondPass(this);
++			mappings.addSecondPass(secondPass);
++		}
++		else {
++			//We are already in second pass
++			fillSimpleValue();
++		}
++		return simpleValue;
+ 	}
+ 
+-	public SimpleValue fillSimpleValue(SimpleValue simpleValue) {
++	public void fillSimpleValue() {
++				
++		log.debug( "setting SimpleValue typeName for {}", propertyName );
++				
+ 		String type = BinderHelper.isDefault( explicitType ) ? returnedClassName : explicitType;
+ 		org.hibernate.mapping.TypeDef typeDef = mappings.getTypeDef( type );
+ 		if ( typeDef != null ) {
+@@ -262,9 +292,10 @@
+ 		if ( persistentClassName != null ) {
+ 			simpleValue.setTypeUsingReflection( persistentClassName, propertyName );
+ 		}
+-		for (Ejb3Column column : columns) {
+-			column.linkWithValue( simpleValue );
++		
++		if ( !simpleValue.isTypeSpecified() && isVersionField()) {
++			simpleValue.setTypeName( "integer" );
+ 		}
+-		return simpleValue;
++				
+ 	}
+ }
+Index: src/main/java/org/hibernate/cfg/ExtendedMappings.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/ExtendedMappings.java	(revision 17625)
++++ src/main/java/org/hibernate/cfg/ExtendedMappings.java	(working copy)
+@@ -156,4 +156,7 @@
+ 	public void addAnyMetaDef(AnyMetaDef defAnn) throws AnnotationException;
+ 
+ 	public AnyMetaDef getAnyMetaDef(String name);
++	
++	public boolean isInSecondPass(); 
++	
+ }
+\ No newline at end of file
+Index: src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java	(revision 0)
++++ src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java	(revision 0)
+@@ -0,0 +1,45 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */package org.hibernate.cfg;
++
++import java.util.Map;
++import org.hibernate.MappingException;
++import org.hibernate.cfg.annotations.SimpleValueBinder;
++
++/**
++ * @author Sharath Reddy
++ *
++ */
++public class SetSimpleValueTypeSecondPass implements SecondPass {
++
++	SimpleValueBinder binder;
++	
++	public SetSimpleValueTypeSecondPass(SimpleValueBinder val) {
++		binder = val;
++	}
++	
++	public void doSecondPass(Map persistentClasses) throws MappingException {
++		binder.fillSimpleValue();
++	}
++
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(revision 17625)
++++ src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(working copy)
+@@ -342,6 +342,33 @@
+ 		s.close();
+ 	}
+ 
++	/**
++	 * Test correct usage of 'name' and 'defaultForType' attributes of Typedef annotation
++	 */
++	public void testTypeDefUsingNameAndDefaultForType() {
++			
++			ContactDetails contactDetails = new ContactDetails();
++			contactDetails.setLocalPhoneNumber(new PhoneNumber("999999"));
++			contactDetails.setOverseasPhoneNumber(new OverseasPhoneNumber("111111"));
++			
++			Session s = openSession();
++			Transaction tx = s.beginTransaction();
++			s.persist(contactDetails);
++			tx.commit();
++			s.close();
++			
++			s = openSession();
++			tx = s.beginTransaction();
++			contactDetails = 
++				(ContactDetails) s.get( ContactDetails.class, contactDetails.getId() );
++			assertNotNull( contactDetails );
++			assertEquals( "999999", contactDetails.getLocalPhoneNumber().getNumber() );
++			assertEquals( "111111", contactDetails.getOverseasPhoneNumber().getNumber() );
++			s.delete(contactDetails);
++			tx.commit();
++			s.close();
++	}
++	
+ 	public BasicHibernateAnnotationsTest(String x) {
+ 		super( x );
+ 	}
+@@ -353,7 +380,8 @@
+ 				Ransom.class,
+ 				ZipCode.class,
+ 				Flight.class,
+-				Name.class
++				Name.class,
++				ContactDetails.class
+ 		};
+ 	}
+ 
+Index: src/test/java/org/hibernate/test/annotations/entity/ContactDetails.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/ContactDetails.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/ContactDetails.java	(revision 0)
+@@ -0,0 +1,78 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++import org.hibernate.annotations.Type;
++import org.hibernate.annotations.TypeDef;
++
++@TypeDef(
++	name = "phoneNumber",
++	defaultForType = PhoneNumber.class,
++	typeClass = PhoneNumberType.class
++)
++
++/**
++ * @author Sharath Reddy
++ *
++ */
++@Entity
++public class ContactDetails {
++
++	@Id
++	@GeneratedValue
++	private int id;
++		
++	private PhoneNumber localPhoneNumber;
++	@Type(type="phoneNumber")
++	private OverseasPhoneNumber overseasPhoneNumber;
++	
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	public PhoneNumber getLocalPhoneNumber() {
++		return localPhoneNumber;
++	}
++	public void setLocalPhoneNumber(PhoneNumber localPhoneNumber) {
++		this.localPhoneNumber = localPhoneNumber;
++	}
++	public OverseasPhoneNumber getOverseasPhoneNumber() {
++		return overseasPhoneNumber;
++	}
++	public void setOverseasPhoneNumber(OverseasPhoneNumber overseasPhoneNumber) {
++		this.overseasPhoneNumber = overseasPhoneNumber;
++	}
++	
++	
++	
++	
++	
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/OverseasPhoneNumber.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/OverseasPhoneNumber.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/OverseasPhoneNumber.java	(revision 0)
+@@ -0,0 +1,33 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.annotations.entity;
++
++public class OverseasPhoneNumber extends PhoneNumber {
++	
++	public OverseasPhoneNumber(String val) {
++		super(val);
++	}
++	
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/PhoneNumber.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/PhoneNumber.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/PhoneNumber.java	(revision 0)
+@@ -0,0 +1,45 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.annotations.entity;
++
++/**
++ * @author Sharath Reddy
++ *
++ */
++public class PhoneNumber {
++	
++	private String number;
++	
++	public PhoneNumber(String val) {
++		number = val;
++	}
++		
++	public String getNumber() {
++		return number;
++	}
++
++	public void setNumber(String number) {
++		this.number = number;
++	}
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/PhoneNumberType.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/PhoneNumberType.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/PhoneNumberType.java	(revision 0)
+@@ -0,0 +1,94 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.entity;
++
++import java.io.Serializable;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.sql.Types;
++import org.hibernate.HibernateException;
++import org.hibernate.usertype.UserType;
++
++/**
++ * Used to persist and retrieve objects of type 'PhoneNumber' 
++ *
++ * @author Sharath Reddy 
++ */
++public class PhoneNumberType implements UserType {
++
++	public int[] sqlTypes() {
++		return new int[]{Types.VARCHAR};
++	}
++
++	public Class returnedClass() {
++		return PhoneNumber.class;
++	}
++
++	public boolean equals(Object x, Object y) throws HibernateException {
++		return ( x == y ) || ( x != null && x.equals( y ) );
++	}
++
++	public int hashCode(Object x) throws HibernateException {
++		return x.hashCode();
++	}
++
++	public Object nullSafeGet(ResultSet rs, String[] names, Object owner) throws HibernateException, SQLException {
++		String result = rs.getString( names[0] );
++		if ( rs.wasNull() ) return null;
++		return new OverseasPhoneNumber(result);
++	}
++
++	public void nullSafeSet(PreparedStatement st, Object value, int index) throws HibernateException, SQLException {
++		if ( value == null ) {
++			st.setNull( index, sqlTypes()[0] );
++		}
++		else {
++			PhoneNumber phoneNumber = (PhoneNumber) value;
++			st.setString( index, phoneNumber.getNumber() );
++		}
++	}
++
++	public Object deepCopy(Object value) throws HibernateException {
++		return value;
++	}
++
++	public boolean isMutable() {
++		return false;
++	}
++
++	public Serializable disassemble(Object value) throws HibernateException {
++		return (Serializable) value;
++	}
++
++	public Object assemble(Serializable cached, Object owner) throws HibernateException {
++		return cached;
++	}
++
++	public Object replace(Object original, Object target, Object owner) throws HibernateException {
++		return original;
++	}
++
++}
+\ No newline at end of file

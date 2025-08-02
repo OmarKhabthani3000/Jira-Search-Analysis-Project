@@ -1,0 +1,94 @@
+From 27b17bcb2630486bccaa35200ef55b216b9431af Mon Sep 17 00:00:00 2001
+From: Isak Jonsson <isak@vidispine.com>
+Date: Wed, 7 Mar 2012 22:43:32 +0100
+Subject: [PATCH] fix for HHH-6344, negated row-value IN queries
+
+detecting if Node is NOT_IN, if so apply some De Morgan rules
+---
+ .../hql/internal/ast/tree/InLogicOperatorNode.java |   26 ++++++++++++-------
+ 1 files changed, 16 insertions(+), 10 deletions(-)
+
+diff --git a/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/InLogicOperatorNode.java b/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/InLogicOperatorNode.java
+index 7be4152..016e0b0 100644
+--- a/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/InLogicOperatorNode.java
++++ b/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/InLogicOperatorNode.java
+@@ -88,7 +88,7 @@ public class InLogicOperatorNode extends BinaryLogicOperatorNode implements Bina
+             rhsColumnSpan = rhsType.getColumnSpan( sessionFactory );
+         }
+ 		if ( lhsColumnSpan > 1 && rhsColumnSpan > 1 ) {
+-			mutateRowValueConstructorSyntaxInInListSyntax( lhsColumnSpan, rhsColumnSpan );
++			mutateRowValueConstructorSyntaxInInListSyntax( lhsColumnSpan, rhsColumnSpan, getType() == HqlTokenTypes.NOT_IN );
+ 		}
+ 	}
+ 	
+@@ -112,7 +112,7 @@ public class InLogicOperatorNode extends BinaryLogicOperatorNode implements Bina
+      * @param lhsColumnSpan The number of elements in the row value constructor list.
+      */
+     private void mutateRowValueConstructorSyntaxInInListSyntax(
+-            int lhsColumnSpan, int rhsColumnSpan ) {
++            int lhsColumnSpan, int rhsColumnSpan, boolean invert ) {
+         String[] lhsElementTexts = extractMutationTexts( getLeftHandOperand(),
+                 lhsColumnSpan );
+         Node rhsNode = (Node) getInList().getFirstChild();
+@@ -121,6 +121,12 @@ public class InLogicOperatorNode extends BinaryLogicOperatorNode implements Bina
+                 || ( !ParameterNode.class.isInstance( getLeftHandOperand() ) ) ? null
+                 : ( (ParameterNode) getLeftHandOperand() )
+                         .getHqlParameterSpecification();
++        int andType = invert ? HqlSqlTokenTypes.OR : HqlSqlTokenTypes.AND;
++        String andText =  invert ? "OR" : "AND";
++        int orType = invert ? HqlSqlTokenTypes.AND : HqlSqlTokenTypes.OR;
++        String orText =  invert ? "AND" : "OR";
++        int eqType = invert ? HqlSqlTokenTypes.NE : HqlSqlTokenTypes.EQ;
++        String eqText =  invert ? "<>" : "=";
+         /**
+          * only one element in "in" cluster, e.g.
+          * <code> where (a,b) in ( (1,2) ) </code> this will be mutated to
+@@ -129,13 +135,13 @@ public class InLogicOperatorNode extends BinaryLogicOperatorNode implements Bina
+         if ( rhsNode != null && rhsNode.getNextSibling() == null ) {
+             String[] rhsElementTexts = extractMutationTexts( rhsNode,
+                     rhsColumnSpan );
+-            setType( HqlSqlTokenTypes.AND );
+-            setText( "AND" );
++            setType( andType );
++            setText( andText );
+             ParameterSpecification rhsEmbeddedCompositeParameterSpecification = rhsNode == null
+                     || ( !ParameterNode.class.isInstance( rhsNode ) ) ? null
+                     : ( (ParameterNode) rhsNode )
+                             .getHqlParameterSpecification();
+-            translate( lhsColumnSpan, HqlSqlTokenTypes.EQ, "=", lhsElementTexts,
++            translate( lhsColumnSpan, eqType, eqText, lhsElementTexts,
+                     rhsElementTexts,
+                     lhsEmbeddedCompositeParameterSpecification,
+                     rhsEmbeddedCompositeParameterSpecification, this );
+@@ -144,23 +150,23 @@ public class InLogicOperatorNode extends BinaryLogicOperatorNode implements Bina
+             while ( rhsNode != null ) {
+                 String[] rhsElementTexts = extractMutationTexts( rhsNode,
+                         rhsColumnSpan );
+-                AST and = getASTFactory().create( HqlSqlTokenTypes.AND, "AND" );
++                AST and = getASTFactory().create( andType, andText );
+                 ParameterSpecification rhsEmbeddedCompositeParameterSpecification = rhsNode == null
+                         || ( !ParameterNode.class.isInstance( rhsNode ) ) ? null
+                         : ( (ParameterNode) rhsNode )
+                                 .getHqlParameterSpecification();
+-                translate( lhsColumnSpan, HqlSqlTokenTypes.EQ, "=",
++                translate( lhsColumnSpan, eqType, eqText,
+                         lhsElementTexts, rhsElementTexts,
+                         lhsEmbeddedCompositeParameterSpecification,
+                         rhsEmbeddedCompositeParameterSpecification, and );
+                 andElementsNodeList.add( and );
+                 rhsNode = (Node) rhsNode.getNextSibling();
+             }
+-            setType( HqlSqlTokenTypes.OR );
+-            setText( "OR" );
++            setType( orType );
++            setText( orText );
+             AST curNode = this;
+             for ( int i = andElementsNodeList.size() - 1; i > 1; i-- ) {
+-                AST or = getASTFactory().create( HqlSqlTokenTypes.OR, "OR" );
++                AST or = getASTFactory().create( orType, orText );
+                 curNode.setFirstChild( or );
+                 curNode = or;
+                 AST and = (AST) andElementsNodeList.get( i );
+-- 
+1.7.1
+

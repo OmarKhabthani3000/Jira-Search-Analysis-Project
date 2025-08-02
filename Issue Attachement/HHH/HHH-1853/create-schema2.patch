@@ -1,0 +1,163 @@
+Index: src/org/hibernate/dialect/Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/Dialect.java	(revision 14027)
++++ src/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -1762,4 +1762,9 @@
+ 	public boolean supportsBindAsCallableArgument() {
+ 		return true;
+ 	}
++
++    public String getCreateSchemaString(String schema)
++    {
++        return "create schema " + schema;
++    }
+ }
+Index: src/org/hibernate/dialect/HSQLDialect.java
+===================================================================
+--- src/org/hibernate/dialect/HSQLDialect.java	(revision 14027)
++++ src/org/hibernate/dialect/HSQLDialect.java	(working copy)
+@@ -323,4 +323,10 @@
+ 	public boolean supportsLobValueChangePropogation() {
+ 		return false;
+ 	}
++
++    @Override
++    public String getCreateSchemaString(String schema)
++    {
++        return super.getCreateSchemaString(schema) + " authorization dba";
++    }
+ }
+Index: src/org/hibernate/cfg/Configuration.java
+===================================================================
+--- src/org/hibernate/cfg/Configuration.java	(revision 14027)
++++ src/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -180,8 +180,8 @@
+ 
+ 	private transient Mapping mapping = buildMapping();
+ 
+-	
+ 
++
+ 	protected Configuration(SettingsFactory settingsFactory) {
+ 		this.settingsFactory = settingsFactory;
+ 		reset();
+@@ -826,10 +826,30 @@
+ 			}
+ 		}
+ 
+-		return ArrayHelper.toStringArray( script );
++        Set schemas = findSchemaDefinitions( dialect );
++        Iterator each = schemas.iterator();
++        while ( each.hasNext() ) {
++            String schema = (String)each.next();
++            script.add( "drop schema " + schema );
++        }
++
++        return ArrayHelper.toStringArray( script );
+ 	}
+ 
+-	/**
++    public Set findSchemaDefinitions( Dialect dialect ) {
++        Set schemas = new HashSet();
++        Iterator each = getTableMappings();
++        while ( each.hasNext() ) {
++            Table t = (Table)each.next();
++            if ( t.isPhysicalTable() ) {
++                String schema = t.getQuotedSchema( dialect );
++                if ( schema != null ) schemas.add( schema );
++            }
++        }
++        return schemas;
++    }
++
++    /**
+ 	 * Generate DDL for creating tables
+ 	 *
+ 	 * @see org.hibernate.tool.hbm2ddl.SchemaExport
+@@ -841,7 +861,16 @@
+ 		String defaultCatalog = properties.getProperty( Environment.DEFAULT_CATALOG );
+ 		String defaultSchema = properties.getProperty( Environment.DEFAULT_SCHEMA );
+ 
+-		Iterator iter = getTableMappings();
++        Set schemas = findSchemaDefinitions( dialect );
++        Iterator each = schemas.iterator();
++        while ( each.hasNext() ) {
++            String schema = (String)each.next();
++            script.add( dialect.getCreateSchemaString( schema ));
++        }
++
++
++        // generate table statements...
++        Iterator iter = getTableMappings();
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+@@ -860,6 +889,7 @@
+ 			}
+ 		}
+ 
++        // generate constraint statements...
+ 		iter = getTableMappings();
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+@@ -944,7 +974,7 @@
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+-				
++
+ 				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+ 						table.getName(),
+ 						( table.getSchema() == null ) ? defaultSchema : table.getSchema(),
+@@ -1064,13 +1094,13 @@
+ 
+ 		String defaultCatalog = properties.getProperty( Environment.DEFAULT_CATALOG );
+ 		String defaultSchema = properties.getProperty( Environment.DEFAULT_SCHEMA );
+-		
++
+ 		Iterator iter = getTableMappings();
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+-				
+ 
++
+ 				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+ 						table.getName(),
+ 						( table.getSchema() == null ) ? defaultSchema : table.getSchema(),
+@@ -1127,7 +1157,7 @@
+ 		while ( iter.hasNext() ) {
+ 			SecondPass sp = (SecondPass) iter.next();
+ 			if ( ! (sp instanceof QuerySecondPass) ) {
+-				sp.doSecondPass( classes ); 
++				sp.doSecondPass( classes );
+ 				iter.remove();
+ 			}
+ 		}
+@@ -1136,7 +1166,7 @@
+ 		iter = secondPasses.iterator();
+ 		while ( iter.hasNext() ) {
+ 			SecondPass sp = (SecondPass) iter.next();
+-			sp.doSecondPass( classes ); 
++			sp.doSecondPass( classes );
+ 			iter.remove();
+ 		}
+ 
+@@ -2066,7 +2096,7 @@
+ 				Property prop = pc.getReferencedProperty( propertyName );
+ 				if ( prop == null ) {
+ 					throw new MappingException(
+-							"property not known: " + 
++							"property not known: " +
+ 							persistentClass + '.' + propertyName
+ 						);
+ 				}
+@@ -2096,7 +2126,7 @@
+ 	public Map getSqlFunctions() {
+ 		return sqlFunctions;
+ 	}
+-	
++
+ 	public void addSqlFunction(String functionName, SQLFunction function) {
+ 		sqlFunctions.put( functionName, function );
+ 	}

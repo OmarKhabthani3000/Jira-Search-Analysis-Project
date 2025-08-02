@@ -1,0 +1,1482 @@
+Index: src/org/hibernate/Criteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/Criteria.java,v
+retrieving revision 1.18
+diff -u -r1.18 Criteria.java
+--- src/org/hibernate/Criteria.java	29 Apr 2005 15:13:02 -0000	1.18
++++ src/org/hibernate/Criteria.java	14 Dec 2005 23:35:41 -0000
+@@ -7,6 +7,7 @@
+ import org.hibernate.criterion.Criterion;
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
++import org.hibernate.sql.JoinFragment;
+ import org.hibernate.transform.ResultTransformer;
+ 
+ /**
+@@ -74,7 +75,7 @@
+ 	 * @return Criteria
+ 	 */
+ 	public Criteria add(Criterion criterion);
+-	
++
+ 	/**
+ 	 * Add an <tt>Order</tt> to the result set.
+ 	 *
+@@ -93,12 +94,19 @@
+ 	 * @return the Criteria object for method chaining
+ 	 */
+ 	public Criteria setFetchMode(String associationPath, FetchMode mode) throws HibernateException;
++
+ 	/**
+ 	 * Join an association, assigning an alias to the joined entity
+ 	 */
+ 	public Criteria createAlias(String associationPath, String alias) throws HibernateException;
+ 
+ 	/**
++	 * Join an association, assigning an alias to the joined entity and using the
++	 * specified join type (by default <tt>JoinFragment.INNER_JOIN</tt>).
++	 */
++	public Criteria createAlias(String associationPath, String alias, int joinType) throws HibernateException;
++
++	/**
+ 	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity
+ 	 */
+ 	public Criteria createCriteria(String associationPath) throws HibernateException;
+@@ -110,11 +118,25 @@
+ 	public Criteria createCriteria(String associationPath, String alias) throws HibernateException;
+ 
+ 	/**
++	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity, using the
++	 * specified join type(by default <tt>JoinFragment.INNER_JOIN</tt>).
++	 */
++	public Criteria createCriteria(String associationPath, int joinType) throws HibernateException;
++
++	/**
++	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity,
++	 * assigning the given alias and using the specified join type
++	 * (by default <tt>JoinFragment.INNER_JOIN</tt>).
++	 */
++	public Criteria createCriteria(String associationPath, String alias, int joinType) throws HibernateException;
++
++
++	/**
+ 	 * Set a projection of projection list, and select
+ 	 * the <tt>PROJECTION</tt> result transformer
+ 	 */
+ 	public Criteria setProjection(Projection projection);
+-	
++
+ 	/**
+ 	 * Get the alias of the entity
+ 	 */
+@@ -138,7 +160,7 @@
+ 	 * @return Criteria
+ 	 */
+ 	public Criteria setMaxResults(int maxResults);
+-	
++
+ 	/**
+ 	 * Set the first result to be retrieved.
+ 	 *
+@@ -146,7 +168,7 @@
+ 	 * @return Criteria
+ 	 */
+ 	public Criteria setFirstResult(int firstResult);
+-	
++
+ 	/**
+ 	 * Set a fetch size for the underlying JDBC query.
+ 	 * @param fetchSize the fetch size
+@@ -181,7 +203,7 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public List list() throws HibernateException;
+-	
++
+ 	/**
+ 	 * Get the results as an instance of <tt>ScrollableResults</tt>.
+ 	 *
+@@ -224,15 +246,15 @@
+ 	 * @param comment a human-readable string
+ 	 */
+ 	public Criteria setComment(String comment);
+-	
++
+ 	/**
+ 	 * Override the flush mode
+ 	 */
+ 	public Criteria setFlushMode(FlushMode flushMode);
+-	
++
+ 	/**
+ 	 * Override the cache mode
+ 	 */
+ 	public Criteria setCacheMode(CacheMode cacheMode);
+-	
++
+ }
+\ No newline at end of file
+Index: src/org/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.31
+diff -u -r1.31 CriteriaImpl.java
+--- src/org/hibernate/impl/CriteriaImpl.java	6 Dec 2005 03:35:39 -0000	1.31
++++ src/org/hibernate/impl/CriteriaImpl.java	14 Dec 2005 23:35:41 -0000
+@@ -21,6 +21,7 @@
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.sql.JoinFragment;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -51,13 +52,13 @@
+ 	private String comment;
+ 	private transient SessionImplementor session;
+ 	private final String rootAlias;
+-	
++
+ 	private ResultTransformer resultTransformer = Criteria.ROOT_ENTITY;
+-	
++
+ 	public void setSession(SessionImplementor session) {
+ 		this.session = session;
+ 	}
+-	
++
+ 	public SessionImplementor getSession() {
+ 		return session;
+ 	}
+@@ -65,36 +66,50 @@
+ 	public Iterator iterateSubcriteria() {
+ 		return subcriteriaList.iterator();
+ 	}
+-	
++
+ 	public final class Subcriteria implements Criteria, Serializable {
+ 
+ 		private String alias;
+ 		private String path;
+ 		private Criteria parent;
+ 		private LockMode lockMode;
+-		
++		private int joinType;
++
+ 		public Criteria getParent() {
+ 			return parent;
+ 		}
+-		
++
+ 		public String getPath() {
+ 			return path;
+ 		}
+-		
+-		public String toString() { 
+-			return "Subcriteria(" + 
+-				path + ":" + 
+-				(alias==null ? "" : alias) + 
+-				')'; 
++
++		public int getJoinType() {
++			return joinType;
+ 		}
+ 
+-		private Subcriteria(Criteria parent, String path, String alias) {
++		public String toString() {
++			return "Subcriteria(" +
++				path + ":" +
++				(alias==null ? "" : alias) +
++				')';
++		}
++
++		private Subcriteria(Criteria parent, String path, String alias, int joinType) {
+ 			this.alias = alias;
+ 			this.path = path;
+ 			this.parent = parent;
++			this.joinType = joinType;
+ 			CriteriaImpl.this.subcriteriaList.add(this);
+ 		}
+ 
++		private Subcriteria(Criteria parent, String path, String alias) {
++			this(parent, path, alias, JoinFragment.INNER_JOIN);
++		}
++
++		private Subcriteria(Criteria parent, String path, int joinType) {
++			this(parent, path, null, joinType);
++		}
++
+ 		private Subcriteria(Criteria parent, String path) {
+ 			this(parent, path, null);
+ 		}
+@@ -103,11 +118,11 @@
+ 			this.alias = alias;
+ 			return this;
+ 		}
+-		
++
+ 		public String getAlias() {
+ 			return alias;
+ 		}
+-		
++
+ 		public Criteria add(Criterion expression) {
+ 			CriteriaImpl.this.add(this, expression);
+ 			return this;
+@@ -119,6 +134,12 @@
+ 			return this;
+ 		}
+ 
++		public Criteria createAlias(String associationPath, String alias, int joinType)
++			throws HibernateException {
++			new Subcriteria(this, associationPath, alias, joinType);
++			return this;
++		}
++
+ 		public Criteria addOrder(Order order) {
+ 			CriteriaImpl.this.orderEntries.add( new OrderEntry(order, this) );
+ 			return this;
+@@ -139,6 +160,11 @@
+ 			return new Subcriteria(Subcriteria.this, associationPath);
+ 		}
+ 
++		public Criteria createCriteria(String associationPath, int joinType)
++			throws HibernateException {
++			return new Subcriteria(Subcriteria.this, associationPath, joinType);
++		}
++
+ 		public List list() throws HibernateException {
+ 			return CriteriaImpl.this.list();
+ 		}
+@@ -165,12 +191,12 @@
+ 			CriteriaImpl.this.setFlushMode(flushMode);
+ 			return this;
+ 		}
+-		
++
+ 		public Criteria setCacheMode(CacheMode cacheMode) {
+ 			CriteriaImpl.this.setCacheMode(cacheMode);
+ 			return this;
+ 		}
+-		
++
+ 		public Criteria setFirstResult(int firstResult) {
+ 			CriteriaImpl.this.setFirstResult(firstResult);
+ 			return this;
+@@ -195,12 +221,17 @@
+ 			throws HibernateException {
+ 			return new Subcriteria(Subcriteria.this, associationPath, alias);
+ 		}
+-		
++
++		public Criteria createCriteria(String associationPath, String alias, int joinType)
++			throws HibernateException {
++			return new Subcriteria(Subcriteria.this, associationPath, alias, joinType);
++		}
++
+ 		public Criteria setLockMode(LockMode lockMode) {
+ 			this.lockMode = lockMode;
+ 			return this;
+ 		}
+-		
++
+ 		public LockMode getLockMode() {
+ 			return lockMode;
+ 		}
+@@ -232,12 +263,12 @@
+ 		this.flushMode = flushMode;
+ 		return this;
+ 	}
+-	
++
+ 	public Criteria setCacheMode(CacheMode cacheMode) {
+ 		this.cacheMode = cacheMode;
+ 		return this;
+ 	}
+-	
++
+ 	public Criteria setMaxResults(int maxResults) {
+ 		this.maxResults = new Integer(maxResults);
+ 		return this;
+@@ -270,7 +301,7 @@
+ 	public String getAlias() {
+ 		return rootAlias;
+ 	}
+-	
++
+ 	public Integer getMaxResults() {
+ 		return maxResults;
+ 	}
+@@ -301,7 +332,7 @@
+ 			after();
+ 		}
+ 	}
+-	
++
+ 	public ScrollableResults scroll() {
+ 		before();
+ 		try {
+@@ -349,11 +380,11 @@
+ 	}
+ 
+ 	public String toString() {
+-		return "CriteriaImpl(" + 
+-			entityOrClassName + ":" + 
+-			(rootAlias==null ? "" : rootAlias) + 
+-			subcriteriaList.toString() + 
+-			criterionEntries.toString() + 
++		return "CriteriaImpl(" +
++			entityOrClassName + ":" +
++			(rootAlias==null ? "" : rootAlias) +
++			subcriteriaList.toString() +
++			criterionEntries.toString() +
+ 			( projection==null ? "" : projection.toString() ) +
+ 			')';
+ 	}
+@@ -372,17 +403,23 @@
+ 		return this;
+ 	}
+ 
+-	public Criteria createAlias(String associationPath, String alias) 
++	public Criteria createAlias(String associationPath, String alias)
+ 	throws HibernateException {
+ 		new Subcriteria(this, associationPath, alias);
+ 		return this;
+ 	}
+ 
++	public Criteria createAlias(String associationPath, String alias, int joinType)
++	throws HibernateException {
++		new Subcriteria(this, associationPath, alias, joinType);
++		return this;
++	}
++
+ 	public Criteria add(Criteria criteriaInst, Criterion expression) {
+ 		criterionEntries.add( new CriterionEntry(expression, criteriaInst) );
+ 		return this;
+ 	}
+-	
++
+ 	public static final class CriterionEntry implements Serializable {
+ 		private final Criterion criterion;
+ 		private final Criteria criteria;
+@@ -430,11 +467,21 @@
+ 	public Object uniqueResult() throws HibernateException {
+ 		return AbstractQueryImpl.uniqueElement( list() );
+ 	}
+-	
++
+ 	public String getEntityOrClassName() {
+ 		return entityOrClassName;
+ 	}
+ 
++	public Criteria createCriteria(String associationPath, String alias, int joinType)
++	throws HibernateException {
++		return new Subcriteria(this, associationPath, alias, joinType);
++	}
++
++	public Criteria createCriteria(String associationPath, int joinType)
++	throws HibernateException {
++		return new Subcriteria(this, associationPath, joinType);
++	}
++
+ 	public Criteria createCriteria(String associationPath, String alias)
+ 		throws HibernateException {
+ 		return new Subcriteria(this, associationPath, alias);
+@@ -482,11 +529,11 @@
+ 		setResultTransformer(PROJECTION);
+ 		return this;
+ 	}
+-	
++
+ 	public Projection getProjection() {
+ 		return projection;
+ 	}
+-	
++
+ 	public Criteria getProjectionCriteria() {
+ 		return projectionCriteria;
+ 	}
+@@ -501,7 +548,7 @@
+ 			getSession().setCacheMode(cacheMode);
+ 		}
+ 	}
+-	
++
+ 	protected void after() {
+ 		if (sessionFlushMode!=null) {
+ 			getSession().setFlushMode(sessionFlushMode);
+@@ -512,7 +559,7 @@
+ 			sessionCacheMode = null;
+ 		}
+ 	}
+-	
++
+ 	public boolean isLookupByNaturalKey() {
+ 		if (projection!=null) return false;
+ 		if ( subcriteriaList.size()>0 ) return false;
+Index: src/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java,v
+retrieving revision 1.5
+diff -u -r1.5 CriteriaJoinWalker.java
+--- src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	26 Jul 2005 05:51:46 -0000	1.5
++++ src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	14 Dec 2005 23:35:41 -0000
+@@ -18,7 +18,6 @@
+ import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+ import org.hibernate.persister.entity.Queryable;
+-import org.hibernate.sql.JoinFragment;
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
+@@ -32,8 +31,8 @@
+  */
+ public class CriteriaJoinWalker extends AbstractEntityJoinWalker {
+ 
+-	//TODO: this class depends directly upon CriteriaImpl, 
+-	//      in the impl package ... add a CriteriaImplementor 
++	//TODO: this class depends directly upon CriteriaImpl,
++	//      in the impl package ... add a CriteriaImplementor
+ 	//      interface
+ 
+ 	//NOTE: unlike all other Loaders, this one is NOT
+@@ -56,10 +55,10 @@
+ 	}
+ 
+ 	public CriteriaJoinWalker(
+-			final OuterJoinLoadable persister, 
++			final OuterJoinLoadable persister,
+ 			final CriteriaQueryTranslator translator,
+-			final SessionFactoryImplementor factory, 
+-			final CriteriaImpl criteria, 
++			final SessionFactoryImplementor factory,
++			final CriteriaImpl criteria,
+ 			final String rootEntityName,
+ 			final Map enabledFilters)
+ 	throws HibernateException {
+@@ -71,13 +70,13 @@
+ 
+ 		if ( translator.hasProjection() ) {
+ 			resultTypes = translator.getProjectedTypes();
+-			
+-			initProjection( 
+-					translator.getSelect(), 
+-					translator.getWhereCondition(), 
++
++			initProjection(
++					translator.getSelect(),
++					translator.getWhereCondition(),
+ 					translator.getOrderBy(),
+ 					translator.getGroupBy(),
+-					LockMode.NONE 
++					LockMode.NONE
+ 				);
+ 		}
+ 		else {
+@@ -85,15 +84,15 @@
+ 
+ 			initAll( translator.getWhereCondition(), translator.getOrderBy(), LockMode.NONE );
+ 		}
+-		
++
+ 		userAliasList.add( criteria.getAlias() ); //root entity comes *last*
+ 		userAliases = ArrayHelper.toStringArray(userAliasList);
+ 
+ 	}
+ 
+ 	protected int getJoinType(
+-			AssociationType type, 
+-			FetchMode config, 
++			AssociationType type,
++			FetchMode config,
+ 			String path,
+ 			String lhsTable,
+ 			String[] lhsColumns,
+@@ -102,7 +101,7 @@
+ 	throws MappingException {
+ 
+ 		if ( translator.isJoin(path) ) {
+-			return JoinFragment.INNER_JOIN;
++			return translator.getJoinType(path);
+ 		}
+ 		else {
+ 			if ( translator.hasProjection() ) {
+@@ -113,11 +112,11 @@
+ 					.getFetchMode(path);
+ 				if ( isDefaultFetchMode(fetchMode) ) {
+ 					return super.getJoinType(
+-							type, 
+-							config, 
+-							path, 
+-							lhsTable, 
+-							lhsColumns, 
++							type,
++							config,
++							path,
++							lhsTable,
++							lhsColumns,
+ 							nullable,
+ 							currentDepth, cascadeStyle
+ 						);
+@@ -134,7 +133,7 @@
+ 			}
+ 		}
+ 	}
+-	
++
+ 	private static boolean isDefaultFetchMode(FetchMode fetchMode) {
+ 		return fetchMode==null || fetchMode==FetchMode.DEFAULT;
+ 	}
+@@ -147,7 +146,7 @@
+ 		return super.getWhereFragment() +
+ 			( (Queryable) getPersister() ).filterFragment( getAlias(), getEnabledFilters() );
+ 	}
+-	
++
+ 	protected String generateTableAlias(int n, String path, Joinable joinable) {
+ 		if ( joinable.consumesEntityAlias() ) {
+ 			final Criteria subcriteria = translator.getCriteria(path);
+@@ -170,7 +169,7 @@
+ 	public Set getQuerySpaces() {
+ 		return querySpaces;
+ 	}
+-	
++
+ 	public String getComment() {
+ 		return "criteria query";
+ 	}
+Index: src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java,v
+retrieving revision 1.7
+diff -u -r1.7 CriteriaQueryTranslator.java
+--- src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	30 Nov 2005 13:49:03 -0000	1.7
++++ src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	14 Dec 2005 23:35:41 -0000
+@@ -18,20 +18,21 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
+-import org.hibernate.hql.ast.util.SessionFactoryHelper;
+ import org.hibernate.criterion.CriteriaQuery;
+ import org.hibernate.criterion.Projection;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.RowSelection;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.TypedValue;
++import org.hibernate.hql.ast.util.SessionFactoryHelper;
+ import org.hibernate.impl.CriteriaImpl;
+ import org.hibernate.persister.entity.Loadable;
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.sql.JoinFragment;
+ import org.hibernate.type.AssociationType;
+-import org.hibernate.type.Type;
+ import org.hibernate.type.NullableType;
++import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -53,6 +54,7 @@
+ 	private final Map criteriaSQLAliasMap = new HashMap();
+ 	private final Map aliasCriteriaMap = new HashMap();
+ 	private final Map associationPathCriteriaMap = new SequencedHashMap();
++	private final Map associationPathJoinTypesMap = new SequencedHashMap();
+ 
+ 	private final SessionFactoryImplementor sessionFactory;
+ 
+@@ -105,6 +107,11 @@
+ 		return (Criteria) associationPathCriteriaMap.get(path);
+ 	}
+ 
++	public int getJoinType(String path) {
++		Integer result = (Integer) associationPathJoinTypesMap.get(path);
++		return (result == null ? JoinFragment.INNER_JOIN : result.intValue());
++	}
++
+ 	public Set getQuerySpaces() {
+ 		Set result = new HashSet();
+ 		Iterator iter = criteriaEntityNames.values().iterator();
+@@ -134,11 +141,16 @@
+ 		Iterator iter = rootCriteria.iterateSubcriteria();
+ 		while ( iter.hasNext() ) {
+ 			CriteriaImpl.Subcriteria crit = (CriteriaImpl.Subcriteria) iter.next();
++			int joinType = crit.getJoinType();
+ 			String wholeAssociationPath = getWholeAssociationPath(crit);
+ 			Object old = associationPathCriteriaMap.put( wholeAssociationPath, crit );
+ 			if (old!=null) {
+ 				throw new QueryException("duplicate association path: " + wholeAssociationPath );
+ 			}
++			old = associationPathJoinTypesMap.put( wholeAssociationPath, Integer.valueOf(joinType) );
++			if (old!=null) {
++				throw new QueryException("duplicate association path: " + wholeAssociationPath );
++			}
+ 		}
+ 	}
+ 
+Index: test/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/criteria/CriteriaQueryTest.java,v
+retrieving revision 1.29
+diff -u -r1.29 CriteriaQueryTest.java
+--- test/org/hibernate/test/criteria/CriteriaQueryTest.java	30 Nov 2005 13:49:03 -0000	1.29
++++ test/org/hibernate/test/criteria/CriteriaQueryTest.java	14 Dec 2005 23:35:42 -0000
+@@ -13,11 +13,23 @@
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+-import org.hibernate.criterion.*;
+-import org.hibernate.dialect.HSQLDialect;
++import org.hibernate.criterion.DetachedCriteria;
++import org.hibernate.criterion.Expression;
++import org.hibernate.criterion.MatchMode;
++import org.hibernate.criterion.Order;
++import org.hibernate.criterion.Projection;
++import org.hibernate.criterion.Projections;
++import org.hibernate.criterion.Property;
++import org.hibernate.criterion.Restrictions;
++import org.hibernate.criterion.Subqueries;
++import org.hibernate.sql.JoinFragment;
+ import org.hibernate.test.TestCase;
+-import org.hibernate.test.hql.Reptile;
++import org.hibernate.test.criteria.Course;
++import org.hibernate.test.criteria.Enrolment;
++import org.hibernate.test.criteria.Student;
++import org.hibernate.test.criteria.StudentDTO;
+ import org.hibernate.test.hql.Animal;
++import org.hibernate.test.hql.Reptile;
+ import org.hibernate.transform.AliasToBeanResultTransformer;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.SerializationHelper;
+@@ -26,11 +38,11 @@
+  * @author Gavin King
+  */
+ public class CriteriaQueryTest extends TestCase {
+-	
++
+ 	public CriteriaQueryTest(String str) {
+ 		super(str);
+ 	}
+-	
++
+ 	public void testScrollCriteria() {
+ 		Session session = openSession();
+ 		Transaction t = session.beginTransaction();
+@@ -47,12 +59,12 @@
+ 		assertNotNull(course);
+ 		sr.close();
+ 		session.delete(course);
+-		
++
+ 		t.commit();
+ 		session.close();
+-		
++
+ 	}
+-	
++
+ 	public void testSubselect() {
+ 
+ 		Session session = openSession();
+@@ -62,7 +74,7 @@
+ 		course.setCourseCode("HIB");
+ 		course.setDescription("Hibernate Training");
+ 		session.persist(course);
+-		
++
+ 		Student gavin = new Student();
+ 		gavin.setName("Gavin King");
+ 		gavin.setStudentNumber(232);
+@@ -77,7 +89,7 @@
+ 		enrolment2.setStudentNumber(gavin.getStudentNumber());
+ 		gavin.getEnrolments().add(enrolment2);
+ 		session.persist(enrolment2);
+-		
++
+ 		DetachedCriteria dc = DetachedCriteria.forClass(Student.class)
+ 			.add( Property.forName("studentNumber").eq( new Long(232) ) )
+ 			.setProjection( Property.forName("name") );
+@@ -85,23 +97,23 @@
+ 		session.createCriteria(Student.class)
+ 			.add( Subqueries.propertyEqAll("name", dc) )
+ 			.list();
+-		
++
+ 		session.createCriteria(Student.class)
+ 			.add( Subqueries.exists(dc) )
+ 			.list();
+-	
++
+ 		session.createCriteria(Student.class)
+ 		.add( Property.forName("name").eqAll(dc) )
+ 		.list();
+-	
++
+ 		session.createCriteria(Student.class)
+ 			.add( Subqueries.in("Gavin King", dc) )
+ 			.list();
+-		
++
+ 		DetachedCriteria dc2 = DetachedCriteria.forClass(Student.class, "st")
+ 			.add( Property.forName("st.studentNumber").eqProperty("e.studentNumber") )
+ 			.setProjection( Property.forName("name") );
+-		
++
+ 		session.createCriteria(Enrolment.class, "e")
+ 			.add( Subqueries.eq("Gavin King", dc2) )
+ 			.list();
+@@ -112,7 +124,7 @@
+ 				.createCriteria("course")
+ 					.add( Property.forName("description").eq("Hibernate Training") )
+ 					.setProjection( Property.forName("st.name") );
+-	
++
+ 		session.createCriteria(Enrolment.class, "e")
+ 			.add( Subqueries.eq("Gavin King", dc3) )
+ 			.list();*/
+@@ -122,65 +134,124 @@
+ 		session.delete(course);
+ 		t.commit();
+ 		session.close();
+-		
++
+ 	}
+-	
++
++	public void testSubselectJoinTypes() {
++
++		Session session = openSession();
++		Transaction t = session.beginTransaction();
++
++		Course courseA = new Course();
++		courseA.setCourseCode("HIB-A");
++		courseA.setDescription("Hibernate Training A");
++		session.persist(courseA);
++
++		Course courseB = new Course();
++		courseB.setCourseCode("HIB-B");
++		courseB.setDescription("Hibernate Training B");
++		session.persist(courseB);
++
++		Student gavin = new Student();
++		gavin.setName("Gavin King");
++		gavin.setStudentNumber(232);
++		gavin.setPreferredCourse(courseA);
++		gavin.setPreferredCourseCode(courseA.getCourseCode());
++		session.persist(gavin);
++
++		Student leonardo = new Student();
++		leonardo.setName("Leonardo Quijano");
++		leonardo.setStudentNumber(233);
++		leonardo.setPreferredCourse(courseB);
++		gavin.setPreferredCourseCode(courseB.getCourseCode());
++		session.persist(leonardo);
++
++		Student johnDoe = new Student();
++		johnDoe.setName("John Doe");
++		johnDoe.setStudentNumber(235);
++		johnDoe.setPreferredCourse(null);
++		session.persist(johnDoe);
++
++		Criteria c = session.createCriteria(Student.class);
++		c.setProjection( Property.forName("preferredCourse.courseCode") );
++		c.createCriteria("preferredCourse", JoinFragment.LEFT_OUTER_JOIN);
++		c.addOrder(Order.asc("preferredCourse.courseCode"));
++
++		List result = c.list();
++		assertEquals( 3, result.size() );
++		assertNull( result.get(0) );
++		assertEquals( "HIB-A", result.get(1) );
++		assertEquals( "HIB-B", result.get(2) );
++
++		session.delete(gavin);
++		session.delete(leonardo);
++		session.delete(johnDoe);
++
++		session.delete(courseA);
++		session.delete(courseB);
++
++		t.commit();
++		session.close();
++
++	}
++
+ 	public void testDetachedCriteria() {
+-		
++
+ 		DetachedCriteria dc = DetachedCriteria.forClass(Student.class)
+ 			.add( Property.forName("name").eq("Gavin King") )
+ 			.addOrder( Order.asc("studentNumber") )
+ 			.setProjection( Property.forName("studentNumber") );
+-		
++
+ 		byte[] bytes = SerializationHelper.serialize(dc);
+-		
++
+ 		dc = (DetachedCriteria) SerializationHelper.deserialize(bytes);
+-		
++
+ 		Session session = openSession();
+ 		Transaction t = session.beginTransaction();
+ 
+ 		Student gavin = new Student();
+ 		gavin.setName("Gavin King");
+ 		gavin.setStudentNumber(232);
++
+ 		Student bizarroGavin = new Student();
+ 		bizarroGavin.setName("Gavin King");
+ 		bizarroGavin.setStudentNumber(666);
+ 		session.persist(bizarroGavin);
+ 		session.persist(gavin);
+-		
++
+ 		List result = dc.getExecutableCriteria(session)
+ 			.setMaxResults(3)
+ 			.list();
+-		
++
+ 		assertEquals( result.size(), 2 );
+ 		assertEquals( result.get(0), new Long(232) );
+ 		assertEquals( result.get(1), new Long(666) );
+-		
++
+ 		session.delete(gavin);
+ 		session.delete(bizarroGavin);
+ 		t.commit();
+ 		session.close();
+ 	}
+-	
++
+ 	public void testProjectionCache() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+-		
++
+ 		Course course = new Course();
+ 		course.setCourseCode("HIB");
+ 		course.setDescription("Hibernate Training");
+ 		s.save(course);
+-		
++
+ 		Student gavin = new Student();
+ 		gavin.setName("Gavin King");
+ 		gavin.setStudentNumber(666);
+ 		s.save(gavin);
+-		
++
+ 		Student xam = new Student();
+ 		xam.setName("Max Rydahl Andersen");
+ 		xam.setStudentNumber(101);
+ 		s.save(xam);
+-		
++
+ 		Enrolment enrolment1 = new Enrolment();
+ 		enrolment1.setCourse(course);
+ 		enrolment1.setCourseCode(course.getCourseCode());
+@@ -190,7 +261,7 @@
+ 		enrolment1.setStudentNumber(xam.getStudentNumber());
+ 		xam.getEnrolments().add(enrolment1);
+ 		s.save(enrolment1);
+-		
++
+ 		Enrolment enrolment2 = new Enrolment();
+ 		enrolment2.setCourse(course);
+ 		enrolment2.setCourseCode(course.getCourseCode());
+@@ -200,7 +271,7 @@
+ 		enrolment2.setStudentNumber(gavin.getStudentNumber());
+ 		gavin.getEnrolments().add(enrolment2);
+ 		s.save(enrolment2);
+-		
++
+ 		List list = s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "s")
+ 			.createAlias("course", "c")
+@@ -211,17 +282,17 @@
+ 			)
+ 			.setCacheable(true)
+ 			.list();
+-		
++
+ 		assertEquals( list.size(), 2 );
+ 		assertEquals( ( (Object[]) list.get(0) ).length, 2 );
+ 		assertEquals( ( (Object[]) list.get(1) ).length, 2 );
+-		
++
+ 		t.commit();
+ 		s.close();
+ 
+ 		s = openSession();
+ 		t = s.beginTransaction();
+-		
++
+ 		s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "s")
+ 			.createAlias("course", "c")
+@@ -232,17 +303,17 @@
+ 			)
+ 			.setCacheable(true)
+ 			.list();
+-	
++
+ 		assertEquals( list.size(), 2 );
+ 		assertEquals( ( (Object[]) list.get(0) ).length, 2 );
+ 		assertEquals( ( (Object[]) list.get(1) ).length, 2 );
+-		
++
+ 		t.commit();
+ 		s.close();
+ 
+ 		s = openSession();
+ 		t = s.beginTransaction();
+-		
++
+ 		s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "s")
+ 			.createAlias("course", "c")
+@@ -253,40 +324,40 @@
+ 			)
+ 			.setCacheable(true)
+ 			.list();
+-		
++
+ 		assertEquals( list.size(), 2 );
+ 		assertEquals( ( (Object[]) list.get(0) ).length, 2 );
+ 		assertEquals( ( (Object[]) list.get(1) ).length, 2 );
+-		
++
+ 		s.delete(enrolment1);
+ 		s.delete(enrolment2);
+ 		s.delete(course);
+ 		s.delete(gavin);
+ 		s.delete(xam);
+-	
++
+ 		t.commit();
+ 		s.close();
+ }
+-		
++
+ 	public void testProjections() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+-		
++
+ 		Course course = new Course();
+ 		course.setCourseCode("HIB");
+ 		course.setDescription("Hibernate Training");
+ 		s.save(course);
+-		
++
+ 		Student gavin = new Student();
+ 		gavin.setName("Gavin King");
+ 		gavin.setStudentNumber(667);
+ 		s.save(gavin);
+-		
++
+ 		Student xam = new Student();
+ 		xam.setName("Max Rydahl Andersen");
+ 		xam.setStudentNumber(101);
+ 		s.save(xam);
+-		
++
+ 		Enrolment enrolment = new Enrolment();
+ 		enrolment.setCourse(course);
+ 		enrolment.setCourseCode(course.getCourseCode());
+@@ -296,7 +367,7 @@
+ 		enrolment.setStudentNumber(xam.getStudentNumber());
+ 		xam.getEnrolments().add(enrolment);
+ 		s.save(enrolment);
+-		
++
+ 		enrolment = new Enrolment();
+ 		enrolment.setCourse(course);
+ 		enrolment.setCourseCode(course.getCourseCode());
+@@ -306,14 +377,14 @@
+ 		enrolment.setStudentNumber(gavin.getStudentNumber());
+ 		gavin.getEnrolments().add(enrolment);
+ 		s.save(enrolment);
+-		
++
+ 		//s.flush();
+-		
++
+ 		Integer count = (Integer) s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.count("studentNumber").setDistinct() )
+ 			.uniqueResult();
+ 		assertEquals(count, new Integer(2));
+-		
++
+ 		Object object = s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.projectionList()
+ 					.add( Projections.count("studentNumber") )
+@@ -322,45 +393,45 @@
+ 					.add( Projections.avg("studentNumber") )
+ 			)
+ 			.uniqueResult();
+-		Object[] result = (Object[])object; 
+-		
++		Object[] result = (Object[])object;
++
+ 		assertEquals(new Integer(2),result[0]);
+ 		assertEquals(new Long(667),result[1]);
+ 		assertEquals(new Long(101),result[2]);
+ 		assertEquals( 384.0, ( (Double) result[3] ).doubleValue(), 0.01 );
+-		
+-		
++
++
+ 		List resultWithMaps = s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.distinct( Projections.projectionList()
+ 					.add( Projections.property("studentNumber"), "stNumber" )
+ 					.add( Projections.property("courseCode"), "cCode" ) )
+ 			)
+-		    .add( Expression.gt( "studentNumber", new Long(665) ) )
+-		    .add( Expression.lt( "studentNumber", new Long(668) ) )
+-		    .addOrder( Order.asc("stNumber") )
++			.add( Expression.gt( "studentNumber", new Long(665) ) )
++			.add( Expression.lt( "studentNumber", new Long(668) ) )
++			.addOrder( Order.asc("stNumber") )
+ 			.setResultTransformer(Criteria.ALIAS_TO_ENTITY_MAP)
+ 			.list();
+-		
++
+ 		assertEquals(1, resultWithMaps.size());
+ 		Map m1 = (Map) resultWithMaps.get(0);
+-		
++
+ 		assertEquals(new Long(667), m1.get("stNumber"));
+-		assertEquals(course.getCourseCode(), m1.get("cCode"));		
++		assertEquals(course.getCourseCode(), m1.get("cCode"));
+ 
+ 		resultWithMaps = s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.property("studentNumber").as("stNumber") )
+-		    .addOrder( Order.desc("stNumber") )
++			.addOrder( Order.desc("stNumber") )
+ 			.setResultTransformer(Criteria.ALIAS_TO_ENTITY_MAP)
+ 			.list();
+-		
++
+ 		assertEquals(2, resultWithMaps.size());
+ 		Map m0 = (Map) resultWithMaps.get(0);
+ 		m1 = (Map) resultWithMaps.get(1);
+-		
++
+ 		assertEquals(new Long(101), m1.get("stNumber"));
+ 		assertEquals(new Long(667), m0.get("stNumber"));
+ 
+-	
++
+ 		List resultWithAliasedBean = s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "st")
+ 			.createAlias("course", "co")
+@@ -371,13 +442,13 @@
+ 			.addOrder( Order.desc("studentName") )
+ 			.setResultTransformer( new AliasToBeanResultTransformer(StudentDTO.class) )
+ 			.list();
+-		
++
+ 		assertEquals(2, resultWithAliasedBean.size());
+-		
++
+ 		StudentDTO dto = (StudentDTO) resultWithAliasedBean.get(0);
+ 		assertNotNull(dto.getDescription());
+ 		assertNotNull(dto.getName());
+-	
++
+ 		s.createCriteria(Student.class)
+ 			.add( Restrictions.like("name", "Gavin", MatchMode.START) )
+ 			.addOrder( Order.asc("name") )
+@@ -394,27 +465,27 @@
+ 					.add( Projections.property("c.description") )
+ 				)
+ 			.uniqueResult();
+-			
++
+ 		Projection p1 = Projections.projectionList()
+ 			.add( Projections.count("studentNumber") )
+ 			.add( Projections.max("studentNumber") )
+ 			.add( Projections.rowCount() );
+-		
++
+ 		Projection p2 = Projections.projectionList()
+ 			.add( Projections.min("studentNumber") )
+ 			.add( Projections.avg("studentNumber") )
+ 			.add( Projections.sqlProjection(
+-					"1 as constOne, count(*) as countStar", 
+-					new String[] { "constOne", "countStar" }, 
++					"1 as constOne, count(*) as countStar",
++					new String[] { "constOne", "countStar" },
+ 					new Type[] { Hibernate.INTEGER, Hibernate.INTEGER }
+ 			) );
+-	
++
+ 		Object[] array = (Object[]) s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.projectionList().add(p1).add(p2) )
+ 			.uniqueResult();
+-		
++
+ 		assertEquals( array.length, 7 );
+-		
++
+ 		List list = s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "st")
+ 			.createAlias("course", "co")
+@@ -424,43 +495,43 @@
+ 					.add( Projections.groupProperty("year") )
+ 			)
+ 			.list();
+-		
++
+ 		assertEquals( list.size(), 2 );
+-		
++
+ 		Object g = s.createCriteria(Student.class)
+ 			.add( Restrictions.idEq( new Long(667) ) )
+ 			.setFetchMode("enrolments", FetchMode.JOIN)
+ 			//.setFetchMode("enrolments.course", FetchMode.JOIN) //TODO: would love to make that work...
+ 			.uniqueResult();
+ 		assertSame(g, gavin);
+-		
++
+ 		s.delete(gavin);
+ 		s.delete(xam);
+ 		s.delete(course);
+-		
++
+ 		t.commit();
+ 		s.close();
+ 	}
+-		
++
+ 	public void testProjectionsUsingProperty() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+-		
++
+ 		Course course = new Course();
+ 		course.setCourseCode("HIB");
+ 		course.setDescription("Hibernate Training");
+ 		s.save(course);
+-		
++
+ 		Student gavin = new Student();
+ 		gavin.setName("Gavin King");
+ 		gavin.setStudentNumber(667);
+ 		s.save(gavin);
+-		
++
+ 		Student xam = new Student();
+ 		xam.setName("Max Rydahl Andersen");
+ 		xam.setStudentNumber(101);
+ 		s.save(xam);
+-		
++
+ 		Enrolment enrolment = new Enrolment();
+ 		enrolment.setCourse(course);
+ 		enrolment.setCourseCode(course.getCourseCode());
+@@ -470,7 +541,7 @@
+ 		enrolment.setStudentNumber(xam.getStudentNumber());
+ 		xam.getEnrolments().add(enrolment);
+ 		s.save(enrolment);
+-		
++
+ 		enrolment = new Enrolment();
+ 		enrolment.setCourse(course);
+ 		enrolment.setCourseCode(course.getCourseCode());
+@@ -480,14 +551,14 @@
+ 		enrolment.setStudentNumber(gavin.getStudentNumber());
+ 		gavin.getEnrolments().add(enrolment);
+ 		s.save(enrolment);
+-		
++
+ 		s.flush();
+-		
++
+ 		Integer count = (Integer) s.createCriteria(Enrolment.class)
+ 			.setProjection( Property.forName("studentNumber").count().setDistinct() )
+ 			.uniqueResult();
+ 		assertEquals(count, new Integer(2));
+-		
++
+ 		Object object = s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.projectionList()
+ 					.add( Property.forName("studentNumber").count() )
+@@ -496,53 +567,53 @@
+ 					.add( Property.forName("studentNumber").avg() )
+ 			)
+ 			.uniqueResult();
+-		Object[] result = (Object[])object; 
+-		
++		Object[] result = (Object[])object;
++
+ 		assertEquals(new Integer(2),result[0]);
+ 		assertEquals(new Long(667),result[1]);
+ 		assertEquals(new Long(101),result[2]);
+ 		assertEquals(384.0, ( (Double) result[3] ).doubleValue(), 0.01);
+-		
+-		
++
++
+ 		s.createCriteria(Enrolment.class)
+-		    .add( Property.forName("studentNumber").gt( new Long(665) ) )
+-		    .add( Property.forName("studentNumber").lt( new Long(668) ) )
+-		    .add( Property.forName("courseCode").like("HIB", MatchMode.START) )
+-		    .add( Property.forName("year").eq( new Short( (short) 1999 ) ) )
+-		    .addOrder( Property.forName("studentNumber").asc() )
++			.add( Property.forName("studentNumber").gt( new Long(665) ) )
++			.add( Property.forName("studentNumber").lt( new Long(668) ) )
++			.add( Property.forName("courseCode").like("HIB", MatchMode.START) )
++			.add( Property.forName("year").eq( new Short( (short) 1999 ) ) )
++			.addOrder( Property.forName("studentNumber").asc() )
+ 			.uniqueResult();
+-	
++
+ 		List resultWithMaps = s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.projectionList()
+ 					.add( Property.forName("studentNumber").as("stNumber") )
+ 					.add( Property.forName("courseCode").as("cCode") )
+ 			)
+-		    .add( Property.forName("studentNumber").gt( new Long(665) ) )
+-		    .add( Property.forName("studentNumber").lt( new Long(668) ) )
+-		    .addOrder( Property.forName("studentNumber").asc() )
++			.add( Property.forName("studentNumber").gt( new Long(665) ) )
++			.add( Property.forName("studentNumber").lt( new Long(668) ) )
++			.addOrder( Property.forName("studentNumber").asc() )
+ 			.setResultTransformer(Criteria.ALIAS_TO_ENTITY_MAP)
+ 			.list();
+-		
++
+ 		assertEquals(1, resultWithMaps.size());
+ 		Map m1 = (Map) resultWithMaps.get(0);
+-		
++
+ 		assertEquals(new Long(667), m1.get("stNumber"));
+-		assertEquals(course.getCourseCode(), m1.get("cCode"));		
++		assertEquals(course.getCourseCode(), m1.get("cCode"));
+ 
+ 		resultWithMaps = s.createCriteria(Enrolment.class)
+ 			.setProjection( Property.forName("studentNumber").as("stNumber") )
+-		    .addOrder( Order.desc("stNumber") )
++			.addOrder( Order.desc("stNumber") )
+ 			.setResultTransformer(Criteria.ALIAS_TO_ENTITY_MAP)
+ 			.list();
+-		
++
+ 		assertEquals(2, resultWithMaps.size());
+ 		Map m0 = (Map) resultWithMaps.get(0);
+ 		m1 = (Map) resultWithMaps.get(1);
+-		
++
+ 		assertEquals(new Long(101), m1.get("stNumber"));
+ 		assertEquals(new Long(667), m0.get("stNumber"));
+ 
+-	
++
+ 		List resultWithAliasedBean = s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "st")
+ 			.createAlias("course", "co")
+@@ -553,13 +624,13 @@
+ 			.addOrder( Order.desc("studentName") )
+ 			.setResultTransformer( new AliasToBeanResultTransformer(StudentDTO.class) )
+ 			.list();
+-		
++
+ 		assertEquals(2, resultWithAliasedBean.size());
+-		
++
+ 		StudentDTO dto = (StudentDTO) resultWithAliasedBean.get(0);
+ 		assertNotNull(dto.getDescription());
+ 		assertNotNull(dto.getName());
+-	
++
+ 		s.createCriteria(Student.class)
+ 			.add( Restrictions.like("name", "Gavin", MatchMode.START) )
+ 			.addOrder( Order.asc("name") )
+@@ -576,27 +647,27 @@
+ 					.add( Property.forName("c.description") )
+ 				)
+ 			.uniqueResult();
+-			
++
+ 		Projection p1 = Projections.projectionList()
+ 			.add( Property.forName("studentNumber").count() )
+ 			.add( Property.forName("studentNumber").max() )
+ 			.add( Projections.rowCount() );
+-		
++
+ 		Projection p2 = Projections.projectionList()
+ 			.add( Property.forName("studentNumber").min() )
+ 			.add( Property.forName("studentNumber").avg() )
+ 			.add( Projections.sqlProjection(
+-					"1 as constOne, count(*) as countStar", 
+-					new String[] { "constOne", "countStar" }, 
++					"1 as constOne, count(*) as countStar",
++					new String[] { "constOne", "countStar" },
+ 					new Type[] { Hibernate.INTEGER, Hibernate.INTEGER }
+ 			) );
+-	
++
+ 		Object[] array = (Object[]) s.createCriteria(Enrolment.class)
+ 			.setProjection( Projections.projectionList().add(p1).add(p2) )
+ 			.uniqueResult();
+-		
++
+ 		assertEquals( array.length, 7 );
+-		
++
+ 		List list = s.createCriteria(Enrolment.class)
+ 			.createAlias("student", "st")
+ 			.createAlias("course", "co")
+@@ -606,13 +677,13 @@
+ 					.add( Property.forName("year").group() )
+ 			)
+ 			.list();
+-		
++
+ 		assertEquals( list.size(), 2 );
+-		
++
+ 		s.delete(gavin);
+ 		s.delete(xam);
+ 		s.delete(course);
+-		
++
+ 		t.commit();
+ 		s.close();
+ 	}
+Index: test/org/hibernate/test/criteria/Enrolment.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/criteria/Enrolment.hbm.xml,v
+retrieving revision 1.4
+diff -u -r1.4 Enrolment.hbm.xml
+--- test/org/hibernate/test/criteria/Enrolment.hbm.xml	30 Jan 2005 23:02:22 -0000	1.4
++++ test/org/hibernate/test/criteria/Enrolment.hbm.xml	14 Dec 2005 23:35:42 -0000
+@@ -1,44 +1,47 @@
+ <?xml version="1.0"?>
+-<!DOCTYPE hibernate-mapping PUBLIC 
+-	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+-	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<!DOCTYPE hibernate-mapping PUBLIC
++  "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
+ 
+ <hibernate-mapping package="org.hibernate.test.criteria">
+-	
+-	<class name="Course">
+-		<id name="courseCode">
+-			<generator class="assigned"/>
+-		</id>
+-		<property name="description"/>
+-	</class>
+-	
+-	<class name="Student">
+-		<id name="studentNumber">
+-		    <column name="studentId"/>
+-			<generator class="assigned"/>
+-		</id>
+-		<property name="name" not-null="true"/>
+-		<set name="enrolments" inverse="true" cascade="delete">
+-			<key column="studentId"/>
+-			<one-to-many class="Enrolment"/>
+-		</set>
+-	</class>
+-	
+-	<class name="Enrolment">
+-		<composite-id>
+-			<key-property name="studentNumber">
+-				<column name="studentId"/>
+-			</key-property>
+-			<key-property name="courseCode"/>
+-		</composite-id>
+-		<many-to-one name="student" insert="false" update="false">
+-			<column name="studentId"/>
+-		</many-to-one>
+-		<many-to-one name="course" insert="false" update="false">
+-			<column name="courseCode"/>
+-		</many-to-one>
+-		<property name="semester" not-null="true"/>
+-		<property name="year" not-null="true"/>
+-	</class>
++
++  <class name="Course">
++    <id name="courseCode">
++      <generator class="assigned"/>
++    </id>
++    <property name="description"/>
++  </class>
++
++  <class name="Student">
++    <id name="studentNumber">
++        <column name="studentId"/>
++      <generator class="assigned"/>
++    </id>
++    <property name="name" not-null="true"/>
++    <set name="enrolments" inverse="true" cascade="delete">
++      <key column="studentId"/>
++      <one-to-many class="Enrolment"/>
++    </set>
++    <many-to-one name="preferredCourse">
++      <column name="preferredCourseCode"/>
++    </many-to-one>
++  </class>
++
++  <class name="Enrolment">
++    <composite-id>
++      <key-property name="studentNumber">
++        <column name="studentId"/>
++      </key-property>
++      <key-property name="courseCode"/>
++    </composite-id>
++    <many-to-one name="student" insert="false" update="false">
++      <column name="studentId"/>
++    </many-to-one>
++    <many-to-one name="course" insert="false" update="false">
++      <column name="courseCode"/>
++    </many-to-one>
++    <property name="semester" not-null="true"/>
++    <property name="year" not-null="true"/>
++  </class>
+ 
+ </hibernate-mapping>
+Index: test/org/hibernate/test/criteria/Student.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/criteria/Student.java,v
+retrieving revision 1.3
+diff -u -r1.3 Student.java
+--- test/org/hibernate/test/criteria/Student.java	12 Feb 2005 07:27:21 -0000	1.3
++++ test/org/hibernate/test/criteria/Student.java	14 Dec 2005 23:35:42 -0000
+@@ -4,6 +4,8 @@
+ import java.util.HashSet;
+ import java.util.Set;
+ 
++import org.hibernate.test.criteria.Course;
++
+ /**
+  * @author Gavin King
+  */
+@@ -11,6 +13,9 @@
+ 	private long studentNumber;
+ 	private String name;
+ 	private Set enrolments = new HashSet();
++	private Course preferredCourse;
++	private String preferredCourseCode;
++
+ 	public Set getEnrolments() {
+ 		return enrolments;
+ 	}
+@@ -29,4 +34,16 @@
+ 	public void setName(String name) {
+ 		this.name = name;
+ 	}
++	public Course getPreferredCourse() {
++		return preferredCourse;
++	}
++	public void setPreferredCourse(Course preferredCourse) {
++		this.preferredCourse = preferredCourse;
++	}
++	public String getPreferredCourseCode() {
++		return preferredCourseCode;
++	}
++	public void setPreferredCourseCode(String courseId) {
++		this.preferredCourseCode = courseId;
++	}
+ }

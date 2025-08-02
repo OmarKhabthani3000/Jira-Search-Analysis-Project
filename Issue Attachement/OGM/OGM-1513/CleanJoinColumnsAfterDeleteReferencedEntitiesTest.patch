@@ -1,0 +1,84 @@
+Index: core/src/test/java/org/hibernate/ogm/backendtck/associations/manytoone/CleanJoinColumnsAfterDeleteReferencedEntitiesTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- core/src/test/java/org/hibernate/ogm/backendtck/associations/manytoone/CleanJoinColumnsAfterDeleteReferencedEntitiesTest.java	(date 1532007597000)
++++ core/src/test/java/org/hibernate/ogm/backendtck/associations/manytoone/CleanJoinColumnsAfterDeleteReferencedEntitiesTest.java	(date 1532007597000)
+@@ -0,0 +1,76 @@
++/*
++ * Hibernate OGM, Domain model persistence for NoSQL datastores
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.ogm.backendtck.associations.manytoone;
++
++import static org.fest.assertions.Assertions.assertThat;
++
++import org.hibernate.ogm.utils.OgmTestCase;
++
++import org.junit.After;
++import org.junit.Test;
++
++public class CleanJoinColumnsAfterDeleteReferencedEntitiesTest extends OgmTestCase {
++
++	public static final String SALES_FORCE_ID = "red_hat";
++	public static final String SALES_GUY_ID = "eric";
++
++	/**
++	 * Test should fail. In order to avoid improper associations.
++	 *
++	 * Actually, it fails only when applied on Graph dialects, such as Neo4j,
++	 * that do not have to handle inverse relationships.
++	 *
++	 * In case of Grid or Document dialect, like Infinispan, HashMap or MongoDB,
++	 * it does not fail.
++	 */
++	@Test
++	public void testErroneousAssociationsOnRecreateEntityWithSameId() {
++		inTransaction( session -> {
++			SalesForce force = new SalesForce( SALES_FORCE_ID );
++			force.setCorporation( "Red Hat" );
++			session.save( force );
++
++			SalesGuy eric = new SalesGuy( SALES_GUY_ID );
++			eric.setName( "Eric" );
++			eric.setSalesForce( force );
++			force.getSalesGuys().add( eric );
++			session.save( eric );
++		} );
++
++		inTransaction( session -> {
++			SalesForce force = session.load( SalesForce.class, SALES_FORCE_ID );
++			session.remove( force );
++		} );
++
++		// if we create a new entity recycling the old id
++		inTransaction( session -> {
++			SalesForce force = new SalesForce( SALES_FORCE_ID );
++			force.setCorporation( "Red Hat II" );
++			session.save( force );
++		} );
++
++		// eric would be automatically attached to them. is that right?
++		inTransaction( session -> {
++			SalesGuy eric = session.load( SalesGuy.class, SALES_GUY_ID );
++			assertThat( eric.getSalesForce() ).isNotNull();
++			assertThat( eric.getSalesForce().getCorporation() ).isEqualTo( "Red Hat II" );
++		} );
++	}
++
++	@After
++	public void rinse() {
++		deleteAll( SalesGuy.class, SALES_GUY_ID );
++		deleteAll( SalesForce.class, SALES_FORCE_ID );
++
++		checkCleanCache();
++	}
++
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class[] { SalesForce.class, SalesGuy.class };
++	}
++}

@@ -1,0 +1,90 @@
+Index: hibernate-core/src/main/java/org/hibernate/type/CustomType.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/type/CustomType.java	(revision 0c1660317eaad69d01302702c66cff5f59c8348d)
++++ hibernate-core/src/main/java/org/hibernate/type/CustomType.java	(revision )
+@@ -118,7 +118,36 @@
+ 		return userType.equals( x, y );
+ 	}
+ 
+-	public int getHashCode(Object x) {
++//	@Override
++//	public int hashCode() {
++//		return userType.hashCode();
++//	}
++//
++//	@Override
++//	public boolean equals(Object x) {
++//	    return userType.equals(x);
++//	}
++
++    //Is this an appropriate implementation or better delegate to UserType like above?
++    @Override
++    public int hashCode() {
++        return name.hashCode();
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if ( this == o ) {
++            return true;
++        }
++        if ( o == null || getClass() != o.getClass() ) {
++            return false;
++        }
++
++        CustomType that = ( CustomType) o;
++        return name.equals(that.getName());
++    }
++
++    public int getHashCode(Object x) {
+ 		return userType.hashCode(x);
+ 	}
+ 
+Index: hibernate-core/src/test/java/org/hibernate/test/queryplan/NativeSQLQueryPlanEqualsTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/queryplan/NativeSQLQueryPlanEqualsTest.java	(revision 0c1660317eaad69d01302702c66cff5f59c8348d)
++++ hibernate-core/src/test/java/org/hibernate/test/queryplan/NativeSQLQueryPlanEqualsTest.java	(revision )
+@@ -23,6 +23,8 @@
+  */
+ package org.hibernate.test.queryplan;
+ 
++import org.hibernate.test.type.BasicTypeRegistryTest;
++import org.hibernate.type.CustomType;
+ import org.junit.Test;
+ 
+ import org.hibernate.engine.query.spi.NativeSQLQueryPlan;
+@@ -66,4 +68,28 @@
+ 		};
+ 		return new NativeSQLQuerySpecification( select, queryReturns, null );
+ 	}
++
++	@Test
++	public void testNativeSQLQuerySpecEqualsFailsWithCustomTypeAndNoHashCodeEquals() {
++		QueryPlanCache cache = new QueryPlanCache( sessionFactory() );
++		NativeSQLQuerySpecification firstSpec = createCustomTypeSpec();
++		NativeSQLQuerySpecification secondSpec = createCustomTypeSpec();
++
++		NativeSQLQueryPlan firstPlan = cache.getNativeSQLQueryPlan(firstSpec);
++		NativeSQLQueryPlan secondPlan = cache.getNativeSQLQueryPlan(secondSpec);
++
++		//Test will fail if CustomType hashcode/equals are not implemented.
++		//QueryPlanCache will contain 2 entries and keep growing in size;
++		assertEquals(firstPlan, secondPlan);
++	}
++
++	private NativeSQLQuerySpecification createCustomTypeSpec() {
++		String blah = "blah";
++		String select = "select blah from blah";
++
++		NativeSQLQueryReturn[] queryReturns = new NativeSQLQueryScalarReturn[] {
++				new NativeSQLQueryScalarReturn( blah, new CustomType(new BasicTypeRegistryTest.TotallyIrrelevantUserType()))
++		};
++		return new NativeSQLQuerySpecification( select, queryReturns, null );
++	}
+ }

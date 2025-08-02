@@ -1,0 +1,90 @@
+package hib.example;
+
+import javax.persistence.*;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import org.hibernate.annotations.GenericGenerator;
+import org.hibernate.cfg.AnnotationConfiguration;
+import org.hibernate.dialect.Oracle10gDialect;
+import org.hibernate.Session;
+
+@Entity
+@Table(name = "example_entity_with_embed")
+public class EntityWithEmbeddable {
+
+  @Id
+  @GeneratedValue(generator="Oid")
+  @GenericGenerator(name = "Oid",
+                    strategy = "hib.example.OidGenerator")
+  public long oid;
+
+  ExampleEmbeddable embedded;
+
+  public static void main(String[] args) throws Exception {
+    String dbUrl = "jdbc:oracle:thin:trafictest/password@localhost:1521:xe";
+    Connection conn = DriverManager.getConnection(dbUrl);
+    AnnotationConfiguration config = new AnnotationConfiguration();
+    config.addAnnotatedClass(EntityWithEmbeddable.class);
+    config.setProperty("hibernate.dialect", Oracle10gDialect.class.getName());
+
+    Session sess= config.buildSessionFactory().openSession(conn);
+
+    ExampleEmbeddable ee = new ExampleEmbeddable();
+    ee.field1 = "string 1";
+    ee.field2 = "string 2";
+    EntityWithEmbeddable entity = new EntityWithEmbeddable();
+    entity.embedded = ee;
+    sess.persist(entity);
+
+    org.hibernate.Query q = sess.createQuery(
+            "from EntityWithEmbeddable where embedded = :embedded");
+    q.setParameter("embedded", "1");
+    q.iterate();
+
+  }
+
+}
+
+---- Embeddable ---
+package hib.example;
+
+import javax.persistence.Embeddable;
+
+@Embeddable
+public class ExampleEmbeddable {
+
+  public String field1;
+
+  public String field2;
+}
+
+
+--- Mock Id Generator  ----
+package hib.example;
+
+import java.io.Serializable;
+import org.hibernate.id.IdentityGenerator;
+import org.hibernate.engine.SessionImplementor;
+
+public class OidGenerator extends IdentityGenerator {
+
+  private static long _next;
+
+  public Serializable generate(SessionImplementor s, Object obj) {
+    return _next++;
+  }
+}
+
+
+
+--- Oracle Schema ----
+
+create table example_entity_with_embed 
+  (
+    oid integer not null,
+    field1 varchar(30) not null,
+    field2 varchar(20) not null
+  );
+
+commit;
+

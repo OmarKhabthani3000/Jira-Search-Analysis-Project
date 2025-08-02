@@ -1,0 +1,164 @@
+diff -X /u2/radni/excl -urN /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java src/java/org/hibernate/cfg/JDBCBinder.java
+--- /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java	2005-04-23 02:14:39.000000000 +0000
++++ src/java/org/hibernate/cfg/JDBCBinder.java	2005-04-28 00:45:28.000000000 +0000
+@@ -8,6 +8,7 @@
+ import java.sql.DatabaseMetaData;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
++import java.sql.Types;
+ import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Comparator;
+@@ -105,7 +106,14 @@
+ 				processIndices(table);
+ 			}
+ 			
++			// temporary list because ConcurentModifiactionException
++			// method processForeignKey(table) modify iterator
++			List tablesHelper = new ArrayList();
+ 			tables = mappings.iterateTables();
++			while(tables.hasNext()) 
++				tablesHelper.add(tables.next());
++			
++			tables = tablesHelper.iterator();
+ 			Map oneToManyCandidates = new HashMap();
+ 			while (tables.hasNext()) {
+ 				Table table = (Table) tables.next();
+@@ -113,8 +121,10 @@
+ 				// all referenced tables (this ensure the columns are the same instances througout the basic JDBC derived model.
+ 				// after this stage it should be "ok" to divert from keeping columns in sync as it can be required if the same 
+ 				//column is used with different aliases in the ORM mapping.
+-			    Map foreignKeys = processForeignKeys(table);
+-                mergeMultiMap(oneToManyCandidates, foreignKeys);  	    
++				if (filter.isBuildManyToOne()) {
++					Map foreignKeys = processForeignKeys(table);
++					mergeMultiMap(oneToManyCandidates, foreignKeys);
++				}
+ 			} 
+ 			
+ 			createPersistentClasses(oneToManyCandidates);
+@@ -188,8 +198,11 @@
+ 			bindPrimaryKeyToProperties(table, rc, processed);
+ 			bindOutgoingForeignKeys(table, rc, processed);
+ 			bindColumnsToProperties(table, rc, processed);
+-			List incomingForeignKeys = (List) manyToOneCandidates.get(rc.getEntityName());
+-			bindIncomingForeignKeys(rc, processed, incomingForeignKeys);
++			if (filter.isBuildOneToMany()) {
++				List incomingForeignKeys = (List) manyToOneCandidates.get(rc
++						.getEntityName());
++				bindIncomingForeignKeys(rc, processed, incomingForeignKeys);
++			}
+ 		}
+ 		
+ 	}
+@@ -699,6 +712,18 @@
+ 		return connection;
+ 	}
+ 
++	// scale and precision have numeric column
++	private boolean columnHasScaleAndPrecision(int sqlType) {
++		return (sqlType == Types.DECIMAL || sqlType == Types.NUMERIC
++				|| sqlType == Types.REAL || sqlType == Types.FLOAT || sqlType == Types.DOUBLE);
++	}
++	
++	// length is for string column
++	private boolean columnHasLength(int sqlType) {
++		return (sqlType == Types.CHAR || sqlType == Types.DATE
++				|| sqlType == Types.LONGVARCHAR || sqlType == Types.TIME || sqlType == Types.TIMESTAMP
++				|| sqlType == Types.VARCHAR );
++	}
+ 
+ 	/**
+ 	 * @param table
+@@ -737,14 +762,18 @@
+ 				// TODO: would like to put physicalSqlType on to Column instead of this map!
+ 				column.setSqlTypeCode(new Integer(sqlType));
+                 if(intBounds(size)) { 
+-					column.setLength(size); 
+-					column.setPrecision(size); 
++					if (columnHasLength(sqlType))
++						column.setLength(size);
++					if (columnHasScaleAndPrecision(sqlType))
++						column.setPrecision(size); 
+ 				} 
+                 if(intBounds(decimalDigits)) { 
+-					column.setScale(decimalDigits); 
++					if (columnHasScaleAndPrecision(sqlType))
++						column.setScale(decimalDigits); 
+ 				}
+ 				
+ 				column.setNullable(isNullable);
++				column.setSqlType(sqlTypeName);
+ 
+ 				// columnDefaultValue is useless for Hibernate
+ 				// isIndexed  (available via Indexes)
+@@ -1008,6 +1037,7 @@
+ 					// somehow reuse hibernates name generator ?
+ 					fkName = Short.toString(bogusFkName);
+ 				}
++				
+ 				Table fkTable = mappings.addTable(fkSchema, fkCatalog, fkTableName, null, false);
+ 				
+ 				
+diff -X /u2/radni/excl -urN /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCFilter.java src/java/org/hibernate/cfg/reveng/JDBCFilter.java
+--- /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCFilter.java	2005-04-22 16:18:58.000000000 +0000
++++ src/java/org/hibernate/cfg/reveng/JDBCFilter.java	2005-04-27 21:48:35.000000000 +0000
+@@ -13,4 +13,8 @@
+ public interface JDBCFilter {
+ 
+ 	boolean excludeTable(TableIdentifier ti);
++	boolean isBuildOneToMany();
++	void setBuildOneToMany(boolean buildOneToMany);
++	boolean isBuildManyToOne();
++	void setBuildManyToOne(boolean buildManyToOne);
+ }
+diff -X /u2/radni/excl -urN /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/OverrideRepository.java src/java/org/hibernate/cfg/reveng/OverrideRepository.java
+--- /u2/Hibernate-2.2/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/OverrideRepository.java	2005-04-22 16:18:58.000000000 +0000
++++ src/java/org/hibernate/cfg/reveng/OverrideRepository.java	2005-04-27 21:50:05.000000000 +0000
+@@ -24,6 +24,8 @@
+ 	
+ 	private transient XMLHelper xmlHelper;
+ 	private transient EntityResolver entityResolver;
++	private boolean buildOneToMany = true;
++	private boolean buildManyToOne = true;
+ 
+ 	private Map typeMappings; // from sqltypes to list of SQLTypeMapping
+ 	
+@@ -181,10 +183,21 @@
+ 		tableFilters.add(filter);
+ 	}
+ 
+-	
+-	
+-	
+-	
++	public boolean isBuildManyToOne() {
++		return buildManyToOne;
++	}
++
++	public void setBuildManyToOne(boolean buildManyToOne) {
++		this.buildManyToOne = buildManyToOne;
++	}
++
++	public boolean isBuildOneToMany() {
++		return buildOneToMany;
++	}
++
++	public void setBuildOneToMany(boolean buildOneToMany) {
++		this.buildOneToMany = buildOneToMany;
++	}
+ 
+ 
+ }
+diff -X /u2/radni/excl -urN /u2/Hibernate-2.2/HibernateExt/tools/src/velocity/pojo/javaclass.vm src/velocity/pojo/javaclass.vm
+--- /u2/Hibernate-2.2/HibernateExt/tools/src/velocity/pojo/javaclass.vm	2005-04-07 21:20:45.000000000 +0000
++++ src/velocity/pojo/javaclass.vm	2005-04-26 20:59:19.000000000 +0000
+@@ -10,7 +10,7 @@
+ $secondpassclassimports
+ 
+ /**
+-$c2j.getJavaDoc($clazz, $render.eval($ctx, "$c2j.getDeclarationName($clazz) generated by hbm2java"),0)
++$c2j.getClassJavaDoc($clazz, $render.eval($ctx, "$c2j.getDeclarationName($clazz) generated by hbm2java"),0)
+  */
+ #if($ejb3)
+ @Entity

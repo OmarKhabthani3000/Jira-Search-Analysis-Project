@@ -1,0 +1,343 @@
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/cfg/Configuration.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/cfg/Configuration.java
+--- hibernate-2.1.8/src/net/sf/hibernate/cfg/Configuration.java	2005-01-30 08:48:42.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/cfg/Configuration.java	2005-02-03 13:11:47.000000000 +0100
+@@ -264,6 +264,7 @@
+ 	 */
+ 	public Mappings createMappings() {
+ 		return new Mappings(
++			this,
+ 			classes, 
+ 			collections, 
+ 			tables, 
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/cfg/Mappings.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/cfg/Mappings.java
+--- hibernate-2.1.8/src/net/sf/hibernate/cfg/Mappings.java	2005-01-30 08:48:40.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/cfg/Mappings.java	2005-02-03 13:21:20.000000000 +0100
+@@ -40,9 +40,11 @@
+ 	private final Map caches;
+ 	private final NamingStrategy namingStrategy;
+ 
++	private final Configuration cfg;
+ 	
+ 	
+ 	Mappings(
++		final Configuration cfg,
+ 		final Map classes, 
+ 		final Map collections, 
+ 		final Map tables, 
+@@ -54,6 +56,7 @@
+ 		final List propertyReferences,
+ 		final NamingStrategy namingStrategy
+ 	) {
++		this.cfg = cfg;
+ 		this.classes = classes;
+ 		this.collections = collections;
+ 		this.queries = queries;
+@@ -94,6 +97,7 @@
+ 			table = new Table();
+ 			table.setName(name);
+ 			table.setSchema(schema);
++			table.setConfiguration(cfg);
+ 			tables.put(key, table);
+ 		}
+ 		
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/Configurable.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/Configurable.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/Configurable.java	2005-01-30 08:48:27.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/Configurable.java	2005-02-03 13:14:07.000000000 +0100
+@@ -4,6 +4,7 @@
+ import java.util.Properties;
+ 
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.type.Type;
+ 
+@@ -22,6 +23,6 @@
+ 	 * 
+ 	 * @param params param values, keyed by parameter name
+ 	 */
+-	public void configure(Type type, Properties params, Dialect d) throws MappingException;
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg) throws MappingException;
+ 
+ }
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/ForeignGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/ForeignGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/ForeignGenerator.java	2005-01-30 08:48:26.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/ForeignGenerator.java	2005-02-03 12:53:45.000000000 +0100
+@@ -7,6 +7,7 @@
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.TransientObjectException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -57,7 +58,7 @@
+ 	/**
+ 	 * @see net.sf.hibernate.id.Configurable#configure(net.sf.hibernate.type.Type, java.util.Properties, net.sf.hibernate.dialect.Dialect)
+ 	 */
+-	public void configure(Type type, Properties params, Dialect d)
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg)
+ 		throws MappingException {
+ 		
+ 		propertyName = params.getProperty("property");
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/IdentifierGeneratorFactory.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/IdentifierGeneratorFactory.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/IdentifierGeneratorFactory.java	2005-01-30 08:48:35.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/IdentifierGeneratorFactory.java	2005-02-03 12:55:23.000000000 +0100
+@@ -8,6 +8,7 @@
+ import java.util.Properties;
+ 
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -57,7 +58,7 @@
+ 		GENERATORS.put("foreign", ForeignGenerator.class);
+ 	}
+ 	
+-	public static IdentifierGenerator create(String strategy, Type type, Properties params, Dialect dialect) throws MappingException {
++	public static IdentifierGenerator create(String strategy, Type type, Properties params, Dialect dialect, Configuration cfg) throws MappingException {
+ 		try {
+ 			//if ( "vm".equals(strategy) ) log.info("'vm' strategy is deprecated; use 'increment'");
+ 			
+@@ -75,7 +76,7 @@
+ 			}
+ 			if (clazz==null) clazz = ReflectHelper.classForName(strategy);
+ 			IdentifierGenerator idgen = (IdentifierGenerator) clazz.newInstance();
+-			if (idgen instanceof Configurable) ( (Configurable) idgen).configure(type, params, dialect);
++			if (idgen instanceof Configurable) ( (Configurable) idgen).configure(type, params, dialect, cfg);
+ 			return idgen;
+ 		}
+ 		catch (Exception e) {
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/IncrementGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/IncrementGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/IncrementGenerator.java	2005-01-30 08:48:27.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/IncrementGenerator.java	2005-02-03 13:15:57.000000000 +0100
+@@ -12,6 +12,7 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -44,7 +45,7 @@
+ 		return IdentifierGeneratorFactory.createNumber(next++, returnClass);
+ 	}
+ 
+-	public void configure(Type type, Properties params, Dialect d)
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg)
+ 		throws MappingException {
+ 		
+ 		String table = params.getProperty("table");
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/SequenceGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/SequenceGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/SequenceGenerator.java	2005-01-30 08:48:43.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/SequenceGenerator.java	2005-02-03 13:16:30.000000000 +0100
+@@ -12,6 +12,8 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
++import net.sf.hibernate.cfg.Environment;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.util.JDBCExceptionReporter;
+@@ -47,10 +49,16 @@
+ 	
+ 	private static final Log log = LogFactory.getLog(SequenceGenerator.class);
+ 	
+-	public void configure(Type type, Properties params, Dialect dialect) throws MappingException {
++	public void configure(Type type, Properties params, Dialect dialect, Configuration cfg) throws MappingException {
+ 		this.sequenceName = PropertiesHelper.getString(SEQUENCE, params, "hibernate_sequence");
+ 		this.parameters = params.getProperty(PARAMETERS);
+ 		String schemaName = params.getProperty(SCHEMA);
++
++		if (schemaName == null && cfg != null) {
++			Properties props = cfg.getProperties();
++			schemaName = props.getProperty(Environment.DEFAULT_SCHEMA);
++		}
++
+ 		if ( schemaName!=null && sequenceName.indexOf(StringHelper.DOT)<0 ) 
+ 			sequenceName = schemaName + '.' + sequenceName;
+ 		this.type = type;
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/SequenceHiLoGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/SequenceHiLoGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/SequenceHiLoGenerator.java	2005-01-30 08:48:27.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/SequenceHiLoGenerator.java	2005-02-03 13:16:58.000000000 +0100
+@@ -10,6 +10,7 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -41,8 +42,8 @@
+ 	private long hi;
+ 	private Class returnClass;
+ 	
+-	public void configure(Type type, Properties params, Dialect d) throws MappingException {
+-		super.configure(type, params, d);
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg) throws MappingException {
++		super.configure(type, params, d, cfg);
+ 		maxLo = PropertiesHelper.getInt(MAX_LO, params, 9);
+ 		lo = maxLo + 1; // so we "clock over" on the first invocation
+ 		returnClass = type.getReturnedClass();
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/TableGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/TableGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/TableGenerator.java	2005-01-30 08:48:31.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/TableGenerator.java	2005-02-03 13:17:23.000000000 +0100
+@@ -13,6 +13,8 @@
+ import org.apache.commons.logging.LogFactory;
+ 
+ import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.cfg.Configuration;
++import net.sf.hibernate.cfg.Environment;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -58,11 +60,17 @@
+ 	private String query;
+ 	private String update;
+ 
+-	public void configure(Type type, Properties params, Dialect dialect) {
++	public void configure(Type type, Properties params, Dialect dialect, Configuration cfg) {
+ 		
+ 		this.tableName = PropertiesHelper.getString(TABLE, params, "hibernate_unique_key");
+ 		this.columnName = PropertiesHelper.getString(COLUMN, params, "next_hi");
+ 		String schemaName = params.getProperty(SCHEMA);
++
++		if (schemaName == null && cfg != null) {
++			Properties props = cfg.getProperties();
++			schemaName = props.getProperty(Environment.DEFAULT_SCHEMA);
++		}
++
+ 		if ( schemaName!=null && tableName.indexOf(StringHelper.DOT)<0 ) 
+ 			tableName = schemaName + '.' + tableName;
+ 		
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/TableHiLoGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/TableHiLoGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/TableHiLoGenerator.java	2005-01-30 08:48:29.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/TableHiLoGenerator.java	2005-02-03 13:17:34.000000000 +0100
+@@ -6,6 +6,7 @@
+ import java.util.Properties;
+ 
+ import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -46,8 +47,8 @@
+ 	
+ 	private static final Log log = LogFactory.getLog(TableHiLoGenerator.class);
+ 	
+-	public void configure(Type type, Properties params, Dialect d) {
+-		super.configure(type, params, d);
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg) {
++		super.configure(type, params, d, cfg);
+ 		maxLo = PropertiesHelper.getInt(MAX_LO, params, Short.MAX_VALUE);
+ 		lo = maxLo + 1; // so we "clock over" on the first invocation
+ 		returnClass = type.getReturnedClass();
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/UUIDHexGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/UUIDHexGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/UUIDHexGenerator.java	2005-01-30 08:48:34.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/UUIDHexGenerator.java	2005-02-03 13:17:56.000000000 +0100
+@@ -5,6 +5,7 @@
+ import java.util.Properties;
+ 
+ import net.sf.hibernate.Hibernate;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -55,9 +56,9 @@
+ 		Properties props = new Properties();
+ 		props.setProperty("separator", "/");
+ 		IdentifierGenerator gen = new UUIDHexGenerator();
+-		( (Configurable) gen ).configure(Hibernate.STRING, props, null);
++		( (Configurable) gen ).configure(Hibernate.STRING, props, null, null);
+ 		IdentifierGenerator gen2 = new UUIDHexGenerator();
+-		( (Configurable) gen2 ).configure(Hibernate.STRING, props, null);
++		( (Configurable) gen2 ).configure(Hibernate.STRING, props, null, null);
+ 		
+ 		for ( int i=0; i<10; i++) {
+ 			String id = (String) gen.generate(null, null);
+@@ -68,7 +69,7 @@
+ 	}
+ 	
+ 	
+-	public void configure(Type type, Properties params, Dialect d) {
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg) {
+ 		sep = PropertiesHelper.getString("separator", params, StringHelper.EMPTY_STRING);
+ 	}
+ 
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/id/UUIDStringGenerator.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/UUIDStringGenerator.java
+--- hibernate-2.1.8/src/net/sf/hibernate/id/UUIDStringGenerator.java	2005-01-30 08:48:25.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/id/UUIDStringGenerator.java	2005-02-03 13:18:02.000000000 +0100
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ import java.util.Properties;
+ 
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -56,7 +57,7 @@
+ 		return new String ( BytesHelper.toBytes(value) );
+ 	}
+ 
+-	public void configure(Type type, Properties params, Dialect d) {
++	public void configure(Type type, Properties params, Dialect d, Configuration cfg) {
+ 		sep = PropertiesHelper.getString("separator", params, StringHelper.EMPTY_STRING);
+ 	}
+ }
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/mapping/SimpleValue.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/mapping/SimpleValue.java
+--- hibernate-2.1.8/src/net/sf/hibernate/mapping/SimpleValue.java	2005-01-30 08:48:25.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/mapping/SimpleValue.java	2005-02-03 13:18:43.000000000 +0100
+@@ -8,6 +8,7 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.Mapping;
+ import net.sf.hibernate.id.IdentifierGenerator;
+@@ -78,9 +79,11 @@
+ 	private IdentifierGenerator uniqueIdentifierGenerator;
+ 	
+ 	public IdentifierGenerator createIdentifierGenerator(Dialect dialect) throws MappingException {
++		Configuration cfg = table.getConfiguration();
++
+ 		if (uniqueIdentifierGenerator==null) {
+ 			uniqueIdentifierGenerator = IdentifierGeneratorFactory.create(
+-				identifierGeneratorStrategy, type, identifierGeneratorProperties, dialect
++				identifierGeneratorStrategy, type, identifierGeneratorProperties, dialect, cfg
+ 			);
+ 		}
+ 		return uniqueIdentifierGenerator;
+diff -urb hibernate-2.1.8/src/net/sf/hibernate/mapping/Table.java /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/mapping/Table.java
+--- hibernate-2.1.8/src/net/sf/hibernate/mapping/Table.java	2005-01-30 08:48:30.000000000 +0100
++++ /home/henning/workspace/Hibernate-2.1.8/src/net/sf/hibernate/mapping/Table.java	2005-02-03 13:23:42.000000000 +0100
+@@ -9,6 +9,7 @@
+ 
+ import net.sf.hibernate.engine.Mapping;
+ import net.sf.hibernate.id.IdentityGenerator;
++import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.dialect.HSQLDialect;
+ import net.sf.hibernate.HibernateException;
+@@ -37,10 +38,20 @@
+ 	private static int tableCounter=0;
+ 	private List checkConstraints = new ArrayList();
+ 	
++	private Configuration cfg = null;
++	
+ 	public Table() {
+ 		uniqueInteger = tableCounter++;
+ 	}
+ 	
++	public Configuration getConfiguration() {
++		return this.cfg;
++	}
++
++	public void setConfiguration(final Configuration cfg) {
++		this.cfg = cfg;
++	}
++	
+ 	private String getQualifiedName(Dialect dialect) {
+ 		String quotedName = getQuotedName(dialect);
+ 		return schema==null ? quotedName : schema + dialect.getSchemaSeparator() + quotedName;

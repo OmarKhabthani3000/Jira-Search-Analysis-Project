@@ -1,0 +1,255 @@
+[1] Here's the mapping for the subselect, with the matching <synchronize> tag.
+
+    As some background info on terminology, a PartySite is a generic term for an address
+    and a PartySiteUse indicates what you use the PartySite (Address) for. This might be
+    for billing, shipping, or some other business like use. These terms come from Oracle ERP.
+    
+    This is just a fictional example so we can get our heads around using <subselect>
+    so don't try to make too much sense of why we'd want to use these types of SQL statements.
+    
+    Also, we've gone through the SubselectTest in the Hibernate tests. After reading the code,
+    it appears as though SubselectTest does what we'd expect.
+    
+    The problem is that our use of subselect returns stale data from Session even after 
+    dependencies referenced in the <synchronize> tags are flushed.
+    
+ 
+
+<hibernate-mapping auto-import="true" package="com.mycompany.ice.domain">
+	
+	<class name="PartySiteUseSummary" batch-size="20">
+
+		<subselect>
+        	SELECT ps.id_party_site as id, ps.row_version as version, Count(*) as count 
+		FROM party_site_use psu, party_site ps 
+		WHERE ps.id_party_site = psu.fk_party_site
+		GROUP BY ps.id_party_site, ps.row_version
+		</subselect>
+		
+	    <synchronize table="PARTY_SITE_USE"/>
+
+		<id name="id" column="id" type="java.lang.Long"/>
+		<version name="version"/>
+		<property name="count"/>
+	</class>
+	
+</hibernate-mapping>
+
+
+[2] Here's some log output. My numbered comments appear within the log output below.
+
+    The actual problem occurs in step [10] below.
+
+
+12:43:21 DEBUG org.hibernate.impl.SessionFactoryImpl.<init> - instantiated session factory
+12:43:21 INFO org.hibernate.impl.SessionFactoryImpl.checkNamedQueries - Checking 2 named queries
+12:43:21 DEBUG org.hibernate.impl.SessionFactoryImpl.checkNamedQueries - Checking named query: public.addresses.for.party
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatement - select << begin [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatementCompletion - select : finishing up [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.afterStatementCompletion - select >> end [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.impl.SessionFactoryImpl.checkNamedQueries - Checking named query: getPersonCategoriesAndSignatories
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatement - select << begin [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatementCompletion - select : finishing up [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.afterStatementCompletion - select >> end [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.impl.SessionImpl.<init> - opened session at timestamp: 11423870013
+12:43:21 DEBUG org.hibernate.transaction.JDBCTransaction.begin - begin
+12:43:21 DEBUG org.hibernate.jdbc.ConnectionManager.openConnection - opening JDBC connection
+12:43:21 DEBUG org.hibernate.connection.DriverManagerConnectionProvider.getConnection - total checked-out connections: 0
+12:43:21 DEBUG org.hibernate.connection.DriverManagerConnectionProvider.getConnection - using pooled JDBC connection, pool size: 0
+12:43:21 DEBUG org.hibernate.transaction.JDBCTransaction.begin - current autocommit status: false
+12:43:21 DEBUG org.hibernate.jdbc.JDBCContext.afterTransactionBegin - before transaction completion
+12:43:21 DEBUG com.mycompany.test.GeneralTests.getPartySiteUseCount - [___Getting PartySiteUseSummary___]
+12:43:21 DEBUG org.hibernate.impl.SessionImpl.list - find: from PartySiteUseSummary p where p.id = 229
+12:43:21 DEBUG org.hibernate.engine.QueryParameters.traceParameters - named parameters: {}
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatement - select << begin [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.beforeStatementCompletion - select : finishing up [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker.afterStatementCompletion - select >> end [level=1, statement=select]
+12:43:21 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenPreparedStatement - about to open PreparedStatement (open PreparedStatements: 0, globally: 0)
+12:43:21 DEBUG org.hibernate.SQL.log - select partysiteu0_.id as id12_, partysiteu0_.version as version12_, partysiteu0_.count as count12_ from ( 
+        SELECT ps.id_party_site as id, ps.row_version as version, Count(*) as count 
+		FROM party_site_use psu, party_site ps 
+	    WHERE ps.id_party_site = psu.fk_party_site
+		GROUP BY ps.id_party_site, ps.row_version
+		 ) partysiteu0_ where partysiteu0_.id=229
+12:43:21 DEBUG org.hibernate.jdbc.AbstractBatcher.getPreparedStatement - preparing statement
+12:43:21 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenResults - about to open ResultSet (open ResultSets: 0, globally: 0)
+12:43:21 DEBUG org.hibernate.loader.Loader.doQuery - processing result set
+12:43:21 DEBUG org.hibernate.loader.Loader.doQuery - result set row: 0
+12:43:21 DEBUG org.hibernate.type.LongType.nullSafeGet - returning '229' as column: id12_
+12:43:24 DEBUG org.hibernate.loader.Loader.getRow - result row: EntityKey[com.mycompany.ice.domain.PartySiteUseSummary#229]
+
+
+[3] Here's where we load the PartySiteUseSummary record for the first time. We can see the various column values being loaded
+    since the record was not in 1st level cache. (We don't use 2nd level cache in this example).
+
+
+12:43:24 DEBUG org.hibernate.loader.Loader.loadFromResultSet - Initializing object from ResultSet: [com.mycompany.ice.domain.PartySiteUseSummary#229]
+12:43:24 DEBUG org.hibernate.persister.entity.AbstractEntityPersister.hydrate - Hydrating entity: [com.mycompany.ice.domain.PartySiteUseSummary#229]
+12:43:24 DEBUG org.hibernate.type.IntegerType.nullSafeGet - returning '6' as column: version12_
+12:43:24 DEBUG org.hibernate.type.IntegerType.nullSafeGet - returning '4' as column: count12_
+12:43:24 DEBUG org.hibernate.engine.TwoPhaseLoad.postHydrate - Version: 6
+12:43:24 DEBUG org.hibernate.loader.Loader.doQuery - done processing result set (1 rows)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logCloseResults - about to close ResultSet (open ResultSets: 1, globally: 1)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logClosePreparedStatement - about to close PreparedStatement (open PreparedStatements: 1, globally: 1)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.closePreparedStatement - closing statement
+12:43:24 DEBUG org.hibernate.loader.Loader.initializeEntitiesAndCollections - total objects hydrated: 1
+12:43:24 DEBUG org.hibernate.engine.TwoPhaseLoad.initializeEntity - resolving associations for [com.mycompany.ice.domain.PartySiteUseSummary#229]
+12:43:24 DEBUG org.hibernate.engine.TwoPhaseLoad.initializeEntity - done materializing entity [com.mycompany.ice.domain.PartySiteUseSummary#229]
+12:43:24 DEBUG org.hibernate.engine.StatefulPersistenceContext.initializeNonLazyCollections - initializing non-lazy collections
+12:43:24 DEBUG com.mycompany.test.GeneralTests.getPartySiteUseCount - com.mycompany.ice.domain.PartySiteUseSummary@216b59
+
+
+[4] The below 'count = 4' log message indicates that there are 4 child (PartySiteUse) records attached to the parent (PartySite)
+    record that we loaded.
+    
+    Next we'll insert a new record, after which we'll try reselecting from the PartySiteUseSummary mapping and expect to 
+    see that 5 child records are attached.
+    
+
+12:43:24 DEBUG com.mycompany.test.GeneralTests.testHqlQuery - [___count = 4___]
+12:43:24 DEBUG com.mycompany.test.GeneralTests.testHqlQuery - creating party site use: 876
+12:43:24 DEBUG org.hibernate.event.def.DefaultSaveOrUpdateEventListener.entityIsTransient - saving transient instance
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenPreparedStatement - about to open PreparedStatement (open PreparedStatements: 0, globally: 0)
+12:43:24 DEBUG org.hibernate.SQL.log - select SEQ_ID_PARTY_SITE_USE.nextval from dual
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.getPreparedStatement - preparing statement
+12:43:24 DEBUG org.hibernate.id.SequenceGenerator.generate - Sequence identifier generated: 300006250
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logClosePreparedStatement - about to close PreparedStatement (open PreparedStatements: 1, globally: 1)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.closePreparedStatement - closing statement
+12:43:24 DEBUG org.hibernate.event.def.AbstractSaveEventListener.saveWithGeneratedId - generated identifier: 300006250, using strategy: org.hibernate.id.SequenceGenerator
+12:43:24 DEBUG org.hibernate.event.def.AbstractSaveEventListener.performSave - saving [com.mycompany.ice.domain.PartySiteUse#300006250]
+12:43:24 DEBUG org.hibernate.engine.Versioning.seedVersion - using initial version: 0
+
+
+12:43:24 DEBUG com.mycompany.test.GeneralTests.testHqlQuery - [___Inserted PartySiteUse___]
+
+
+[5] We just did a session.save(partySiteUse), but this hasn't been flushed yet.
+
+
+12:43:24 DEBUG com.mycompany.test.GeneralTests.testHqlQuery - [___Expecting to see flush occur here, since about to query a <subselect> class___]
+
+
+[6] We're about to query PartySiteUseSummmary, which we then expect to flush any PartySiteUse records,
+    since those are mentioned in a <synchronize> tag for PartySiteUseSummary.
+    
+
+12:43:24 DEBUG com.mycompany.test.GeneralTests.getPartySiteUseCount - [___Getting PartySiteUseSummary___]
+12:43:24 DEBUG org.hibernate.impl.SessionImpl.list - find: from PartySiteUseSummary p where p.id = 229
+12:43:24 DEBUG org.hibernate.engine.QueryParameters.traceParameters - named parameters: {}
+
+
+[7] Here's the flush about to occur, which we expected. We understand that this needs to occur so that
+    the query against PartySiteUseSummary doesn't retrieve stale data.
+    
+
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - flushing session
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.prepareEntityFlushes - processing flush-time cascades
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.prepareCollectionFlushes - dirty checking collections
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEntities - Flushing entities and processing referenced collections
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushCollections - Processing unreferenced collections
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushCollections - Scheduling collection removes/(re)creates/updates
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - Flushed: 1 insertions, 0 updates, 0 deletions to 2 objects
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - Flushed: 0 (re)creations, 0 updates, 0 removals to 0 collections
+12:43:24 DEBUG org.hibernate.pretty.Printer.toString - listing entities:
+12:43:24 DEBUG org.hibernate.pretty.Printer.toString - com.mycompany.ice.domain.PartySiteUseSummary{count=4, id=229, version=6}
+12:43:24 DEBUG org.hibernate.pretty.Printer.toString - com.mycompany.ice.domain.PartySiteUse{modifiedBy=null, ownedBy=0, historyDate=null, lkpPartySiteUse=876, rowVersion=0, modifiedDate=null, addedBy=GREG, fkPartySite=229, historyBy=null, primaryPerType=false, addedDate=null, id=300006250}
+
+
+[8] This next message directly below only appears if we do session.createQuery() against PartySiteUseSummary, but not if we try
+    to do session.load against PartySiteUseSummary. 
+
+12:43:24 DEBUG org.hibernate.engine.ActionQueue.areTablesToUpdated - changes must be flushed to space: PARTY_SITE_USE
+12:43:24 DEBUG org.hibernate.event.def.DefaultAutoFlushEventListener.onAutoFlush - Need to execute flush
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.performExecutions - executing flush
+12:43:24 DEBUG org.hibernate.persister.entity.AbstractEntityPersister.insert - Inserting entity: [com.mycompany.ice.domain.PartySiteUse#300006250]
+12:43:24 DEBUG org.hibernate.persister.entity.AbstractEntityPersister.insert - Version: 0
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenPreparedStatement - about to open PreparedStatement (open PreparedStatements: 0, globally: 0)
+
+
+[9] Here's the row being inserted from the save() we did back up in step [5].
+
+
+12:43:24 DEBUG org.hibernate.SQL.log - insert into PARTY_SITE_USE (ROW_VERSION, FK_PARTY_SITE, T_PARTY_SITE_USE, I_PRIMARY_PER_TYPE, ADDED_BY, ADDED_DATE, MODIFIED_BY, MODIFIED_DATE, HISTORY_DATE, HISTORY_BY, OWNED_BY, ID_PARTY_SITE_USE) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.getPreparedStatement - preparing statement
+12:43:24 DEBUG org.hibernate.persister.entity.AbstractEntityPersister.dehydrate - Dehydrating entity: [com.mycompany.ice.domain.PartySiteUse#300006250]
+12:43:24 DEBUG org.hibernate.type.LongType.nullSafeSet - binding '0' to parameter: 1
+12:43:24 DEBUG org.hibernate.type.LongType.nullSafeSet - binding '229' to parameter: 2
+12:43:24 DEBUG org.hibernate.type.LongType.nullSafeSet - binding '876' to parameter: 3
+12:43:24 DEBUG org.hibernate.type.BooleanType.nullSafeSet - binding 'false' to parameter: 4
+12:43:24 DEBUG org.hibernate.type.StringType.nullSafeSet - binding 'GREG' to parameter: 5
+12:43:24 DEBUG org.hibernate.type.DateType.nullSafeSet - binding null to parameter: 6
+12:43:24 DEBUG org.hibernate.type.StringType.nullSafeSet - binding null to parameter: 7
+12:43:24 DEBUG org.hibernate.type.DateType.nullSafeSet - binding null to parameter: 8
+12:43:24 DEBUG org.hibernate.type.DateType.nullSafeSet - binding null to parameter: 9
+12:43:24 DEBUG org.hibernate.type.StringType.nullSafeSet - binding null to parameter: 10
+12:43:24 DEBUG org.hibernate.type.IntegerType.nullSafeSet - binding '0' to parameter: 11
+12:43:24 DEBUG org.hibernate.type.LongType.nullSafeSet - binding '300006250' to parameter: 12
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.addToBatch - Adding to batch
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.doExecuteBatch - Executing batch size: 1
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.checkRowCount - success of batch update unknown: 0
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logClosePreparedStatement - about to close PreparedStatement (open PreparedStatements: 1, globally: 1)
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.closePreparedStatement - closing statement
+12:43:24 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.postFlush - post flush
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenPreparedStatement - about to open PreparedStatement (open PreparedStatements: 0, globally: 0)
+12:43:24 DEBUG org.hibernate.SQL.log - select partysiteu0_.id as id12_, partysiteu0_.version as version12_, partysiteu0_.count as count12_ from ( 
+        SELECT ps.id_party_site as id, ps.row_version as version, Count(*) as count 
+		FROM party_site_use psu, party_site ps 
+	    WHERE ps.id_party_site = psu.fk_party_site
+		GROUP BY ps.id_party_site, ps.row_version
+		 ) partysiteu0_ where partysiteu0_.id=229
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.getPreparedStatement - preparing statement
+12:43:24 DEBUG org.hibernate.jdbc.AbstractBatcher.logOpenResults - about to open ResultSet (open ResultSets: 0, globally: 0)
+12:43:24 DEBUG org.hibernate.loader.Loader.doQuery - processing result set
+12:43:24 DEBUG org.hibernate.loader.Loader.doQuery - result set row: 0
+
+
+[10] Here's the results being read for the query executed against PartySiteUseSummary. Since we added a child record
+     back in step [5], we'd now expect there to be a value of 5 in the 'count' column for PartySiteUseSummary
+     since we've added a new PartySiteUse and it got flushed.
+     
+     It seems like the PartySiteUseSummary row is loaded from session. We'd expect it to be reloaded from disk
+     since surely flushing the tables that it depends on would invalidate any cached PartySiteUseSummary rows.
+     
+     Based on reviewing the SubselectTest JUnit class that ships with the Hibernate source, we think that's what's
+     supposed to happen.
+
+
+12:43:24 DEBUG org.hibernate.type.LongType.nullSafeGet - returning '229' as column: id12_
+12:43:25 DEBUG org.hibernate.loader.Loader.getRow - result row: EntityKey[com.mycompany.ice.domain.PartySiteUseSummary#229]
+12:43:26 DEBUG org.hibernate.loader.Loader.doQuery - done processing result set (1 rows)
+12:43:26 DEBUG org.hibernate.jdbc.AbstractBatcher.logCloseResults - about to close ResultSet (open ResultSets: 1, globally: 1)
+12:43:26 DEBUG org.hibernate.jdbc.AbstractBatcher.logClosePreparedStatement - about to close PreparedStatement (open PreparedStatements: 1, globally: 1)
+12:43:26 DEBUG org.hibernate.jdbc.AbstractBatcher.closePreparedStatement - closing statement
+12:43:26 DEBUG org.hibernate.loader.Loader.initializeEntitiesAndCollections - total objects hydrated: 0
+12:43:26 DEBUG org.hibernate.engine.StatefulPersistenceContext.initializeNonLazyCollections - initializing non-lazy collections
+12:43:26 DEBUG com.mycompany.test.GeneralTests.getPartySiteUseCount - com.mycompany.ice.domain.PartySiteUseSummary@216b59
+
+
+[11] We get the wrong result (4) instead of the expected result (5).
+
+     If we manually evict the PartySiteUseSummary record from session then we get 5 as the result.
+     We also see that in step [10] above that the full record is loaded from the result set
+     instead of loading the PartySiteUsageSummary record from session, but this is obvious.
+
+
+12:43:26 DEBUG com.mycompany.test.GeneralTests.testHqlQuery - New count = 4, expecting 5
+12:43:26 DEBUG org.hibernate.transaction.JDBCTransaction.commit - commit
+12:43:26 DEBUG org.hibernate.impl.SessionImpl.managedFlush - automatically flushing session
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - flushing session
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.prepareEntityFlushes - processing flush-time cascades
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.prepareCollectionFlushes - dirty checking collections
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEntities - Flushing entities and processing referenced collections
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushCollections - Processing unreferenced collections
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushCollections - Scheduling collection removes/(re)creates/updates
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - Flushed: 0 insertions, 0 updates, 0 deletions to 2 objects
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.flushEverythingToExecutions - Flushed: 0 (re)creations, 0 updates, 0 removals to 0 collections
+12:43:26 DEBUG org.hibernate.pretty.Printer.toString - listing entities:
+12:43:26 DEBUG org.hibernate.pretty.Printer.toString - com.mycompany.ice.domain.PartySiteUseSummary{count=4, id=229, version=6}
+12:43:26 DEBUG org.hibernate.pretty.Printer.toString - com.mycompany.ice.domain.PartySiteUse{modifiedBy=null, ownedBy=0, historyDate=null, lkpPartySiteUse=876, rowVersion=0, modifiedDate=null, addedBy=GREG, fkPartySite=229, historyBy=null, primaryPerType=false, addedDate=null, id=300006250}
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.performExecutions - executing flush
+12:43:26 DEBUG org.hibernate.event.def.AbstractFlushingEventListener.postFlush - post flush
+12:43:26 DEBUG org.hibernate.jdbc.JDBCContext.beforeTransactionCompletion - before transaction completion
+12:43:26 DEBUG org.hibernate.impl.SessionImpl.beforeTransactionCompletion - before transaction completion
+12:43:26 DEBUG org.hibernate.transaction.JDBCTransaction.commit - committed JDBC Connection
+12:43:26 DEBUG org.hibernate.jdbc.JDBCContext.afterTransactionCompletion - after transaction completion
+12:43:26 DEBUG org.hibernate.impl.SessionImpl.afterTransactionCompletion - after transaction completion

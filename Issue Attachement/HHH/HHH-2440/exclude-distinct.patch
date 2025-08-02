@@ -1,0 +1,561 @@
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/grammar/sql-gen.g
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/grammar/sql-gen.g	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/grammar/sql-gen.g	(working copy)
+@@ -32,6 +32,7 @@
+ 
+    /** the buffer resulting SQL statement is written to */
+ 	private StringBuffer buf = new StringBuffer();
++	private boolean excludeSqlDistinct = false;
+ 
+ 	protected void out(String s) {
+ 		buf.append(s);
+@@ -98,6 +99,10 @@
+ 	protected void commaBetweenParameters(String comma) {
+ 		out(comma);
+ 	}
++	
++	public void setExcludeSqlDistinct(boolean b) {
++		this.excludeSqlDistinct = b;
++	}
+ }
+ 
+ statement
+@@ -223,7 +228,7 @@
+ 	;
+ 
+ distinctOrAll
+-	: DISTINCT { out("distinct "); }
++	: DISTINCT { if (!excludeSqlDistinct) { out("distinct "); } }
+ 	| ALL { out("all "); }
+ 	;
+ 
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/Session.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/Session.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/Session.java	(working copy)
+@@ -3,6 +3,7 @@
+ 
+ import java.io.Serializable;
+ import java.sql.Connection;
++import java.util.Collection;
+ 
+ import org.hibernate.stat.SessionStatistics;
+ 
+@@ -602,6 +603,21 @@
+ 	 */
+ 	public Query createQuery(String queryString) throws HibernateException;
+ 
++    /**
++     * Create a new instance of <tt>Query</tt> for the given HQL query string.
++     * <p>
++     * Allows the user to specify hints for the queries, currently supported
++     * are:
++     * <p>
++     * - org.hibernate.excludeSqlDistinct: Excludes the distinct clause from the
++     * generated SQL.
++     *
++     * @param queryString a HQL query
++     * @return Query
++     * @throws HibernateException
++     */
++    public Query createQuery(String queryString, Collection hints) throws HibernateException;
++    
+ 	/**
+ 	 * Create a new instance of <tt>SQLQuery</tt> for the given SQL query string.
+ 	 *
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/QueryPlanCache.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/QueryPlanCache.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/QueryPlanCache.java	(working copy)
+@@ -1,24 +1,23 @@
+ package org.hibernate.engine.query;
+ 
+-import org.hibernate.util.ArrayHelper;
+-import org.hibernate.util.SimpleMRUCache;
+-import org.hibernate.util.SoftLimitMRUCache;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
+-import org.hibernate.QueryException;
+-import org.hibernate.MappingException;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-
+ import java.io.Serializable;
+-import java.util.Map;
++import java.util.Collection;
++import java.util.Collections;
+ import java.util.HashMap;
+-import java.util.List;
++import java.util.HashSet;
+ import java.util.Iterator;
++import java.util.Map;
+ import java.util.Set;
+-import java.util.HashSet;
+-import java.util.Collections;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.MappingException;
++import org.hibernate.QueryException;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
++import org.hibernate.util.SimpleMRUCache;
++import org.hibernate.util.SoftLimitMRUCache;
++
+ /**
+  * Acts as a cache for compiled query plans, as well as query-parameter metadata.
+  *
+@@ -60,7 +59,7 @@
+ 		return metadata;
+ 	}
+ 
+-	public HQLQueryPlan getHQLQueryPlan(String queryString, boolean shallow, Map enabledFilters)
++	public HQLQueryPlan getHQLQueryPlan(String queryString, boolean shallow, Collection hints, Map enabledFilters)
+ 			throws QueryException, MappingException {
+ 		HQLQueryPlanKey key = new HQLQueryPlanKey( queryString, shallow, enabledFilters );
+ 		HQLQueryPlan plan = ( HQLQueryPlan ) planCache.get ( key );
+@@ -69,7 +68,7 @@
+ 			if ( log.isTraceEnabled() ) {
+ 				log.trace( "unable to locate HQL query plan in cache; generating (" + queryString + ")" );
+ 			}
+-			plan = new HQLQueryPlan(queryString, shallow, enabledFilters, factory );
++			plan = new HQLQueryPlan(queryString, shallow, hints, enabledFilters, factory );
+ 		}
+ 		else {
+ 			if ( log.isTraceEnabled() ) {
+@@ -155,7 +154,7 @@
+ 		private final Set filterNames;
+ 		private final int hashCode;
+ 
+-		public HQLQueryPlanKey(String query, boolean shallow, Map enabledFilters) {
++		public HQLQueryPlanKey(String query, boolean shallow, Map enabledFilters ) {
+ 			this.query = query;
+ 			this.shallow = shallow;
+ 
+@@ -193,7 +192,7 @@
+ 			if ( !query.equals( that.query ) ) {
+ 				return false;
+ 			}
+-
++            
+ 			return true;
+ 		}
+ 
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/HQLQueryPlan.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/HQLQueryPlan.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/engine/query/HQLQueryPlan.java	(working copy)
+@@ -1,34 +1,36 @@
+ package org.hibernate.engine.query;
+ 
++import java.io.Serializable;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.HibernateException;
++import org.hibernate.QueryException;
++import org.hibernate.ScrollableResults;
++import org.hibernate.engine.QueryParameters;
++import org.hibernate.engine.RowSelection;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.event.EventSource;
++import org.hibernate.hql.FilterTranslator;
++import org.hibernate.hql.ParameterTranslations;
+ import org.hibernate.hql.QuerySplitter;
+ import org.hibernate.hql.QueryTranslator;
+-import org.hibernate.hql.ParameterTranslations;
+-import org.hibernate.hql.FilterTranslator;
++import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
++import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.EmptyIterator;
++import org.hibernate.util.IdentitySet;
+ import org.hibernate.util.JoinedIterator;
+-import org.hibernate.util.IdentitySet;
+-import org.hibernate.HibernateException;
+-import org.hibernate.ScrollableResults;
+-import org.hibernate.QueryException;
+-import org.hibernate.type.Type;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.QueryParameters;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.engine.RowSelection;
+-import org.hibernate.event.EventSource;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+ 
+-import java.io.Serializable;
+-import java.util.Map;
+-import java.util.Set;
+-import java.util.HashSet;
+-import java.util.List;
+-import java.util.ArrayList;
+-import java.util.Iterator;
+-import java.util.HashMap;
+-
+ /**
+  * Defines a query execution plan for an HQL query (or filter).
+  *
+@@ -51,12 +53,19 @@
+ 	private final Set enabledFilterNames;
+ 	private final boolean shallow;
+ 
++    public HQLQueryPlan(String hql, boolean shallow, Map enabledFilters, SessionFactoryImplementor factory) {
++        this( hql, null, shallow, CollectionHelper.EMPTY_COLLECTION, enabledFilters, factory );
++    }
+ 
+-	public HQLQueryPlan(String hql, boolean shallow, Map enabledFilters, SessionFactoryImplementor factory) {
+-		this( hql, null, shallow, enabledFilters, factory );
++	public HQLQueryPlan(String hql, boolean shallow, Collection hints, Map enabledFilters, SessionFactoryImplementor factory) {
++		this( hql, null, shallow, hints, enabledFilters, factory );
+ 	}
+ 
+-	protected HQLQueryPlan(String hql, String collectionRole, boolean shallow, Map enabledFilters, SessionFactoryImplementor factory) {
++    protected HQLQueryPlan(String hql, String collectionRole, boolean shallow, Map enabledFilters, SessionFactoryImplementor factory) {
++        this( hql, collectionRole, shallow, CollectionHelper.EMPTY_COLLECTION, enabledFilters, factory );
++    }
++    
++	protected HQLQueryPlan(String hql, String collectionRole, boolean shallow, Collection hints, Map enabledFilters, SessionFactoryImplementor factory) {
+ 		this.sourceQuery = hql;
+ 		this.shallow = shallow;
+ 
+@@ -73,7 +82,7 @@
+ 			if ( collectionRole == null ) {
+ 				translators[i] = factory.getSettings()
+ 						.getQueryTranslatorFactory()
+-						.createQueryTranslator( hql, concreteQueryStrings[i], enabledFilters, factory );
++						.createQueryTranslator( hql, concreteQueryStrings[i], hints, enabledFilters, factory );
+ 				translators[i].compile( factory.getSettings().getQuerySubstitutions(), shallow );
+ 			}
+ 			else {
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/AbstractSessionImpl.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/AbstractSessionImpl.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/AbstractSessionImpl.java	(working copy)
+@@ -1,23 +1,25 @@
+ //$Id$
+ package org.hibernate.impl;
+ 
++import java.util.Collection;
++import java.util.Collections;
++import java.util.List;
++
++import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.Query;
+ import org.hibernate.SQLQuery;
+-import org.hibernate.HibernateException;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.SessionException;
+-import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
+ import org.hibernate.engine.NamedQueryDefinition;
+ import org.hibernate.engine.NamedSQLQueryDefinition;
+-import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.query.HQLQueryPlan;
+ import org.hibernate.engine.query.NativeSQLQueryPlan;
++import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
+ 
+-import java.util.List;
+-
+ /**
+  * Functionality common to stateless and stateful sessions
+  * 
+@@ -50,7 +52,11 @@
+ 		}
+ 	}
+ 
+-	public Query getNamedQuery(String queryName) throws MappingException {
++    public Query getNamedQuery(String queryName) throws MappingException {
++        return getNamedQuery(queryName, Collections.EMPTY_SET);
++    }
++    
++	public Query getNamedQuery(String queryName, Collection hints) throws MappingException {
+ 		errorIfClosed();
+ 		NamedQueryDefinition nqd = factory.getNamedQuery( queryName );
+ 		final Query query;
+@@ -60,7 +66,7 @@
+ 					queryString,
+ 			        nqd.getFlushMode(),
+ 			        this,
+-			        getHQLQueryPlan( queryString, false ).getParameterMetadata()
++			        getHQLQueryPlan( queryString, false, hints ).getParameterMetadata()
+ 			);
+ 			query.setComment( "named HQL query " + queryName );
+ 		}
+@@ -107,12 +113,16 @@
+ 		if ( nqd.getComment() != null ) query.setComment( nqd.getComment() );
+ 	}
+ 
+-	public Query createQuery(String queryString) {
++    public Query createQuery(String queryString) {
++        return createQuery(queryString, Collections.EMPTY_SET);
++    }
++    
++	public Query createQuery(String queryString, Collection hints) {
+ 		errorIfClosed();
+ 		QueryImpl query = new QueryImpl(
+ 				queryString,
+ 		        this,
+-		        getHQLQueryPlan( queryString, false ).getParameterMetadata()
++		        getHQLQueryPlan( queryString, false, hints ).getParameterMetadata()
+ 		);
+ 		query.setComment( queryString );
+ 		return query;
+@@ -129,8 +139,12 @@
+ 		return query;
+ 	}
+ 
+-	protected HQLQueryPlan getHQLQueryPlan(String query, boolean shallow) throws HibernateException {
+-		return factory.getQueryPlanCache().getHQLQueryPlan( query, shallow, getEnabledFilters() );
++    protected HQLQueryPlan getHQLQueryPlan(String query, boolean shallow) throws HibernateException {
++        return getHQLQueryPlan(query, shallow, Collections.EMPTY_SET);
++    }
++    
++	protected HQLQueryPlan getHQLQueryPlan(String query, boolean shallow, Collection hints) throws HibernateException {
++		return factory.getQueryPlanCache().getHQLQueryPlan( query, shallow, hints, getEnabledFilters() );
+ 	}
+ 
+ 	protected NativeSQLQueryPlan getNativeSQLQueryPlan(NativeSQLQuerySpecification spec) throws HibernateException {
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/SessionFactoryImpl.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -399,7 +399,7 @@
+ 			try {
+ 				log.debug("Checking named query: " + queryName);
+ 				//TODO: BUG! this currently fails for named queries for non-POJO entities
+-				queryPlanCache.getHQLQueryPlan( qd.getQueryString(), false, CollectionHelper.EMPTY_MAP );
++				queryPlanCache.getHQLQueryPlan( qd.getQueryString(), false, Collections.EMPTY_SET, CollectionHelper.EMPTY_MAP );
+ 			}
+ 			catch ( QueryException e ) {
+ 				errors.put( queryName, e );
+@@ -652,11 +652,11 @@
+ 	}
+ 
+ 	public Type[] getReturnTypes(String queryString) throws HibernateException {
+-		return queryPlanCache.getHQLQueryPlan( queryString, false, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getReturnTypes();
++		return queryPlanCache.getHQLQueryPlan( queryString, false, Collections.EMPTY_SET, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getReturnTypes();
+ 	}
+ 
+ 	public String[] getReturnAliases(String queryString) throws HibernateException {
+-		return queryPlanCache.getHQLQueryPlan( queryString, false, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getReturnAliases();
++		return queryPlanCache.getHQLQueryPlan( queryString, false, Collections.EMPTY_SET, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getReturnAliases();
+ 	}
+ 
+ 	public ClassMetadata getClassMetadata(Class persistentClass) throws HibernateException {
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/classic/ClassicQueryTranslatorFactory.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/classic/ClassicQueryTranslatorFactory.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/classic/ClassicQueryTranslatorFactory.java	(working copy)
+@@ -1,13 +1,14 @@
+ //$Id$
+ package org.hibernate.hql.classic;
+ 
++import java.util.Collection;
++import java.util.Map;
++
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.hql.FilterTranslator;
+ import org.hibernate.hql.QueryTranslator;
+ import org.hibernate.hql.QueryTranslatorFactory;
+ 
+-import java.util.Map;
+-
+ /**
+  * Generates translators which uses the older hand-written parser to perform
+  * the translation.
+@@ -22,6 +23,7 @@
+ 	public QueryTranslator createQueryTranslator(
+ 			String queryIdentifier,
+ 	        String queryString,
++            Collection hints,
+ 	        Map filters,
+ 	        SessionFactoryImplementor factory) {
+ 		return new QueryTranslatorImpl( queryIdentifier, queryString, filters, factory );
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/QueryTranslatorImpl.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/QueryTranslatorImpl.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/QueryTranslatorImpl.java	(working copy)
+@@ -1,10 +1,14 @@
+ // $Id$
+ package org.hibernate.hql.ast;
+ 
+-import antlr.ANTLRException;
+-import antlr.RecognitionException;
+-import antlr.TokenStreamException;
+-import antlr.collections.AST;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.HibernateException;
+@@ -17,8 +21,8 @@
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.event.EventSource;
+ import org.hibernate.hql.FilterTranslator;
++import org.hibernate.hql.ParameterTranslations;
+ import org.hibernate.hql.QueryExecutionRequestException;
+-import org.hibernate.hql.ParameterTranslations;
+ import org.hibernate.hql.antlr.HqlSqlTokenTypes;
+ import org.hibernate.hql.antlr.HqlTokenTypes;
+ import org.hibernate.hql.antlr.SqlTokenTypes;
+@@ -31,21 +35,19 @@
+ import org.hibernate.hql.ast.tree.QueryNode;
+ import org.hibernate.hql.ast.tree.Statement;
+ import org.hibernate.hql.ast.util.ASTPrinter;
++import org.hibernate.hql.ast.util.ASTUtil;
+ import org.hibernate.hql.ast.util.NodeTraverser;
+-import org.hibernate.hql.ast.util.ASTUtil;
+ import org.hibernate.loader.hql.QueryLoader;
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.IdentitySet;
++import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+-import org.hibernate.util.ReflectHelper;
+ 
+-import java.util.HashMap;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-import java.util.ArrayList;
++import antlr.ANTLRException;
++import antlr.RecognitionException;
++import antlr.TokenStreamException;
++import antlr.collections.AST;
+ 
+ /**
+  * A QueryTranslator that uses an Antlr-based parser.
+@@ -56,6 +58,7 @@
+ 
+ 	private static final Log log = LogFactory.getLog( QueryTranslatorImpl.class );
+ 	private static final Log AST_LOG = LogFactory.getLog( "org.hibernate.hql.ast.AST" );
++    private static final String EXCLUDE_SQL_DISTINCT = "org.hibernate.excludeSqlDistinct";
+ 
+ 	private SessionFactoryImplementor factory;
+ 
+@@ -72,6 +75,8 @@
+ 
+ 	private Statement sqlAst;
+ 	private String sql;
++    
++    private boolean excludeSqlDistinct = false;
+ 
+ 	private ParameterTranslations paramTranslations;
+ 
+@@ -86,6 +91,7 @@
+ 	public QueryTranslatorImpl(
+ 			String queryIdentifier,
+ 	        String query,
++            Collection hints,
+ 	        Map enabledFilters,
+ 	        SessionFactoryImplementor factory) {
+ 		this.queryIdentifier = queryIdentifier;
+@@ -94,6 +100,7 @@
+ 		this.shallowQuery = false;
+ 		this.enabledFilters = enabledFilters;
+ 		this.factory = factory;
++        this.excludeSqlDistinct = hints.contains(EXCLUDE_SQL_DISTINCT);
+ 	}
+ 
+ 	/**
+@@ -210,6 +217,7 @@
+ 	private void generate(AST sqlAst) throws QueryException, RecognitionException {
+ 		if ( sql == null ) {
+ 			SqlGenerator gen = new SqlGenerator(factory);
++            gen.setExcludeSqlDistinct(excludeSqlDistinct);
+ 			gen.statement( sqlAst );
+ 			sql = gen.getSQL();
+ 			if ( log.isDebugEnabled() ) {
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/ASTQueryTranslatorFactory.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/ASTQueryTranslatorFactory.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/ast/ASTQueryTranslatorFactory.java	(working copy)
+@@ -1,15 +1,17 @@
+ //$Id$
+ package org.hibernate.hql.ast;
+ 
++import java.util.Collection;
++import java.util.Map;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.hql.FilterTranslator;
+ import org.hibernate.hql.QueryTranslator;
+ import org.hibernate.hql.QueryTranslatorFactory;
++import org.hibernate.util.CollectionHelper;
+ 
+-import java.util.Map;
+-
+ /**
+  * Generates translators which uses the Antlr-based parser to perform
+  * the translation.
+@@ -30,9 +32,10 @@
+ 	public QueryTranslator createQueryTranslator(
+ 			String queryIdentifier,
+ 	        String queryString,
++            Collection hints,
+ 	        Map filters,
+ 	        SessionFactoryImplementor factory) {
+-		return new QueryTranslatorImpl( queryIdentifier, queryString, filters, factory );
++		return new QueryTranslatorImpl( queryIdentifier, queryString, hints, filters, factory );
+ 	}
+ 
+ 	/**
+@@ -43,7 +46,7 @@
+ 	        String queryString,
+ 	        Map filters,
+ 	        SessionFactoryImplementor factory) {
+-		return new QueryTranslatorImpl( queryIdentifier, queryString, filters, factory );
++		return new QueryTranslatorImpl( queryIdentifier, queryString, CollectionHelper.EMPTY_COLLECTION,  filters, factory );
+ 	}
+ 
+ }
+Index: C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/QueryTranslatorFactory.java
+===================================================================
+--- C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/QueryTranslatorFactory.java	(revision 11228)
++++ C:/Documents and Settings/Michael.Barker/workspace/Hibernate3/src/org/hibernate/hql/QueryTranslatorFactory.java	(working copy)
+@@ -1,10 +1,11 @@
+ //$Id$
+ package org.hibernate.hql;
+ 
++import java.util.Collection;
++import java.util.Map;
++
+ import org.hibernate.engine.SessionFactoryImplementor;
+ 
+-import java.util.Map;
+-
+ /**
+  * Facade for generation of {@link QueryTranslator} and {@link FilterTranslator} instances.
+  *
+@@ -25,7 +26,7 @@
+ 	 * @param factory The session factory.
+ 	 * @return an appropriate translator.
+ 	 */
+-	public QueryTranslator createQueryTranslator(String queryIdentifier, String queryString, Map filters, SessionFactoryImplementor factory);
++	public QueryTranslator createQueryTranslator(String queryIdentifier, String queryString, Collection hints, Map filters, SessionFactoryImplementor factory);
+ 
+ 	/**
+ 	 * Construct a {@link FilterTranslator} instance capable of translating

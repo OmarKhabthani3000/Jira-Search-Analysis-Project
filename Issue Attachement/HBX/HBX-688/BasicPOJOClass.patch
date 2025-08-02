@@ -1,0 +1,61 @@
+Index: HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java
+===================================================================
+--- HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(revision 11156)
++++ HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(working copy)
+@@ -12,6 +12,7 @@
+ import org.hibernate.mapping.Component;
+ import org.hibernate.mapping.MetaAttributable;
+ import org.hibernate.mapping.MetaAttribute;
++import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.PropertyGeneration;
+ import org.hibernate.mapping.Selectable;
+@@ -303,9 +304,13 @@
+ 	public String staticImport(String fqcn, String member) {
+ 		return importContext.staticImport(fqcn, member);
+ 	}
+-	
++
+ 	public String generateBasicAnnotation(Property property) {
+-		StringBuffer annotations = new StringBuffer( "    " );
++		boolean optimisticLock = this.isOptimisticLockProperty(property);
++		StringBuffer annotations = new StringBuffer( "\n    " );
++		if (optimisticLock) {
++			annotations.append("@").append( importType("javax.persistence.Version")).append( "\n    " );
++		}
+ 		if(property.getValue() instanceof SimpleValue) {
+ 			String typeName = ((SimpleValue)property.getValue()).getTypeName();
+ 			if("date".equals(typeName) || "java.sql.Date".equals(typeName)) {
+@@ -311,7 +316,9 @@
+ 			if("date".equals(typeName) || "java.sql.Date".equals(typeName)) {
+ 				buildTemporalAnnotation( annotations, "DATE" );
+ 			} else if ("timestamp".equals(typeName) || "java.sql.Timestamp".equals(typeName)) {
+-				//buildTemporalAnnotation( annotations, "TIMESTAMP" ); ..the default so don't generate
++				//buildTemporalAnnotation( annotations, "TIMESTAMP" ); .. the default so don't generate
++				// In this case, just remove the newline and spaces (for nicer formatting)
++				annotations.delete(annotations.lastIndexOf("\n"), annotations.length());
+ 			} else if ("time".equals(typeName) || "java.sql.Time".equals(typeName)) {
+ 				buildTemporalAnnotation(annotations, "TIME");
+ 			} //TODO: calendar etc. ?
+@@ -316,10 +323,20 @@
+ 				buildTemporalAnnotation(annotations, "TIME");
+ 			} //TODO: calendar etc. ?
+ 		}
+-			
+ 		return annotations.toString();
+ 	}
+ 
++	private boolean isOptimisticLockProperty(Property property) {
++		PersistentClass persistentClass = property.getPersistentClass();
++		if (persistentClass != null) {
++			Property versionProperty = persistentClass.getVersion();
++			if (property.equals(versionProperty)) {
++				return true;
++			}
++		}
++		return false;
++	}
++
+ 	private StringBuffer buildTemporalAnnotation(StringBuffer annotations, String temporalTypeValue) {
+ 		String temporal = importType("javax.persistence.Temporal");
+ 		String temporalType = importType("javax.persistence.TemporalType");

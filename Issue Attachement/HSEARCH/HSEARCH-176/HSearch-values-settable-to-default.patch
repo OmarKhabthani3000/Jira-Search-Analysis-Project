@@ -1,0 +1,908 @@
+Index: doc/reference/en/modules/configuration.xml
+===================================================================
+--- doc/reference/en/modules/configuration.xml	(revision 14491)
++++ doc/reference/en/modules/configuration.xml	(working copy)
+@@ -610,7 +610,12 @@
+     explicitly set, the value will default to the
+     <literal>.transaction</literal> property.</para>
+ 
+-    <para>For more information about Lucene indexing performances, please
++    <para>
++    The default for all values is to leave them at Lucene's own default,
++    so the listed values in the following table actually depend on the
++    version of Lucene you are using;
++    values shown are relative to version <literal>2.3</literal>.
++    For more information about Lucene indexing performances, please
+     refer to the Lucene documentation.</para>
+ 
+     <table>
+@@ -664,7 +669,7 @@
+             <para>Used by Hibernate Search during index update operations as
+             part of database modifications.</para></entry>
+ 
+-            <entry>10</entry>
++            <entry>Disabled (not set)</entry>
+           </row>
+           
+           <row>
+@@ -716,7 +721,7 @@
+             <para>Used during indexing via
+             <literal>FullTextSession.index()</literal></para></entry>
+ 
+-            <entry>10</entry>
++            <entry>Disabled (not set)</entry>
+           </row>
+           
+           <row>
+Index: src/test/org/hibernate/search/test/configuration/ConfigurationReadTestCase.java
+===================================================================
+--- src/test/org/hibernate/search/test/configuration/ConfigurationReadTestCase.java	(revision 0)
++++ src/test/org/hibernate/search/test/configuration/ConfigurationReadTestCase.java	(revision 0)
+@@ -0,0 +1,62 @@
++package org.hibernate.search.test.configuration;
++
++import org.hibernate.search.FullTextSession;
++import org.hibernate.search.Search;
++import org.hibernate.search.backend.configuration.WriterSetting;
++import org.hibernate.search.impl.SearchFactoryImpl;
++import org.hibernate.search.test.SearchTestCase;
++
++/**
++ * Contains some utility methods to simplify coding of
++ * testcases about configuration parsing.
++ * @author Sanne Grinovero
++ */
++public abstract class ConfigurationReadTestCase extends SearchTestCase {
++	
++	private SearchFactoryImpl searchFactory;
++	
++	protected enum TransactionType { TRANSACTION, BATCH };
++
++	@Override
++	protected void setUp() throws Exception {
++		super.setUp();
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		fullTextSession.close();
++    }
++	
++	protected final void assertValueIsDefault(Class testEntity, TransactionType parmGroup, WriterSetting setting){
++		assertValueIsDefault(testEntity, 0, parmGroup, setting);
++	}
++	
++	protected final void assertValueIsDefault(Class testEntity, int shard, TransactionType parmGroup, WriterSetting setting){
++		boolean batch = isBatch(parmGroup);
++		assertNull("shard:"+shard+" batch="+batch+" setting:"+setting.getKey()+" : value was expected unset!", getParm(shard, batch, setting, testEntity ) );
++	}
++	
++	protected final void assertValueIsSet(Class testEntity, TransactionType parmGroup, WriterSetting setting, int expectedValue ){
++		assertValueIsSet(testEntity, 0, parmGroup, setting, expectedValue);
++	}
++	
++	protected final void assertValueIsSet(Class testEntity, int shard, TransactionType parmGroup, WriterSetting setting, int expectedValue ){
++		boolean batch = isBatch(parmGroup);
++		assertNotNull("shard:"+shard+" batch="+batch+" setting:"+setting.getKey(), getParm(shard, batch, setting, testEntity ) );
++		assertEquals("shard:"+shard+" batch="+batch+" setting:"+setting.getKey(), expectedValue, (int)getParm(shard, batch, setting, testEntity ) );
++	}
++	
++	protected final SearchFactoryImpl getSearchFactory() {
++		return searchFactory;
++	}
++	
++	private boolean isBatch(TransactionType parmGroup){
++		return parmGroup == TransactionType.BATCH;
++	}
++	
++	private Integer getParm(int shard, boolean batch, WriterSetting setting, Class testEntity){
++		if (batch)
++			return searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(testEntity)[shard]).getBatchIndexParameters().getCurrentValueFor(setting);
++		else
++			return searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(testEntity)[shard]).getTransactionIndexParameters().getCurrentValueFor(setting);
++	}
++
++}
+Index: src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java
+===================================================================
+--- src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java	(revision 14491)
++++ src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java	(working copy)
+@@ -1,34 +1,31 @@
+ package org.hibernate.search.test.configuration;
+ 
+-import org.hibernate.search.FullTextSession;
+-import org.hibernate.search.Search;
+-import org.hibernate.search.backend.LuceneIndexingParameters;
+-import org.hibernate.search.impl.SearchFactoryImpl;
+ import org.hibernate.search.test.Document;
+-import org.hibernate.search.test.SearchTestCase;
+ import org.hibernate.search.test.query.Author;
+ import org.hibernate.search.test.query.Book;
++import static org.hibernate.search.backend.configuration.WriterSetting.MAX_BUFFERED_DOCS;
++import static org.hibernate.search.backend.configuration.WriterSetting.MAX_MERGE_DOCS;
++import static org.hibernate.search.backend.configuration.WriterSetting.MERGE_FACTOR;
++import static org.hibernate.search.backend.configuration.WriterSetting.RAM_BUFFER_SIZE;
++import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.TRANSACTION;
++import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.BATCH;
+ 
+ /**
+  * @author Sanne Grinovero
+  */
+-public class LuceneIndexingParametersTest extends SearchTestCase {
++public class LuceneIndexingParametersTest extends ConfigurationReadTestCase {
+ 	
+ 	protected void configure(org.hibernate.cfg.Configuration cfg) {
+ 		super.configure( cfg );
+ 		
+-		//super sets:
+-		//cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "100" );
+-		//cfg.setProperty( "hibernate.search.default.batch.max_buffered_docs", "1000" );
+-		
+ 		cfg.setProperty( "hibernate.search.default.batch.ram_buffer_size", "1" );
++//set by super : cfg.setProperty( "hibernate.search.default.batch.max_buffered_docs", "1000" );
+ 		
+ 		cfg.setProperty( "hibernate.search.default.transaction.ram_buffer_size", "2" );
+ 		cfg.setProperty( "hibernate.search.default.transaction.max_merge_docs", "9" );
+-		cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "10" );
++//set by super : cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "100" );
+ 		cfg.setProperty( "hibernate.search.default.transaction.max_buffered_docs", "11" );
+ 		
+-		cfg.setProperty( "hibernate.search.Book.batch.ram_buffer_size", "3" );
+ 		cfg.setProperty( "hibernate.search.Book.batch.max_merge_docs", "12" );
+ 		cfg.setProperty( "hibernate.search.Book.batch.merge_factor", "13" );
+ 		cfg.setProperty( "hibernate.search.Book.batch.max_buffered_docs", "14" );
+@@ -38,63 +35,55 @@
+ 		cfg.setProperty( "hibernate.search.Book.transaction.merge_factor", "16" );
+ 		cfg.setProperty( "hibernate.search.Book.transaction.max_buffered_docs", "17" );
+ 		
+-		cfg.setProperty( "hibernate.search.Documents.ram_buffer_size", "4" );
++		cfg.setProperty( "hibernate.search.Documents.transaction.ram_buffer_size", "default" );
++		cfg.setProperty( "hibernate.search.Documents.transaction.max_merge_docs", "5" );
++		cfg.setProperty( "hibernate.search.Documents.transaction.merge_factor", "6" );
++		cfg.setProperty( "hibernate.search.Documents.transaction.max_buffered_docs", "7" );
++		cfg.setProperty( "hibernate.search.Documents.batch.max_merge_docs", "9" );
+ 		
+ 	}
+ 	
+-	public void testUnsetBatchValueTakesTransaction() throws Exception {
+-		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
+-		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
+-		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Document.class)[0]);
+-		assertEquals(10, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
+-		assertEquals(1000, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
+-		fullTextSession.close();
++	public void testDefaultIndexProviderParameters() throws Exception {
++		assertValueIsSet( Author.class, TRANSACTION, RAM_BUFFER_SIZE, 2 );
++		assertValueIsSet( Author.class, TRANSACTION, MAX_MERGE_DOCS, 9 );
++		assertValueIsSet( Author.class, TRANSACTION, MAX_BUFFERED_DOCS,  11 );
++		assertValueIsSet( Author.class, TRANSACTION, MERGE_FACTOR,  100 );
+ 	}
+ 	
+-	public void testBatchParametersDefault() throws Exception {
+-		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
+-		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
+-		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Author.class)[0]);
+-		assertEquals(1, (int)indexingParameters.getBatchIndexParameters().getRamBufferSizeMB());
+-		assertEquals(9, (int)indexingParameters.getBatchIndexParameters().getMaxMergeDocs());
+-		assertEquals(1000, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
+-		assertEquals(10, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
+-		fullTextSession.close();
++	public void testBatchParametersGlobals() throws Exception {
++		assertValueIsSet( Author.class, BATCH, RAM_BUFFER_SIZE, 1 );
++		assertValueIsSet( Author.class, BATCH, MAX_MERGE_DOCS, 9 );
++		assertValueIsSet( Author.class, BATCH, MAX_BUFFERED_DOCS, 1000 );
++		assertValueIsSet( Author.class, BATCH, MERGE_FACTOR, 100 );
+ 	}
+ 	
+-	public void testTransactionParametersDefault() throws Exception {
+-		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
+-		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
+-		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Author.class)[0]);
+-		assertEquals(2, (int)indexingParameters.getTransactionIndexParameters().getRamBufferSizeMB());
+-		assertEquals(9, (int)indexingParameters.getTransactionIndexParameters().getMaxMergeDocs());
+-		assertEquals(11, (int)indexingParameters.getTransactionIndexParameters().getMaxBufferedDocs());
+-		assertEquals(10, (int)indexingParameters.getTransactionIndexParameters().getMergeFactor());
+-		fullTextSession.close();
++	public void testUnsetBatchValueTakesTransaction() throws Exception {
++		assertValueIsSet( Document.class, BATCH, MERGE_FACTOR, 6 );
++		assertValueIsSet( Document.class, BATCH, MAX_BUFFERED_DOCS, 7 );
+ 	}
+ 	
+-	public void testBatchParameters() throws Exception {
+-		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
+-		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
+-		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Book.class)[0]);
+-		assertEquals(3, (int)indexingParameters.getBatchIndexParameters().getRamBufferSizeMB());
+-		assertEquals(12, (int)indexingParameters.getBatchIndexParameters().getMaxMergeDocs());
+-		assertEquals(14, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
+-		assertEquals(13, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
+-		fullTextSession.close();
++	public void testExplicitBatchParameters() throws Exception {
++		assertValueIsSet( Book.class, BATCH, MAX_MERGE_DOCS, 12 );
++		assertValueIsSet( Book.class, BATCH, MAX_BUFFERED_DOCS, 14 );
++		assertValueIsSet( Book.class, BATCH, MERGE_FACTOR, 13 );
+ 	}
+ 	
++	public void testInheritedBatchParametersFromTranscation() throws Exception {
++		assertValueIsSet( Book.class, BATCH, RAM_BUFFER_SIZE, 4 );
++	}
++	
+ 	public void testTransactionParameters() throws Exception {
+-		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
+-		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
+-		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Book.class)[0]);
+-		assertEquals(4, (int)indexingParameters.getTransactionIndexParameters().getRamBufferSizeMB());
+-		assertEquals(15, (int)indexingParameters.getTransactionIndexParameters().getMaxMergeDocs());
+-		assertEquals(17, (int)indexingParameters.getTransactionIndexParameters().getMaxBufferedDocs());
+-		assertEquals(16, (int)indexingParameters.getTransactionIndexParameters().getMergeFactor());
+-		fullTextSession.close();
++		assertValueIsSet( Book.class, TRANSACTION, RAM_BUFFER_SIZE, 4 );
++		assertValueIsSet( Book.class, TRANSACTION, MAX_MERGE_DOCS, 15 );
++		assertValueIsSet( Book.class, TRANSACTION, MAX_BUFFERED_DOCS, 17 );
++		assertValueIsSet( Book.class, TRANSACTION, MERGE_FACTOR, 16 );
+ 	}
+-
++	
++	public void testDefaultKeywordOverwritesInherited() throws Exception {
++		assertValueIsDefault( Document.class, TRANSACTION, RAM_BUFFER_SIZE );
++		assertValueIsDefault( Document.class, TRANSACTION, RAM_BUFFER_SIZE );
++	}
++	
+ 	protected Class[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+@@ -102,5 +91,5 @@
+ 				Document.class
+ 		};
+ 	}
+-
++	
+ }
+Index: src/test/org/hibernate/search/test/configuration/UselessShardingStrategy.java
+===================================================================
+--- src/test/org/hibernate/search/test/configuration/UselessShardingStrategy.java	(revision 0)
++++ src/test/org/hibernate/search/test/configuration/UselessShardingStrategy.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.search.test.configuration;
++
++import java.io.Serializable;
++import java.util.Properties;
++
++import org.apache.lucene.document.Document;
++import org.hibernate.search.store.DirectoryProvider;
++import org.hibernate.search.store.IndexShardingStrategy;
++
++/**
++ * Used to test the configuration of a third-party strategy
++ * @author Sanne Grinovero
++ */
++public class UselessShardingStrategy implements IndexShardingStrategy {
++	
++	public DirectoryProvider getDirectoryProviderForAddition(Class entity, Serializable id, String idInString, Document document) {
++		return null;
++	}
++
++	public DirectoryProvider[] getDirectoryProvidersForAllShards() {
++		return null;
++	}
++
++	public DirectoryProvider[] getDirectoryProvidersForDeletion(Class entity, Serializable id, String idInString) {
++		return null;
++	}
++
++	public void initialize(Properties properties, DirectoryProvider[] providers) {
++	}
++
++}
+Index: src/test/org/hibernate/search/test/configuration/ShardsConfigurationTest.java
+===================================================================
+--- src/test/org/hibernate/search/test/configuration/ShardsConfigurationTest.java	(revision 0)
++++ src/test/org/hibernate/search/test/configuration/ShardsConfigurationTest.java	(revision 0)
+@@ -0,0 +1,92 @@
++package org.hibernate.search.test.configuration;
++
++import static org.hibernate.search.backend.configuration.WriterSetting.MAX_BUFFERED_DOCS;
++import static org.hibernate.search.backend.configuration.WriterSetting.MAX_MERGE_DOCS;
++import static org.hibernate.search.backend.configuration.WriterSetting.MERGE_FACTOR;
++import static org.hibernate.search.backend.configuration.WriterSetting.RAM_BUFFER_SIZE;
++import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.TRANSACTION;
++import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.BATCH;
++import org.hibernate.search.store.DirectoryProvider;
++import org.hibernate.search.store.FSDirectoryProvider;
++import org.hibernate.search.store.IndexShardingStrategy;
++import org.hibernate.search.store.RAMDirectoryProvider;
++import org.hibernate.search.test.Document;
++import org.hibernate.search.test.query.Author;
++import org.hibernate.search.test.query.Book;
++
++/**
++ * @author Sanne Grinovero
++ */
++public class ShardsConfigurationTest extends ConfigurationReadTestCase {
++	
++	protected void configure(org.hibernate.cfg.Configuration cfg) {
++		super.configure( cfg );
++		//super contains these:
++//		cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "100" );
++//		cfg.setProperty( "hibernate.search.default.batch.max_buffered_docs", "1000" );
++		cfg.setProperty( "hibernate.search.default.sharding_strategy.nbr_of_shards", "2" );// permit this?
++		cfg.setProperty( "hibernate.search.default.directory_provider", FSDirectoryProvider.class.getCanonicalName() );
++		cfg.setProperty( "hibernate.search.default.2.directory_provider", RAMDirectoryProvider.class.getCanonicalName() );
++		cfg.setProperty( "hibernate.search.Documents.batch.max_buffered_docs", "4" );
++		cfg.setProperty( "hibernate.search.Documents.batch.max_merge_docs", "5" );
++		cfg.setProperty( "hibernate.search.Documents.transaction.max_buffered_docs", "6" );
++		cfg.setProperty( "hibernate.search.Documents.sharding_strategy.nbr_of_shards", "4" );
++		cfg.setProperty( "hibernate.search.Documents.sharding_strategy", UselessShardingStrategy.class.getCanonicalName() );
++		cfg.setProperty( "hibernate.search.Documents.0.batch.max_merge_docs", "57" );
++		cfg.setProperty( "hibernate.search.Documents.0.directory_provider", RAMDirectoryProvider.class.getCanonicalName() );
++		cfg.setProperty( "hibernate.search.Documents.0.transaction.max_buffered_docs", "58" );
++		cfg.setProperty( "hibernate.search.Documents.1.batch.max_merge_docs", "11" );
++		cfg.setProperty( "hibernate.search.Documents.1.transaction.max_buffered_docs", "12" );
++	}
++	
++	public void testCorrectNumberOfShardsDetected() throws Exception {
++		DirectoryProvider[] docDirProviders = getSearchFactory().getDirectoryProviders(Document.class);
++		assertNotNull(docDirProviders);
++		assertEquals(4, docDirProviders.length);
++		DirectoryProvider[] bookDirProviders = getSearchFactory().getDirectoryProviders(Book.class);
++		assertNotNull(bookDirProviders);
++		assertEquals(2, bookDirProviders.length);
++	}
++	
++	public void testSelectionOfShardingStrategy() throws Exception {
++		IndexShardingStrategy shardingStrategy = getSearchFactory().getDocumentBuilders().get(Document.class).getDirectoryProviderSelectionStrategy();
++		assertNotNull( shardingStrategy );
++		assertEquals( shardingStrategy.getClass(), UselessShardingStrategy.class );
++	}
++	
++	public void testShardingSettingsInherited() throws Exception {
++		DirectoryProvider[] docDirProviders = getSearchFactory().getDirectoryProviders(Document.class);
++		assertTrue( docDirProviders[0] instanceof RAMDirectoryProvider );
++		assertTrue( docDirProviders[1] instanceof FSDirectoryProvider );
++		assertTrue( docDirProviders[2] instanceof RAMDirectoryProvider );
++	}
++	
++	public void testShardN2UsesDefaults() throws Exception {
++		assertValueIsSet( Document.class, 2, TRANSACTION, MAX_BUFFERED_DOCS, 6);
++		assertValueIsDefault( Document.class, 2, TRANSACTION, MAX_MERGE_DOCS );
++		assertValueIsSet( Document.class, 2, TRANSACTION, MERGE_FACTOR, 100 );
++		assertValueIsDefault( Document.class, 2, TRANSACTION, RAM_BUFFER_SIZE );
++		assertValueIsSet( Document.class, 2, BATCH, MAX_BUFFERED_DOCS, 4 );
++		assertValueIsSet( Document.class, 2, BATCH, MAX_MERGE_DOCS, 5 );
++		assertValueIsSet( Document.class, 2, BATCH, MERGE_FACTOR, 100 );
++		assertValueIsDefault( Document.class, 2, BATCH, RAM_BUFFER_SIZE );
++	}
++	
++	public void testShardN1_ExplicitParams() throws Exception {
++		assertValueIsSet( Document.class, 1, TRANSACTION, MAX_BUFFERED_DOCS, 12 );
++		assertValueIsSet( Document.class, 1, BATCH, MAX_MERGE_DOCS, 11 );
++	}
++	
++	public void testShard_BatchInheritedFromTransaction() throws Exception {
++		assertValueIsSet( Document.class, 1, BATCH, MAX_BUFFERED_DOCS, 12 );
++		assertValueIsSet( Document.class, 0, BATCH, MAX_BUFFERED_DOCS, 58 );
++	}
++	
++	protected Class[] getMappings() {
++		return new Class[] {
++				Book.class,
++				Author.class,
++				Document.class
++		};
++	}
++}
+Index: src/java/org/hibernate/search/backend/LuceneIndexingParameters.java
+===================================================================
+--- src/java/org/hibernate/search/backend/LuceneIndexingParameters.java	(revision 14491)
++++ src/java/org/hibernate/search/backend/LuceneIndexingParameters.java	(working copy)
+@@ -2,10 +2,14 @@
+ package org.hibernate.search.backend;
+ 
+ import java.io.Serializable;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.Properties;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.lucene.index.IndexWriter;
++import org.hibernate.search.backend.configuration.WriterSetting;
+ 
+ /**
+  * Wrapper class around the Lucene indexing parameters <i>mergeFactor</i>, <i>maxMergeDocs</i>,
+@@ -16,25 +20,39 @@
+  * 
+  * @author Hardy Ferentschik
+  * @author Sanne Grinovero
+- *
+  */
+ public class LuceneIndexingParameters implements Serializable {
+ 
+ 	private static final Log log = LogFactory.getLog( LuceneIndexingParameters.class );
++
++	// value keyword
++	public static final String EXPLICIT_DEFAULT_VALUE = "default"; 
++	// property path keywords
++	public static final String BATCH = "batch.";
++	public static final String TRANSACTION = "transaction.";
+ 	
+-	private final ParameterSet transactionIndexParameters = new ParameterSet();
+-	private final ParameterSet batchIndexParameters = new ParameterSet();
++	private final ParameterSet transactionIndexParameters;
++	private final ParameterSet batchIndexParameters;
+ 	
+-	/**
+-	 * Constructor which instantiates new parameter objects with the the default values.
+-	 */
+-	public LuceneIndexingParameters() {
+-		//FIXME: I would recommend setting the following parameters as defaults for batch indexing:
+-		//batchIndexParameters.setMaxBufferedDocs(null);
+-		//batchIndexParameters.setRamBufferSizeMB(64);
+-
++	public LuceneIndexingParameters( Properties sourceProps ) {
++		Properties transactionProps = new Properties();
++		Properties batchProps = new Properties( transactionProps ); // transaction settings is the default for batch
++		//don't iterate on property entries we know all the keys:
++		for ( WriterSetting t : WriterSetting.values() ) {
++			String key = t.getKey();
++			String trxValue = sourceProps.getProperty( TRANSACTION + key );
++			if (trxValue != null) {
++				transactionProps.setProperty( key, trxValue );
++			}
++			String batchValue = sourceProps.getProperty( BATCH + key );
++			if (batchValue != null) {
++				batchProps.setProperty( key, batchValue );
++			}
++		}
++		transactionIndexParameters = new ParameterSet(transactionProps);
++		batchIndexParameters = new ParameterSet(batchProps);
+ 	}
+-	
++
+ 	public ParameterSet getTransactionIndexParameters() {
+ 		return transactionIndexParameters;
+ 	}
+@@ -44,65 +62,45 @@
+ 	}
+ 
+ 	public class ParameterSet implements Serializable {
+-
+-		private Integer mergeFactor = null;
+-		private Integer maxMergeDocs = null;
+-		private Integer maxBufferedDocs = null;
+-		private Integer termIndexInterval = null;
+-		private Integer ramBufferSizeMB = null;
+-
+-		public Integer getMergeFactor() {
+-			return mergeFactor;
++		
++		final Map<WriterSetting, Integer> parameters = new HashMap<WriterSetting, Integer>();
++		
++		public ParameterSet(Properties prop) {
++			for ( WriterSetting t : WriterSetting.values() ) {
++				String value = prop.getProperty( t.getKey() );
++				if ( ! (value==null || EXPLICIT_DEFAULT_VALUE.equals(value)) )
++					parameters.put(t, t.parseVal(value) );
++			}
+ 		}
+-		public void setMergeFactor(Integer mergeFactor) {
+-			this.mergeFactor = mergeFactor;
+-		}
+-		public Integer getMaxMergeDocs() {
+-			return maxMergeDocs;
+-		}
+-		public void setMaxMergeDocs(Integer maxMergeDocs) {
+-			this.maxMergeDocs = maxMergeDocs;
+-		}
+-		public Integer getMaxBufferedDocs() {
+-			return maxBufferedDocs;
+-		}
+-		public void setMaxBufferedDocs(Integer maxBufferedDocs) {
+-			this.maxBufferedDocs = maxBufferedDocs;
+-		}
+-		public Integer getRamBufferSizeMB() {
+-			return ramBufferSizeMB;
+-		}
+-		public void setRamBufferSizeMB(Integer ramBufferSizeMB) {
+-			this.ramBufferSizeMB = ramBufferSizeMB;
+-		}
+-		public Integer getTermIndexInterval() {
+-			return termIndexInterval;
+-		}
+-		public void setTermIndexInterval(Integer termIndexInterval) {
+-			this.termIndexInterval = termIndexInterval;
+-		}
+-
++		
+ 		/**
+ 		 * Applies the parameters represented by this to a writer.
+ 		 * Undefined parameters are not set, leaving the lucene default.
+ 		 * @param writer the IndexWriter whereto the parameters will be applied.
+ 		 */
+-		void applyToWriter(IndexWriter writer){
++		public void applyToWriter(IndexWriter writer) {
+ 			try {
+-			if (mergeFactor!=null)
+-				writer.setMergeFactor(mergeFactor);
+-			if (maxMergeDocs!=null)
+-				writer.setMaxMergeDocs(maxMergeDocs);
+-			if (maxBufferedDocs!=null)
+-				writer.setMaxBufferedDocs(maxBufferedDocs);
+-			if (ramBufferSizeMB!=null)
+-				writer.setRAMBufferSizeMB(ramBufferSizeMB);
+-			if (termIndexInterval!=null)
+-				writer.setTermIndexInterval(termIndexInterval);
+-			}catch (IllegalArgumentException e) {
+-				log.error("Illegal IndexWriter setting"+e.getMessage()+". Will use default settings!");
++				for ( Map.Entry<WriterSetting,Integer> entry : parameters.entrySet() ) {
++					entry.getKey().applySetting( writer, entry.getValue() );
++				}
++			} catch (IllegalArgumentException e) {
++				log.error( "Illegal IndexWriter setting" + e.getMessage()
++						+ ". Will use default settings." );
+ 			}
+ 		}
++		
++		public Integer getCurrentValueFor(WriterSetting ws){
++			return parameters.get(ws);
++		}
++		
++		public void setCurrentValueFor(WriterSetting ws, Integer newValue){
++			if (newValue==null){
++				parameters.remove(ws);
++			} else {
++				parameters.put(ws, newValue);
++			}
++		}
+ 
+  	}
++	
+ }
+Index: src/java/org/hibernate/search/backend/configuration/WriterSetting.java
+===================================================================
+--- src/java/org/hibernate/search/backend/configuration/WriterSetting.java	(revision 0)
++++ src/java/org/hibernate/search/backend/configuration/WriterSetting.java	(revision 0)
+@@ -0,0 +1,60 @@
++package org.hibernate.search.backend.configuration;
++
++import java.io.Serializable;
++
++import org.apache.lucene.index.IndexWriter;
++import org.hibernate.search.SearchException;
++
++public enum WriterSetting implements Serializable {
++	
++	MERGE_FACTOR( "merge_factor" ) {
++		public void applySetting(IndexWriter writer, int value) {
++			writer.setMergeFactor( value );
++		}
++	} ,
++	MAX_MERGE_DOCS( "max_merge_docs" ) {
++		public void applySetting(IndexWriter writer, int value) {
++			writer.setMaxMergeDocs( value );
++		}
++	} ,
++	MAX_BUFFERED_DOCS( "max_buffered_docs" ) {
++		public void applySetting(IndexWriter writer, int value) {
++			writer.setMaxBufferedDocs( value );
++		}
++	} ,
++	RAM_BUFFER_SIZE( "ram_buffer_size" ) {
++		public void applySetting(IndexWriter writer, int value) {
++			writer.setRAMBufferSizeMB( value );
++		}
++	};
++	
++	private final String cfgKey;
++	
++	WriterSetting(String configurationKey){
++		this.cfgKey = configurationKey;
++	}
++	
++	/**
++	 * @throws IllegalArgumentException when user selects an invalid value; should be wrapped.
++	 */
++	public abstract void applySetting(IndexWriter writer, int value);
++
++	public String getKey() {
++		return cfgKey;
++	}
++
++	/**
++	 * Specific parameters may override to provide additional keywords support.
++	 * @param value the string value as in configuration file
++	 * @return the integer value going to be set as parameter
++	 * @throws SearchException for unrecognized values
++	 */
++	public Integer parseVal(String value) {
++		try {
++			return Integer.valueOf( value );
++		} catch (NumberFormatException ne) {
++			throw new SearchException( "Invalid value for " + cfgKey + ": " + value );
++		}
++	}
++	
++}
+Index: src/java/org/hibernate/search/store/DirectoryProviderFactory.java
+===================================================================
+--- src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(revision 14491)
++++ src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(working copy)
+@@ -2,8 +2,8 @@
+ package org.hibernate.search.store;
+ 
+ import java.util.ArrayList;
++import java.util.Enumeration;
+ import java.util.List;
+-import java.util.Map;
+ import java.util.Properties;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
+@@ -49,15 +49,6 @@
+ 	private static String LUCENE_DEFAULT = LUCENE_PREFIX + "default.";
+ 	private static String DEFAULT_DIRECTORY_PROVIDER = FSDirectoryProvider.class.getName();
+ 	
+-	// Lucene index performance parameters
+-	private static final String MERGE_FACTOR = "merge_factor";
+-	private static final String MAX_MERGE_DOCS = "max_merge_docs";
+-	private static final String MAX_BUFFERED_DOCS = "max_buffered_docs";
+-	private static final String RAM_BUFFER_SIZE = "ram_buffer_size";
+-	
+-	private static final String BATCH = "batch.";
+-	private static final String TRANSACTION = "transaction.";
+-
+ 	private static final String SHARDING_STRATEGY = "sharding_strategy";
+ 	private static final String NBR_OF_SHARDS = SHARDING_STRATEGY + ".nbr_of_shards";
+ 
+@@ -80,9 +71,11 @@
+ 		//define sharding strategy
+ 		IndexShardingStrategy shardingStrategy;
+ 		Properties shardingProperties = new Properties();
+-		for (Map.Entry entry : indexProps[0].entrySet()) {
+-			if ( ( (String) entry.getKey() ).startsWith( SHARDING_STRATEGY ) ) {
+-				shardingProperties.put( entry.getKey(), entry.getValue() );
++		Enumeration<String> allProps = (Enumeration<String>)indexProps[0].propertyNames();
++		while ( allProps.hasMoreElements() ){
++			String key = allProps.nextElement();
++			if ( key.startsWith( SHARDING_STRATEGY ) ) {
++				shardingProperties.put( key, indexProps[0].getProperty( key ) );
+ 			}
+ 		}
+ 		String shardingStrategyName = shardingProperties.getProperty( SHARDING_STRATEGY );
+@@ -183,7 +176,7 @@
+ 	 * If there are no matching properties in the configuration default values will be applied.
+ 	 * <p>
+ 	 * NOTE:</br>
+-	 * If a non  batch value is set in the configuration apply it also to the
++	 * If a non batch value is set in the configuration apply it also to the
+      * batch mode. This covers the case where users only specify 
+ 	 * parameters for the non batch mode. In this case the same parameters apply for 
+ 	 * batch indexing.
+@@ -194,179 +187,75 @@
+ 	 * @param provider The directory provider for which to configure the indexing parameters.
+ 	 */
+ 	private void configureIndexingParameters(SearchFactoryImplementor searchFactoryImplementor, Properties indexProps, DirectoryProvider<?> provider) {
+-		
+-		LuceneIndexingParameters indexingParams = new LuceneIndexingParameters();
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, TRANSACTION + MERGE_FACTOR);
+-			if (val!=null) {
+-				indexingParams.getTransactionIndexParameters().setMergeFactor(val);
+-				indexingParams.getBatchIndexParameters().setMergeFactor(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, TRANSACTION + MAX_MERGE_DOCS);
+-			if (val!=null) {
+-				indexingParams.getTransactionIndexParameters().setMaxMergeDocs(val);
+-				indexingParams.getBatchIndexParameters().setMaxMergeDocs(val);
+-			}
+-		}
+-
+-		{
+-			Integer val = getIntegerProperty(indexProps, TRANSACTION + MAX_BUFFERED_DOCS);
+-			if (val!=null) {
+-				indexingParams.getTransactionIndexParameters().setMaxBufferedDocs(val);
+-				indexingParams.getBatchIndexParameters().setMaxBufferedDocs(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, TRANSACTION + RAM_BUFFER_SIZE);
+-			if (val!=null) {
+-				indexingParams.getTransactionIndexParameters().setRamBufferSizeMB(val);
+-				indexingParams.getBatchIndexParameters().setRamBufferSizeMB(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, BATCH + MERGE_FACTOR);
+-			if (val!=null) {
+-				indexingParams.getBatchIndexParameters().setMergeFactor(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, BATCH + MAX_MERGE_DOCS);
+-			if (val!=null) {
+-				indexingParams.getBatchIndexParameters().setMaxMergeDocs(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, BATCH + MAX_BUFFERED_DOCS);
+-			if (val!=null) {
+-				indexingParams.getBatchIndexParameters().setMaxBufferedDocs(val);
+-			}
+-		}
+-		
+-		{
+-			Integer val = getIntegerProperty(indexProps, BATCH + RAM_BUFFER_SIZE);
+-			if (val!=null) {
+-				indexingParams.getBatchIndexParameters().setRamBufferSizeMB(val);
+-			}
+-		}
+-		
+-		searchFactoryImplementor.addIndexingParmeters(provider, indexingParams);
++		LuceneIndexingParameters indexingParams = new LuceneIndexingParameters( indexProps );
++		searchFactoryImplementor.addIndexingParmeters( provider, indexingParams );
+ 	}
+ 
+ 	/**
+-	 * @param indexProps The properties to look into for the value.
+-	 * @param propertyName The value key.
+-	 * @return null if the property is not defined, the parse value otherwise.
+-	 * @throws SearchException if the property is defined but not in an integer format.
+-	 */
+-	private Integer getIntegerProperty(Properties indexProps, String propertyName) {
+-		String propertyValue = indexProps.getProperty(propertyName);
+-		Integer i = null;
+-		if (StringHelper.isNotEmpty( propertyValue )) {
+-			try{
+-				i = Integer.valueOf(propertyValue);
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + propertyName + ": " + propertyValue);
+-			}
+-		}
+-		return i;
+-	}
+-
+-	/**
+ 	 * Returns an array of directory properties
+-	 * Properties are defaulted. For a given proeprty name,
++	 * Properties are defaulted. For a given property name,
+ 	 * hibernate.search.indexname.n has priority over hibernate.search.indexname which has priority over hibernate.search
+ 	 * If the Index is not sharded, a single Properties is returned
+ 	 * If the index is sharded, the Properties index matches the shard index
+-	 */
++	 */	
+ 	private static Properties[] getDirectoryProperties(Configuration cfg, String directoryProviderName) {
+-		Properties props = cfg.getProperties();
+-		String indexName = LUCENE_PREFIX + directoryProviderName;
+-		//indexSpecificProperties[i] >> indexSpecificDefaultproperties >> defaultProperties
+-		Properties defaultProperties = new Properties();
+-		ArrayList<Properties> indexSpecificProps = new ArrayList<Properties>();
+-		Properties indexSpecificDefaultProps = new Properties(defaultProperties);
+-		for ( Map.Entry entry : props.entrySet() ) {
+-			String key = (String) entry.getKey();
+-			if ( key.startsWith( LUCENE_DEFAULT ) ) {
+-				defaultProperties.setProperty( key.substring( LUCENE_DEFAULT.length() ), (String) entry.getValue() );
+-			}
+-			else if ( key.startsWith( indexName ) ) {
+-				String suffixedKey = key.substring( indexName.length() + 1 );
+-				int nextDoc = suffixedKey.indexOf( '.' );
+-				int index = -1;
+-				if ( nextDoc != -1 ) {
+-				    String potentialNbr = suffixedKey.substring( 0, nextDoc );
+-					try {
+-						index = Integer.parseInt( potentialNbr );
+-					}
+-					catch ( Exception e ) {
+-						//just not a number
+-						index = -1;
+-					}
++		Properties valuesToBeAdded = new Properties();
++		for ( Object entryKey : cfg.getProperties().keySet() ) {
++			String key = entryKey.toString();// casting to String
++			if ( key.startsWith( LUCENE_PREFIX ) && key.contains( LuceneIndexingParameters.TRANSACTION ) ) {
++				String additionalKey = key.replaceFirst(LuceneIndexingParameters.TRANSACTION, LuceneIndexingParameters.BATCH);
++				if ( cfg.getProperty(additionalKey) == null ){
++					valuesToBeAdded.put(additionalKey, cfg.getProperty(key));
+ 				}
+-				if (index == -1) {
+-					indexSpecificDefaultProps.setProperty( suffixedKey, (String) entry.getValue() );
+-				}
+-				else {
+-					String finalKeyName = suffixedKey.substring( nextDoc + 1 );
+-					//ignore sharding strategy properties
+-					if ( ! finalKeyName.startsWith( SHARDING_STRATEGY ) ) {
+-						ensureListSize( indexSpecificProps, index + 1 );
+-						Properties propertiesforIndex = indexSpecificProps.get( index );
+-						if ( propertiesforIndex == null ) {
+-							propertiesforIndex = new Properties( indexSpecificDefaultProps );
+-							indexSpecificProps.set( index, propertiesforIndex );
+-						}
+-						propertiesforIndex.setProperty( finalKeyName, (String) entry.getValue() );
+-					}
+-				}
+ 			}
+ 		}
+-		String nbrOfShardsString = indexSpecificDefaultProps.getProperty( NBR_OF_SHARDS );
+-		int nbrOfShards = -1;
+-		if ( nbrOfShardsString != null ) {
+-			try {
+-				nbrOfShards = Integer.parseInt( nbrOfShardsString );
++		cfg.addProperties(valuesToBeAdded);
++		Properties globalProperties = new Properties();
++		Properties directoryLocalProperties = new Properties( globalProperties );
++		String directoryLocalPrefix = LUCENE_PREFIX + directoryProviderName + ".";
++		// fcg has no defaults, so we may use keySet iteration
++		for (Object entryKey : cfg.getProperties().keySet()) {
++			String key = entryKey.toString();// casting to String
++			if ( key.startsWith( LUCENE_DEFAULT ) ) {
++				globalProperties.setProperty( key.substring( LUCENE_DEFAULT.length() ), cfg.getProperty( key ) );
++			} else if ( key.startsWith( directoryLocalPrefix ) ) {
++				directoryLocalProperties.setProperty( key.substring(directoryLocalPrefix.length() ), cfg.getProperty( key ) );
+ 			}
+-			catch (NumberFormatException e) {
+-				throw new SearchException(indexName + "." + NBR_OF_SHARDS + " is not a number", e);
+-			}
+ 		}
+-		if ( nbrOfShards <= 0 && indexSpecificProps.size() == 0 ) {
+-			//no shard (a shareded subindex has to have at least one property
+-			return new Properties[] { indexSpecificDefaultProps };
+-		}
+-		else {
+-			//sharded
+-			nbrOfShards = nbrOfShards >= indexSpecificDefaultProps.size() ?
+-					nbrOfShards :
+-					indexSpecificDefaultProps.size();
+-			ensureListSize( indexSpecificProps, nbrOfShards );
+-			for ( int index = 0 ; index < nbrOfShards ; index++ ) {
+-				if ( indexSpecificProps.get( index ) == null ) {
+-					indexSpecificProps.set( index, new Properties( indexSpecificDefaultProps ) );
++		final String shardsCountValue = directoryLocalProperties.getProperty(NBR_OF_SHARDS);
++		if (shardsCountValue == null) {
++			// no shards: finished.
++			return new Properties[] { directoryLocalProperties };
++		} else {
++			// count shards
++			int shardsCount = -1;
++			{
++				try {
++					shardsCount = Integer.parseInt( shardsCountValue );
++				} catch (NumberFormatException e) {
++					if ( cfg.getProperty(directoryLocalPrefix + NBR_OF_SHARDS ) != null)
++						throw new SearchException( shardsCountValue + " is not a number", e);
+ 				}
+ 			}
+-			return indexSpecificProps.toArray( new Properties[ indexSpecificProps.size() ] );
++			// create shard-specific Props
++			Properties[] shardLocalProperties = new Properties[shardsCount];
++			for ( int i = 0; i < shardsCount; i++ ) {
++				String currentShardPrefix = i + ".";
++				Properties currentProp = new Properties( directoryLocalProperties );
++				//Enumerations are ugly but otherwise we can't get the property defaults:
++				Enumeration<String> localProps = (Enumeration<String>)directoryLocalProperties.propertyNames();
++				while ( localProps.hasMoreElements() ){
++					String key = localProps.nextElement();
++					if ( key.startsWith( currentShardPrefix ) ) {
++						currentProp.setProperty( key.substring( currentShardPrefix.length() ), directoryLocalProperties.getProperty( key ) );
++					}
++				}
++				shardLocalProperties[i] = currentProp;
++			}
++			return shardLocalProperties;
+ 		}
+ 	}
+ 
+-	private static void ensureListSize(ArrayList<Properties> indexSpecificProps, int size) {
+-		//ensure the index exists
+-		indexSpecificProps.ensureCapacity( size );
+-		while ( indexSpecificProps.size() < size ) {
+-			indexSpecificProps.add(null);
+-		}
+-	}
+-
+ 	private static String getDirectoryProviderName(XClass clazz, Configuration cfg) {
+ 		//yuk
+ 		ReflectionManager reflectionManager = SearchFactoryImpl.getReflectionManager(cfg);

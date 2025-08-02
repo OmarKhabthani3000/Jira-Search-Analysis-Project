@@ -1,0 +1,637 @@
+Index: net/sf/hibernate/cfg/Environment.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/cfg/Environment.java,v
+retrieving revision 1.1
+diff -u -r1.1 Environment.java
+--- net/sf/hibernate/cfg/Environment.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/cfg/Environment.java	4 Oct 2003 05:50:13 -0000
+@@ -106,6 +106,11 @@
+  *   this property when using user supplied connections)</td>
+  * </tr>
+  * <tr>
++ *   <td><tt>hibernate.jdbc.get_generated_keys</tt></td>
++ *   <td>enable use of JDBC3 ResultSet.getGeneratedKeys() to retrieve 
++ *   natively generated keys after insert. Requires JDBC3+ driver and JRE1.4+</td>
++ * </tr>
++ * <tr>
+  *   <td><tt>hibernate.hbm2ddl.auto</tt></td>
+  *   <td>enable auto DDL export</td>
+  * </tr>
+@@ -236,6 +241,12 @@
+ 	/**
+ 	 * Gives the JDBC driver a hint as to the number of rows that should be fetched from the database
+ 	 * when more rows are needed. If <tt>0</tt>, JDBC driver default settings will be used.
++	 */
++	public static final String USE_GET_GENERATED_KEYS = "hibernate.jdbc.use_get_generated_keys";
++	/**
++	 * Tells the JDBC driver to attempt to retrieve row Id with the JDBC 3.0 ResultSet.getGeneratedKeys()
++	 * method. In general, performance will be better if this property is set to true and the underlying 
++	 * JDBC driver supports getGeneratedKeys().
+ 	 */
+ 	public static final String STATEMENT_FETCH_SIZE = "hibernate.jdbc.fetch_size";
+ 	/**
+Index: net/sf/hibernate/cfg/Settings.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/cfg/Settings.java,v
+retrieving revision 1.1
+diff -u -r1.1 Settings.java
+--- net/sf/hibernate/cfg/Settings.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/cfg/Settings.java	4 Oct 2003 05:50:14 -0000
+@@ -23,6 +23,7 @@
+ 	private Dialect dialect;
+ 	private int jdbcBatchSize;
+ 	private boolean scrollableResultSetsEnabled;
++	private boolean getGeneratedKeysEnabled;
+ 	private String defaultSchemaName;
+ 	private Integer statementFetchSize;
+ 	private ConnectionProvider connectionProvider;
+@@ -63,6 +64,10 @@
+ 		return scrollableResultSetsEnabled;
+ 	}
+ 
++	public boolean isGetGeneratedKeysEnabled() {
++		return getGeneratedKeysEnabled;
++	}
++
+ 	void setDefaultSchemaName(String string) {
+ 		defaultSchemaName = string;
+ 	}
+@@ -89,6 +94,10 @@
+ 
+ 	void setScrollableResultSetsEnabled(boolean b) {
+ 		scrollableResultSetsEnabled = b;
++	}
++
++	void setGetGeneratedKeysEnabled(boolean b) {
++		getGeneratedKeysEnabled = b;
+ 	}
+ 
+ 	public Integer getStatementFetchSize() {
+Index: net/sf/hibernate/cfg/SettingsFactory.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/cfg/SettingsFactory.java,v
+retrieving revision 1.1
+diff -u -r1.1 SettingsFactory.java
+--- net/sf/hibernate/cfg/SettingsFactory.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/cfg/SettingsFactory.java	4 Oct 2003 05:50:14 -0000
+@@ -89,6 +89,26 @@
+ 		log.info("Use scrollable result sets: " + useScrollableResultSets);
+ 		if (batchSize>0) log.info("JDBC 2 max batch size: " + batchSize);
+ 		
++		boolean metaSupportsGetGeneratedKeys = false;
++		try {
++			Connection conn = connections.getConnection();
++			try {
++				DatabaseMetaData meta = conn.getMetaData();
++				metaSupportsGetGeneratedKeys = meta.supportsGetGeneratedKeys();
++			}
++			finally {
++				connections.closeConnection(conn);
++			}
++		}
++		catch (SQLException sqle) {
++			log.warn("Could not obtain connection metadata", sqle);
++		}
++		catch (UnsupportedOperationException uoe) {
++			// user supplied JDBC connections
++		}
++		boolean useGetGeneratedKeys = PropertiesHelper.getBoolean(Environment.USE_GET_GENERATED_KEYS, properties, metaSupportsGetGeneratedKeys);
++		log.info("Use result set get generated keys: " + useGetGeneratedKeys);
++		
+ 		String defaultSchema = properties.getProperty(Environment.DEFAULT_SCHEMA);
+ 		if (defaultSchema!=null) log.info("Default schema set to: " + defaultSchema);
+ 		
+@@ -121,6 +141,7 @@
+ 		
+ 		settings.setStatementFetchSize(statementFetchSize);
+ 		settings.setScrollableResultSetsEnabled(useScrollableResultSets);
++		settings.setGetGeneratedKeysEnabled(useGetGeneratedKeys);
+ 		settings.setJdbcBatchSize(batchSize);
+ 		settings.setDefaultSchemaName(defaultSchema);
+ 		settings.setShowSqlEnabled(showSql);
+Index: net/sf/hibernate/dialect/MySQLDialect.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/dialect/MySQLDialect.java,v
+retrieving revision 1.1
+diff -u -r1.1 MySQLDialect.java
+--- net/sf/hibernate/dialect/MySQLDialect.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/dialect/MySQLDialect.java	4 Oct 2003 05:50:05 -0000
+@@ -110,7 +110,7 @@
+ 	}
+ 
+ 	public char getSchemaSeperator() {
+-	  return StringHelper.UNDERSCORE;
++	  return StringHelper.DOT;
+ 	}
+ }
+ 
+Index: net/sf/hibernate/engine/Batcher.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/engine/Batcher.java,v
+retrieving revision 1.1
+diff -u -r1.1 Batcher.java
+--- net/sf/hibernate/engine/Batcher.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/engine/Batcher.java	4 Oct 2003 05:50:08 -0000
+@@ -34,7 +34,7 @@
+ 	 * Get a non-batchable prepared statement to use for inserting / deleting / updating.
+ 	 * Must be explicitly released by <tt>closeStatement()</tt>
+ 	 */
+-	public PreparedStatement prepareStatement(String sql) throws SQLException, HibernateException;
++	public PreparedStatement prepareStatement(String sql, boolean useGetGeneratedKeys) throws SQLException, HibernateException;
+ 	/**
+ 	 * Close a prepared statement opened using <tt>prepareStatement()</tt>
+ 	 */
+Index: net/sf/hibernate/engine/SessionFactoryImplementor.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/engine/SessionFactoryImplementor.java,v
+retrieving revision 1.1
+diff -u -r1.1 SessionFactoryImplementor.java
+--- net/sf/hibernate/engine/SessionFactoryImplementor.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/engine/SessionFactoryImplementor.java	4 Oct 2003 05:50:08 -0000
+@@ -46,6 +46,10 @@
+ 	 */
+ 	public boolean isScrollableResultSetsEnabled();
+ 	/**
++	 * Is <tt>ResultSet</tt> get generated keys supported?
++	 */
++	public boolean isGetGeneratedKeysEnabled();
++	/**
+ 	 * Get the database schema specified in <tt>hibernate.default_schema</tt>
+ 	 */
+ 	public String getDefaultSchema();
+Index: net/sf/hibernate/id/SequenceGenerator.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/id/SequenceGenerator.java,v
+retrieving revision 1.1
+diff -u -r1.1 SequenceGenerator.java
+--- net/sf/hibernate/id/SequenceGenerator.java	3 Oct 2003 19:28:55 -0000	1.1
++++ net/sf/hibernate/id/SequenceGenerator.java	4 Oct 2003 05:50:06 -0000
+@@ -56,7 +56,7 @@
+ 	
+ 	public Serializable generate(SessionImplementor session, Object obj) throws SQLException, HibernateException {
+ 		
+-		PreparedStatement st = session.getBatcher().prepareStatement(sql);
++		PreparedStatement st = session.getBatcher().prepareStatement(sql, false);
+ 		try {
+ 			ResultSet rs = st.executeQuery();
+ 			final Serializable result;
+Index: net/sf/hibernate/impl/BatcherImpl.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/impl/BatcherImpl.java,v
+retrieving revision 1.1
+diff -u -r1.1 BatcherImpl.java
+--- net/sf/hibernate/impl/BatcherImpl.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/impl/BatcherImpl.java	4 Oct 2003 05:50:06 -0000
+@@ -51,9 +51,12 @@
+ 	}
+ 	
+ 	public PreparedStatement prepareStatement(String sql) throws SQLException, HibernateException {
++		return prepareStatement(sql, false);
++	}
++	public PreparedStatement prepareStatement(String sql, boolean getGeneratedKeys) throws SQLException, HibernateException {
+ 		executeBatch();
+ 		logOpenPreparedStatement();
+-		return getPreparedStatement( session.connection(), sql, false );
++		return getPreparedStatement( session.connection(), sql, false, getGeneratedKeys );
+ 	}
+ 	public PreparedStatement prepareQueryStatement(String sql, boolean scrollable) throws SQLException, HibernateException {
+ 		logOpenPreparedStatement();
+@@ -215,11 +218,19 @@
+ 	}
+ 
+ 	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable) throws SQLException {
++		return getPreparedStatement(conn, sql, scrollable, false);
++	}
++	
++	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable, boolean useGetGeneratedKeys) throws SQLException {
+ 		
+ 		if ( scrollable && !factory.isScrollableResultSetsEnabled() ) {
+ 			throw new AssertionFailure("Hibernate tried to grab a scrollable result set");
+ 		}
+ 		
++		if ( useGetGeneratedKeys && !factory.isGetGeneratedKeysEnabled() ) {
++			throw new AssertionFailure("Hibernate tried to prepare a statement assuming unsupported getGeneratedKeys");
++		}
++		
+ 		// note: if we're not using JDBC2, don't return a scrollable PS
+ 		// clients *must* be prepared to handle this case!
+ 		
+@@ -227,16 +238,42 @@
+ 			(scrollable ? "scrollable " : StringHelper.EMPTY_STRING ) + "prepared statement get: " + sql
+ 		);
+ 		if ( factory.isShowSqlEnabled() ) System.out.println("Hibernate: " + sql);
++
++		// Setup up call to PreparedStatement.getGeneratedKeys(String, int)
++		java.lang.reflect.Method prepareStatementMethod = null;
++		Object[] args = null ;
++		if ( !scrollable && useGetGeneratedKeys ) {		
++			try {
++	        	java.lang.reflect.Field return_generated_keys = java.sql.Statement.class.getDeclaredField("RETURN_GENERATED_KEYS");
++				int RETURN_GENERATED_KEYS = return_generated_keys.getInt(PreparedStatement.class);
++				
++				Class[] types = new Class[] {String.class, Integer.TYPE};
++				args = new Object[] {sql, new Integer(RETURN_GENERATED_KEYS)};
++			
++				prepareStatementMethod = conn.getClass().getMethod("prepareStatement", types);
++			} 
++			catch (Exception nsme) {
++				log.error("JDBC 3.0 driver required for prepareStatement(String, int) support", nsme);
++				throw new SQLException("Class " + conn.getClass().getName() 
++				+ " is not a JDBC 3.0 Driver that supports prepareStatement(String, int)");
++			}
++		}	
+ 		
+ 		try {
+ 			log.trace("preparing statement");
+ 			return scrollable ?
+ 				conn.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY) :
+-				conn.prepareStatement(sql);
++				useGetGeneratedKeys ?
++					(PreparedStatement) prepareStatementMethod.invoke(conn, args) :
++					conn.prepareStatement(sql);
+ 		}
+ 		catch (SQLException sqle) {
+ 			JDBCExceptionReporter.logExceptions(sqle);
+ 			throw sqle;
++		}
++		catch (Exception e) {
++			log.error("Error invoking " + conn.getClass().getName() + ".prepareStatement(String, int).", e);
++			throw new SQLException("Error invoking " + conn.getClass().getName() + ".prepareStatement(String, int).");
+ 		}
+ 	}
+ 	
+Index: net/sf/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.1
+diff -u -r1.1 SessionFactoryImpl.java
+--- net/sf/hibernate/impl/SessionFactoryImpl.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/impl/SessionFactoryImpl.java	4 Oct 2003 05:50:07 -0000
+@@ -390,6 +390,10 @@
+ 		return settings.isScrollableResultSetsEnabled();
+ 	}
+ 	
++	public boolean isGetGeneratedKeysEnabled() {
++		return settings.isGetGeneratedKeysEnabled();
++	}
++	
+ 	public boolean isOuterJoinedFetchEnabled() {
+ 		return settings.isOuterJoinFetchEnabled();
+ 	}
+Index: net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.1
+diff -u -r1.1 AbstractEntityPersister.java
+--- net/sf/hibernate/persister/AbstractEntityPersister.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/persister/AbstractEntityPersister.java	4 Oct 2003 05:50:09 -0000
+@@ -1046,7 +1046,7 @@
+ 		
+ 		try {
+ 			
+-			PreparedStatement st = session.getBatcher().prepareStatement( getVersionSelectString() );
++			PreparedStatement st = session.getBatcher().prepareStatement( getVersionSelectString(), false );
+ 			try {
+ 				getIdentifierType().nullSafeSet(st, id, 1, session);
+ 				
+Index: net/sf/hibernate/persister/EntityPersister.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/persister/EntityPersister.java,v
+retrieving revision 1.1
+diff -u -r1.1 EntityPersister.java
+--- net/sf/hibernate/persister/EntityPersister.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/persister/EntityPersister.java	4 Oct 2003 05:50:11 -0000
+@@ -21,6 +21,7 @@
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.Map;
++import java.lang.reflect.Method;
+ 
+ import org.apache.commons.lang.ObjectUtils;
+ import org.apache.commons.logging.Log;
+@@ -32,6 +33,7 @@
+ import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.StaleObjectStateException;
+ import net.sf.hibernate.id.IdentifierGeneratorFactory;
++import net.sf.hibernate.id.IdentifierGenerationException;
+ import net.sf.hibernate.impl.MessageHelper;
+ import net.sf.hibernate.sql.Delete;
+ import net.sf.hibernate.sql.InFragment;
+@@ -442,7 +444,7 @@
+ 			
+ 			try {
+ 				
+-				PreparedStatement st = session.getBatcher().prepareStatement( (String) lockers.get(lockMode) );
++				PreparedStatement st = session.getBatcher().prepareStatement( (String) lockers.get(lockMode), false );
+ 				try {
+ 					getIdentifierType().nullSafeSet(st, id, 1, session);
+ 					if ( isVersioned() ) {
+@@ -540,14 +542,33 @@
+ 			if ( isVersioned() ) log.trace( "Version: " + Versioning.getVersion(fields, this) );
+ 		}
+ 		
++		boolean useGetGeneratedKeys = session.getFactory().isGetGeneratedKeysEnabled();
++		Serializable id = null;
++
+ 		try {
+ 		
+ 			// Render the SQL query
+-			PreparedStatement statement = session.getBatcher().prepareStatement(sql);
++			PreparedStatement statement = session.getBatcher().prepareStatement(sql, useGetGeneratedKeys);
+ 			
+ 			try {
+ 				dehydrate(null, fields, notNull, statement, session);
+ 				statement.executeUpdate();
++
++				if (useGetGeneratedKeys) {
++					try {
++						Method getGeneratedKeysMethod;
++						ResultSet rs = null;
++						getGeneratedKeysMethod = statement.getClass().getMethod("getGeneratedKeys",  new Class[0]);
++						rs = (ResultSet) getGeneratedKeysMethod.invoke(statement, new Object[0]);
++       					return getNativeId(object, session, rs);
++					} 
++					catch (Exception e) {
++						log.error(session.getBatcher().getClass().getName() 
++						+ " error invoking JDBC 3.0 PreparedStatement.getGeneratedKeys()", e);
++						throw new HibernateException("Class " + session.getBatcher().getClass().getName() 
++						+ " does not support JDBC 3.0 PreparedStatement.getGeneratedKeys()", e);
++					}
++				}	
+ 			}
+ 			catch (SQLException sqle) {
+ 				JDBCExceptionReporter.logExceptions(sqle);
+@@ -558,24 +579,12 @@
+ 			}
+ 			
+ 			// fetch the generated id:
+-			PreparedStatement idselect = session.getBatcher().prepareStatement( sqlIdentitySelect() );
++			PreparedStatement idselect = session.getBatcher().prepareStatement( sqlIdentitySelect(), false );
+ 			
+ 			try {
+-				
+ 				ResultSet rs = idselect.executeQuery();
+-				final Serializable id;
+-				try {
+-					if ( !rs.next() ) throw new HibernateException("The database returned no natively generated identity value");
+-					id = IdentifierGeneratorFactory.get( 
+-						rs, getIdentifierType(), session, object 
+-					);
+-				}
+-				finally {
+-					rs.close();
+-				}
+-				log.debug("Natively generated identity: " + id);
+-				
+-				return id;
++
++				return getNativeId(object, session, rs);
+ 			}
+ 			catch(SQLException sqle) {
+ 				JDBCExceptionReporter.logExceptions(sqle);
+@@ -593,6 +602,35 @@
+ 	}
+ 	
+ 	/**
++	 * Method getNativeId returns the native identier from a result.
++	 * @param object
++	 * @param session
++	 * @param rs
++	 * @return Serializable
++	 * @throws SQLException
++	 * @throws HibernateException
++	 * @throws IdentifierGenerationException
++	 */
++	private Serializable getNativeId(
++		Object object,
++		SessionImplementor session,
++		ResultSet rs)
++		throws SQLException, HibernateException, IdentifierGenerationException {
++		final Serializable id;
++		try {
++			if ( !rs.next() ) throw new HibernateException("The database returned no natively generated identity value");
++				id = IdentifierGeneratorFactory.get( 
++				rs, getIdentifierType(), session, object 
++			);
++		}
++		finally {
++			rs.close();
++		}
++		log.debug("Natively generated identity: " + id);
++		return id;
++	}
++		
++	/**
+ 	 * Delete an object
+ 	 */
+ 	public void delete(Serializable id, Object version, Object object, SessionImplementor session) throws HibernateException {
+@@ -607,7 +645,7 @@
+ 			//Render the SQL query
+ 			final PreparedStatement statement;// = session.getPreparedStatement( sqlDelete() );
+ 			if ( isVersioned() ) {
+-				statement = session.getBatcher().prepareStatement( getSQLDeleteString() );
++				statement = session.getBatcher().prepareStatement( getSQLDeleteString(), false );
+ 			}
+ 			else {
+ 				statement = session.getBatcher().prepareBatchStatement( getSQLDeleteString() );
+@@ -683,7 +721,7 @@
+ 		
+ 			final PreparedStatement statement;
+ 			if ( isVersioned() ) {
+-				statement = session.getBatcher().prepareStatement(sql);
++				statement = session.getBatcher().prepareStatement(sql, false);
+ 			}
+ 			else {
+ 				statement = session.getBatcher().prepareBatchStatement(sql);
+Index: net/sf/hibernate/persister/NormalizedEntityPersister.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/persister/NormalizedEntityPersister.java,v
+retrieving revision 1.1
+diff -u -r1.1 NormalizedEntityPersister.java
+--- net/sf/hibernate/persister/NormalizedEntityPersister.java	3 Oct 2003 19:28:54 -0000	1.1
++++ net/sf/hibernate/persister/NormalizedEntityPersister.java	4 Oct 2003 05:50:12 -0000
+@@ -20,6 +20,7 @@
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.Map;
++import java.lang.reflect.Method;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -32,6 +33,7 @@
+ import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.QueryException;
+ import net.sf.hibernate.StaleObjectStateException;
++import net.sf.hibernate.id.IdentifierGenerationException;
+ import net.sf.hibernate.id.IdentifierGeneratorFactory;
+ import net.sf.hibernate.impl.MessageHelper;
+ import net.sf.hibernate.sql.CaseFragment;
+@@ -441,7 +443,7 @@
+ 			
+ 			try {
+ 			
+-				PreparedStatement st = session.getBatcher().prepareStatement( (String) lockers.get(lockMode) );
++				PreparedStatement st = session.getBatcher().prepareStatement( (String) lockers.get(lockMode), false );
+ 				try {
+ 					getIdentifierType().nullSafeSet(st, id, 1, session);
+ 					if ( isVersioned() ) getVersionType().nullSafeSet(st, version, getIdentifierColumnNames().length+1, session);
+@@ -506,7 +508,7 @@
+ 			try {
+ 				
+ 				for ( int i=0; i<tableNames.length; i++ ) {
+-					statements[i] = session.getBatcher().prepareStatement( sql[i] );
++					statements[i] = session.getBatcher().prepareStatement( sql[i], false );
+ 				}
+ 				
+ 				// Write the values of fields onto the prepared statement - we MUST use the state at the time the
+@@ -543,50 +545,72 @@
+ 			if ( isVersioned() ) log.trace( "Version: " + Versioning.getVersion(fields, this) );
+ 		}
+ 		
++		boolean useGetGeneratedKeys = session.getFactory().isGetGeneratedKeysEnabled();
++		Serializable id = null;
++		
+ 		try {
+-			
+-			PreparedStatement statement = session.getBatcher().prepareStatement( sql[0] );
++			PreparedStatement statement = session.getBatcher().prepareStatement( sql[0], useGetGeneratedKeys );
+ 			try {
+ 				dehydrate(null, fields, notNull, 0, statement, session);
+ 				statement.executeUpdate();
++
++				if (useGetGeneratedKeys) {
++					try {
++						Method getGeneratedKeysMethod;
++						ResultSet rs = null;
++						getGeneratedKeysMethod = statement.getClass().getMethod("getGeneratedKeys",  new Class[0]);
++						rs = (ResultSet) getGeneratedKeysMethod.invoke(statement, new Object[0]);
++	                    id = getNativeId(object, session, rs);
++					} 
++					catch (NoSuchMethodException nsme) {
++						log.error(session.getBatcher().getClass().getName() 
++						+ " does not support JDBC 3.0 PreparedStatement.getGeneratedKeys()", nsme);
++						throw new HibernateException("Class " + session.getBatcher().getClass().getName() 
++						+ " does not support JDBC 3.0 PreparedStatement.getGeneratedKeys()", nsme);
++					}
++					catch (java.lang.reflect.InvocationTargetException ite) {
++						log.error(session.getBatcher().getClass().getName() 
++						+ " error invoking JDBC 3.0 PreparedStatement.getGeneratedKeys()", ite);
++						throw new HibernateException("Class " + session.getBatcher().getClass().getName() 
++						+ " error invoking JDBC 3.0 PreparedStatement.getGeneratedKeys()", ite);
++					}
++					catch (IllegalAccessException iae) {
++						log.error(session.getBatcher().getClass().getName() 
++						+ " unable to access JDBC 3.0 PreparedStatement.getGeneratedKeys()", iae);
++						throw new HibernateException("Class " + session.getBatcher().getClass().getName() 
++						+ " uable to access JDBC 3.0 PreparedStatement.getGeneratedKeys()", iae);
++					}
++				}	
+ 			}
+ 			catch (SQLException sqle) {
+ 				JDBCExceptionReporter.logExceptions(sqle);
+ 				throw sqle;
+ 			}
++			
+ 			finally {
+ 				session.getBatcher().closeStatement(statement);
+ 			}
+-			
++
+ 			// fetch the generated id:
+-			PreparedStatement idselect = session.getBatcher().prepareStatement( sqlIdentitySelect() );
+-			final Serializable id;
+-			try {
+-				
+-				ResultSet rs = idselect.executeQuery();
++			if (!useGetGeneratedKeys) {
++				PreparedStatement idselect = session.getBatcher().prepareStatement( sqlIdentitySelect(), false );
+ 				try {
+-					if ( !rs.next() ) throw new HibernateException("The database returned no natively generated identity value");
+-					id = IdentifierGeneratorFactory.get( 
+-						rs, getIdentifierType(), session, object 
+-					);
++				
++					ResultSet rs = idselect.executeQuery();
++                    id = getNativeId(object, session, rs);
++				}
++				catch(SQLException sqle) {
++					JDBCExceptionReporter.logExceptions(sqle);
++					throw sqle;
+ 				}
+ 				finally {
+-					rs.close();
++					session.getBatcher().closeStatement(idselect);
+ 				}
+-				log.debug("Natively generated identity: " + id);
+-				
+-			}
+-			catch(SQLException sqle) {
+-				JDBCExceptionReporter.logExceptions(sqle);
+-				throw sqle;
+-			}
+-			finally {
+-				session.getBatcher().closeStatement(idselect);
+ 			}
+-			
++
+ 			for ( int i=1; i<naturalOrderTableNames.length; i++ )  {
+ 				
+-				statement = session.getBatcher().prepareStatement( sql[i] );
++				statement = session.getBatcher().prepareStatement( sql[i], false );
+ 				
+ 				try {
+ 					dehydrate(id, fields, notNull, i, statement, session);
+@@ -610,6 +634,35 @@
+ 		}
+ 		
+ 	}
++
++	/**
++	 * Method getNativeId returns the native identier from a result.
++	 * @param object
++	 * @param session
++	 * @param rs
++	 * @return Serializable
++	 * @throws SQLException
++	 * @throws HibernateException
++	 * @throws IdentifierGenerationException
++	 */
++	private Serializable getNativeId(
++		Object object,
++		SessionImplementor session,
++		ResultSet rs)
++		throws SQLException, HibernateException, IdentifierGenerationException {
++		final Serializable id;
++		try {
++			if ( !rs.next() ) throw new HibernateException("The database returned no natively generated identity value");
++				id = IdentifierGeneratorFactory.get( 
++				rs, getIdentifierType(), session, object 
++			);
++		}
++		finally {
++			rs.close();
++		}
++		log.debug("Natively generated identity: " + id);
++		return id;
++	}
+ 	
+ 	/**
+ 	 * Delete an object
+@@ -626,7 +679,7 @@
+ 			try {
+ 				
+ 				for ( int i=0; i<naturalOrderTableNames.length; i++ ) {
+-					statements[i] = session.getBatcher().prepareStatement( getSQLDeleteStrings()[i] );
++					statements[i] = session.getBatcher().prepareStatement( getSQLDeleteStrings()[i], false );
+ 				}
+ 				
+ 				if ( isVersioned() ) getVersionType().nullSafeSet( statements[0], version, getIdentifierColumnNames().length + 1, session );
+@@ -702,7 +755,7 @@
+ 			try {
+ 				
+ 				for ( int i=0; i<tables; i++ ) {
+-					if ( includeTable[i] ) statements[i] = session.getBatcher().prepareStatement( sql[i] );
++					if ( includeTable[i] ) statements[i] = session.getBatcher().prepareStatement( sql[i], false );
+ 				}
+ 				
+ 				int versionParam = dehydrate(id, fields, includeProperty, statements, session);

@@ -1,0 +1,90 @@
+*** org/hibernate/ejb/packaging/JarVisitorFactory.orig.java	2009-08-13 20:59:30.000000000 +0200
+--- org/hibernate/ejb/packaging/JarVisitorFactory.java	2010-07-08 12:07:09.000000000 +0200
+***************
+*** 82,87 ****
+--- 82,166 ----
+  					jarUrl = new File(file).toURL();
+  				}
+  			}
++ 			else if ( "bundleresource".equals( protocol )) {
++ 				File tmpFile = null;
++ 				String uriString = null;
++ 				FileOutputStream tmpOut = null;
++ 				JarOutputStream tmpJar = null;
++ 				InputStream resourceStream = null;
++ 				ZipEntry tmpZe = null;
++ 				byte[] buffer = new byte[4096];
++ 				int numread = 0, totalread = 0, countread = 0;
++ 				
++ 				//create a temporary JAR file
++ 				try {
++ 					tmpFile = File.createTempFile(url.getHost(), ".jar");
++ 				} catch (IOException e) {
++ 					log.error("Error creating temp file " + url.getHost() + ".jar");
++ 					log.error(e.toString());
++ 				}
++ 				tmpFile.setWritable(true);
++ 				
++ 				//generate an associated URL
++ 				uriString = "file://" + tmpFile.getAbsolutePath();
++ 				jarUrl = new URL(uriString);
++ 				
++ 				try {
++ 					tmpOut = new FileOutputStream(tmpFile);
++ 				} catch (FileNotFoundException e) {
++ 					log.error("Error creating temp file " + url.getHost() + ".jar");
++ 					log.error(e.toString());
++ 				}
++ 				
++ 				try {
++ 					//read total amount of bytes in the resource
++ 					resourceStream = JarVisitorFactory.class.getResourceAsStream(entry);
++ 					totalread = resourceStream.available();
++ 					//start a new JAR file entry; remove leading "/"
++ 					if (entry.startsWith("/") == true) {
++ 						tmpZe = new ZipEntry(entry.substring(1));
++ 					} else {
++ 						tmpZe = new ZipEntry(entry);
++ 					}
++ 					//open JAR file
++ 					tmpJar = new JarOutputStream(tmpOut);
++ 					//put a new entry in it
++ 					tmpJar.putNextEntry(tmpZe);
++ 					//read the resource and write it to the JAR file entry
++ 					while (countread < totalread) {
++ 						numread = resourceStream.read(buffer);
++ 
++ 						if (numread != -1) {
++ 							countread += numread;
++ 							tmpJar.write(buffer, 0, numread);
++ 						}
++ 					}
++ 					
++ 					//try to add META-INF/orm.xml
++ 					resourceStream = JarVisitorFactory.class.getResourceAsStream("/META-INF/orm.xml");
++ 					if (resourceStream != null) {
++ 						tmpZe = new ZipEntry("META-INF/orm.xml");
++ 						tmpJar.putNextEntry(tmpZe);
++ 						totalread = resourceStream.available();
++ 						countread = 0;
++ 						//read the resource and write it to the JAR file entry
++ 						while (countread < totalread) {
++ 							numread = resourceStream.read(buffer);
++ 
++ 							if (numread != -1) {
++ 								countread += numread;
++ 								tmpJar.write(buffer, 0, numread);
++ 							}
++ 						}
++ 					}
++ 					
++ 					tmpJar.flush();
++ 					tmpJar.close();
++ 				} catch (IOException e) {
++ 					log.error("Error writing temp file " + url.getHost() + ".tmp");
++ 					log.error(e.toString());
++ 				}
++ 			}
+  			else {
+  				jarUrl = new URL( protocol, url.getHost(), url.getPort(), file );
+  			}

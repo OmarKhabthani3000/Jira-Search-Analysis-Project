@@ -1,0 +1,1131 @@
+Index: changelog.txt
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/changelog.txt,v
+retrieving revision 1.31
+diff -u -r1.31 changelog.txt
+--- changelog.txt	28 Feb 2005 20:24:14 -0000	1.31
++++ changelog.txt	16 Mar 2005 22:19:03 -0000
+@@ -3,6 +3,9 @@
+ Changes in version 3.0x (xx.xx.2005)
+ ----------------------------------
+ * remove hard coded log4j dependency
++* added support for stored procedure in named queries.
++* added <fieldresult> to named sql queries to allow users to use sql without {}-markup
++* <fieldresult> enables complete support for multi-column properties in native sql.
+ 
+ Changes in version 3.0 (28.2.2005)
+ ----------------------------------
+Index: src/org/hibernate/hibernate-mapping-3.0.dtd
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/hibernate-mapping-3.0.dtd,v
+retrieving revision 1.89
+diff -u -r1.89 hibernate-mapping-3.0.dtd
+--- src/org/hibernate/hibernate-mapping-3.0.dtd	15 Mar 2005 12:32:07 -0000	1.89
++++ src/org/hibernate/hibernate-mapping-3.0.dtd	16 Mar 2005 22:19:08 -0000
+@@ -877,18 +877,25 @@
+ 	and takes the form "ClassName.propertyName"; role refers to the property path for an eager fetch
+ 	and takes the form "owningAlias.propertyName"
+ -->
+-<!ELEMENT return EMPTY>
++<!ELEMENT return (fieldresult)*>
+ 	<!ATTLIST return alias CDATA #REQUIRED>
+ 	<!ATTLIST return entity-name CDATA #IMPLIED>
+ 	<!ATTLIST return class CDATA #IMPLIED>
+ 	<!ATTLIST return lock-mode (none|read|upgrade|upgrade-nowait|write) "read">	
+ 
+-<!ELEMENT return-join EMPTY>
++<!ELEMENT fieldresult (resultcolumn)*> 
++	<!ATTLIST fieldresult name CDATA #REQUIRED>
++	<!ATTLIST fieldresult column CDATA #IMPLIED>
++
++<!ELEMENT resultcolumn EMPTY> 
++	<!ATTLIST resultcolumn name CDATA #REQUIRED>
++
++<!ELEMENT return-join EMPTY> <!-- TODO: (fieldresult)* -->
+ 	<!ATTLIST return-join alias CDATA #REQUIRED>
+ 	<!ATTLIST return-join property CDATA #REQUIRED>
+ 	<!ATTLIST return-join lock-mode (none|read|upgrade|upgrade-nowait|write) "read">
+ 
+-<!ELEMENT load-collection EMPTY>
++<!ELEMENT load-collection EMPTY> <!-- TODO: (fieldresult)* -->
+ 	<!ATTLIST load-collection alias CDATA #REQUIRED>
+ 	<!ATTLIST load-collection role CDATA #REQUIRED>
+ 	<!ATTLIST load-collection lock-mode (none|read|upgrade|upgrade-nowait|write) "read">
+Index: src/org/hibernate/cfg/HbmBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/cfg/HbmBinder.java,v
+retrieving revision 1.71
+diff -u -r1.71 HbmBinder.java
+--- src/org/hibernate/cfg/HbmBinder.java	15 Mar 2005 12:31:53 -0000	1.71
++++ src/org/hibernate/cfg/HbmBinder.java	16 Mar 2005 22:19:12 -0000
+@@ -75,6 +75,8 @@
+ import org.hibernate.type.ForeignKeyDirection;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
++import org.hibernate.util.ArrayHelper;
++import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+@@ -2127,12 +2129,57 @@
+ 			throw new MappingException( "<return alias='" + alias + "'> must specify either a class or entity-name");
+ 		}
+ 		LockMode lockMode = getLockMode( returnElem.attributeValue( "lock-mode" ) );
++				
++		java.util.Map fieldResults = bindFieldResults(alias, returnElem);
++		
+ 		queryReturns.add( new SQLQueryRootReturn(
+ 			alias,
+-			entityName, 			
++			entityName,
++			fieldResults,
+ 			lockMode ) );
+ 	}
+ 
++	/**
++	 * @param alias 
++	 * @param returnElement
++	 * @return
++	 */
++	private static java.util.Map bindFieldResults(String alias, Element returnElement) {
++		Iterator iterator = returnElement.elementIterator("fieldresult");
++		HashMap fieldResults = new HashMap(); // maybe a concrete SQLFieldResult type, but Map is exactly what is required at the moment
++		while (iterator.hasNext()) {
++			Element fieldresult = (Element) iterator.next();
++			String name = fieldresult.attributeValue("name");
++			
++			ArrayList allResultColumns = getResultColumns(fieldresult);
++			
++			if(allResultColumns.isEmpty()) {
++				throw new MappingException("fieldresult for alias " + alias + " must specify at least one column or resultcolumn name");
++			}
++			String[] existing = (String[]) fieldResults.put(name, ArrayHelper.toStringArray(allResultColumns));
++			if(existing!=null) {
++				throw new MappingException("duplicate fieldresult for property " + name + " on alias " + alias);
++			}
++		}
++		return fieldResults.isEmpty() ? CollectionHelper.EMPTY_MAP : fieldResults;
++	}
++
++	/**
++	 * @param fieldresult
++	 * @return
++	 */
++	private static ArrayList getResultColumns(Element fieldresult) {
++		String column = fieldresult.attributeValue("column");
++		ArrayList allResultColumns = new ArrayList();
++		if(column!=null) allResultColumns.add(column);
++		Iterator resultColumns = fieldresult.elementIterator("resultcolumn");
++		while (resultColumns.hasNext()) {
++			Element element = (Element) resultColumns.next();
++			allResultColumns.add(element.attributeValue("name"));
++		}
++		return allResultColumns;
++	}
++
+ 	private static void bindReturnJoin(Element returnElem, java.util.List queryReturns,
+ 			Mappings mappings) {
+ 		String alias = returnElem.attributeValue( "alias" );
+@@ -2146,7 +2193,12 @@
+ 		}
+ 		String roleOwnerAlias = roleAttribute.substring( 0, dot );
+ 		String roleProperty = roleAttribute.substring( dot + 1 );
+-		queryReturns.add( new SQLQueryJoinReturn( alias, roleOwnerAlias, roleProperty, lockMode ) );
++		queryReturns.add( new SQLQueryJoinReturn( 
++					alias, 
++					roleOwnerAlias, 
++					roleProperty, 
++					CollectionHelper.EMPTY_MAP, // TODO: bindFieldResults(alias, returnElem) 
++					lockMode ) );
+ 	}
+ 
+ 	private static void bindLoadCollection(Element returnElem, java.util.List queryReturns,
+@@ -2167,6 +2219,7 @@
+ 			alias,
+ 			ownerClassName,
+ 			ownerPropertyName,
++			CollectionHelper.EMPTY_MAP, // TODO: bindFieldResults(alias, returnElem)
+ 			lockMode ) );
+ 	}
+ 
+Index: src/org/hibernate/loader/custom/SQLCustomQuery.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLCustomQuery.java,v
+retrieving revision 1.3
+diff -u -r1.3 SQLCustomQuery.java
+--- src/org/hibernate/loader/custom/SQLCustomQuery.java	3 Mar 2005 13:26:33 -0000	1.3
++++ src/org/hibernate/loader/custom/SQLCustomQuery.java	16 Mar 2005 22:19:13 -0000
+@@ -12,6 +12,7 @@
+ import org.hibernate.loader.BasicLoader;
+ import org.hibernate.loader.EntityAliases;
+ import org.hibernate.loader.GeneratedEntityAliases;
++import org.hibernate.loader.SQLGeneratedEntityAliases;
+ import org.hibernate.persister.collection.QueryableCollection;
+ import org.hibernate.persister.entity.SQLLoadable;
+ import org.hibernate.type.Type;
+@@ -100,6 +101,7 @@
+ 		QueryableCollection collectionPersister = processor.getCollectionPersister();
+ 		
+ 		String[] aliases = ArrayHelper.toStringArray( processor.getAliases() );
++		Map[] fieldResultMaps =  (Map[]) processor.getFieldresults().toArray( new Map[0] );
+ 		SQLLoadable[] entityPersisters = (SQLLoadable[]) processor.getPersisters().toArray( new SQLLoadable[0] );
+         lockModes = (LockMode[]) processor.getLockModes().toArray( new LockMode[0] );
+ 		
+@@ -110,7 +112,8 @@
+ 
+ 		SQLQueryParser parser = new SQLQueryParser(
+ 				sqlQuery, 
+-				processor.getAlias2Persister(), 
++				processor.getAlias2Persister(),
++				processor.getAlias2Return(),				
+ 				aliases, 
+ 				processor.getCollectionAlias(),
+ 				collectionPersister,
+@@ -128,14 +131,18 @@
+ 		
+ 		// Populate entityNames, entityDescrptors and querySpaces
+ 		entityNames = new String[entityPersisters.length];
+-		entityDescriptors = new EntityAliases[entityPersisters.length];
++		entityDescriptors = new EntityAliases[entityPersisters.length];		
+ 		for (int i = 0; i < entityPersisters.length; i++) {
+ 			SQLLoadable persister = entityPersisters[i];
+ 			//alias2Persister.put( aliases[i], persister );
+ 			//TODO: Does not consider any other tables referenced in the query
+ 			ArrayHelper.addAll( querySpaces, persister.getQuerySpaces() ); 
+ 			entityNames[i] = persister.getEntityName();
+-			entityDescriptors[i] = new GeneratedEntityAliases( entityPersisters[i], suffixes[i] );
++			if(fieldResultMaps[i].isEmpty()) {
++				entityDescriptors[i] = new GeneratedEntityAliases( entityPersisters[i], suffixes[i] );
++			} else {
++				entityDescriptors[i] = new SQLGeneratedEntityAliases( fieldResultMaps[i], entityPersisters[i], suffixes[i] );
++			}
+ 		}
+ 		if (additionalQuerySpaces!=null) {
+ 			querySpaces.addAll(additionalQuerySpaces);
+Index: src/org/hibernate/loader/custom/SQLQueryCollectionReturn.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryCollectionReturn.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLQueryCollectionReturn.java
+--- src/org/hibernate/loader/custom/SQLQueryCollectionReturn.java	13 Feb 2005 12:47:00 -0000	1.1
++++ src/org/hibernate/loader/custom/SQLQueryCollectionReturn.java	16 Mar 2005 22:19:14 -0000
+@@ -1,6 +1,8 @@
+ // $Id: SQLQueryCollectionReturn.java,v 1.1 2005/02/13 12:47:00 oneovthafew Exp $
+ package org.hibernate.loader.custom;
+ 
++import java.util.Map;
++
+ import org.hibernate.LockMode;
+ 
+ /**
+@@ -16,8 +18,8 @@
+ 	private String ownerEntityName;
+ 	private String ownerProperty;
+ 
+-	public SQLQueryCollectionReturn(String alias, String ownerClass, String ownerProperty, LockMode lockMode) {
+-		super(alias, lockMode);
++	public SQLQueryCollectionReturn(String alias, String ownerClass, String ownerProperty, Map fieldResults, LockMode lockMode) {
++		super(alias, fieldResults, lockMode);
+ 		this.ownerEntityName = ownerClass;
+ 		this.ownerProperty = ownerProperty;
+ 	}
+Index: src/org/hibernate/loader/custom/SQLQueryJoinReturn.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryJoinReturn.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLQueryJoinReturn.java
+--- src/org/hibernate/loader/custom/SQLQueryJoinReturn.java	13 Feb 2005 12:47:00 -0000	1.1
++++ src/org/hibernate/loader/custom/SQLQueryJoinReturn.java	16 Mar 2005 22:19:14 -0000
+@@ -1,6 +1,8 @@
+ // $Id: SQLQueryJoinReturn.java,v 1.1 2005/02/13 12:47:00 oneovthafew Exp $
+ package org.hibernate.loader.custom;
+ 
++import java.util.Map;
++
+ import org.hibernate.LockMode;
+ 
+ /**
+@@ -13,8 +15,8 @@
+ 	private String ownerAlias;
+ 	private String ownerProperty;
+ 
+-	public SQLQueryJoinReturn(String alias, String ownerAlias, String ownerProperty, LockMode lockMode) {
+-		super(alias, lockMode);
++	public SQLQueryJoinReturn(String alias, String ownerAlias, String ownerProperty, Map fieldResults, LockMode lockMode) {
++		super(alias, fieldResults, lockMode);
+ 		this.ownerAlias = ownerAlias;
+ 		this.ownerProperty = ownerProperty;
+ 	}
+Index: src/org/hibernate/loader/custom/SQLQueryParser.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryParser.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLQueryParser.java
+--- src/org/hibernate/loader/custom/SQLQueryParser.java	13 Feb 2005 11:50:06 -0000	1.1
++++ src/org/hibernate/loader/custom/SQLQueryParser.java	16 Mar 2005 22:19:14 -0000
+@@ -22,21 +22,23 @@
+ 	private final String[] aliases;
+ 	private final String collectionAlias;
+ 	private final QueryableCollection collectionPersister;
+-	private final String[] suffixes;
+-
++	private final String[] suffixes;	
++	
+ 	private int parameterCount = 0;
+ 	private final Map namedParameters = new HashMap();
+ 	//private Map typeAliasesToTypes;
++	private final Map alias2Return;
+ 	
+ 	public SQLQueryParser(String sqlQuery,
+ 						  Map alias2Persister,
+-						  String[] aliases,
++						  Map alias2Return, String[] aliases,
+ 						  String collectionAlias,
+ 						  //Map typeAliasesToTypes,
+ 						  QueryableCollection collectionPersister,
+ 						  String[] suffixes) {
+ 		this.sqlQuery = sqlQuery;
+ 		this.alias2Persister = alias2Persister;
++		this.alias2Return = alias2Return; // TODO: maybe just fieldMaps ?
+ 		this.collectionAlias = collectionAlias;
+ 		this.collectionPersister = collectionPersister;
+ 		this.suffixes = suffixes;
+@@ -48,6 +50,10 @@
+ 		return (SQLLoadable) alias2Persister.get(aliasName);
+ 	}
+ 	
++	private Map getFieldResultByResultAlias(String aliasName) {
++		SQLQueryReturn sqr = (SQLQueryReturn) alias2Return.get(aliasName);
++		return sqr.getFieldResultsMap();				
++	}
+ 	private boolean isEntityAlias(String aliasName) {
+ 		return alias2Persister.containsKey(aliasName);
+ 	}
+@@ -115,7 +121,7 @@
+ 				if (isEntity) {
+ 					// it is a property reference {foo.bar}
+ 					String propertyName = aliasPath.substring( firstDot + 1 );
+-					resolveProperties( aliasName, propertyName, result,  getPersisterByResultAlias(aliasName) );
++					resolveProperties( aliasName, propertyName, result,  getFieldResultByResultAlias(aliasName), getPersisterByResultAlias(aliasName) );
+ 				}
+ 				
+ 				if ( !isEntity && !isCollection ) {
+@@ -129,12 +135,12 @@
+ 		// Possibly handle :something parameters for the query ?
+ 
+ 		return result.toString();
+-	}
++	}	
+ 
+ 	private void resolveProperties(String aliasName,
+ 								   String propertyName,
+ 								   StringBuffer result,
+-								   SQLLoadable currentPersister) {
++								   Map fieldResults, SQLLoadable currentPersister) {
+ 		int currentPersisterIndex = getPersisterIndex( aliasName );
+ 
+ 		if ( !aliasName.equals( aliases[currentPersisterIndex] ) ) {
+@@ -146,6 +152,9 @@
+ 		}
+ 
+ 		if ( "*".equals( propertyName ) ) {
++			if(!fieldResults.isEmpty()) {
++				throw new QueryException("Using fieldresults together with * syntax is not supported.");
++			}
+ 			result.append( currentPersister.selectFragment( aliasName, suffixes[currentPersisterIndex] ) );
+ 		}
+ 		else {
+@@ -162,7 +171,11 @@
+ 				columnAliases[0] = currentPersister.getDiscriminatorAlias(suffixes[currentPersisterIndex]);
+ 			}
+ 			else {*/
+-			columnAliases = currentPersister.getSubclassPropertyColumnAliases( propertyName, suffixes[currentPersisterIndex] );
++			// Let fieldresults override whatever the persister has for aliases.
++			columnAliases = (String[]) fieldResults.get(propertyName);
++			if(columnAliases==null) {
++				columnAliases = currentPersister.getSubclassPropertyColumnAliases( propertyName, suffixes[currentPersisterIndex] );
++			}
+ 			//}
+ 
+ 			if ( columnAliases == null || columnAliases.length == 0 ) {
+Index: src/org/hibernate/loader/custom/SQLQueryReturn.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryReturn.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLQueryReturn.java
+--- src/org/hibernate/loader/custom/SQLQueryReturn.java	13 Feb 2005 12:47:00 -0000	1.1
++++ src/org/hibernate/loader/custom/SQLQueryReturn.java	16 Mar 2005 22:19:14 -0000
+@@ -2,6 +2,9 @@
+ package org.hibernate.loader.custom;
+ 
+ import java.io.Serializable;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ import org.hibernate.LockMode;
+ 
+@@ -14,10 +17,14 @@
+ public abstract class SQLQueryReturn implements Serializable {
+ 	private String alias;
+ 	private LockMode lockMode;
++	protected Map fieldResults = new HashMap();
+ 
+-	protected SQLQueryReturn(String alias, LockMode lockMode) {
++	protected SQLQueryReturn(String alias, Map fieldResults, LockMode lockMode) {
+ 		this.alias = alias;
+ 		this.lockMode = lockMode;
++		if(fieldResults!=null) {
++			this.fieldResults = fieldResults;
++		}
+ 	}
+ 
+ 	public String getAlias() {
+@@ -27,4 +34,9 @@
+ 	public LockMode getLockMode() {
+ 		return lockMode;
+ 	}
++	
++	public Map getFieldResultsMap() {
++		return Collections.unmodifiableMap(fieldResults);
++	}
++	
+ }
+Index: src/org/hibernate/loader/custom/SQLQueryReturnProcessor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryReturnProcessor.java,v
+retrieving revision 1.3
+diff -u -r1.3 SQLQueryReturnProcessor.java
+--- src/org/hibernate/loader/custom/SQLQueryReturnProcessor.java	17 Feb 2005 04:41:54 -0000	1.3
++++ src/org/hibernate/loader/custom/SQLQueryReturnProcessor.java	16 Mar 2005 22:19:14 -0000
+@@ -15,6 +15,7 @@
+ import org.hibernate.persister.entity.SQLLoadable;
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.Type;
++import org.hibernate.util.CollectionHelper;
+ 
+ /**
+  * @author Gavin King, Max Andersen
+@@ -26,6 +27,7 @@
+ 
+ 	private final List aliases = new ArrayList();
+ 	private final List persisters = new ArrayList();
++	private final List fieldresults = new ArrayList();
+ 	private final List lockModes = new ArrayList();
+ 	private final Map alias2Persister = new HashMap();
+ 	private final Map alias2Return = new HashMap();
+@@ -42,6 +44,7 @@
+ 	private QueryableCollection collectionPersister;
+ 	private boolean isCollectionInitializer = false;
+ 	
++	
+ 	private SessionFactoryImplementor getFactory() {
+ 		return factory;
+ 	}
+@@ -115,19 +118,28 @@
+ 
+ 		SQLLoadable persister = getSQLLoadable( rootReturn.getReturnEntityName() );
+ 		aliases.add( rootReturn.getAlias() );
+-		persisters.add(persister);
++		addPersister(rootReturn.getFieldResultsMap(), persister);
+ 		alias2Persister.put( rootReturn.getAlias(), persister );
+ 		lockModes.add( rootReturn.getLockMode() );
+ 	}
++
++	/**
++	 * @param map
++	 * @param persister
++	 */
++	private void addPersister(Map map, SQLLoadable persister) {
++		persisters.add(persister);
++		fieldresults.add(map);
++	}
+ 	
+-	private void addCollection(String role, String alias, LockMode lockMode) {
++	private void addCollection(String role, String alias, Map fieldResults, LockMode lockMode) {
+ 		collectionPersister = (QueryableCollection) getFactory().getCollectionPersister(role);
+ 		collectionAlias = alias;
+ 		
+ 		if ( collectionPersister.isOneToMany() ) {
+ 			SQLLoadable persister = (SQLLoadable) collectionPersister.getElementPersister();
+ 			aliases.add(alias);
+-			persisters.add(persister);
++			addPersister(fieldResults, persister);
+ 			lockModes.add(lockMode);
+ 			alias2Persister.put(alias, persister);
+ 		}
+@@ -137,7 +149,7 @@
+ 		// we are initializing an owned collection
+ 		collectionOwner = -1;
+ 		String role = collectionReturn.getOwnerEntityName() + '.' + collectionReturn.getOwnerProperty();
+-		addCollection( role, collectionReturn.getAlias(), collectionReturn.getLockMode() );
++		addCollection( role, collectionReturn.getAlias(), collectionReturn.getFieldResultsMap(), collectionReturn.getLockMode() );
+ 	}
+ 
+ 	private void processRoleReturn(SQLQueryJoinReturn roleReturn) {
+@@ -173,7 +185,7 @@
+ 				throw new HibernateException("Only one colection role return can be specified per sql-query");
+ 			}
+ 			String role = ownerPersister.getEntityName() + '.' + roleReturn.getOwnerProperty();
+-			addCollection( role, roleReturn.getAlias(), roleReturn.getLockMode() );
++			addCollection( role, roleReturn.getAlias(), roleReturn.getFieldResultsMap(), roleReturn.getLockMode() );
+ 			collectionOwnerAlias = ownerAlias;
+ 		}
+ 		else if ( returnType.isEntityType() ) {
+@@ -181,7 +193,7 @@
+ 			String returnEntityName = eType.getAssociatedEntityName();
+ 			SQLLoadable persister = getSQLLoadable(returnEntityName);
+ 			aliases.add( roleReturn.getAlias() );
+-			persisters.add(persister);
++			addPersister(roleReturn.getFieldResultsMap(), persister);
+ 			lockModes.add( roleReturn.getLockMode() );
+ 			alias2Persister.put( roleReturn.getAlias(), persister );
+ 		}
+@@ -235,4 +247,11 @@
+ 		return scalarColumnAliases;
+ 	}
+ 
++	public List getFieldresults() {
++		return fieldresults;
++	}
++
++	public Map getAlias2Return() {
++		return alias2Return;
++	}
+ }
+Index: src/org/hibernate/loader/custom/SQLQueryRootReturn.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/custom/SQLQueryRootReturn.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLQueryRootReturn.java
+--- src/org/hibernate/loader/custom/SQLQueryRootReturn.java	13 Feb 2005 12:47:00 -0000	1.1
++++ src/org/hibernate/loader/custom/SQLQueryRootReturn.java	16 Mar 2005 22:19:14 -0000
+@@ -1,6 +1,9 @@
+ // $Id: SQLQueryRootReturn.java,v 1.1 2005/02/13 12:47:00 oneovthafew Exp $
+ package org.hibernate.loader.custom;
+ 
++import java.util.Collections;
++import java.util.Map;
++
+ import org.hibernate.LockMode;
+ 
+ /**
+@@ -12,13 +15,18 @@
+  */
+ public class SQLQueryRootReturn extends SQLQueryReturn {
+ 	private String returnEntityName;
+-
+ 	public SQLQueryRootReturn(String alias, String returnEntityName, LockMode lockMode) {
+-		super(alias, lockMode);
+-		this.returnEntityName = returnEntityName;
++		this(alias, returnEntityName, null, lockMode);
++	}
++
++	public SQLQueryRootReturn(String alias, String entityName, Map fieldResults, LockMode lockMode) {
++		super(alias, fieldResults, lockMode);
++		this.returnEntityName = entityName;
++		
+ 	}
+ 
+ 	public String getReturnEntityName() {
+ 		return returnEntityName;
+ 	}
++	
+ }
+Index: src/org/hibernate/persister/entity/BasicEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/persister/entity/BasicEntityPersister.java,v
+retrieving revision 1.12
+diff -u -r1.12 BasicEntityPersister.java
+--- src/org/hibernate/persister/entity/BasicEntityPersister.java	14 Mar 2005 22:46:23 -0000	1.12
++++ src/org/hibernate/persister/entity/BasicEntityPersister.java	16 Mar 2005 22:19:19 -0000
+@@ -196,6 +196,7 @@
+ 	private UniqueEntityLoader queryLoader;
+ 
+ 	private final Map subclassPropertyAliases = new HashMap();
++	private final Map subclassPropertyColumnNames = new HashMap();
+ 
+ 	protected final BasicEntityPropertyMapping propertyMapping;
+ 
+@@ -1250,6 +1251,13 @@
+ 		return result;
+ 	}
+ 	
++	public String[] getSubclassPropertyColumnNames(String propertyName) {
++		//TODO: should we allow suffixes on these ?
++		return ( String[] ) subclassPropertyColumnNames.get( propertyName );
++	}
++	
++		
++	
+ 	//This is really ugly, but necessary:
+ 	/**
+ 	 * Must be called by subclasses, at the end of their constructors
+@@ -1263,6 +1271,9 @@
+ 		if ( hasIdentifierProperty() ) {
+ 			subclassPropertyAliases.put( getIdentifierPropertyName(), getIdentifierAliases() );
+ 			subclassPropertyAliases.put( ENTITY_ID, getIdentifierAliases() );
++			
++			subclassPropertyColumnNames.put( getIdentifierPropertyName(), getIdentifierColumnNames() );
++			subclassPropertyColumnNames.put( ENTITY_ID, getIdentifierColumnNames() );
+ 		}
+ 
+ 		if ( entityMetamodel.getIdentifierProperty().isEmbedded() ) {
+@@ -1270,23 +1281,27 @@
+ 			AbstractComponentType componentId = ( AbstractComponentType ) getIdentifierType();
+ 			String[] idPropertyNames = componentId.getPropertyNames();
+ 			String[] idAliases = getIdentifierAliases();
+-
++			String[] idColumnNames = getIdentifierColumnNames();
++			
+ 			for ( int i = 0; i < idPropertyNames.length; i++ ) {
+ 				subclassPropertyAliases.put( idPropertyNames[i], new String[]{idAliases[i]} );
++				subclassPropertyColumnNames.put( idPropertyNames[i],  new String[]{idColumnNames[i]} );
+ 			}
+ 		}
+ 
+ 		if ( entityMetamodel.isPolymorphic() ) {
+ 			subclassPropertyAliases.put( ENTITY_CLASS,
+ 					new String[]{getDiscriminatorAlias()} );
++			subclassPropertyColumnNames.put( ENTITY_CLASS,
++					new String[]{getDiscriminatorColumnName()} );
+ 		}
+ 
+ 	}
+ 
+-	private void internalInitSubclassPropertyAliasesMap(String path, Iterator iter) {
+-		while ( iter.hasNext() ) {
++	private void internalInitSubclassPropertyAliasesMap(String path, Iterator propertyIterator) {
++		while ( propertyIterator.hasNext() ) {
+ 
+-			Property prop = ( Property ) iter.next();
++			Property prop = ( Property ) propertyIterator.next();
+ 			String propname = path == null ? prop.getName() : path + "." + prop.getName();
+ 			if ( prop.isComposite() ) {
+ 				Component component = ( Component ) prop.getValue();
+@@ -1301,11 +1316,12 @@
+ 				while ( colIter.hasNext() ) {
+ 					Selectable thing = ( Selectable ) colIter.next();
+ 					aliases[l] = thing.getAlias( prop.getValue().getTable() );
+-					cols[l] = thing.getTemplate( getFactory().getDialect() );
++					cols[l] = thing.getText( getFactory().getDialect() ); // TODO: skip formulas?
+ 					l++;
+ 				}
+ 
+ 				subclassPropertyAliases.put( propname, aliases );
++				subclassPropertyColumnNames.put( propname, cols );
+ 			}
+ 		}
+ 
+Index: src/org/hibernate/persister/entity/SQLLoadable.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/persister/entity/SQLLoadable.java,v
+retrieving revision 1.1
+diff -u -r1.1 SQLLoadable.java
+--- src/org/hibernate/persister/entity/SQLLoadable.java	13 Feb 2005 11:50:09 -0000	1.1
++++ src/org/hibernate/persister/entity/SQLLoadable.java	16 Mar 2005 22:19:19 -0000
+@@ -17,6 +17,11 @@
+ 	public String[] getSubclassPropertyColumnAliases(String propertyName, String suffix);
+ 
+ 	/**
++	 * Return the column names used to persist/query the numbered property of the class or a subclass (optional operation).
++	 */
++	public String[] getSubclassPropertyColumnNames(String propertyName);
++	
++	/**
+ 	 * All columns to select, when loading.
+ 	 */
+ 	public String selectFragment(String alias, String suffix);
+Index: test/org/hibernate/test/legacy/Category.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/Category.hbm.xml,v
+retrieving revision 1.3
+diff -u -r1.3 Category.hbm.xml
+--- test/org/hibernate/test/legacy/Category.hbm.xml	30 Sep 2004 16:46:28 -0000	1.3
++++ test/org/hibernate/test/legacy/Category.hbm.xml	16 Mar 2005 22:19:21 -0000
+@@ -41,5 +41,14 @@
+ 		<return alias="assignable" class="org.hibernate.test.legacy.Assignable"/>		
+ 		select {category.*}, {assignable.*} from Category {category}, "assign-able" {assignable}	
+ 	</sql-query>
++
++	<sql-query name="nonaliasedsql">
++		<return alias="category" class="org.hibernate.test.legacy.Category">
++			<fieldresult name="id" column="category_key_col"/>
++			<fieldresult name="name" column="name"/>
++			<fieldresult name="assignable" column="assignid"/>
++		</return>
++		select category_key_col, name, "assign-able-id" as assignid from category
++	</sql-query>
+ 	
+ </hibernate-mapping>
+\ No newline at end of file
+Index: test/org/hibernate/test/legacy/Multi.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/Multi.hbm.xml,v
+retrieving revision 1.2
+diff -u -r1.2 Multi.hbm.xml
+--- test/org/hibernate/test/legacy/Multi.hbm.xml	27 Jan 2005 18:43:47 -0000	1.2
++++ test/org/hibernate/test/legacy/Multi.hbm.xml	16 Mar 2005 22:19:21 -0000
+@@ -19,7 +19,7 @@
+         <property name="name"/>
+         <property name="address"/>
+         <property name="date" column="date_"/>
+-        <many-to-one name="top" access="field"/>
++        <many-to-one name="top" access="field" column="top_"/>
+                 
+         <joined-subclass name="org.hibernate.test.legacy.TrivialClass">
+         	<key column="tcid"/>
+Index: test/org/hibernate/test/legacy/Object2.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/Object2.hbm.xml,v
+retrieving revision 1.1
+diff -u -r1.1 Object2.hbm.xml
+--- test/org/hibernate/test/legacy/Object2.hbm.xml	26 Sep 2004 05:18:25 -0000	1.1
++++ test/org/hibernate/test/legacy/Object2.hbm.xml	16 Mar 2005 22:19:21 -0000
+@@ -28,7 +28,7 @@
+             type="java.lang.String"
+             update="true"
+             insert="true"
+-            column="dummy"
++            column="xdummy"
+         />
+ 
+         <one-to-one
+Index: test/org/hibernate/test/legacy/SQLLoaderTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/SQLLoaderTest.java,v
+retrieving revision 1.12
+diff -u -r1.12 SQLLoaderTest.java
+--- test/org/hibernate/test/legacy/SQLLoaderTest.java	10 Mar 2005 11:46:36 -0000	1.12
++++ test/org/hibernate/test/legacy/SQLLoaderTest.java	16 Mar 2005 22:19:23 -0000
+@@ -154,6 +154,38 @@
+ 
+ 	}
+ 
++	public void testFieldResultSQL() throws HibernateException, SQLException {
++		Session s = openSession();
++		s.delete("from Assignable");
++		s.delete("from Category");
++
++		Category c = new Category();
++		c.setName("NAME");
++		Assignable assn = new Assignable();
++		assn.setId("i.d.");
++		List l = new ArrayList();
++		l.add(c);
++		assn.setCategories(l);
++		c.setAssignable(assn);
++		s.save(assn);
++		s.flush();
++		s.connection().commit();
++		s.close();
++
++		s = openSession();
++
++		Query query = s.getNamedQuery("nonaliasedsql");
++		assertNotNull(query);
++		List list = query.list();
++        assertNotNull(list);
++		
++		assertTrue(list.get(0) instanceof Category);
++		
++		s.connection().commit();
++		s.close();
++
++	}
++	
+ 	public void testFindBySQLMultipleObject() throws HibernateException, SQLException {
+ 		Session s = openSession();
+ 		s.delete("from Assignable");
+@@ -580,7 +612,8 @@
+         s.close();
+         
+     }
+-
++	
++	
+     /**
+      * @param id
+      * @param id2
+Index: test/org/hibernate/test/querycache/QueryCacheTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/querycache/QueryCacheTest.java,v
+retrieving revision 1.5
+diff -u -r1.5 QueryCacheTest.java
+--- test/org/hibernate/test/querycache/QueryCacheTest.java	17 Feb 2005 08:03:39 -0000	1.5
++++ test/org/hibernate/test/querycache/QueryCacheTest.java	16 Mar 2005 22:19:23 -0000
+@@ -11,6 +11,7 @@
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.dialect.MySQLDialect;
++import org.hibernate.dialect.SQLServerDialect;
+ import org.hibernate.stat.EntityStatistics;
+ import org.hibernate.stat.QueryStatistics;
+ import org.hibernate.test.TestCase;
+@@ -75,7 +76,7 @@
+ 		s = openSession();
+ 		t = s.beginTransaction();
+ 		result = s.createQuery("from Item i where i.name='widget'").setCacheable(true).list();
+-		if ( !(getDialect() instanceof MySQLDialect) ) assertEquals( result.size(), 0 ); //MySQL is case insensitive on strings
++		if ( (!(getDialect() instanceof MySQLDialect)) && (!(getDialect() instanceof SQLServerDialect)) ) assertEquals( result.size(), 0 ); //MySQL and SQLServer is case insensitive on strings
+ 		i = (Item) s.get( Item.class, new Long(i.getId()) );
+ 		assertEquals( i.getName(), "Widget" );
+ 		t.commit();
+Index: test/org/hibernate/test/sql/Employment.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/sql/Employment.hbm.xml,v
+retrieving revision 1.17
+diff -u -r1.17 Employment.hbm.xml
+--- test/org/hibernate/test/sql/Employment.hbm.xml	13 Mar 2005 20:47:45 -0000	1.17
++++ test/org/hibernate/test/sql/Employment.hbm.xml	16 Mar 2005 22:19:23 -0000
+@@ -54,14 +54,24 @@
+ 		<property name="startDate" not-null="true" update="false" insert="false"/>
+ 		<property name="endDate" insert="false"/>
+ 		<property name="regionCode" update="false"/>
++	  <property name="salary" type="org.hibernate.test.sql.MonetaryAmountUserType"> 
++			<column name="VALUE" sql-type="float"/>
++			<column name="CURRENCY"/>			
++		</property>
+ 		<loader query-ref="employment"/>
+-		<sql-insert>
++   		<sql-insert>
++			INSERT INTO EMPLOYMENT 
++				(EMPLOYEE, EMPLOYER, STARTDATE, REGIONCODE, VALUE, CURRENCY, EID) 
++				VALUES (?, ?, CURRENT_DATE, UPPER(?), ?, ?, ?)
++		</sql-insert>
++		<sql-update>UPDATE EMPLOYMENT SET ENDDATE=?, VALUE=?, CURRENCY=? WHERE EID=?</sql-update> 
++<!--  	<sql-insert>
+ 			INSERT INTO EMPLOYMENT 
+ 				(EMPLOYEE, EMPLOYER, STARTDATE, REGIONCODE, EID) 
+-				VALUES (?, ?, CURRENT_DATE, UPPER(?), ?)
++				VALUES (?, ?, CURRENT_DATE, UPPER(?), ? )
+ 		</sql-insert>
+-		<sql-update>UPDATE EMPLOYMENT SET ENDDATE=? WHERE EID=?</sql-update>
+-		<sql-delete>DELETE FROM EMPLOYMENT WHERE EID=?</sql-delete>
++		<sql-update>UPDATE EMPLOYMENT SET ENDDATE=? WHERE EID=?</sql-update>  -->
++		<sql-delete>DELETE FROM EMPLOYMENT WHERE EID=?</sql-delete> 
+ 	</class>
+ 	
+ 	<sql-query name="person">
+@@ -138,20 +148,48 @@
+ 	</sql-query>	
+ 
+ 	<sql-query name="organizationCurrentEmployments">
+-		<return alias="emp" class="Employment"/>
++		<return alias="emp" class="Employment">		    
++			<fieldresult name="salary"> 
++		      <!-- as multi column properties are not supported via the
++		      {}-syntax, we need to provide an explicit column list for salary via <fieldresult> -->
++  			  <resultcolumn name="VALUE"/>
++			  <resultcolumn name="CURRENCY"/>			
++			</fieldresult>
++			<!-- Here we are remapping endDate. Notice that we can still use {emp.endDate} in the SQL. -->
++			<fieldresult name="endDate" column="myEndDate"/>
++		</return>
+ 		<synchronize table="EMPLOYMENT"/>
+ 		SELECT EMPLOYEE AS {emp.employee}, EMPLOYER AS {emp.employer}, 
+ 			STARTDATE AS {emp.startDate}, ENDDATE AS {emp.endDate},
+-			REGIONCODE as {emp.regionCode}, EID AS {emp.id}
++			REGIONCODE as {emp.regionCode}, EID AS {emp.id}, VALUE, CURRENCY
+ 		FROM EMPLOYMENT
+ 		WHERE EMPLOYER = :id AND ENDDATE IS NULL
+ 		ORDER BY STARTDATE ASC
+ 	</sql-query>
+-	
++
++	<sql-query name="selectAllEmployees_SP" callable="true">
++		<return alias="emp" class="Employment">
++			<fieldresult name="employee" column="EMPLOYEE"/>
++			<fieldresult name="employer" column="EMPLOYER"/>			
++			<fieldresult name="startDate" column="STARTDATE"/>
++			<fieldresult name="endDate" column="ENDDATE"/>			
++			<fieldresult name="regionCode" column="REGIONCODE"/>			
++			<fieldresult name="id" column="EID"/>						
++			<fieldresult name="salary"> 
++		      <!-- as multi column properties are not supported via the
++		      {}-syntax, we need to provide an explicit column list for salary via <fieldresult> -->
++  			  <resultcolumn name="VALUE"/>
++			  <resultcolumn name="CURRENCY"/>			
++			</fieldresult>
++		</return>
++	 { ? = call selectAllEmployments() }
++	</sql-query>
++
+ 	<sql-query name="simpleScalar_SP" callable="true">
+ 	 <return-scalar column="name" type="string"/>
+ 	 <return-scalar column="value" type="long"/>
+ 	 { ? = call simpleScalar(:number) }
+ 	</sql-query>
++
+ 	
+ </hibernate-mapping>
+Index: test/org/hibernate/test/sql/Employment.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/sql/Employment.java,v
+retrieving revision 1.5
+diff -u -r1.5 Employment.java
+--- test/org/hibernate/test/sql/Employment.java	12 Feb 2005 07:27:30 -0000	1.5
++++ test/org/hibernate/test/sql/Employment.java	16 Mar 2005 22:19:24 -0000
+@@ -13,7 +13,8 @@
+ 	private Date startDate;
+ 	private Date endDate;
+ 	private String regionCode;
+-
++	private MonetaryAmount salary;
++	
+ 	public Employment() {}
+ 
+ 	public Employment(Person employee, Organization employer, String regionCode) {
+@@ -95,4 +96,12 @@
+ 	public void setRegionCode(String regionCode) {
+ 		this.regionCode = regionCode;
+ 	}
++	
++	public MonetaryAmount getSalary() {
++		return salary;
++	}
++	
++	public void setSalary(MonetaryAmount salary) {
++		this.salary = salary;
++	}
+ }
+Index: test/org/hibernate/test/sql/SQLTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/sql/SQLTest.java,v
+retrieving revision 1.19
+diff -u -r1.19 SQLTest.java
+--- test/org/hibernate/test/sql/SQLTest.java	16 Mar 2005 03:19:51 -0000	1.19
++++ test/org/hibernate/test/sql/SQLTest.java	16 Mar 2005 22:19:24 -0000
+@@ -20,6 +20,7 @@
+ import org.hibernate.dialect.DB2Dialect;
+ import org.hibernate.dialect.MySQLDialect;
+ import org.hibernate.dialect.Oracle9Dialect;
++import org.hibernate.proxy.HibernateProxyHelper;
+ import org.hibernate.test.TestCase;
+ 
+ /**
+@@ -269,6 +270,47 @@
+ 		
+ 		
+ 	}
++	
++	public void testEntityStoredProcedure() throws HibernateException, SQLException {
++		
++		if ( ! ( getDialect() instanceof Oracle9Dialect ) ) return;
++		
++		Session s = openSession();
++				
++		Transaction t = s.beginTransaction();
++		Organization ifa = new Organization("IFA");
++		Organization jboss = new Organization("JBoss");
++		Person gavin = new Person("Gavin");
++		Employment emp = new Employment(gavin, jboss, "AU");
++		
++		s.persist(ifa);
++		s.persist(jboss);
++		s.persist(gavin);
++		s.persist(emp);
++		
++		// Only works on Oracle at the moment.
++		Statement statement = s.connection().createStatement();
++		statement.execute("CREATE OR REPLACE FUNCTION selectAllEmployments \n" + 
++				"    RETURN SYS_REFCURSOR \n" + 
++				"AS \n" + 
++				"    st_cursor SYS_REFCURSOR; \n" + 
++				"BEGIN \n" + 
++				"    OPEN st_cursor FOR \n" + 
++				" SELECT EMPLOYEE, EMPLOYER, \n" + 
++				" STARTDATE, ENDDATE, \n" +
++				" REGIONCODE, EID, VALUE, CURRENCY \n" +
++			    " FROM EMPLOYMENT; \n" +
++				"	  RETURN  st_cursor; \n " + 
++				"END;\n");
++		statement.close();
++		Query namedQuery = s.getNamedQuery("selectAllEmployees_SP");
++		List list = namedQuery.list();
++		assertTrue(list.get(0) instanceof Employment);
++
++		s.close();
++		
++	}
++	
+ 	/*
+ 	public void basicSP() throws SQLException {
+ 		Session session = openSession();
+Index: test/org/hibernate/test/sql/MonetaryAmount.java
+===================================================================
+RCS file: test/org/hibernate/test/sql/MonetaryAmount.java
+diff -N test/org/hibernate/test/sql/MonetaryAmount.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/sql/MonetaryAmount.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,78 @@
++package org.hibernate.test.sql;
++
++import java.math.BigDecimal;
++import java.util.Currency;
++import java.io.Serializable;
++
++/**
++ * Represents a monetary amount as value and currency.
++ *
++ * @author Gavin King <gavin@hibernate.org>
++ * @author Christian Bauer <christian@hibernate.org>
++ */
++public class MonetaryAmount implements Serializable {
++
++	private final BigDecimal value;
++	private final Currency currency;
++
++	public MonetaryAmount(BigDecimal value, Currency currency) {
++		this.value = value;
++		this.currency = currency;
++	}
++
++	public Currency getCurrency() {
++		return currency;
++	}
++
++	public BigDecimal getValue() {
++		return value;
++	}
++
++	// ********************** Common Methods ********************** //
++
++	public boolean equals(Object o) {
++		if (this == o) return true;
++		if (!(o instanceof MonetaryAmount)) return false;
++
++		final MonetaryAmount monetaryAmount = (MonetaryAmount) o;
++
++		if (!currency.equals(monetaryAmount.currency)) return false;
++		if (!value.equals(monetaryAmount.value)) return false;
++
++		return true;
++	}
++
++	public int hashCode() {
++		int result;
++		result = value.hashCode();
++		result = 29 * result + currency.hashCode();
++		return result;
++	}
++
++	public String toString() {
++		return "Value: '" + getValue() + "', " +
++		        "Currency: '" + getCurrency() + "'";
++	}
++
++	public int compareTo(Object o) {
++		if (o instanceof MonetaryAmount) {
++			// TODO: This would actually require some currency conversion magic
++			return this.getValue().compareTo(((MonetaryAmount) o).getValue());
++		}
++		return 0;
++	}
++
++	// ********************** Business Methods ********************** //
++
++	public static MonetaryAmount fromString(String amount, String currencyCode) {
++		return new MonetaryAmount(new BigDecimal(amount),
++								  Currency.getInstance(currencyCode));
++	}
++
++	public static MonetaryAmount convert(MonetaryAmount amount,
++										 Currency toConcurrency) {
++		// TODO: This requires some conversion magic and is therefore broken
++		return new MonetaryAmount(amount.getValue(), toConcurrency);
++	}
++
++}
+Index: test/org/hibernate/test/sql/MonetaryAmountUserType.java
+===================================================================
+RCS file: test/org/hibernate/test/sql/MonetaryAmountUserType.java
+diff -N test/org/hibernate/test/sql/MonetaryAmountUserType.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/sql/MonetaryAmountUserType.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,85 @@
++package org.hibernate.test.sql;
++
++import java.io.Serializable;
++import java.math.BigDecimal;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.sql.Types;
++import java.util.Currency;
++
++import org.hibernate.HibernateException;
++import org.hibernate.usertype.UserType;
++
++/**
++ * This is a simple Hibernate custom mapping type for MonetaryAmount value types.
++ * <p>
++ * 
++ * @author Max & Christian 
++ */
++public class MonetaryAmountUserType
++		implements UserType {
++
++	private static final int[] SQL_TYPES = {Types.NUMERIC, Types.VARCHAR };
++
++	public int[] sqlTypes() { return SQL_TYPES; }
++
++	public Class returnedClass() { return MonetaryAmount.class; }
++
++	public boolean isMutable() { return false; }
++
++	public Object deepCopy(Object value) {
++		return value; // MonetaryAmount is immutable
++	}
++
++	public boolean equals(Object x, Object y) {
++		if (x == y) return true;
++		if (x == null || y == null) return false;
++		return x.equals(y);
++	}
++
++	public Object nullSafeGet(ResultSet resultSet,
++							  String[] names,
++							  Object owner)
++			throws HibernateException, SQLException {
++
++		BigDecimal value = resultSet.getBigDecimal(names[0]);
++		if (resultSet.wasNull()) return null;
++		String cur = resultSet.getString(names[1]);
++		Currency userCurrency = Currency.getInstance(cur);
++						
++		return new MonetaryAmount(value, userCurrency);
++	}
++
++	public void nullSafeSet(PreparedStatement statement,
++							Object value,
++							int index)
++			throws HibernateException, SQLException {
++
++		if (value == null) {
++			statement.setNull(index, Types.NUMERIC);			
++			statement.setNull(index+1, Types.VARCHAR);
++		} else {
++			MonetaryAmount currency = (MonetaryAmount)value;
++			statement.setBigDecimal(index, currency.getValue());
++			statement.setString(index+1, currency.getCurrency().getCurrencyCode());
++		}
++	}
++
++	public Serializable disassemble(Object value) throws HibernateException {
++		return (Serializable) value;
++	}
++
++	public Object assemble(Serializable cached, Object owner) throws HibernateException {
++		return cached;
++	}
++
++	public Object replace(Object original, Object target, Object owner)
++	throws HibernateException {
++		return original;
++	}
++
++	public int hashCode(Object x) throws HibernateException {
++		return x.hashCode();
++	}
++}

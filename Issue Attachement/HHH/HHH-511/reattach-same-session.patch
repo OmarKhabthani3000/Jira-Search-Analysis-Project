@@ -1,0 +1,59 @@
+diff -urN hibernate-3.1-vanilla/src/org/hibernate/engine/Collections.java hibernate-3.1/src/org/hibernate/engine/Collections.java
+--- hibernate-3.1-vanilla/src/org/hibernate/engine/Collections.java	2006-03-20 14:19:38.000000000 -0300
++++ hibernate-3.1/src/org/hibernate/engine/Collections.java	2006-08-08 16:33:24.437500000 -0300
+@@ -146,14 +146,23 @@
+ 
+ 		collection.setOwner(entity);
+ 
++		SessionFactoryImplementor factory = session.getFactory();
++		CollectionPersister persister = factory.getCollectionPersister( type.getRole() );
++
+ 		CollectionEntry ce = session.getPersistenceContext().getCollectionEntry(collection);
+ 
+ 		if ( ce == null ) {
+-			// refer to comment in StatefulPersistenceContext.addCollection()
+-			throw new HibernateException(
+-					"Found two representations of same collection: " +
+-					type.getRole()
+-			);
++			// first, let's check if is a persistent collection cleared from its session
++			if ( !collection.setCurrentSession(session) ) {
++				session.getPersistenceContext().addInitializedDetachedCollection(persister, collection);
++				ce = session.getPersistenceContext().getCollectionEntry(collection);
++			} else {
++				// refer to comment in StatefulPersistenceContext.addCollection()
++				throw new HibernateException(
++						"Found two representations of same collection: " +
++						type.getRole()
++				);
++			}
+ 		}
+ 
+ 		// The CollectionEntry.isReached() stuff is just to detect any silly users  
+@@ -167,8 +176,6 @@
+ 		}
+ 		ce.setReached(true);
+ 
+-		SessionFactoryImplementor factory = session.getFactory();
+-		CollectionPersister persister = factory.getCollectionPersister( type.getRole() );
+ 		ce.setCurrentPersister(persister);
+ 		ce.setCurrentKey( type.getKeyOfOwner(entity, session) ); //TODO: better to pass the id in as an argument?
+ 
+diff -urN hibernate-3.1-vanilla/src/org/hibernate/event/def/OnLockVisitor.java hibernate-3.1/src/org/hibernate/event/def/OnLockVisitor.java
+--- hibernate-3.1-vanilla/src/org/hibernate/event/def/OnLockVisitor.java	2006-03-20 14:19:38.000000000 -0300
++++ hibernate-3.1/src/org/hibernate/event/def/OnLockVisitor.java	2006-08-08 16:33:16.562500000 -0300
+@@ -53,10 +53,10 @@
+ 
+ 			}
+ 			else {
+-				// a collection loaded in the current session
+-				// can not possibly be the collection belonging
+-				// to the entity passed to update()
+-				throw new HibernateException("reassociated object has dirty collection reference");
++				if ( persistentCollection.isDirty() ) {
++						throw new HibernateException("reassociated object has dirty collection reference");
++				}
++				reattachCollection(persistentCollection, type);
+ 			}
+ 
+ 		}

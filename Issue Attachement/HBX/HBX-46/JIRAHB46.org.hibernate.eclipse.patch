@@ -1,0 +1,264 @@
+Index: org/hibernate/console/AbstractQueryPage.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse/src/org/hibernate/console/AbstractQueryPage.java,v
+retrieving revision 1.2
+diff -u -r1.2 AbstractQueryPage.java
+--- org/hibernate/console/AbstractQueryPage.java	26 Aug 2005 06:56:12 -0000	1.2
++++ org/hibernate/console/AbstractQueryPage.java	10 Nov 2005 18:43:11 -0000
+@@ -18,6 +18,14 @@
+  */
+ public abstract class AbstractQueryPage implements QueryPage {
+ 
++	public static final int QUERY_TYPE_LIST    = 1;
++	public static final int QUERY_TYPE_ITERATE = 2;
++	public static final int QUERY_TYPE_SCROLL  = 3;
++	
++	static int defaultMaxResults = 1000;
++	static int defaultFirstResult = 1;
++	static int defaultFetchSize = 1000;
++	
+ 	PropertyChangeSupport pcs = new PropertyChangeSupport(this);    
+     private int id;
+     private Session session;
+@@ -26,7 +34,16 @@
+     List pathNames;
+     protected boolean sticky = true;
+     private List exceptions = new ArrayList();
++    
++    // TODO make these parametrizable.
++	private int maxResults = defaultMaxResults;
++	private int firstResult = defaultFirstResult;
++	private int fetchSize   = defaultFetchSize;
++	
++	private int queryType = QUERY_TYPE_LIST;
+ 
++	QueryProgressMonitor progressMonitor;
++	
+     /**
+      * @param i
+      */
+@@ -114,4 +131,45 @@
+ 	public ConsoleConfiguration getConsoleConfiguration() {
+ 		return cfg;
+ 	}
++
++	public int getFirstResult() {
++		return firstResult;
++	}
++
++	public void setFirstResult(int firstResult) {
++		this.firstResult = firstResult;
++	}
++
++	public int getMaxResults() {
++		return maxResults;
++	}
++
++	public void setMaxResults(int maxSize) {
++		this.maxResults = maxSize;
++	}
++
++	public int getQueryType() {
++		return queryType;
++	}
++
++	public void setQueryType(int queryType) {
++		this.queryType = queryType;
++	}
++
++	public QueryProgressMonitor getProgressMonitor() {
++		return progressMonitor;
++	}
++
++	public void setProgressMonitor(QueryProgressMonitor progressMonitor) {
++		this.progressMonitor = progressMonitor;
++	}
++
++	public int getFetchSize() {
++		return fetchSize;
++	}
++
++	public void setFetchSize(int fetchSize) {
++		this.fetchSize = fetchSize;
++	}
++	
+ }
+Index: org/hibernate/console/HQLQueryPage.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse/src/org/hibernate/console/HQLQueryPage.java,v
+retrieving revision 1.4
+diff -u -r1.4 HQLQueryPage.java
+--- org/hibernate/console/HQLQueryPage.java	3 Oct 2005 22:18:57 -0000	1.4
++++ org/hibernate/console/HQLQueryPage.java	10 Nov 2005 18:43:14 -0000
+@@ -13,6 +13,7 @@
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.Query;
++import org.hibernate.ScrollableResults;
+ import org.hibernate.Session;
+ import org.hibernate.type.Type;
+ 
+@@ -22,31 +23,100 @@
+ 	private Query query;
+ 	private String queryString;
+ 	private final ConsoleQueryParameter[] queryParameters;
++	
+ 	public List getList() {
+-		if (list == null) {
+-			try {
+-				
+-				//list = query.list();
+-				list = new ArrayList();
+-				setupParameters(query, queryParameters);
+-				Iterator iter = query.list().iterator(); // need to be user-controllable to toggle between iterate, scroll etc.
+-				while (iter.hasNext() ) {
+-					Object element = iter.next();
+-					list.add(element);
++		if ( list == null ) {
++			if ( QUERY_TYPE_SCROLL!=getQueryType() )
++			switch (getQueryType()) {
++				case QUERY_TYPE_LIST: {
++					list = getResultsByIterator();
++					break;
++				}
++				case QUERY_TYPE_SCROLL:{
++					list = getResultsByScrolling();
++					break;
+ 				}
+-				pcs.firePropertyChange("list", null, list);
+-			} 
+-			catch (HibernateException e) {
+-				list = Collections.EMPTY_LIST;
+-				addException(e);				                
+-			} catch (IllegalArgumentException e) {
+-				list = Collections.EMPTY_LIST;
+-				addException(e);
++				default: list = Collections.EMPTY_LIST;	
++			}
++		} return list;
++	}
++	
++	
++
++	private List getResultsByIterator() {
++		List result = new ArrayList();
++		try {
++			progressSetSteps(3);
++			startNextStep(1, "Setting up parameters..");
++			setupFetchPreferences(query);
++			setupParameters(query, queryParameters);
++			startNextStep(2, QUERY_TYPE_ITERATE==getQueryType()?"Calling Iterate..":"Calling List...");
++			Iterator iter = QUERY_TYPE_ITERATE==getQueryType()?query.iterate():query.list().iterator();
++			startNextStep(3, "Retrieving results from iterator..");
++			while (iter.hasNext() ) {
++				Object element = iter.next();
++				result.add(element);
++			}
++			startNextStep(3, "Read "+result.size()+" records.");
++			pcs.firePropertyChange("list", null, list);
++		} 
++		catch (HibernateException e) {
++			result = Collections.EMPTY_LIST;
++			addException(e);				                
++		} catch (IllegalArgumentException e) {
++			result = Collections.EMPTY_LIST;
++			addException(e);
++		}
++		return result;
++	}
++
++	/**
++	 * Wraps the progressMonitor so it only sets the progress steps if there is a monitor. 
++	 */
++	private void progressSetSteps(int steps) {
++		if ( progressMonitor!=null ) progressMonitor.setSteps(3);
++	}
++	
++	/**
++	 * Wraps the progressMonitor so it only reports progress if there is a monitor. 
++	 */
++	private void startNextStep(int stepNumber, String progressMsg) {
++		if ( progressMonitor!=null ) progressMonitor.startNextStep(stepNumber, progressMsg);
++	}
++
++	private List getResultsByScrolling() {
++		List result = new ArrayList();
++		try {
++			progressSetSteps(4);
++			startNextStep(1, "Setting up parameters..");
++			setupFetchPreferences(query);
++			setupParameters(query, queryParameters);
++			ScrollableResults results = query.scroll();
++			startNextStep(2, "Retrieving records..");
++			while ( results.next() ) {
++				startNextStep(3, "Retrieving record "+results.getRowNumber());
++				Object nextRow = results.get();
++				result.add(nextRow);
+ 			}
++			startNextStep(3, "Retrieved "+results.getRowNumber()+" rows.");
++			pcs.firePropertyChange("list", null, list);
++		} 
++		catch (HibernateException e) {
++			result = Collections.EMPTY_LIST;
++			addException(e);				                
++		} catch (IllegalArgumentException e) {
++			result = Collections.EMPTY_LIST;
++			addException(e);
+ 		}
+-		return list;
++		return result;
+ 	}
+ 
++	private void setupFetchPreferences(Query toConfigure) {
++		toConfigure.setMaxResults(getMaxResults());
++		toConfigure.setFirstResult(getFirstResult());
++		toConfigure.setFetchSize(getFetchSize());
++	}
++	
+ 	private void setupParameters(Query query2, ConsoleQueryParameter[] queryParameters2) {
+ 		for (int i = 0; i < queryParameters2.length; i++) {
+ 			ConsoleQueryParameter parameter = queryParameters2[i];
+Index: org/hibernate/console/QueryPage.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse/src/org/hibernate/console/QueryPage.java,v
+retrieving revision 1.2
+diff -u -r1.2 QueryPage.java
+--- org/hibernate/console/QueryPage.java	26 Aug 2005 06:56:12 -0000	1.2
++++ org/hibernate/console/QueryPage.java	10 Nov 2005 18:43:14 -0000
+@@ -16,6 +16,7 @@
+ public interface QueryPage {
+ 		
+     public abstract List getList();
++    
+     /**
+      * @param i
+      */
+@@ -62,4 +63,6 @@
+ 	
+     public void addException(Throwable he);
+     
++    public void setProgressMonitor(QueryProgressMonitor progressMonitor);
++    
+ }
+\ No newline at end of file
+Index: org/hibernate/console/QueryProgressMonitor.java
+===================================================================
+RCS file: org/hibernate/console/QueryProgressMonitor.java
+diff -N org/hibernate/console/QueryProgressMonitor.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/console/QueryProgressMonitor.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,14 @@
++package org.hibernate.console;
++
++/**
++ * Use to monitor the progress of the QueryPages you send.
++ */
++public interface QueryProgressMonitor {
++
++	public void setSteps(int steps);
++
++	public int getSteps();
++
++	public void startNextStep(int stepNumber, String progressMade);
++	
++}

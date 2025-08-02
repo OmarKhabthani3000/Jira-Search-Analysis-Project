@@ -1,0 +1,243 @@
+Index: D:/workspaces/hibernate/org.hibernate.eclipse.console/META-INF/MANIFEST.MF
+===================================================================
+--- D:/workspaces/hibernate/org.hibernate.eclipse.console/META-INF/MANIFEST.MF	(revision 6766)
++++ D:/workspaces/hibernate/org.hibernate.eclipse.console/META-INF/MANIFEST.MF	(working copy)
+@@ -1,7 +1,7 @@
+ Manifest-Version: 1.0
+ Bundle-ManifestVersion: 2
+ Bundle-Name: Hibernate Console
+-Bundle-SymbolicName: org.hibernate.eclipse.console; singleton:=true
++Bundle-SymbolicName: org.hibernate.eclipse.console;singleton:=true
+ Bundle-Version: 3.2.0.beta9
+ Bundle-ClassPath: org.hibernate.eclipse.console.jar
+ Bundle-Activator: org.hibernate.eclipse.console.HibernateConsolePlugin
+Index: D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorAction.java
+===================================================================
+--- D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorAction.java	(revision 7708)
++++ D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorAction.java	(working copy)
+@@ -1,6 +1,11 @@
+ package org.hibernate.eclipse.console.actions;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
++import org.eclipse.jdt.core.IJavaProject;
+ import org.eclipse.jface.viewers.IStructuredSelection;
++import org.eclipse.jface.viewers.StructuredSelection;
+ import org.eclipse.jface.viewers.TreePath;
+ import org.eclipse.jface.viewers.TreeSelection;
+ import org.eclipse.swt.widgets.Event;
+@@ -8,6 +13,7 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.console.ConsoleConfiguration;
+ import org.hibernate.eclipse.console.HibernateConsolePlugin;
++import org.hibernate.eclipse.nature.HibernateNature;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ 
+@@ -20,10 +26,26 @@
+ 	public void runWithEvent(Event event) {
+ 		boolean showed = false;
+ 		IStructuredSelection sel = getStructuredSelection();
+-		if (sel instanceof TreeSelection){
+-			TreePath[] paths = ((TreeSelection)sel).getPaths();
+-			showed = doRun(paths);
++		TreePath[] paths = new TreePath[0];
++		if (sel instanceof TreeSelection) {
++			paths = ((TreeSelection) sel).getPaths();				
++		} else {
++			if (sel instanceof StructuredSelection){
++				StructuredSelection selection = (StructuredSelection)sel;
++				Object[] elements = selection.toArray();
++				List<TreePath> list = new ArrayList<TreePath>();
++				for (int i = 0; i < elements.length; i++) {
++					if (elements[i] instanceof TreePath) {
++						list.add((TreePath) elements[i]);							
++					} else if (elements[i] instanceof IJavaProject
++							|| elements[i] instanceof ConsoleConfiguration) {
++						list.add( new TreePath(new Object[]{elements[i]}));							
++					}
++				}
++				paths = list.toArray(new TreePath[0]);
++			}
+ 		}
++		showed = doRun(paths);
+ 		if(!showed) {
+ 			openQueryEditor( null, "" );			
+ 		}
+@@ -33,16 +55,26 @@
+ 		boolean showed = false;
+ 		for (int i = 0; i < paths.length; i++) {
+ 			TreePath path = paths[i];
+-			ConsoleConfiguration config = (ConsoleConfiguration) path.getSegment(0);
+-			try {
+-			  openQueryEditor( config, generateQuery(path) );
+-			  showed = true;
+-			} catch(HibernateException he) {
+-				HibernateConsolePlugin.getDefault().showError(null, "Exception while trying to open HQL editor", he);
++			if (path.getFirstSegment() instanceof ConsoleConfiguration){
++				ConsoleConfiguration config = (ConsoleConfiguration) path.getSegment(0);
++				try {
++				  openQueryEditor( config, generateQuery(path) );
++				  showed = true;
++				} catch(HibernateException he) {
++					HibernateConsolePlugin.getDefault().showError(null, "Exception while trying to open HQL editor", he);
++				}
++			} else 	if (path.getFirstSegment() instanceof IJavaProject)	{
++				HibernateNature nature = HibernateNature.getHibernateNature( (IJavaProject) path.getFirstSegment() );
++				if(nature != null) {
++					openQueryEditor( nature.getDefaultConsoleConfiguration(), "");
++					 showed = true;
++				}
+ 			}
+ 		}
+ 		return showed;							
+ 	}
++	
++	
+ 
+ 	protected abstract void openQueryEditor(final ConsoleConfiguration config, String query);
+ 	
+Index: D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorWorkbenchDelegate.java
+===================================================================
+--- D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorWorkbenchDelegate.java	(revision 0)
++++ D:/workspaces/hibernate/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/actions/OpenQueryEditorWorkbenchDelegate.java	(revision 0)
+@@ -0,0 +1,106 @@
++/*******************************************************************************
++  * Copyright (c) 2007-2008 Red Hat, Inc.
++  * Distributed under license by Red Hat, Inc. All rights reserved.
++  * This program is made available under the terms of the
++  * Eclipse Public License v1.0 which accompanies this distribution,
++  * and is available at http://www.eclipse.org/legal/epl-v10.html
++  *
++  * Contributor:
++  *     Red Hat, Inc. - initial API and implementation
++  ******************************************************************************/
++package org.hibernate.eclipse.console.actions;
++
++import org.eclipse.jface.action.ActionContributionItem;
++import org.eclipse.jface.action.IAction;
++import org.eclipse.jface.viewers.ISelection;
++import org.eclipse.jface.viewers.IStructuredSelection;
++import org.eclipse.jface.viewers.StructuredSelection;
++import org.eclipse.swt.widgets.Control;
++import org.eclipse.swt.widgets.Menu;
++import org.eclipse.ui.IWorkbenchWindow;
++import org.eclipse.ui.IWorkbenchWindowPulldownDelegate;
++import org.eclipse.ui.IWorkbenchWindowPulldownDelegate2;
++import org.eclipse.ui.actions.BaseSelectionListenerAction;
++
++/**
++ * @author Dmitry Geraskov
++ *
++ */
++public class OpenQueryEditorWorkbenchDelegate implements IWorkbenchWindowPulldownDelegate2,
++		IWorkbenchWindowPulldownDelegate {
++	
++	private BaseSelectionListenerAction hqlaction = new HQLScratchpadAction();
++	
++	private BaseSelectionListenerAction criaction = new CriteriaEditorAction();
++	
++	private Menu fMenu;
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IWorkbenchWindowPulldownDelegate2#getMenu(org.eclipse.swt.widgets.Menu)
++	 */
++	public Menu getMenu(Menu parent) {
++		setMenu(new Menu(parent));
++		fillMenu(fMenu);
++		return fMenu;
++	}
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IWorkbenchWindowPulldownDelegate#getMenu(org.eclipse.swt.widgets.Control)
++	 */
++	public Menu getMenu(Control parent) {
++		setMenu(new Menu(parent));
++		fillMenu(fMenu);
++		return fMenu;
++	}
++	
++	protected void fillMenu(Menu menu){
++		ActionContributionItem item= new ActionContributionItem(hqlaction);
++		item.fill(menu, -1);
++		
++		item= new ActionContributionItem(criaction);
++		item.fill(menu, -1);
++	}
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IWorkbenchWindowActionDelegate#dispose()
++	 */
++	public void dispose() {
++		if (fMenu != null) {
++			fMenu.dispose();
++		}
++	}
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IWorkbenchWindowActionDelegate#init(org.eclipse.ui.IWorkbenchWindow)
++	 */
++	public void init(IWorkbenchWindow window) {}
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IActionDelegate#run(org.eclipse.jface.action.IAction)
++	 */
++	public void run(IAction action) {
++		// TODO save and open last opened editor
++		hqlaction.runWithEvent(null);
++	}
++
++	/* (non-Javadoc)
++	 * @see org.eclipse.ui.IActionDelegate#selectionChanged(org.eclipse.jface.action.IAction, org.eclipse.jface.viewers.ISelection)
++	 */
++	public void selectionChanged(IAction action, ISelection selection) {
++		if (selection instanceof IStructuredSelection) {
++			hqlaction.selectionChanged((IStructuredSelection) selection);
++			criaction.selectionChanged((IStructuredSelection) selection);
++		} else {
++			hqlaction.selectionChanged(StructuredSelection.EMPTY);
++			criaction.selectionChanged(StructuredSelection.EMPTY);
++		}
++	}
++	
++	private void setMenu(Menu menu) {
++		if (fMenu != null) {
++			fMenu.dispose();
++		}
++		fMenu = menu;
++	}
++
++}
+
+Property changes on: D:\workspaces\hibernate\org.hibernate.eclipse.console\src\org\hibernate\eclipse\console\actions\OpenQueryEditorWorkbenchDelegate.java
+___________________________________________________________________
+Name: svn:mime-type
+   + text/plain
+Name: svn:keywords
+   + Author Id Revision Date
+Name: svn:eol-style
+   + native
+
+Index: D:/workspaces/hibernate/org.hibernate.eclipse.console/plugin.xml
+===================================================================
+--- D:/workspaces/hibernate/org.hibernate.eclipse.console/plugin.xml	(revision 7514)
++++ D:/workspaces/hibernate/org.hibernate.eclipse.console/plugin.xml	(working copy)
+@@ -264,7 +264,16 @@
+                class="org.hibernate.eclipse.launch.OpenHibernateToolsConfigurations"
+                id="org.hibernate.eclipse.launch.OpenHibernateToolsConfigurations">
+          </action>
+-      </actionSet> 
++         <action
++               class="org.hibernate.eclipse.console.actions.OpenQueryEditorWorkbenchDelegate"
++               icon="icons/images/hql_editor.gif"
++               id="org.hibernate.eclipse.console.openHQLEditorAction"
++               label="Open Query Editor"
++               pulldown="true"
++               style="pulldown"
++               toolbarPath="org.eclipse.debug.ui.launchActionSet/hibernatetool">
++         </action>
++      </actionSet>
+        
+     </extension>
+     

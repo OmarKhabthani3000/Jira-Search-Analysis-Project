@@ -1,0 +1,81 @@
+Index: src/org/hibernate/engine/SessionImplementor.java
+===================================================================
+--- src/org/hibernate/engine/SessionImplementor.java	(revision 14324)
++++ src/org/hibernate/engine/SessionImplementor.java	(working copy)
+@@ -299,4 +299,7 @@
+ 	 * @return True if the session is closed; false otherwise.
+ 	 */
+ 	public boolean isClosed();
++
++	public boolean isReadOnly();
++
+ }
+Index: src/org/hibernate/engine/TwoPhaseLoad.java
+===================================================================
+--- src/org/hibernate/engine/TwoPhaseLoad.java	(revision 14324)
++++ src/org/hibernate/engine/TwoPhaseLoad.java	(working copy)
+@@ -172,7 +172,7 @@
+ 			}
+ 		}
+ 	
+-		if ( readOnly || !persister.isMutable() ) {
++		if ( readOnly || !persister.isMutable() || session.isReadOnly() ) {
+ 			//no need to take a snapshot - this is a 
+ 			//performance optimization, but not really
+ 			//important, except for entities with huge 
+Index: src/org/hibernate/event/def/DefaultLoadEventListener.java
+===================================================================
+--- src/org/hibernate/event/def/DefaultLoadEventListener.java	(revision 14324)
++++ src/org/hibernate/event/def/DefaultLoadEventListener.java	(working copy)
+@@ -569,7 +569,7 @@
+ 		final PersistenceContext persistenceContext = session.getPersistenceContext();
+ 		persistenceContext.addEntry( 
+ 				result, 
+-				Status.MANAGED, 
++				session.isReadOnly() ? Status.READ_ONLY : Status.MANAGED, 
+ 				values, 
+ 				null, 
+ 				id, 
+Index: src/org/hibernate/impl/SessionImpl.java
+===================================================================
+--- src/org/hibernate/impl/SessionImpl.java	(revision 14324)
++++ src/org/hibernate/impl/SessionImpl.java	(working copy)
+@@ -139,6 +139,7 @@
+ 
+ 	private transient boolean flushBeforeCompletionEnabled;
+ 	private transient boolean autoCloseSessionEnabled;
++	private transient boolean readOnly;
+ 	private transient ConnectionReleaseMode connectionReleaseMode;
+ 	
+ 	private transient String fetchProfile;
+@@ -316,6 +317,14 @@
+ 		return autoCloseSessionEnabled;
+ 	}
+ 
++	public boolean isReadOnly() {
++		return readOnly;
++	}
++
++	public void setReadOnly(boolean readOnly) {
++		this.readOnly = readOnly;
++	}
++
+ 	public boolean isOpen() {
+ 		checkTransactionSynchStatus();
+ 		return !isClosed();
+Index: src/org/hibernate/Session.java
+===================================================================
+--- src/org/hibernate/Session.java	(revision 14324)
++++ src/org/hibernate/Session.java	(working copy)
+@@ -776,4 +776,11 @@
+ 	 * @see #disconnect()
+ 	 */
+ 	void reconnect(Connection connection) throws HibernateException;
++
++	/**
++	 * Specificy whether or not the session should create managed snapshots for loaded entities.
++	 * 
++	 * @param readOnly true, do not create managed snapshots, false create managed snapshots 
++	 */
++	public void setReadOnly(boolean readOnly);
+ }

@@ -1,0 +1,190 @@
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping PUBLIC
+    "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+    "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
+<hibernate-mapping>
+    <typedef class="com.ftisoft.hibernate.ClassType" name="java.lang.Class"/>
+    <class name="com.ftisoft.workflow.definition.Node" table="FT_O_WFND" >
+        <meta attribute="scope-class" inherit="false" >public abstract</meta>
+        <meta attribute="class-code" inherit="false">
+        </meta>
+        <id name="id" type="string">
+            <generator class="com.ftisoft.streetlamp.hibernate.TridGenerator">
+                <param name="TemplateGenerator">ftisoft.jmx:service=TransactionIdTemplateGenerator</param>
+            </generator>
+        </id>
+        <discriminator column="type" type="string" not-null="true"/>
+        <property name="name" type="string" not-null="true"/>
+        <property name="description" type="string" not-null="false"/>
+        <property name="NodeHandlerFactory" type="java.lang.Class" column="classname" not-null="true"/>
+
+
+        <set name="persistentVariables" table="FT_O_WFNV" cascade="all,delete-orphan">
+            <key column="id" not-null="true"/>
+            <element type="string" not-null="true" column="name"/>
+        </set>
+        <map name="parameters" cascade="all,delete-orphan" inverse="true" >
+            <key column="node_id" not-null="true"/>
+            <map-key type="string" column="name"/>
+            <one-to-many class="com.ftisoft.workflow.definition.Parameter"/>
+        </map>
+        <set name="toTransitions" cascade="all,delete-orphan" >
+            <meta attribute="scope-set">protected</meta>
+            <meta attribute="scope-get">protected</meta>
+            <meta attribute="property-type">Set&lt;Transition></meta>
+            <meta attribute="scope-field"></meta>
+            <key column="from_node" />
+            <one-to-many class="com.ftisoft.workflow.definition.Transition"   />
+        </set>
+
+        <set name="fromTransitions" cascade="all,delete-orphan" >
+            <meta attribute="scope-set">protected</meta>
+            <meta attribute="scope-get">protected</meta>
+            <meta attribute="property-type">Set&lt;Transition></meta>
+            <meta attribute="scope-field"></meta>
+            <key column="to_node" />
+            <one-to-many class="com.ftisoft.workflow.definition.Transition"/>
+        </set>
+
+        <many-to-one name="workflow" class="com.ftisoft.workflow.definition.Workflow" column="workflow_id" not-null="true"/>
+        <subclass name="com.ftisoft.workflow.definition.Activity" discriminator-value="ACITIVITY">
+            <meta attribute="class-code">
+    public void setToTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(this,n,name);
+    }
+    public void setFromTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(n,this,name);
+    }
+    public Node getToTransition()
+    {
+        return NodeHelper.getToTransition(this);
+    }
+    public Node getFromTransition()
+    {
+        return NodeHelper.getFromTransition(this);
+    }
+    public Node removeFromTransition()
+    {
+        if (fromTransitions == null || fromTransitions.isEmpty())
+            return null;
+        return NodeHelper.removeFromTransition(this,fromTransitions.iterator().next().getName());
+    }
+    public Node removeToTransition()
+    {
+        if (toTransitions == null || toTransitions.isEmpty())
+            return null;
+        return NodeHelper.removeToTransition(this,toTransitions.iterator().next().getName());
+    }
+            </meta>
+        </subclass>
+        <subclass name="com.ftisoft.workflow.definition.Split" discriminator-value="SPLIT">
+            <meta attribute="class-code" inherit="false">
+    public Map&lt;String,Node> listToTransitions()
+    {
+        return NodeHelper.listTransitions(super.getToTransitions(),true);
+    }
+    public Node removeToTransition(String name)
+    {
+        return NodeHelper.removeToTransition(this,name);
+    }
+    public void removeToTransitions()
+    {
+        if (toTransitions == null)
+            return;
+        while(!toTransitions.isEmpty())
+            NodeHelper.removeToTransition(this,toTransitions.iterator().next().getName());
+    }
+    public void addToTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(this,n,name);
+    }
+    public void setFromTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(n,this,name);
+    }
+    public Node getFromTransition()
+    {
+        return NodeHelper.getFromTransition(this);
+    }
+            </meta>
+
+            <subclass name="com.ftisoft.workflow.definition.AndSplit" discriminator-value="AND-SPLIT">
+                <meta attribute="extra-import">java.util.Set</meta>
+                <!-- Must only have one from and at least one to transition.
+                    Can execute more than one to transition -->
+                <set name="joinNodes">
+                    <key column="split_node"/>
+                    <one-to-many class="com.ftisoft.workflow.definition.AndJoin"/>
+                </set>
+            </subclass>
+        </subclass>
+        <subclass name="com.ftisoft.workflow.definition.Join" discriminator-value="JOIN">
+            <meta attribute="class-code" inherit="false">
+    public Map&lt;String,Node> listFromTransitions()
+    {
+        return NodeHelper.listTransitions(super.getFromTransitions(),false);
+    }
+    public Node removeFromTransition(String name)
+    {
+        return NodeHelper.removeFromTransition(this,name);
+    }
+    public void removeFromTransitions()
+    {
+        if (fromTransitions == null)
+            return;
+        while(!fromTransitions.isEmpty())
+            NodeHelper.removeFromTransition(this,fromTransitions.iterator().next().getName());
+    }
+
+    public void setToTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(this,n,name);
+    }
+    public void addFromTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(n,this,name);
+    }
+    public Node getToTransition()
+    {
+        return NodeHelper.getToTransition(this);
+    }
+            </meta>
+            <subclass name="com.ftisoft.workflow.definition.AndJoin" discriminator-value="AND-JOIN">
+                <meta attribute="extra-import">java.util.Set</meta>
+                <!-- Must only have one to and at least one from transition.
+                     Can have more than one runtime from transition-->
+                <many-to-one name="splitNode" column="split_node" class="com.ftisoft.workflow.definition.AndSplit"/>
+            </subclass>
+        </subclass>
+        <subclass name="com.ftisoft.workflow.definition.StartNode" discriminator-value="START" >
+            <meta attribute="class-code">
+    public void setToTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(this,n,name);
+    }
+    public Node getToTransition()
+    {
+        return NodeHelper.getToTransition(this);
+    }
+            </meta>
+            <!-- must not have a from transition -->
+        </subclass>
+        <subclass name="com.ftisoft.workflow.definition.EndNode" discriminator-value="END">
+            <meta attribute="class-code">
+    public void setFromTransition(Node n, String name)
+    {
+        NodeHelper.setTransition(n,this,name);
+    }
+    public Node getFromTransition()
+    {
+        return NodeHelper.getFromTransition(this);
+    }
+            </meta>
+            <!--  must not have a to transition -->
+        </subclass>
+
+
+    </class>
+</hibernate-mapping>

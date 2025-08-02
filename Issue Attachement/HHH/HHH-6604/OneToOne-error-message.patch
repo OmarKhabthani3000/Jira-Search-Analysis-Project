@@ -1,0 +1,99 @@
+Index: hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/Trousers.java
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/Trousers.java	(revision 857a2268f9966601536e1821843b73e4ba1eccc2)
++++ hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/Trousers.java	(revision )
+@@ -17,4 +17,7 @@
+ 	@JoinColumn(name = "zip_id")
+ 	public TrousersZip zip;
+ 
++   @OneToOne(mappedBy = "trousers")
++   public TrousersHanger hanger;
++
+ }
+Index: hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/OneToOneTest.java
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/OneToOneTest.java	(revision 857a2268f9966601536e1821843b73e4ba1eccc2)
++++ hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/OneToOneTest.java	(revision )
+@@ -287,7 +287,55 @@
+ 		s.close();
+ 	}
+ 
+-	@Test
++   @Test
++   public void testConfusingErrorOnMultipleChildren() {
++      Session s = openSession();
++      s.getTransaction().begin();
++      Trousers trousers = new Trousers();
++      TrousersZip zip = new TrousersZip();
++      TrousersHanger hanger = new TrousersHanger();
++      TrousersHanger wrongHanger = new TrousersHanger();
++      trousers.id = 1;
++      zip.id = 2;
++      hanger.id = 3;
++      wrongHanger.id = 4;
++      trousers.zip = zip;
++      zip.trousers = trousers;
++      trousers.hanger = hanger;
++      hanger.trousers = trousers;
++      wrongHanger.trousers = trousers;
++      s.persist(trousers);
++      s.persist(zip);
++      s.persist(hanger);
++      s.persist(wrongHanger);
++      s.getTransaction().commit();
++
++      s.clear();
++
++      Transaction tx = s.beginTransaction();
++      try {
++         trousers = (Trousers) s.get(Trousers.class, trousers.id);
++      } catch (HibernateException e) {
++         // What should the message say?  I don't know, but the actual message is really surprising.
++         // It tells me I have duplicate Trousers (not TrousersHangers), with id 2.
++         // But there are actually *no* Trousers with id 2.
++         // In fact, it found duplicate rows in a join (because of the extra Hanger),
++         // and the id listed here is not the Trousers id, but rather the TrousersZipper id.
++         // The query in question looks up the Trousers by zip_id: the Trousers have been found (with no complaint about
++         // the extra row), but then the Zipper has to find its Trousers by zip_id.
++         assertEquals("Some message that gives a hint about TrousersHanger, and not Trousers#2.", e.getMessage());
++      } finally {
++         s.clear();
++         s.delete(zip);
++         s.delete(zip.trousers);
++         s.delete(hanger);
++         s.delete(wrongHanger);
++         tx.commit();
++         s.close();
++      }
++   }
++
++   @Test
+ 	public void testForeignGenerator() {
+ 		Session s = openSession();
+ 		Transaction tx = s.beginTransaction();
+@@ -366,6 +414,7 @@
+ 				Party.class,
+ 				Trousers.class,
+ 				TrousersZip.class,
++            TrousersHanger.class,
+ 				Customer.class,
+ 				Ticket.class,
+ 				Discount.class,
+Index: hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/TrousersHanger.java
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/TrousersHanger.java	(revision )
++++ hibernate-core/src/test/java/org/hibernate/test/annotations/onetoone/TrousersHanger.java	(revision )
+@@ -0,0 +1,13 @@
++package org.hibernate.test.annotations.onetoone;
++
++import javax.persistence.*;
++
++@Entity
++public class TrousersHanger {
++   @Id
++   public Integer id;
++
++   @OneToOne
++   @JoinColumn(name = "trousers_id")
++   public Trousers trousers;
++}

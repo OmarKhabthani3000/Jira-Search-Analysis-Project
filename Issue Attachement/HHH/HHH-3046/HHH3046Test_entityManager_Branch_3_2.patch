@@ -1,0 +1,476 @@
+Index: U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/HHH3046Test.java
+===================================================================
+--- U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/HHH3046Test.java	(revision 0)
++++ U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/HHH3046Test.java	(revision 0)
+@@ -0,0 +1,119 @@
++package org.hibernate.ejb.test.cascade.circle;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.ejb.test.TestCase;
++
++/**
++ * See http://opensource.atlassian.com/projects/hibernate/browse/HHH-3046
++ * 
++ * @author pavol.zibrita
++ */
++public class HHH3046Test extends TestCase {
++
++	public HHH3046Test(String string) {
++		super(string);
++	}
++
++	@Override
++	public Class[] getAnnotatedClasses() {
++		return new Class[] {
++				Route.class, Tour.class, Node.class, Transport.class
++		};
++	}
++
++	private Node pickupNode;
++
++	private Node deliveryNode;
++
++	private Tour tour;
++
++	private Transport transport;
++
++	private void createObjects(Route route) {
++		tour = new Tour();
++		tour.setName("tourB");
++
++		transport = new Transport();
++		transport.setName("transportB");
++
++		pickupNode = new Node();
++		pickupNode.setName("pickupNodeB");
++
++		deliveryNode = new Node();
++		deliveryNode.setName("deliveryNodeB");
++	}
++
++	private void setRelations(Route route) {
++		pickupNode.setRoute(route);
++		pickupNode.setTour(tour);
++		pickupNode.getPickupTransport().add(transport);
++
++		deliveryNode.setRoute(route);
++		deliveryNode.setTour(tour);
++		deliveryNode.getDeliveryTransport().add(transport);
++
++		tour.getNode().add(pickupNode);
++		tour.getNode().add(deliveryNode);
++
++		route.getNode().add(pickupNode);
++		route.getNode().add(deliveryNode);
++
++		transport.setPickupNode(pickupNode);
++		transport.setDeliveryNode(deliveryNode);
++	}
++
++	private void saveData() {
++		EntityManager em = factory.createEntityManager();
++		em.getTransaction().begin();
++
++		Route route = new Route();
++		route.setName("routeA");
++
++		em.persist(route);
++		em.getTransaction().commit();
++		em.close();
++	}
++
++	void mergeData() {
++		EntityManager em = factory.createEntityManager();
++		em.getTransaction().begin();
++
++		Route route = (Route) em.find(Route.class, new Long(1));
++		// System.out.println(route);
++
++		route.setTransientField(new String("sfnaouisrbn"));
++
++		createObjects(route);
++
++		transport.setTransientField("aaaaaaaaaaaaaa");
++		pickupNode.setTransientField("pickup node aaaaaaaaaaa");
++		deliveryNode.setTransientField("delivery node aaaaaaaaa");
++
++		setRelations(route);
++
++		System.out.println(route);
++
++		Route routeEntity = (Route) em.merge(route);
++		System.out.println("--------------------------------------");
++		System.out.println(routeEntity);
++		System.out.println(((Transport) ((Node) routeEntity.getNode().get(0))
++				.getPickupTransport().get(0)).getTransientField());
++		System.out.println(((Node) routeEntity.getNode().get(0))
++				.getTransientField());
++		System.out.println(((Node) routeEntity.getNode().get(1))
++				.getTransientField());
++		System.out.println("--------------------------------------");
++
++		em.getTransaction().commit();
++		em.close();
++	}
++
++	/**
++	 * THE test method
++	 */
++	public void testBug_HHH3046() {
++		saveData();
++		mergeData();
++	}
++}
+Index: U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Node.java
+===================================================================
+--- U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Node.java	(revision 0)
++++ U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Node.java	(revision 0)
+@@ -0,0 +1,117 @@
++package org.hibernate.ejb.test.cascade.circle;
++
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++import javax.persistence.OneToMany;
++import javax.persistence.Transient;
++
++@Entity
++public class Node {
++
++	@Id @GeneratedValue
++//	@SequenceGenerator(name="NODE_SEQ", sequenceName="NODE_SEQ", initialValue=1, allocationSize=1)
++//	@GeneratedValue(strategy=GenerationType.SEQUENCE, generator="NODE_SEQ")
++	private Long nodeID;
++	
++	private String name;
++	
++	/** the list of orders that are delivered at this node */
++	@OneToMany(fetch=FetchType.LAZY, cascade={CascadeType.MERGE, CascadeType.REFRESH}, mappedBy="deliveryNode")
++	private List<Transport> deliveryTransport = new ArrayList<Transport>();
++	
++	/** the list of orders that are picked up at this node */
++	@OneToMany(fetch=FetchType.LAZY, cascade=CascadeType.ALL, mappedBy="pickupNode")
++	private List<Transport> pickupTransport = new ArrayList<Transport>();
++	
++	/** the route to which this node belongs */
++	@ManyToOne(targetEntity=Route.class, optional=false, fetch=FetchType.EAGER)
++	private Route route = null;
++	
++	/** the tour this node belongs to, null if this node does not belong to a tour (e.g first node of a route) */
++	@ManyToOne(targetEntity=Tour.class, cascade={CascadeType.MERGE, CascadeType.PERSIST, CascadeType.REFRESH}, optional=true, fetch=FetchType.LAZY)
++	private Tour tour;
++	
++	@Transient
++	private String transientField = "node original value";
++
++	public List<Transport> getDeliveryTransport() {
++		return deliveryTransport;
++	}
++
++	public void setDeliveryTransport(List<Transport> deliveryTransport) {
++		this.deliveryTransport = deliveryTransport;
++	}
++
++	public List<Transport> getPickupTransport() {
++		return pickupTransport;
++	}
++
++	public void setPickupTransport(List<Transport> pickupTransport) {
++		this.pickupTransport = pickupTransport;
++	}
++
++	public Long getNodeID() {
++		return nodeID;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Route getRoute() {
++		return route;
++	}
++
++	public void setRoute(Route route) {
++		this.route = route;
++	}
++
++	public Tour getTour() {
++		return tour;
++	}
++	
++	public void setTour(Tour tour) {
++		this.tour = tour;
++	}
++	
++	public String toString()
++	{
++		StringBuffer buffer = new StringBuffer();
++		
++		buffer.append(name + " id: " + nodeID + " route name: " + route.getName() + " tour name: " + tour.getName() + "\n");
++		for (Iterator it = pickupTransport.iterator(); it.hasNext();) {
++			buffer.append("Pickup transport: " + it.next());
++		}
++		
++		for (Iterator it = deliveryTransport.iterator(); it.hasNext();) {
++			buffer.append("Delviery transport: " + it.next());
++		}
++		
++		return buffer.toString();
++	}
++
++	public String getTransientField() {
++		return transientField;
++	}
++
++	public void setTransientField(String transientField) {
++		this.transientField = transientField;
++	}
++
++	protected void setNodeID(Long nodeID) {
++		this.nodeID = nodeID;
++	}
++
++}
+Index: U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Route.java
+===================================================================
+--- U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Route.java	(revision 0)
++++ U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Route.java	(revision 0)
+@@ -0,0 +1,83 @@
++package org.hibernate.ejb.test.cascade.circle;
++
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++import javax.persistence.Transient;
++
++@Entity
++public class Route {
++	
++	@Id @GeneratedValue
++//	@SequenceGenerator(name="ROUTE_SEQ", sequenceName="ROUTE_SEQ", initialValue=1, allocationSize=1)
++//	@GeneratedValue(strategy=GenerationType.SEQUENCE, generator="ROUTE_SEQ")
++	private Long routeID;
++	
++	/** A List of nodes contained in this route. */
++	@OneToMany(targetEntity=Node.class, fetch=FetchType.EAGER, cascade=CascadeType.ALL, mappedBy="route")
++	private List<Node> nodeList = new ArrayList<Node>();
++	
++	private String name;
++	
++	@Transient
++	private String transientField = null;
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	protected List<Node> getNodeList() {
++		return nodeList;
++	}
++
++	protected void setNodeList(List<Node> nodeList) {
++		this.nodeList = nodeList;
++	}
++
++	protected void setRouteID(Long routeID) {
++		this.routeID = routeID;
++	}
++
++	public List<Node> getNode() {
++		return nodeList;
++	}
++
++	public void setNode(List<Node> node) {
++		this.nodeList = node;
++	}
++
++	public Long getRouteID() {
++		return routeID;
++	}
++	
++	public String toString()
++	{
++		StringBuffer buffer = new StringBuffer();
++		
++		buffer.append("Route name: " + name + " id: " + routeID + " transientField: " + transientField + "\n");
++		for (Iterator it = nodeList.iterator(); it.hasNext();) {
++			buffer.append("Node: " + (Node)it.next());
++		}
++		
++		return buffer.toString();
++	}
++
++	public String getTransientField() {
++		return transientField;
++	}
++
++	public void setTransientField(String transientField) {
++		this.transientField = transientField;
++	}
++}
+Index: U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Tour.java
+===================================================================
+--- U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Tour.java	(revision 0)
++++ U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Tour.java	(revision 0)
+@@ -0,0 +1,51 @@
++package org.hibernate.ejb.test.cascade.circle;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++
++
++@Entity
++public class Tour {
++	
++	@Id @GeneratedValue
++//	@SequenceGenerator(name="TOUR_SEQ", sequenceName="TOUR_SEQ", initialValue=1, allocationSize=1)
++//	@GeneratedValue(strategy=GenerationType.SEQUENCE, generator="TOUR_SEQ")
++	private Long tourID;
++	
++	private String name;
++
++	/** A List of nodes contained in this tour. */
++	@OneToMany(targetEntity=Node.class, fetch=FetchType.LAZY, cascade={CascadeType.MERGE, CascadeType.REFRESH}, mappedBy="tour")
++	private List<Node> node = new ArrayList<Node>(0);
++
++	public String getName() {
++		return name;
++	}
++
++	protected void setTourID(Long tourID) {
++		this.tourID = tourID;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public List<Node> getNode() {
++		return node;
++	}
++
++	public void setNode(List<Node> node) {
++		this.node = node;
++	}
++
++	public Long getTourID() {
++		return tourID;
++	}
++}
+Index: U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Transport.java
+===================================================================
+--- U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Transport.java	(revision 0)
++++ U:/workspaces/atn-Standart/HibernateExt/entitymanager/src/test/org/hibernate/ejb/test/cascade/circle/Transport.java	(revision 0)
+@@ -0,0 +1,81 @@
++package org.hibernate.ejb.test.cascade.circle;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++import javax.persistence.Transient;
++
++
++@Entity
++public class Transport {
++	
++	@Id @GeneratedValue
++//	@SequenceGenerator(name="TRANSPORT_SEQ", sequenceName="TRANSPORT_SEQ", initialValue=1, allocationSize=1)
++//	@GeneratedValue(strategy=GenerationType.SEQUENCE, generator="TRANSPORT_SEQ")
++	private Long transportID;
++	
++	private String name;
++	
++	/** node value object at which the order is picked up */
++	@ManyToOne(optional=false, cascade={CascadeType.MERGE, CascadeType.PERSIST, CascadeType.REFRESH}, fetch=FetchType.EAGER)
++	private Node pickupNode = null;
++
++	/** node value object at which the order is delivered */
++	@ManyToOne(optional=false, cascade={CascadeType.MERGE, CascadeType.PERSIST, CascadeType.REFRESH}, fetch=FetchType.EAGER)
++	private Node deliveryNode = null;
++	
++	@Transient
++	private String transientField = "transport original value";
++
++	public Node getDeliveryNode() {
++		return deliveryNode;
++	}
++
++	public void setDeliveryNode(Node deliveryNode) {
++		this.deliveryNode = deliveryNode;
++	}
++
++	public Node getPickupNode() {
++		return pickupNode;
++	}
++
++	protected void setTransportID(Long transportID) {
++		this.transportID = transportID;
++	}
++
++	public void setPickupNode(Node pickupNode) {
++		this.pickupNode = pickupNode;
++	}
++
++	public Long getTransportID() {
++		return transportID;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++	
++	public String toString()
++	{
++		StringBuffer buffer = new StringBuffer();
++		
++		buffer.append(name + " id: " + transportID + "\n");
++		
++		return buffer.toString();
++	}
++
++	public String getTransientField() {
++		return transientField;
++	}
++
++	public void setTransientField(String transientField) {
++		this.transientField = transientField;
++	}
++}

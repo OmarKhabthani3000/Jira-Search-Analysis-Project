@@ -1,0 +1,1606 @@
+Index: test/org/hibernate/test/onetomany/formula/OneToManyFormulaTest.java
+===================================================================
+--- test/org/hibernate/test/onetomany/formula/OneToManyFormulaTest.java	(revision 0)
++++ test/org/hibernate/test/onetomany/formula/OneToManyFormulaTest.java	(revision 0)
+@@ -0,0 +1,217 @@
++package org.hibernate.test.onetomany.formula;
++
++import java.util.Iterator;
++import java.util.List;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++import org.hibernate.FetchMode;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.test.TestCase;
++
++
++
++public class OneToManyFormulaTest extends TestCase {
++
++	public OneToManyFormulaTest(String str) {
++		super(str);
++	}
++	
++	
++	public void testReadManyToOneFormula(){
++		
++		// populate
++		Person p = new Person();
++		p.setCompany("global company");
++		p.setName("Luc");
++		p.setAge(29);
++		
++		Car c1 = new Car();
++		c1.setCompany("global company");
++		c1.setRegistration("94568 GH 41");
++		c1.setColor("blue");
++		
++		Car c2 = new Car();
++		c2.setCompany("global company");
++		c2.setRegistration("6786 TY 47");
++		c2.setColor("red");
++
++		
++		p.getCars().add(c1);
++		p.getCars().add(c2);
++
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.persist(c1);
++		s.persist(c2);
++
++		s.persist(p);
++		t.commit();
++		s.close();
++		
++		
++		// read with criteria
++		s = openSession();
++		t = s.beginTransaction();
++
++		p = (Person)s.createCriteria(Person.class).uniqueResult();
++		assertNotNull(p);
++		assertEquals(2, p.getCars().size());
++		
++		// A blue and a red
++		boolean foundBlue = false;
++		boolean foundRed = false;
++		for(Iterator iteCar = p.getCars().iterator(); iteCar.hasNext();) {
++			Car carX = ( Car ) iteCar.next();
++			if("red".equals(carX.getColor())){
++				foundRed = true;
++			}
++			else if("blue".equals(carX.getColor())){
++				foundBlue = true;
++			}
++		}
++		
++		assertTrue("Car red not found",foundRed);
++		assertTrue("Car blue not found",foundBlue);
++	
++		t.commit();
++		s.close();
++		
++		// read with criteria and Join
++		s = openSession();
++		t = s.beginTransaction();
++
++		s.createCriteria(Person.class).setFetchMode("cars", FetchMode.JOIN).list();
++		
++		t.commit();
++		s.close();
++
++		
++		// read with HQL, join and condition
++		s = openSession();
++		t = s.beginTransaction();
++
++		List resultat = s.createQuery("FROM Person as p left join p.cars as c where c.color='blue'").list();
++		assertTrue(resultat.size() != 0);
++		
++		t.commit();
++		s.close();
++
++		
++		s = openSession();
++		t = s.beginTransaction();
++		s.createQuery("delete from Car").executeUpdate();
++		s.createQuery("delete from Person").executeUpdate();		
++		t.commit();
++		s.close();
++		
++	}
++	
++	public void testUpdateManyToOneFormula(){
++		
++		// populate
++		Person p = new Person();
++		p.setCompany("global company");
++		p.setName("Marc");
++		p.setAge(29);
++		
++		Car c = new Car();
++		c.setCompany("global company");
++		c.setRegistration("JUYE LP 14");
++		c.setColor("green");
++		
++		p.getCars().add(c);
++
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.persist(c);
++		s.persist(p);
++		t.commit();
++		s.close();
++		
++
++		// Add a car
++		s = openSession();
++		t = s.beginTransaction();
++
++		p = (Person)s.createQuery("FROM Person WHERE name='Marc'").uniqueResult();
++		assertNotNull(p);
++		assertEquals(1, p.getCars().size());
++		
++		Car c2 = new Car();
++		c2.setCompany("global company");
++		c2.setRegistration("KIO SO 89");
++		c2.setColor("black");
++		
++		s.persist(c2);
++		p.getCars().add(c2);
++		
++		t.commit();
++		s.close();
++		
++		
++		// Remove a car
++		s = openSession();
++		t = s.beginTransaction();
++
++		p = (Person)s.createQuery("FROM Person WHERE name='Marc'").uniqueResult();
++		assertNotNull(p);
++		assertEquals(2, p.getCars().size());
++		c2 = null;
++		for(Iterator iteCar = p.getCars().iterator(); iteCar.hasNext();) {
++			Car carX = ( Car ) iteCar.next();
++			if("KIO SO 89".equals(carX.getRegistration())){
++				c2 = carX;
++			}
++		}
++		assertNotNull("c2 not found in collection",c2);
++		
++		p.getCars().remove(c2);
++		s.delete(c2);
++		
++
++		t.commit();
++		s.close();
++		
++
++		// Check
++		s = openSession();
++		t = s.beginTransaction();
++
++		p = (Person)s.createQuery("FROM Person WHERE name='Marc'").uniqueResult();
++		assertNotNull(p);
++		assertEquals(1, p.getCars().size());
++		
++		t.commit();
++		s.close();
++		
++		
++		s = openSession();
++		t = s.beginTransaction();
++		s.createQuery("delete from Car").executeUpdate();
++		s.createQuery("delete from Person").executeUpdate();		
++		t.commit();
++		s.close();
++		
++	}
++	
++	protected void configure(Configuration cfg) {
++		cfg.setProperty(Environment.USE_SECOND_LEVEL_CACHE, "false");
++		cfg.setProperty(Environment.GENERATE_STATISTICS, "true");
++		cfg.setProperty(Environment.DEFAULT_BATCH_FETCH_SIZE, "2");
++	}
++	
++	protected String[] getMappings() {
++		return new String[] { "onetomany/formula/Person.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite(OneToManyFormulaTest.class);
++	}
++}
+Index: test/org/hibernate/test/onetomany/formula/Car.java
+===================================================================
+--- test/org/hibernate/test/onetomany/formula/Car.java	(revision 0)
++++ test/org/hibernate/test/onetomany/formula/Car.java	(revision 0)
+@@ -0,0 +1,41 @@
++package org.hibernate.test.onetomany.formula;
++
++import java.io.Serializable;
++
++public class Car implements Serializable{
++	
++	// composite id
++	private String company;
++	private String registration;
++
++	private String color;
++	
++	public String getCompany() {
++		return company;
++	}
++	public void setCompany(String company) {
++		this.company = company;
++	}
++	public String getRegistration() {
++		return registration;
++	}
++	public void setRegistration(String registration) {
++		this.registration = registration;
++	}
++	public String getColor() {
++		return color;
++	}
++	public void setColor(String color) {
++		this.color = color;
++	}
++	public boolean equals(Object that) {
++		if ( !(that instanceof Car) ) return false;
++		Car car = (Car) that;
++		return car.getCompany().equals(company) && 
++		car.getRegistration().equals( registration );
++	}
++	
++	public int hashCode() {
++		return (registration + company).hashCode();
++	}
++}
+Index: test/org/hibernate/test/onetomany/formula/Person.java
+===================================================================
+--- test/org/hibernate/test/onetomany/formula/Person.java	(revision 0)
++++ test/org/hibernate/test/onetomany/formula/Person.java	(revision 0)
+@@ -0,0 +1,51 @@
++package org.hibernate.test.onetomany.formula;
++
++import java.io.Serializable;
++import java.util.HashSet;
++import java.util.Set;
++
++public class Person implements Serializable{
++	
++	// Composite Id
++	private String company;
++	private String name;
++	private Set cars = new HashSet();
++	
++	private int age;
++	public int getAge() {
++		return age;
++	}
++	public void setAge(int age) {
++		this.age = age;
++	}
++	public String getCompany() {
++		return company;
++	}
++	public void setCompany(String company) {
++		this.company = company;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	
++	public Set getCars() {
++		return cars;
++	}
++	public void setCars(Set cars) {
++		this.cars = cars;
++	}
++	public boolean equals(Object that) {
++		if ( !(that instanceof Person) ) return false;
++		Person person = (Person) that;
++		return person.getCompany().equals(company) && 
++		person.getName().equals( name );
++	}
++	
++	public int hashCode() {
++		return (name + company).hashCode();
++	}
++}
+Index: test/org/hibernate/test/onetomany/formula/Person.hbm.xml
+===================================================================
+--- test/org/hibernate/test/onetomany/formula/Person.hbm.xml	(revision 0)
++++ test/org/hibernate/test/onetomany/formula/Person.hbm.xml	(revision 0)
+@@ -0,0 +1,35 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.test.onetomany.formula">
++
++	<class name="Person">
++        <composite-id>
++			<key-property name="company"/>
++			<key-property name="name"/>
++		</composite-id>
++
++		<property name="age"/>
++		
++		<set name="cars">
++			<key>
++				<formula>company</formula>
++				<column name="FK_PERSON"/>
++			</key>
++			<one-to-many class="Car"/>
++		</set>
++	</class>
++	
++	<class name="Car">
++        <composite-id>
++			<key-property name="company"/>
++			<key-property name="registration"/>
++		</composite-id>
++		<property name="color"/>
++	</class>
++
++
++</hibernate-mapping>
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+--- test/org/hibernate/test/AllTests.java	(revision 10491)
++++ test/org/hibernate/test/AllTests.java	(working copy)
+@@ -91,6 +91,8 @@
+ import org.hibernate.test.naturalid.NaturalIdTest;
+ import org.hibernate.test.ondelete.OnDeleteTest;
+ import org.hibernate.test.onetomany.OneToManyTest;
++import org.hibernate.test.onetomany.formula.OneToManyFormulaTest;
++import org.hibernate.test.onetoone.bidirectionnalformula.OneToOneBidirectionalFormulaTest;
+ import org.hibernate.test.onetoone.joined.OneToOneTest;
+ import org.hibernate.test.onetooneformula.OneToOneFormulaTest;
+ import org.hibernate.test.ops.CreateTest;
+@@ -209,9 +211,11 @@
+ 			suite.addTest( org.hibernate.test.unionsubclass2.UnionSubclassTest.suite() );
+ 			suite.addTest( MixedTest.suite() );
+ 			suite.addTest( OneToManyTest.suite() );
++			suite.addTest( OneToManyFormulaTest.suite() );
+ 			suite.addTest( ManyToManyTest.suite() );
+ 			suite.addTest( OneToOneFormulaTest.suite() );
+ 			suite.addTest( OneToOneTest.suite() );
++			suite.addTest( OneToOneBidirectionalFormulaTest.suite() );
+ 			suite.addTest( org.hibernate.test.onetoone.singletable.OneToOneTest.suite() );
+ 			suite.addTest( org.hibernate.test.onetoonelink.OneToOneTest.suite() );
+ 			suite.addTest( OptimisticLockTest.suite() );
+Index: test/org/hibernate/test/onetoone/bidirectionnalformula/Car.java
+===================================================================
+--- test/org/hibernate/test/onetoone/bidirectionnalformula/Car.java	(revision 0)
++++ test/org/hibernate/test/onetoone/bidirectionnalformula/Car.java	(revision 0)
+@@ -0,0 +1,48 @@
++package org.hibernate.test.onetoone.bidirectionnalformula;
++
++import java.io.Serializable;
++
++public class Car implements Serializable{
++	
++	// composite id
++	private String company;
++	private String registration;
++	
++	
++	private String color;
++	private Person person;
++	public String getCompany() {
++		return company;
++	}
++	public void setCompany(String company) {
++		this.company = company;
++	}
++	public String getRegistration() {
++		return registration;
++	}
++	public void setRegistration(String registration) {
++		this.registration = registration;
++	}
++	public Person getPerson() {
++		return person;
++	}
++	public void setPerson(Person person) {
++		this.person = person;
++	}
++	public String getColor() {
++		return color;
++	}
++	public void setColor(String color) {
++		this.color = color;
++	}
++	public boolean equals(Object that) {
++		if ( !(that instanceof Car) ) return false;
++		Car car = (Car) that;
++		return car.getCompany().equals(company) && 
++		car.getRegistration().equals( registration );
++	}
++	
++	public int hashCode() {
++		return (registration + company).hashCode();
++	}
++}
+Index: test/org/hibernate/test/onetoone/bidirectionnalformula/OneToOneBidirectionalFormulaTest.java
+===================================================================
+--- test/org/hibernate/test/onetoone/bidirectionnalformula/OneToOneBidirectionalFormulaTest.java	(revision 0)
++++ test/org/hibernate/test/onetoone/bidirectionnalformula/OneToOneBidirectionalFormulaTest.java	(revision 0)
+@@ -0,0 +1,167 @@
++package org.hibernate.test.onetoone.bidirectionnalformula;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++import org.hibernate.FetchMode;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.test.TestCase;
++
++
++
++public class OneToOneBidirectionalFormulaTest extends TestCase {
++
++	public OneToOneBidirectionalFormulaTest(String str) {
++		super(str);
++	}
++	
++	
++	public void testReadOneToOneBidirectionalFormula(){
++		
++		// populate
++		Person p = new Person();
++		p.setCompany("global company");
++		p.setName("Luc Sky");
++		p.setAge(29);
++		
++		Car c = new Car();
++		c.setCompany("global company");
++		c.setRegistration("94568 GH 41");
++		c.setColor("blue");
++		
++		p.setCar(c);
++		c.setPerson(p);
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.persist(c);
++		s.persist(p);
++		t.commit();
++		s.close();
++		
++		
++		// read with criteria
++		s = openSession();
++		t = s.beginTransaction();
++
++		c = (Car)s.createCriteria(Car.class).uniqueResult();
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		t.commit();
++		s.close();
++		
++		// read with criteria and Join
++		s = openSession();
++		t = s.beginTransaction();
++
++		c = (Car)s.createCriteria(Car.class).setFetchMode("person", FetchMode.JOIN).uniqueResult();
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		t.commit();
++		s.close();
++
++		
++		// read with HQL and join
++		s = openSession();
++		t = s.beginTransaction();
++
++		c = (Car)s.createQuery("FROM Car as c left join fetch c.person where color='blue'").uniqueResult();
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		t.commit();
++		s.close();
++
++		s = openSession();
++		t = s.beginTransaction();
++		s.createQuery("delete from Person").executeUpdate();
++		s.createQuery("delete from Car").executeUpdate();		
++		t.commit();
++		s.close();
++		
++	}
++	
++	public void testUpdateOneToOneBidirectionalFormula(){
++		
++		// populate
++		Person p = new Person();
++		p.setCompany("global company");
++		p.setName("Obiuan Keno");
++		p.setAge(29);
++		
++		Car c = new Car();
++		c.setCompany("global company");
++		c.setRegistration("RTHGF GH 45");
++		c.setColor("red");
++		
++		p.setCar(c);
++		c.setPerson(p);
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.persist(c);
++		s.persist(p);
++		t.commit();
++		s.close();
++		
++
++		// link person -> car to null
++		s = openSession();
++		t = s.beginTransaction();
++
++		c = (Car)s.createQuery("FROM Car WHERE color='red'").uniqueResult();
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		assertNotNull(c);
++		p= c.getPerson();
++		assertNotNull(p);
++		assertEquals(29, p.getAge());
++		
++		p.setCar(null);
++		s.delete(c);
++		
++		t.commit();
++		s.close();
++		
++		s = openSession();
++		t = s.beginTransaction();
++		s.createQuery("delete from Person").executeUpdate();
++		s.createQuery("delete from Car").executeUpdate();		
++		t.commit();
++		s.close();
++		
++	}
++	
++	protected void configure(Configuration cfg) {
++		cfg.setProperty(Environment.USE_SECOND_LEVEL_CACHE, "false");
++		cfg.setProperty(Environment.GENERATE_STATISTICS, "true");
++		cfg.setProperty(Environment.DEFAULT_BATCH_FETCH_SIZE, "2");
++	}
++	
++	protected String[] getMappings() {
++		return new String[] { "onetoone/bidirectionnalformula/Person.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite(OneToOneBidirectionalFormulaTest.class);
++	}
++}
+Index: test/org/hibernate/test/onetoone/bidirectionnalformula/Person.java
+===================================================================
+--- test/org/hibernate/test/onetoone/bidirectionnalformula/Person.java	(revision 0)
++++ test/org/hibernate/test/onetoone/bidirectionnalformula/Person.java	(revision 0)
+@@ -0,0 +1,49 @@
++package org.hibernate.test.onetoone.bidirectionnalformula;
++
++import java.io.Serializable;
++
++public class Person implements Serializable{
++	
++	// Composite Id
++	private String company;
++	private String name;
++	
++	
++	private Car car;
++	private int age;
++	public int getAge() {
++		return age;
++	}
++	public void setAge(int age) {
++		this.age = age;
++	}
++	public String getCompany() {
++		return company;
++	}
++	public void setCompany(String company) {
++		this.company = company;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++	public Car getCar() {
++		return car;
++	}
++	public void setCar(Car car) {
++		this.car = car;
++	}
++	
++	public boolean equals(Object that) {
++		if ( !(that instanceof Person) ) return false;
++		Person person = (Person) that;
++		return person.getCompany().equals(company) && 
++		person.getName().equals( name );
++	}
++	
++	public int hashCode() {
++		return (name + company).hashCode();
++	}
++}
+Index: test/org/hibernate/test/onetoone/bidirectionnalformula/Person.hbm.xml
+===================================================================
+--- test/org/hibernate/test/onetoone/bidirectionnalformula/Person.hbm.xml	(revision 0)
++++ test/org/hibernate/test/onetoone/bidirectionnalformula/Person.hbm.xml	(revision 0)
+@@ -0,0 +1,34 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.test.onetoone.bidirectionnalformula">
++
++	<class name="Person">
++        <composite-id>
++			<key-property name="company" type="string" column="COMPANY"/>
++			<key-property name="name" type="string" column="NAME"/>
++		</composite-id>
++
++		<property name="age" type="int" column="AGE"/>
++		
++		<many-to-one name="car" class="Car" unique="true">
++			<formula>company</formula>
++			<column name="FK_CAR_REGISTRATION"/>
++		</many-to-one>
++	</class>
++	
++	<class name="Car">
++        <composite-id>
++			<key-property name="company" type="string" column="COMPANY"/>
++			<key-property name="registration" type="string" column="REGISTRATION"/>
++		</composite-id>
++
++		<property name="color" type="string" column="COLOR"/>
++		<one-to-one name="person" class="Person" property-ref="car"/>
++	</class>
++
++
++</hibernate-mapping>
+Index: src/org/hibernate/criterion/AbstractEmptinessExpression.java
+===================================================================
+--- src/org/hibernate/criterion/AbstractEmptinessExpression.java	(revision 10491)
++++ src/org/hibernate/criterion/AbstractEmptinessExpression.java	(working copy)
+@@ -43,9 +43,9 @@
+ 		String[] ownerKeys = ( ( Loadable ) factory.getEntityPersister( entityName ) ).getIdentifierColumnNames();
+ 
+ 		String innerSelect = "(select 1 from " + collectionPersister.getTableName()
+-		        + " where "
+-		        + new ConditionFragment().setTableAlias( sqlAlias ).setCondition( ownerKeys, collectionKeys ).toFragmentString()
+-		        + ")";
++        	+ " where "
++        	+ new ConditionFragment().setTableAlias( sqlAlias ).setCondition( ownerKeys, collectionKeys,null ).toFragmentString()
++        	+ ")";
+ 
+ 		return excludeEmpty()
+ 		        ? "exists " + innerSelect
+Index: src/org/hibernate/criterion/SizeExpression.java
+===================================================================
+--- src/org/hibernate/criterion/SizeExpression.java	(revision 10491)
++++ src/org/hibernate/criterion/SizeExpression.java	(working copy)
+@@ -47,9 +47,9 @@
+ 				//" collection_ where " +
+ 				" where " +
+ 				new ConditionFragment()
+-						.setTableAlias( criteriaQuery.getSQLAlias(criteria, propertyName) )
+-						.setCondition(pk, fk)
+-						.toFragmentString() +
++					.setTableAlias( criteriaQuery.getSQLAlias(criteria, propertyName) )
++					.setCondition(pk, fk,null)
++					.toFragmentString() +
+ 				")";
+ 	}
+ 
+Index: src/org/hibernate/sql/OracleJoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/OracleJoinFragment.java	(revision 10491)
++++ src/org/hibernate/sql/OracleJoinFragment.java	(working copy)
+@@ -4,6 +4,8 @@
+ import java.util.HashSet;
+ import java.util.Set;
+ 
++import org.hibernate.util.StringHelper;
++
+ /**
+  * An Oracle-style (theta) join
+  *
+@@ -14,7 +16,7 @@
+ 	private StringBuffer afterFrom = new StringBuffer();
+ 	private StringBuffer afterWhere = new StringBuffer();
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType) {
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType) {
+ 
+ 		addCrossJoin( tableName, alias );
+ 
+@@ -23,10 +25,17 @@
+ 			afterWhere.append( " and " )
+ 					.append( fkColumns[j] );
+ 			if ( joinType == RIGHT_OUTER_JOIN || joinType == FULL_JOIN ) afterWhere.append( "(+)" );
+-			afterWhere.append( '=' )
+-					.append( alias )
++			afterWhere.append( '=' );
++
++			if(pkFormulaTemplate!=null && pkFormulaTemplate[j]!=null){
++				afterWhere.append(StringHelper.replace( pkFormulaTemplate[j], Template.TEMPLATE, alias ));
++			}
++			else{
++				afterWhere.append( alias )
+ 					.append( '.' )
+ 					.append( pkColumns[j] );
++			}
++
+ 			if ( joinType == LEFT_OUTER_JOIN || joinType == FULL_JOIN ) afterWhere.append( "(+)" );
+ 		}
+ 
+@@ -81,9 +90,9 @@
+ 		afterFrom.append( fromFragmentString );
+ 	}
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType, String on) {
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on) {
+ 		//arbitrary on clause ignored!!
+-		addJoin( tableName, alias, fkColumns, pkColumns, joinType );
++		addJoin( tableName, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType );
+ 		if ( joinType == JoinFragment.INNER_JOIN ) {
+ 			addCondition( on );
+ 		}
+Index: src/org/hibernate/sql/QueryJoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/QueryJoinFragment.java	(revision 10491)
++++ src/org/hibernate/sql/QueryJoinFragment.java	(working copy)
+@@ -20,18 +20,18 @@
+ 		this.useThetaStyleInnerJoins = useThetaStyleInnerJoins;
+ 	}
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType) {
+-		addJoin( tableName, alias, alias, fkColumns, pkColumns, joinType, null );
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType) {
++		addJoin( tableName, alias, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType, null );
+ 	}
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType, String on) {
+-		addJoin( tableName, alias, alias, fkColumns, pkColumns, joinType, on );
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on) {
++		addJoin( tableName, alias, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType, on );
+ 	}
+ 
+-	private void addJoin(String tableName, String alias, String concreteAlias, String[] fkColumns, String[] pkColumns, int joinType, String on) {
++	private void addJoin(String tableName, String alias, String concreteAlias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on) {
+ 		if ( !useThetaStyleInnerJoins || joinType != INNER_JOIN ) {
+ 			JoinFragment jf = dialect.createOuterJoinFragment();
+-			jf.addJoin( tableName, alias, fkColumns, pkColumns, joinType, on );
++			jf.addJoin( tableName, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType, on );
+ 			addFragment( jf );
+ 		}
+ 		else {
+Index: src/org/hibernate/sql/ConditionFragment.java
+===================================================================
+--- src/org/hibernate/sql/ConditionFragment.java	(revision 10491)
++++ src/org/hibernate/sql/ConditionFragment.java	(working copy)
+@@ -2,6 +2,7 @@
+ package org.hibernate.sql;
+ 
+ import org.hibernate.util.ArrayHelper;
++import org.hibernate.util.StringHelper;
+ 
+ /**
+  * @author Gavin King
+@@ -11,7 +12,8 @@
+ 	private String[] lhs;
+ 	private String[] rhs;
+ 	private String op = "=";
+-
++	private String[] lhsFormulaTemplates;
++	
+ 	/**
+ 	 * Sets the op.
+ 	 * @param op The op to set
+@@ -30,26 +32,34 @@
+ 		return this;
+ 	}
+ 
+-	public ConditionFragment setCondition(String[] lhs, String[] rhs) {
++	public ConditionFragment setCondition(String[] lhs, String[] rhs, String[] lhsFormulaTemplates) {
+ 		this.lhs = lhs;
+ 		this.rhs = rhs;
++		this.lhsFormulaTemplates = lhsFormulaTemplates;
+ 		return this;
+ 	}
+ 
+-	public ConditionFragment setCondition(String[] lhs, String rhs) {
++	public ConditionFragment setCondition(String[] lhs, String rhs, String[] lhsFormulaTemplates) {
+ 		this.lhs = lhs;
+ 		this.rhs = ArrayHelper.fillArray(rhs, lhs.length);
++		this.lhsFormulaTemplates = lhsFormulaTemplates;
+ 		return this;
+ 	}
+ 
+ 	public String toFragmentString() {
+ 		StringBuffer buf = new StringBuffer( lhs.length * 10 );
+ 		for ( int i=0; i<lhs.length; i++ ) {
+-			buf.append(tableAlias)
++			if(lhsFormulaTemplates!=null && lhsFormulaTemplates[i]!=null){
++				// Use formula
++				buf.append(StringHelper.replace(lhsFormulaTemplates[i], Template.TEMPLATE, tableAlias));
++			}
++			else{
++				buf.append(tableAlias)
+ 				.append('.')
+-				.append( lhs[i] )
+-				.append(op)
+-				.append( rhs[i] );
++				.append( lhs[i] );
++			}
++
++			buf.append(op).append( rhs[i] );
+ 			if (i<lhs.length-1) buf.append(" and ");
+ 		}
+ 		return buf.toString();
+Index: src/org/hibernate/sql/JoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/JoinFragment.java	(revision 10491)
++++ src/org/hibernate/sql/JoinFragment.java	(working copy)
+@@ -10,9 +10,9 @@
+  */
+ public abstract class JoinFragment {
+ 
+-	public abstract void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType);
++	public abstract void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType);
+ 
+-	public abstract void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType, String on);
++	public abstract void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on);
+ 
+ 	public abstract void addCrossJoin(String tableName, String alias);
+ 
+Index: src/org/hibernate/sql/Sybase11JoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/Sybase11JoinFragment.java	(revision 10491)
++++ src/org/hibernate/sql/Sybase11JoinFragment.java	(working copy)
+@@ -1,7 +1,9 @@
+ //$Id$
+ package org.hibernate.sql;
+ 
++import org.hibernate.util.StringHelper;
+ 
++
+ /**
+  * An old Sybase-style join (before Sybase supported the ANSI style "inner join" etc syntax)
+  * This is needed for Sybase 11.9.2 and earlier, using the HQL 2.* syntax with Collections.
+@@ -13,7 +15,7 @@
+ 	private StringBuffer afterFrom = new StringBuffer();
+ 	private StringBuffer afterWhere = new StringBuffer();
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType) {
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType) {
+ 
+ 		addCrossJoin(tableName, alias);
+ 
+@@ -29,10 +31,16 @@
+ 			afterWhere.append('=');
+ 			if (joinType==RIGHT_OUTER_JOIN ) afterWhere.append("*");
+ 
+-			afterWhere.append (" ")
+-				.append(alias)
++			afterWhere.append (" ");
++			
++			if(pkFormulaTemplate!=null && pkFormulaTemplate[j]!=null){
++				afterWhere.append(StringHelper.replace( pkFormulaTemplate[j], Template.TEMPLATE, alias ));
++			}
++			else{
++				afterWhere.append(alias)
+ 				.append('.')
+ 				.append( pkColumns[j] );
++			}
+ 		}
+ 
+ 	}
+@@ -89,8 +97,8 @@
+ 	}
+ 
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType, String on) {
+-		addJoin(tableName, alias, fkColumns, pkColumns, joinType);
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on) {
++		addJoin(tableName, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType);
+ 		addCondition(on);
+ 	}
+ }
+Index: src/org/hibernate/sql/ANSIJoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/ANSIJoinFragment.java	(revision 10491)
++++ src/org/hibernate/sql/ANSIJoinFragment.java	(working copy)
+@@ -2,6 +2,7 @@
+ package org.hibernate.sql;
+ 
+ import org.hibernate.AssertionFailure;
++import org.hibernate.util.StringHelper;
+ 
+ /**
+  * An ANSI-style join
+@@ -13,11 +14,11 @@
+ 	private StringBuffer buffer = new StringBuffer();
+ 	private StringBuffer conditions = new StringBuffer();
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType) {
+-		addJoin(tableName, alias, fkColumns, pkColumns, joinType, null);
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType) {
++		addJoin(tableName, alias, fkColumns, pkColumns, pkFormulaTemplate, joinType, null);
+ 	}
+ 
+-	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, int joinType, String on) {
++	public void addJoin(String tableName, String alias, String[] fkColumns, String[] pkColumns, String[] pkFormulaTemplate, int joinType, String on) {
+ 		String joinString;
+ 		switch (joinType) {
+ 			case INNER_JOIN:
+@@ -48,10 +49,16 @@
+ 				throw new AssertionFailure("missing alias");
+ 			}*/
+ 			buffer.append( fkColumns[j] )
+-				.append('=')
+-				.append(alias)
++			.append('=');
++			
++			if(pkFormulaTemplate!=null && pkFormulaTemplate[j]!=null ){
++				buffer.append(StringHelper.replace( pkFormulaTemplate[j], Template.TEMPLATE, alias ));
++			}
++			else{
++				buffer.append(alias)
+ 				.append('.')
+ 				.append( pkColumns[j] );
++			}
+ 			if ( j<fkColumns.length-1 ) buffer.append(" and ");
+ 		}
+ 
+Index: src/org/hibernate/engine/JoinHelper.java
+===================================================================
+--- src/org/hibernate/engine/JoinHelper.java	(revision 10491)
++++ src/org/hibernate/engine/JoinHelper.java	(working copy)
+@@ -154,4 +154,19 @@
+ 			return ( (OuterJoinLoadable) joinable ).getPropertyColumnNames(uniqueKeyPropertyName);
+ 		}
+ 	}
++	
++	/**
++	 * Get formula templates of the associated table which are to 
++	 * be used in the join
++	 */
++	public static String[] getRHSFormulaTemplates(AssociationType type, SessionFactoryImplementor factory) {
++		String uniqueKeyPropertyName = type.getRHSUniqueKeyPropertyName();
++		Joinable joinable = type.getAssociatedJoinable(factory);
++		if (uniqueKeyPropertyName==null) {
++			return joinable.getKeyFomulaTemplates();
++		}
++		else {
++			return ( (OuterJoinLoadable) joinable ).getPropertyFormulaTemplates(uniqueKeyPropertyName);
++		}
++	}
+ }
+Index: src/org/hibernate/engine/JoinSequence.java
+===================================================================
+--- src/org/hibernate/engine/JoinSequence.java	(revision 10491)
++++ src/org/hibernate/engine/JoinSequence.java	(working copy)
+@@ -179,6 +179,7 @@
+ 					join.getAlias(),
+ 					join.getLHSColumns(),
+ 					JoinHelper.getRHSColumnNames( join.getAssociationType(), factory ),
++					JoinHelper.getRHSFormulaTemplates( join.getAssociationType(), factory ),
+ 					join.joinType,
+ 					condition
+ 			);
+Index: src/org/hibernate/hibernate-mapping-3.0.dtd
+===================================================================
+--- src/org/hibernate/hibernate-mapping-3.0.dtd	(revision 10491)
++++ src/org/hibernate/hibernate-mapping-3.0.dtd	(working copy)
+@@ -792,7 +792,7 @@
+ 	
+ <!-- Declares the column name of a foreign key. -->
+ 
+-<!ELEMENT key (column*)>
++<!ELEMENT key ((column|formula)*)>
+ 	<!ATTLIST key column CDATA #IMPLIED>
+ 	<!ATTLIST key property-ref CDATA #IMPLIED>
+ 	<!ATTLIST key foreign-key CDATA #IMPLIED>
+Index: src/org/hibernate/persister/collection/AbstractCollectionPersister.java
+===================================================================
+--- src/org/hibernate/persister/collection/AbstractCollectionPersister.java	(revision 10491)
++++ src/org/hibernate/persister/collection/AbstractCollectionPersister.java	(working copy)
+@@ -112,6 +112,9 @@
+ 
+ 	//columns
+ 	protected final String[] keyColumnNames;
++	protected final String[] keyFormulaTemplates;
++	protected final String[] keyFormulas;
++	protected final boolean[] keyColumnIsSettable;
+ 	protected final String[] indexColumnNames;
+ 	protected final String[] indexFormulaTemplates;
+ 	protected final String[] indexFormulas;
+@@ -272,15 +275,35 @@
+ 		int keySpan = collection.getKey().getColumnSpan();
+ 		keyColumnNames = new String[keySpan];
+ 		keyColumnAliases = new String[keySpan];
++		keyFormulaTemplates = new String[keySpan];
++		keyFormulas = new String[keySpan];
++		keyColumnIsSettable = new boolean[keySpan];;
++		int nbCol = 0;
+ 		int k = 0;
+ 		while ( iter.hasNext() ) {
+ 			// NativeSQL: collect key column and auto-aliases
+-			Column col = ( (Column) iter.next() );
+-			keyColumnNames[k] = col.getQuotedName(dialect);
+-			keyColumnAliases[k] = col.getAlias(dialect);
++			Selectable sel = ( (Selectable) iter.next() );
++			keyColumnAliases[k] = sel.getAlias(dialect);
++			if(sel.isFormula()){
++				Formula form = (Formula) sel;
++				keyFormulaTemplates[k] = form.getTemplate(dialect, factory.getSqlFunctionRegistry());
++				keyFormulas[k] = form.getFormula();
++				keyColumnNames[k] = form.getFormula();
++				keyColumnIsSettable[k] = false;
++			}
++			else{
++				Column col = (Column) sel;
++				keyColumnNames[k] = col.getQuotedName(dialect);
++				keyColumnIsSettable[k] = true;
++				nbCol++;
++			}
+ 			k++;
+ 		}
+ 		
++		if(k>0 && nbCol==0){
++			throw new MappingException("You must have at least a column (not only formula). ");
++		}
++		
+ 		//unquotedKeyColumnNames = StringHelper.unQuote(keyColumnAliases);
+ 
+ 		//ELEMENT
+@@ -912,9 +935,16 @@
+ 	}
+ 
+ 	protected SelectFragment generateSelectFragment(String alias, String columnSuffix) {
+-		return new SelectFragment()
+-				.setSuffix( columnSuffix )
+-				.addColumns( alias, keyColumnNames, keyColumnAliases );
++		SelectFragment frag = new SelectFragment().setSuffix( columnSuffix );
++		for ( int i=0; i<keyColumnIsSettable.length; i++ ) {
++			if ( keyColumnIsSettable[i] ) {
++				frag.addColumn( alias, keyColumnNames[i], keyColumnAliases[i] );
++			}
++			else {
++				frag.addFormula( alias, keyFormulaTemplates[i], keyColumnAliases[i] );
++			}
++		}
++		return frag;
+ 	}
+ 
+ 	protected void appendElementColumns(SelectFragment frag, String elemAlias) {
+@@ -1133,7 +1163,7 @@
+ 								offset+= expectation.prepare( st );
+ 
+ 								//TODO: copy/paste from insertRows()
+-								int loc = writeKey( st, id, offset, session );
++								int loc = writeKeySettable( st, id, offset, session );
+ 								if ( hasIdentifier ) {
+ 									loc = writeIdentifier( st, collection.getIdentifier(entry, i), loc, session );
+ 								}
+@@ -1354,7 +1384,7 @@
+ 						try {
+ 							offset += expectation.prepare( st );
+ 							//TODO: copy/paste from recreate()
+-							offset = writeKey( st, id, offset, session );
++							offset = writeKeySettable( st, id, offset, session );
+ 							if ( hasIdentifier ) {
+ 								offset = writeIdentifier( st, collection.getIdentifier(entry, i), offset, session );
+ 							}
+@@ -1782,4 +1812,24 @@
+ 	protected Dialect getDialect() {
+ 		return dialect;
+ 	}
++	
++	/**
++	 * Write only the settable element of the key to a JDBC <tt>PreparedStatement</tt>
++	 */
++	protected int writeKeySettable(PreparedStatement st, Serializable key, int i, SessionImplementor session)
++			throws HibernateException, SQLException {
++		
++		if ( key == null ) {
++			throw new NullPointerException( "null key for collection: " + role );  //an assertion
++		}
++		getKeyType().nullSafeSet( st, key, i, keyColumnIsSettable, session );
++		return i + ArrayHelper.countTrue(keyColumnIsSettable);
++	}
++	
++	/**
++	 * Interface Joinable
++	 */
++	public String[] getKeyFomulaTemplates() {
++		return keyFormulaTemplates;
++	}
+ }
+Index: src/org/hibernate/persister/collection/OneToManyPersister.java
+===================================================================
+--- src/org/hibernate/persister/collection/OneToManyPersister.java	(revision 10491)
++++ src/org/hibernate/persister/collection/OneToManyPersister.java	(working copy)
+@@ -71,8 +71,13 @@
+ 		
+ 		Update update = new Update( getDialect() )
+ 				.setTableName( qualifiedTableName )
+-				.addColumns( keyColumnNames, "null" )
+ 				.setPrimaryKeyColumnNames( keyColumnNames );
++	
++		for( int i=0 ; i<keyColumnNames.length ; i++ ){
++			if(keyColumnIsSettable[i]){
++				update.addColumn(keyColumnNames[i], "null");
++			}
++		}
+ 		
+ 		if ( hasIndex && !indexContainsFormula ) update.addColumns( indexColumnNames, "null" );
+ 		
+@@ -92,7 +97,7 @@
+ 		
+ 		Update update = new Update( getDialect() )
+ 				.setTableName( qualifiedTableName )
+-				.addColumns( keyColumnNames );
++				.addColumns( keyColumnNames, keyColumnIsSettable );
+ 		
+ 		if ( hasIndex && !indexContainsFormula ) update.addColumns( indexColumnNames );
+ 		
+@@ -119,9 +124,14 @@
+ 	protected String generateDeleteRowString() {
+ 		
+ 		Update update = new Update( getDialect() )
+-				.setTableName( qualifiedTableName )
+-				.addColumns( keyColumnNames, "null" );
+-		
++				.setTableName( qualifiedTableName );
++	
++		for( int i=0 ; i<keyColumnNames.length ; i++ ){
++			if(keyColumnIsSettable[i]){
++				update.addColumn(keyColumnNames[i], "null");
++			}
++		}
++
+ 		if ( hasIndex && !indexContainsFormula ) update.addColumns( indexColumnNames, "null" );
+ 		
+ 		if ( getFactory().getSettings().isCommentsEnabled() ) {
+Index: src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 10491)
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -1314,6 +1314,10 @@
+ 		return propertyMapping.getColumnNames( propertyName );
+ 	}
+ 
++	public String[] getPropertyFormulaTemplates(String propertyName) {
++		return propertyMapping.getFormulaTemplates( propertyName );
++	}
++	
+ 	/**
+ 	 * Warning:
+ 	 * When there are duplicated property names in the subclasses
+@@ -1387,6 +1391,10 @@
+ 		return propertyColumnNames[i];
+ 	}
+ 
++	public String[] getPropertyFormulaTemplates(int i) {
++		return propertyColumnFormulaTemplates[i];
++	}
++
+ 	protected int getPropertyColumnSpan(int i) {
+ 		return propertyColumnSpans[i];
+ 	}
+@@ -1594,6 +1602,7 @@
+ 			return createUniqueKeyLoader(
+ 					propertyMapping.toType(propertyName),
+ 					propertyMapping.toColumns(propertyName),
++					propertyMapping.getFormulaTemplates(propertyName),
+ 					enabledFilters
+ 				);
+ 		}
+@@ -1614,6 +1623,7 @@
+ 						createUniqueKeyLoader(
+ 								propertyTypes[i],
+ 								getPropertyColumnNames( i ),
++								getPropertyFormulaTemplates( i ),
+ 								CollectionHelper.EMPTY_MAP
+ 							)
+ 					);
+@@ -1622,13 +1632,13 @@
+ 		}
+ 	}
+ 
+-	private EntityLoader createUniqueKeyLoader(Type uniqueKeyType, String[] columns, Map enabledFilters) {
++	private EntityLoader createUniqueKeyLoader(Type uniqueKeyType, String[] columns, String[] formulaTemplates, Map enabledFilters) {
+ 		if ( uniqueKeyType.isEntityType() ) {
+ 			String className = ( ( EntityType ) uniqueKeyType ).getAssociatedEntityName();
+ 			uniqueKeyType = getFactory().getEntityPersister( className ).getIdentifierType();
+ 		}
+ 
+-		return new EntityLoader( this, columns, uniqueKeyType, 1, LockMode.NONE, getFactory(), enabledFilters );
++		return new EntityLoader( this, columns, formulaTemplates, uniqueKeyType, 1, LockMode.NONE, getFactory(), enabledFilters );
+ 	}
+ 
+ 	protected String getSQLWhereString(String alias) {
+@@ -2747,6 +2757,7 @@
+ 						generateTableAlias( name, j ),
+ 						idCols,
+ 						getSubclassTableKeyColumns( j ),
++						null,
+ 						innerJoin && isClassOrSuperclassTable( j ) && !isInverseTable( j ) && !isNullableTable( j ) ?
+ 						JoinFragment.INNER_JOIN : //we can inner join to superclass tables (the row MUST be there)
+ 						JoinFragment.LEFT_OUTER_JOIN //we can never inner join to subclass tables
+@@ -2765,6 +2776,7 @@
+ 					generateTableAlias( getRootAlias(), j ),
+ 					keyCols,
+ 					getSubclassTableKeyColumns( j ),
++					null,
+ 					isInverseSubclassTable( j ) || isNullableSubclassTable( j ) ?
+ 					JoinFragment.LEFT_OUTER_JOIN :
+ 					JoinFragment.INNER_JOIN );
+Index: src/org/hibernate/persister/entity/OuterJoinLoadable.java
+===================================================================
+--- src/org/hibernate/persister/entity/OuterJoinLoadable.java	(revision 10491)
++++ src/org/hibernate/persister/entity/OuterJoinLoadable.java	(working copy)
+@@ -84,7 +84,12 @@
+ 	 * Get the table name for the given property path
+ 	 */
+ 	public String getPropertyTableName(String propertyName);
+-	
++
++	/** 
++	 * Get formula Templates for the given property path
++	 */
++	public String[] getPropertyFormulaTemplates(String propertyName);
++
+ 	public EntityType getEntityType();
+ 
+ }
+Index: src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(revision 10491)
++++ src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(working copy)
+@@ -575,4 +575,8 @@
+ 	public String getRootTableName() {
+ 		return naturalOrderTableNames[0];
+ 	}
++
++	public String[] getKeyFomulaTemplates() {
++		return null;
++	}
+ }
+Index: src/org/hibernate/persister/entity/Joinable.java
+===================================================================
+--- src/org/hibernate/persister/entity/Joinable.java	(revision 10491)
++++ src/org/hibernate/persister/entity/Joinable.java	(working copy)
+@@ -43,6 +43,10 @@
+ 	 */
+ 	public String[] getKeyColumnNames();
+ 	/**
++	 * Get formula templates to join on
++	 */
++	public String[] getKeyFomulaTemplates();
++	/**
+ 	 * Get the where clause filter, given a query alias and considering enabled session filters
+ 	 */
+ 	public String filterFragment(String alias, Map enabledFilters) throws MappingException;
+Index: src/org/hibernate/persister/entity/AbstractPropertyMapping.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractPropertyMapping.java	(revision 10491)
++++ src/org/hibernate/persister/entity/AbstractPropertyMapping.java	(working copy)
+@@ -218,5 +218,8 @@
+ 			return StringHelper.qualify(path, property);
+ 		}
+ 	}
+-
++	
++	public String[] getFormulaTemplates(String propertyName) {
++		return (String[])formulaTemplatesByPropertyPath.get(propertyName);
++	}
+ }
+Index: src/org/hibernate/persister/entity/UnionSubclassEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/UnionSubclassEntityPersister.java	(revision 10491)
++++ src/org/hibernate/persister/entity/UnionSubclassEntityPersister.java	(working copy)
+@@ -457,4 +457,8 @@
+ 	public String[][] getContraintOrderedTableKeyColumnClosure() {
+ 		return constraintOrderedKeyColumnNames;
+ 	}
++
++	public String[] getKeyFomulaTemplates() {
++		return null;
++	}
+ }
+Index: src/org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 10491)
++++ src/org/hibernate/persister/entity/SingleTableEntityPersister.java	(working copy)
+@@ -711,4 +711,8 @@
+ 	public String[][] getContraintOrderedTableKeyColumnClosure() {
+ 		return constraintOrderedKeyColumnNames;
+ 	}
++	
++	public String[] getKeyFomulaTemplates() {
++		return null;
++	}
+ }
+Index: src/org/hibernate/loader/OuterJoinableAssociation.java
+===================================================================
+--- src/org/hibernate/loader/OuterJoinableAssociation.java	(revision 10491)
++++ src/org/hibernate/loader/OuterJoinableAssociation.java	(working copy)
+@@ -20,6 +20,7 @@
+ 	private final String[] lhsColumns; // belong to other persister
+ 	private final String rhsAlias;
+ 	private final String[] rhsColumns;
++	private final String[] rhsFormulaTemplates;
+ 	private final int joinType;
+ 	private final String on;
+ 	private final Map enabledFilters;
+@@ -40,6 +41,7 @@
+ 		this.joinType = joinType;
+ 		this.joinable = joinableType.getAssociatedJoinable(factory);
+ 		this.rhsColumns = JoinHelper.getRHSColumnNames(joinableType, factory);
++		this.rhsFormulaTemplates = JoinHelper.getRHSFormulaTemplates(joinableType, factory);
+ 		this.on = joinableType.getOnCondition(rhsAlias, factory, enabledFilters);
+ 		this.enabledFilters = enabledFilters; // needed later for many-to-many/filter application
+ 	}
+@@ -106,12 +108,13 @@
+ 
+ 	public void addJoins(JoinFragment outerjoin) throws MappingException {
+ 		outerjoin.addJoin(
+-			joinable.getTableName(),
+-			rhsAlias,
+-			lhsColumns,
+-			rhsColumns,
+-			joinType,
+-			on
++				joinable.getTableName(),
++				rhsAlias,
++				lhsColumns,
++				rhsColumns,
++				rhsFormulaTemplates,
++				joinType,
++				on
+ 		);
+ 		outerjoin.addJoins(
+ 			joinable.fromJoinFragment(rhsAlias, false, true),
+@@ -152,6 +155,7 @@
+ 		        rhsAlias,
+ 		        lhsColumns,
+ 		        rhsColumns,
++		        rhsFormulaTemplates,
+ 		        joinType,
+ 		        condition
+ 		);
+Index: src/org/hibernate/loader/JoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/JoinWalker.java	(revision 10491)
++++ src/org/hibernate/loader/JoinWalker.java	(working copy)
+@@ -830,11 +830,17 @@
+ 	/**
+ 	 * Render the where condition for a (batch) load by identifier / collection key
+ 	 */
+-	protected StringBuffer whereString(String alias, String[] columnNames, int batchSize) {
++	protected StringBuffer whereString(String alias, String[] columnNames, String[] formulaTemplates, int batchSize) {
+ 		if ( columnNames.length==1 ) {
+ 			// if not a composite key, use "foo in (?, ?, ?)" for batching
+ 			// if no batch, and not a composite key, use "foo = ?"
+-			InFragment in = new InFragment().setColumn( alias, columnNames[0] );
++			InFragment in= new InFragment();
++			if(formulaTemplates!=null && formulaTemplates[0]!=null){
++				in.setFormula( alias, formulaTemplates[0] );
++			}
++			else{
++				in.setColumn( alias, columnNames[0] );
++			}
+ 			for ( int i=0; i<batchSize; i++ ) in.addValue("?");
+ 			return new StringBuffer( in.toFragmentString() );
+ 		}
+@@ -842,7 +848,7 @@
+ 			//a composite key
+ 			ConditionFragment byId = new ConditionFragment()
+ 					.setTableAlias(alias)
+-					.setCondition( columnNames, "?" );
++					.setCondition( columnNames, "?", formulaTemplates );
+ 	
+ 			StringBuffer whereString = new StringBuffer();
+ 			if ( batchSize==1 ) {
+@@ -862,7 +868,6 @@
+ 			return whereString;
+ 		}
+ 	}
+-
+ 	protected void initPersisters(final List associations, final LockMode lockMode) throws MappingException {
+ 		
+ 		final int joins = countEntityPersisters(associations);
+Index: src/org/hibernate/loader/collection/OneToManyJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/collection/OneToManyJoinWalker.java	(revision 10491)
++++ src/org/hibernate/loader/collection/OneToManyJoinWalker.java	(working copy)
+@@ -90,7 +90,8 @@
+ 				alias, 
+ 				oneToManyPersister.getKeyColumnNames(), 
+ 				subquery,
+-				batchSize
++				batchSize,
++				oneToManyPersister.getKeyFomulaTemplates()
+ 			);
+ 		String filter = oneToManyPersister.filterFragment( alias, getEnabledFilters() );
+ 		whereString.insert( 0, StringHelper.moveAndToBeginning(filter) );
+Index: src/org/hibernate/loader/collection/CollectionJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/collection/CollectionJoinWalker.java	(revision 10491)
++++ src/org/hibernate/loader/collection/CollectionJoinWalker.java	(working copy)
+@@ -5,6 +5,7 @@
+ 
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.loader.JoinWalker;
++import org.hibernate.sql.Template;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -22,13 +23,35 @@
+ 	}
+ 
+ 	protected StringBuffer whereString(String alias, String[] columnNames, String subselect, int batchSize) {
++		String[] formulaTemplate = new String[columnNames.length];
++		return whereString(alias, columnNames, subselect, batchSize, formulaTemplate);
++	}
++	
++	protected StringBuffer whereString(String alias, String[] columnNames, String subselect, int batchSize, String[] formulaTemplate) {
+ 		if (subselect==null) {
+-			return super.whereString(alias, columnNames, batchSize);
++			return super.whereString(alias, columnNames, formulaTemplate, batchSize);
+ 		}
+ 		else {
+ 			StringBuffer buf = new StringBuffer();
+ 			if (columnNames.length>1) buf.append('(');
+-			buf.append( StringHelper.join(", ", StringHelper.qualify(alias, columnNames) ) );
++
++			String[] names;
++			if(formulaTemplate==null){
++				names = columnNames;
++			}
++			else {
++				names = new String[columnNames.length];
++				for(int i=0; i<columnNames.length; i++){
++					if(formulaTemplate[i]!=null){
++						names[i] = StringHelper.replace( formulaTemplate[i], Template.TEMPLATE, alias );
++					}
++					else{
++						names[i] = columnNames[i];
++					}
++				}
++			}
++			buf.append( StringHelper.join(", ", StringHelper.qualify(alias, names) ) );
++			
+ 			if (columnNames.length>1) buf.append(')');
+ 			buf.append(" in ")
+ 				.append('(')
+Index: src/org/hibernate/loader/entity/EntityJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/entity/EntityJoinWalker.java	(revision 10491)
++++ src/org/hibernate/loader/entity/EntityJoinWalker.java	(working copy)
+@@ -26,6 +26,7 @@
+ 	public EntityJoinWalker(
+ 			OuterJoinLoadable persister, 
+ 			String[] uniqueKey, 
++			String[] uniqueKeyFormulaTemplate,
+ 			int batchSize, 
+ 			LockMode lockMode,
+ 			SessionFactoryImplementor factory, 
+@@ -35,7 +36,7 @@
+ 
+ 		this.lockMode = lockMode;
+ 		
+-		StringBuffer whereCondition = whereString( getAlias(), uniqueKey, batchSize )
++		StringBuffer whereCondition = whereString( getAlias(), uniqueKey, uniqueKeyFormulaTemplate, batchSize )
+ 			//include the discriminator and class-level where, but not filters
+ 			.append( persister.filterFragment( getAlias(), Collections.EMPTY_MAP ) );
+ 
+Index: src/org/hibernate/loader/entity/EntityLoader.java
+===================================================================
+--- src/org/hibernate/loader/entity/EntityLoader.java	(revision 10491)
++++ src/org/hibernate/loader/entity/EntityLoader.java	(working copy)
+@@ -43,6 +43,7 @@
+ 		this( 
+ 				persister, 
+ 				persister.getIdentifierColumnNames(), 
++				null,
+ 				persister.getIdentifierType(), 
+ 				batchSize,
+ 				lockMode,
+@@ -53,7 +54,8 @@
+ 
+ 	public EntityLoader(
+ 			OuterJoinLoadable persister, 
+-			String[] uniqueKey, 
++			String[] uniqueKey,
++			String[] uniqueKeyFormulaTemplate,
+ 			Type uniqueKeyType, 
+ 			int batchSize, 
+ 			LockMode lockMode,
+@@ -65,6 +67,7 @@
+ 		JoinWalker walker = new EntityJoinWalker(
+ 				persister, 
+ 				uniqueKey, 
++				uniqueKeyFormulaTemplate,
+ 				batchSize, 
+ 				lockMode, 
+ 				factory, 
+Index: src/org/hibernate/loader/entity/CascadeEntityJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/entity/CascadeEntityJoinWalker.java	(revision 10491)
++++ src/org/hibernate/loader/entity/CascadeEntityJoinWalker.java	(working copy)
+@@ -20,9 +20,9 @@
+ 	throws MappingException {
+ 		super( persister, factory, CollectionHelper.EMPTY_MAP );
+ 		this.cascadeAction = action;
+-		StringBuffer whereCondition = whereString( getAlias(), persister.getIdentifierColumnNames(), 1 )
+-				//include the discriminator and class-level where, but not filters
+-				.append( persister.filterFragment( getAlias(), CollectionHelper.EMPTY_MAP ) );
++		StringBuffer whereCondition = whereString( getAlias(), persister.getIdentifierColumnNames(),null, 1 )
++		//include the discriminator and class-level where, but not filters
++		.append( persister.filterFragment( getAlias(), CollectionHelper.EMPTY_MAP ) );
+ 	
+ 		initAll( whereCondition.toString(), "", LockMode.READ );
+ 	}
+Index: src/org/hibernate/loader/entity/CollectionElementLoader.java
+===================================================================
+--- src/org/hibernate/loader/entity/CollectionElementLoader.java	(revision 10491)
++++ src/org/hibernate/loader/entity/CollectionElementLoader.java	(working copy)
+@@ -53,6 +53,7 @@
+ 						collectionPersister.getKeyColumnNames(), 
+ 						collectionPersister.getIndexColumnNames()
+ 					),
++				null,
+ 				1, 
+ 				LockMode.NONE, 
+ 				factory, 

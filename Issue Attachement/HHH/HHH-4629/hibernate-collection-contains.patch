@@ -1,0 +1,282 @@
+Index: core/src/main/java/org/hibernate/criterion/CollectionContainsExpression.java
+===================================================================
+--- core/src/main/java/org/hibernate/criterion/CollectionContainsExpression.java	(revision 0)
++++ core/src/main/java/org/hibernate/criterion/CollectionContainsExpression.java	(revision 0)
+@@ -0,0 +1,139 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.criterion;
++
++import java.util.logging.Logger;
++
++import org.hibernate.Criteria;
++import org.hibernate.EntityMode;
++import org.hibernate.HibernateException;
++import org.hibernate.MappingException;
++import org.hibernate.QueryException;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.TypedValue;
++import org.hibernate.metadata.ClassMetadata;
++import org.hibernate.persister.collection.QueryableCollection;
++import org.hibernate.persister.entity.Loadable;
++import org.hibernate.persister.entity.PropertyMapping;
++import org.hibernate.sql.ConditionFragment;
++import org.hibernate.type.CollectionType;
++import org.hibernate.type.Type;
++
++/**
++ * Implementation of AbstractEmptinessExpression.
++ *
++ * @author Chris Wilson
++ */
++public class CollectionContainsExpression implements Criterion
++{
++	private final String propertyName;
++    private final Object value;
++
++	protected CollectionContainsExpression(String propertyName, Object value) {
++		this.propertyName = propertyName;
++        this.value = value;
++	}
++
++	public final String toSqlString(Criteria criteria,
++        CriteriaQuery criteriaQuery) throws HibernateException
++    {
++		String entityName = criteriaQuery.getEntityName( criteria, propertyName );
++		String actualPropertyName = criteriaQuery.getPropertyName( propertyName );
++		String sqlAlias = criteriaQuery.getSQLAlias( criteria, propertyName );
++
++		SessionFactoryImplementor factory = criteriaQuery.getFactory();
++		QueryableCollection collectionPersister = getQueryableCollection( entityName, actualPropertyName, factory );
++		Logger.getLogger(getClass().toString()).fine("select fragment is: "
++            + collectionPersister.selectFragment("foo", "bar"));
++        /*
++        Logger.getLogger(getClass().toString()).fine("select fragment is: "
++            + collectionPersister.filterFragment());
++            */
++        
++		String[] collectionKeys = collectionPersister.getKeyColumnNames();
++		String[] ownerKeys = ( ( Loadable ) factory.getEntityPersister( entityName ) ).getIdentifierColumnNames();
++
++        ConditionFragment join = new ConditionFragment();
++        join.setTableAlias(sqlAlias);
++        join.setCondition(ownerKeys, collectionKeys);
++        
++        StringBuffer query = new StringBuffer("exists (select 1 from ");
++        query.append(collectionPersister.getTableName());
++        query.append(" where ");
++        query.append(join.toFragmentString());
++        
++        String [] elementColumns = collectionPersister.getElementColumnNames();
++        
++        for (int i = 0; i < elementColumns.length; i++)
++        {
++            query.append(" and " + elementColumns[i] + " = ?");
++        }
++        
++        query.append(")");
++        
++        return query.toString();
++        //TODO: get SQL rendering out of this package!
++    }
++
++	protected QueryableCollection getQueryableCollection(String entityName,
++        String propertyName, SessionFactoryImplementor factory)
++	throws HibernateException
++    {
++		PropertyMapping ownerMapping = ( PropertyMapping ) factory.getEntityPersister( entityName );
++		Type type = ownerMapping.toType( propertyName );
++		if ( !type.isCollectionType() ) {
++			throw new MappingException(
++			        "Property path [" + entityName + "." + propertyName + "] does not reference a collection"
++			);
++		}
++
++		String role = ( ( CollectionType ) type ).getRole();
++		try {
++			return ( QueryableCollection ) factory.getCollectionPersister( role );
++		}
++		catch ( ClassCastException cce ) {
++			throw new QueryException( "collection role is not queryable: " + role );
++		}
++		catch ( Exception e ) {
++			throw new QueryException( "collection role not found: " + role );
++		}
++	}
++
++    public TypedValue[] getTypedValues(Criteria criteria,
++        CriteriaQuery criteriaQuery)
++    throws HibernateException
++    {
++        ClassMetadata meta = 
++            criteriaQuery.getFactory().getClassMetadata(value.getClass());
++        return new TypedValue[] {
++            criteriaQuery.getTypedIdentifierValue(criteria,
++                meta.getIdentifier(value, EntityMode.POJO))
++        };
++    }
++
++	public final String toString() {
++		return propertyName + " contains " + value;
++	}
++}
+Index: core/src/main/java/org/hibernate/criterion/Restrictions.java
+===================================================================
+--- core/src/main/java/org/hibernate/criterion/Restrictions.java	(revision 18091)
++++ core/src/main/java/org/hibernate/criterion/Restrictions.java	(working copy)
+@@ -341,7 +341,15 @@
+ 	public static Criterion isNotEmpty(String propertyName) {
+ 		return new NotEmptyExpression(propertyName);
+ 	}
+-	
++
++    /**
++     * Constrain a collection valued property to contain a particular value
++     * @author Chris Wilson
++     */
++    public static Criterion contains(String propertyName, Object value) {
++        return new CollectionContainsExpression(propertyName, value);
++    }
++
+ 	/**
+ 	 * Constrain a collection valued property by size
+ 	 */
+Index: annotations/src/test/java/org/hibernate/test/criterion/CollectionContainsTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/criterion/CollectionContainsTest.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/criterion/CollectionContainsTest.java	(revision 0)
+@@ -0,0 +1,112 @@
++package org.hibernate.test.criterion;
++
++import java.util.Arrays;
++import java.util.HashSet;
++import java.util.Set;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinTable;
++import javax.persistence.ManyToMany;
++import javax.persistence.Table;
++
++import org.hibernate.Criteria;
++import org.hibernate.Session;
++import org.hibernate.annotations.GenericGenerator;
++import org.hibernate.criterion.Restrictions;
++
++/**
++ * Hibernate doesn't allow adding a criteria query on a many-to-many
++ * association.
++ * 
++ * @author Chris Wilson
++ */
++public class CollectionContainsTest
++extends org.hibernate.test.annotations.TestCase
++{
++    @Entity
++    @Table(name="org")
++    private static class Org
++    {
++        @Id
++        @GenericGenerator(name="generator", strategy="increment")
++        @GeneratedValue(generator="generator")
++        Integer id;
++        
++        @ManyToMany(targetEntity=Project.class)
++        @JoinTable(joinColumns=@JoinColumn(name="org_id"),
++            inverseJoinColumns=@JoinColumn(name="project_id")
++        )
++        Set<Project> projects = new HashSet<Project>(0);
++    }
++    
++    @Entity
++    @Table(name="project")
++    private static class Project
++    {
++        @Id
++        @GenericGenerator(name="generator", strategy="increment")
++        @GeneratedValue(generator="generator")        
++        Integer id;
++        String name;
++    }
++
++    protected Class[] getMappings() {
++        return new Class[]{
++                Org.class,
++                Project.class,
++        };
++    }
++
++    public void testTest() throws Exception
++    {
++        Session session = openSession();
++
++        Org org1 = new Org();
++        session.save(org1);
++        
++        Org org2 = new Org();
++        session.save(org2);
++        
++        Project p1 = new Project();
++        session.save(p1);
++        
++        Project p2 = new Project();
++        session.save(p2);
++
++        Project p3 = new Project();
++        session.save(p3);
++
++        org1.projects.add(p1);
++        org1.projects.add(p2);
++        org2.projects.add(p2);
++        session.flush();
++        
++        /*
++        Criteria org = session.createCriteria(Org.class);
++        org.add(Restrictions.isEmpty("projects"));
++        assertEquals(Arrays.asList(new Org[]{org2}), org.list());
++        */
++        
++        Criteria org = session.createCriteria(Org.class);
++        org.add(Restrictions.contains("projects", p1));
++        assertEquals(Arrays.asList(new Org[]{org1}), org.list());
++
++        org = session.createCriteria(Org.class);
++        org.add(Restrictions.contains("projects", p2));
++        assertEquals(Arrays.asList(new Org[]{org1, org2}), org.list());
++
++        org = session.createCriteria(Org.class);
++        org.add(Restrictions.contains("projects", p3));
++        assertEquals(Arrays.asList(new Org[]{}), org.list());
++
++        session.close();
++    }
++    
++    public static void main(String[] args)
++    {
++        junit.textui.TestRunner.run(CollectionContainsTest.class);
++    }
++}

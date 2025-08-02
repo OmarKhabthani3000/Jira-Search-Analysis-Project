@@ -1,0 +1,399 @@
+==== //depot/Tony/hibernate/org/hibernate/engine/SessionImplementor.java#1 - c:\depot\Tony\hibernate\org\hibernate\engine\SessionImplementor.java ====
+@@ -16,6 +16,7 @@
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.Transaction;
++import org.hibernate.LockMode;
+ import org.hibernate.engine.query.NativeSQLQuerySpecification;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.event.EventListeners;
+@@ -83,6 +84,12 @@
+ 	public Object immediateLoad(String entityName, Serializable id) throws HibernateException;
+ 
+ 	/**
++	 * Load the entity from the second level cache.  If it's not in the cache, return null.
++	 */
++	public Object loadFromSecondLevelCache(Serializable id, EntityPersister persister, LockMode lockMode, final Object instanceToLoad)
++	throws HibernateException;
++
++	/**
+ 	 * System time before the start of the transaction
+ 	 */
+ 	public long getTimestamp();
+==== //depot/Tony/hibernate/org/hibernate/event/def/DefaultLoadEventListener.java#1 - c:\depot\Tony\hibernate\org\hibernate\event\def\DefaultLoadEventListener.java ====
+@@ -299,10 +299,10 @@
+ 		final EntityKey keyToLoad, 
+ 		final LoadEventListener.LoadType options) 
+ 	throws HibernateException {
+-		
++
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace(
+-					"attempting to resolve: " + 
++					"attempting to resolve: " +
+ 					MessageHelper.infoString( persister, event.getEntityId(), event.getSession().getFactory() )
+ 				);
+ 		}
+@@ -325,7 +325,13 @@
+ 			return null;
+ 		}*/
+ 
+-		entity = loadFromSecondLevelCache(event, persister, options);
++		entity = event.getSession().loadFromSecondLevelCache(
++		    event.getEntityId(),
++		    persister,
++		    event.getLockMode(),
++		    event.getInstanceToLoad()
++		);
++
+ 		if ( entity != null ) {
+ 			if ( log.isTraceEnabled() ) {
+ 				log.trace(
+@@ -420,144 +426,4 @@
+ 		}
+ 	}
+ 
+-	/**
+-	 * Attempts to load the entity from the second-level cache.
+-	 *
+-	 * @return The entity from the second-level cache, or null.
+-	 * @throws HibernateException
+-	 */
+-	protected Object loadFromSecondLevelCache(
+-		final LoadEvent event,
+-		final EntityPersister persister,
+-		final LoadEventListener.LoadType options) 
+-	throws HibernateException {
+-		
+-		final SessionImplementor source = event.getSession();
+-		
+-		final boolean useCache = persister.hasCache() && 
+-			source.getCacheMode().isGetEnabled() && 
+-			event.getLockMode().lessThan(LockMode.READ);
+-		
+-		if (useCache) {
+-			
+-			final SessionFactoryImplementor factory = source.getFactory();
+-			
+-			final CacheKey ck = new CacheKey( 
+-					event.getEntityId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(),
+-					source.getEntityMode(), 
+-					source.getFactory()
+-				);
+-			Object ce = persister.getCache()
+-				.get( ck, source.getTimestamp() );
+-			
+-			if ( factory.getStatistics().isStatisticsEnabled() ) {
+-				if (ce==null) {
+-					factory.getStatisticsImplementor().secondLevelCacheMiss( 
+-						persister.getCache().getRegionName() 
+-					);
+-				}
+-				else {
+-					factory.getStatisticsImplementor().secondLevelCacheHit( 
+-						persister.getCache().getRegionName() 
+-					);
+-				}
+-			}
+-
+-			if ( ce != null ) {
+-
+-				CacheEntry entry = (CacheEntry) persister.getCacheEntryStructure()
+-						.destructure(ce, factory);
+-			
+-				// Entity was found in second-level cache...
+-				return assembleCacheEntry(
+-						entry,
+-						event.getEntityId(),
+-						persister,
+-						event
+-					);
+-			}
+-		}
+-		
+-		return null;
+-	}
+-
+-	private Object assembleCacheEntry(
+-		final CacheEntry entry,
+-		final Serializable id,
+-		final EntityPersister persister,
+-		final LoadEvent event)
+-	throws HibernateException {
+-		
+-		final Object optionalObject = event.getInstanceToLoad();
+-		final EventSource session = event.getSession();
+-		final SessionFactoryImplementor factory = session.getFactory();
+-		
+-		if ( log.isTraceEnabled() ) {
+-			log.trace(
+-					"assembling entity from second-level cache: " +
+-					MessageHelper.infoString( persister, id, factory )
+-				);
+-		}
+-
+-		EntityPersister subclassPersister = factory.getEntityPersister( entry.getSubclass() );
+-		Object result = optionalObject == null ? 
+-				session.instantiate( subclassPersister, id ) : optionalObject;
+-				
+-		// make it circular-reference safe
+-		TwoPhaseLoad.addUninitializedCachedEntity( 
+-				new EntityKey( id, subclassPersister, session.getEntityMode() ), 
+-				result, 
+-				subclassPersister, 
+-				LockMode.NONE, 
+-				entry.areLazyPropertiesUnfetched(),
+-				entry.getVersion(),
+-				session
+-			);
+-
+-		Type[] types = subclassPersister.getPropertyTypes();
+-		Object[] values = entry.assemble( result, id, subclassPersister, session.getInterceptor(), session ); // intializes result by side-effect
+-		TypeFactory.deepCopy( 
+-				values, 
+-				types, 
+-				subclassPersister.getPropertyUpdateability(), 
+-				values, 
+-				session
+-			);
+-		
+-		Object version = Versioning.getVersion( values, subclassPersister );
+-		if ( log.isTraceEnabled() ) log.trace( "Cached Version: " + version );
+-		
+-		final PersistenceContext persistenceContext = session.getPersistenceContext();
+-		persistenceContext.addEntry( 
+-				result, 
+-				Status.MANAGED, 
+-				values, 
+-				null, 
+-				id, 
+-				version, 
+-				LockMode.NONE, 
+-				true, 
+-				subclassPersister, 
+-				false, 
+-				entry.areLazyPropertiesUnfetched() 
+-			);
+-		subclassPersister.afterInitialize( result, entry.areLazyPropertiesUnfetched(), session );
+-		persistenceContext.initializeNonLazyCollections();
+-		// upgrade the lock if necessary:
+-		//lock(result, lockMode);
+-
+-		//PostLoad is needed for EJB3
+-		//TODO: reuse the PostLoadEvent...
+-		PostLoadEvent postLoadEvent = new PostLoadEvent(session).setEntity(result)
+-				.setId(id).setPersister(persister);
+-		PostLoadEventListener[] listeners = session.getListeners().getPostLoadEventListeners();
+-		for ( int i = 0; i < listeners.length; i++ ) {
+-			listeners[i].onPostLoad(postLoadEvent);
+-		}
+-		
+-		return result;
+-	}
+-
+ }
+==== //depot/Tony/hibernate/org/hibernate/impl/SessionImpl.java#1 - c:\depot\Tony\hibernate\org\hibernate\impl\SessionImpl.java ====
+@@ -40,6 +40,8 @@
+ import org.hibernate.Transaction;
+ import org.hibernate.TransientObjectException;
+ import org.hibernate.UnresolvableObjectException;
++import org.hibernate.cache.CacheKey;
++import org.hibernate.cache.entry.CacheEntry;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.ActionQueue;
+ import org.hibernate.engine.CollectionEntry;
+@@ -51,6 +53,8 @@
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.StatefulPersistenceContext;
+ import org.hibernate.engine.Status;
++import org.hibernate.engine.TwoPhaseLoad;
++import org.hibernate.engine.Versioning;
+ import org.hibernate.engine.query.HQLQueryPlan;
+ import org.hibernate.engine.query.FilterQueryPlan;
+ import org.hibernate.engine.query.NativeSQLQuerySpecification;
+@@ -76,6 +80,8 @@
+ import org.hibernate.event.MergeEventListener;
+ import org.hibernate.event.PersistEvent;
+ import org.hibernate.event.PersistEventListener;
++import org.hibernate.event.PostLoadEvent;
++import org.hibernate.event.PostLoadEventListener;
+ import org.hibernate.event.RefreshEvent;
+ import org.hibernate.event.RefreshEventListener;
+ import org.hibernate.event.ReplicateEvent;
+@@ -98,6 +104,7 @@
+ import org.hibernate.stat.SessionStatisticsImpl;
+ import org.hibernate.tuple.DynamicMapInstantiator;
+ import org.hibernate.type.Type;
++import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.StringHelper;
+@@ -773,6 +780,136 @@
+ 		return event.getResult();
+ 	}
+ 
++	/**
++	 * Load the entity from the second level cache.  If it's not in the cache, return null.
++	 */
++	public Object loadFromSecondLevelCache(Serializable id, EntityPersister persister,
++	    LockMode lockMode, final Object instanceToLoad) throws HibernateException
++	{
++		final boolean useCache = lockMode.lessThan( LockMode.READ )
++			&& persister.hasCache()
++			&& this.getCacheMode().isGetEnabled();
++
++		if (useCache) {
++
++			final SessionFactoryImplementor factory = this.getFactory();
++
++			final CacheKey ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					this.getEntityMode(),
++					factory
++				);
++			Object ce = persister.getCache()
++				.get( ck, this.getTimestamp() );
++
++			if ( factory.getStatistics().isStatisticsEnabled() ) {
++				if (ce==null) {
++					factory.getStatisticsImplementor().secondLevelCacheMiss(
++						persister.getCache().getRegionName()
++					);
++				}
++				else {
++					factory.getStatisticsImplementor().secondLevelCacheHit(
++						persister.getCache().getRegionName()
++					);
++				}
++			}
++
++			if ( ce != null ) {
++
++				CacheEntry entry = (CacheEntry) persister.getCacheEntryStructure()
++						.destructure(ce, factory);
++
++				// Entity was found in second-level cache...
++				return assembleCacheEntry(
++						entry,
++						id,
++						persister,
++						instanceToLoad
++					);
++			}
++		}
++
++		return null;
++	}
++
++	private Object assembleCacheEntry(
++		final CacheEntry entry,
++		final Serializable id,
++		final EntityPersister persister,
++	    final Object optionalObject)
++	throws HibernateException {
++
++		final SessionFactoryImplementor factory = this.getFactory();
++
++		if ( log.isTraceEnabled() ) {
++			log.trace(
++					"assembling entity from second-level cache: " +
++					MessageHelper.infoString( persister, id, factory )
++				);
++		}
++
++		EntityPersister subclassPersister = factory.getEntityPersister( entry.getSubclass() );
++		Object result = optionalObject == null ?
++				this.instantiate( subclassPersister, id ) : optionalObject;
++
++		// make it circular-reference safe
++		TwoPhaseLoad.addUninitializedCachedEntity(
++				new EntityKey( id, subclassPersister, this.getEntityMode() ),
++				result,
++				subclassPersister,
++				LockMode.NONE,
++				entry.areLazyPropertiesUnfetched(),
++				entry.getVersion(),
++				this
++			);
++
++		Type[] types = subclassPersister.getPropertyTypes();
++		Object[] values = entry.assemble( result, id, subclassPersister, this.getInterceptor(), this ); // intializes result by side-effect
++		TypeFactory.deepCopy(
++				values,
++				types,
++				subclassPersister.getPropertyUpdateability(),
++				values,
++				this
++			);
++
++		Object version = Versioning.getVersion( values, subclassPersister );
++		if ( log.isTraceEnabled() ) log.trace( "Cached Version: " + version );
++
++		final PersistenceContext persistenceContext = this.getPersistenceContext();
++		persistenceContext.addEntry(
++				result,
++				Status.MANAGED,
++				values,
++				null,
++				id,
++				version,
++				LockMode.NONE,
++				true,
++				subclassPersister,
++				false,
++				entry.areLazyPropertiesUnfetched()
++			);
++		subclassPersister.afterInitialize( result, entry.areLazyPropertiesUnfetched(), this );
++		persistenceContext.initializeNonLazyCollections();
++		// upgrade the lock if necessary:
++		//lock(result, lockMode);
++
++		//PostLoad is needed for EJB3
++		//TODO: reuse the PostLoadEvent...
++		PostLoadEvent postLoadEvent = new PostLoadEvent(this).setEntity(result)
++				.setId(id).setPersister(persister);
++		PostLoadEventListener[] listeners = this.getListeners().getPostLoadEventListeners();
++		for ( int i = 0; i < listeners.length; i++ ) {
++			listeners[i].onPostLoad(postLoadEvent);
++		}
++
++		return result;
++	}
++
+ 	public Object internalLoad(String entityName, Serializable id, boolean eager, boolean nullable) throws HibernateException {
+ 		// todo : remove
+ 		LoadEventListener.LoadType type = nullable ? 
+==== //depot/Tony/hibernate/org/hibernate/impl/StatelessSessionImpl.java#1 - c:\depot\Tony\hibernate\org\hibernate\impl\StatelessSessionImpl.java ====
+@@ -272,6 +272,11 @@
+ 		throw new SessionException("proxies cannot be fetched by a stateless session");
+ 	}
+ 
++	public Object loadFromSecondLevelCache(Serializable id, EntityPersister persister, LockMode lockMode, final Object instanceToLoad)
++	throws HibernateException {
++		throw new SessionException("cache cannot be used by a stateless session");
++	}
++
+ 	public void initializeCollection(PersistentCollection collection, boolean writing) 
+ 	throws HibernateException {
+ 		throw new SessionException("collections cannot be fetched by a stateless session");
+==== //depot/Tony/hibernate/org/hibernate/loader/Loader.java#1 - c:\depot\Tony\hibernate\org\hibernate\loader\Loader.java ====
+@@ -1181,6 +1181,15 @@
+ 
+ 				//If the object is already loaded, return the loaded one
+ 				object = session.getEntityUsingInterceptor( key );
++
++				if ( object == null ) {
++					object = session.loadFromSecondLevelCache(
++					    key.getIdentifier(),
++					    persisters[i],
++					    lockModes[i],
++					    optionalObject );
++				}
++
+ 				if ( object != null ) {
+ 					//its already loaded so don't need to hydrate it
+ 					instanceAlreadyLoaded( 

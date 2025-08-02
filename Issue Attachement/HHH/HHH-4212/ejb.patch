@@ -1,0 +1,92 @@
+Index: C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/ExceptionTranslator.java
+===================================================================
+--- C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/ExceptionTranslator.java	(revision 0)
++++ C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/ExceptionTranslator.java	(revision 0)
+@@ -0,0 +1,20 @@
++package org.hibernate.ejb;
++
++public class ExceptionTranslator {
++
++	static final ExceptionTranslator noOpInstance = new ExceptionTranslator();
++
++	public final RuntimeException translateException(RuntimeException ex) {
++		RuntimeException result = ex;
++		try {
++			result = doTranslateException(ex);
++		} catch (Throwable ignore) {
++		}
++		return result;
++	}
++
++	protected RuntimeException doTranslateException(RuntimeException ex) {
++		return ex;
++	}
++
++}
+
+Index: C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/AbstractEntityManagerImpl.java
+===================================================================
+--- C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/AbstractEntityManagerImpl.java	(revision 14058)
++++ C:/HibernateSVN/HibernateExt/entitymanager/src/java/org/hibernate/ejb/AbstractEntityManagerImpl.java	(working copy)
+@@ -68,6 +68,7 @@
+ 	private FlushModeType flushModeType = FlushModeType.AUTO;
+ 	private PersistenceUnitTransactionType transactionType;
+ 	private Map properties;
++	private ExceptionTranslator exceptionTranslator;
+ 
+ 	protected AbstractEntityManagerImpl(
+ 			PersistenceContextType type, PersistenceUnitTransactionType transactionType, Map properties
+@@ -84,6 +85,8 @@
+ 		if (flushMode != null) {
+ 			getSession().setFlushMode( ConfigurationHelper.getFlushMode( flushMode ) );
+ 		}
++		exceptionTranslator = (ExceptionTranslator) properties.get("org.hibernate.exception.translator");
++		exceptionTranslator = exceptionTranslator != null ? exceptionTranslator : ExceptionTranslator.noOpInstance;
+ 		this.properties = null;
+ 	}
+ 
+@@ -414,7 +417,7 @@
+ 		return ( (SessionImplementor) getRawSession() ).isTransactionInProgress();
+ 	}
+ 
+-	protected void markAsRollback() {
++	protected void markAsRollback(RuntimeException cause) {
+ 		log.debug( "mark transaction for rollback");
+ 		if ( tx.isActive() ) {
+ 			tx.setRollbackOnly();
+@@ -430,7 +433,16 @@
+ 					);
+ 				}
+ 				try {
+-					transactionManager.setRollbackOnly();
++					javax.transaction.Transaction transaction = transactionManager.getTransaction();
++					try {
++						/* Try WLS specific method. */
++						RuntimeException reason = exceptionTranslator.translateException(cause);
++						transaction.getClass().getMethod("setRollbackOnly", new Class[] { Throwable.class }).invoke(
++							transaction, new Object[] { reason });
++					} catch (Throwable e) {
++						/* Fallback to standard method. */
++						transaction.setRollbackOnly();
++					}
+ 				}
+ 				catch (SystemException e) {
+ 					throw new PersistenceException( "Unable to set the JTA transaction as RollbackOnly", e );
+@@ -585,7 +597,7 @@
+ 	public void throwPersistenceException(PersistenceException e) {
+ 		if ( ! ( e instanceof NoResultException || e instanceof NonUniqueResultException ) ) {
+ 			try {
+-				markAsRollback();
++				markAsRollback(e);
+ 			}
+ 			catch (Exception ne) {
+ 				//we do not want the subsequent exception to swallow the original one
+@@ -618,7 +630,7 @@
+ 		}
+ 		else if ( e instanceof TransientObjectException ) {
+ 			try {
+-				markAsRollback();
++				markAsRollback(e);
+ 			}
+ 			catch (Exception ne) {
+ 				//we do not want the subsequent exception to swallow the original one

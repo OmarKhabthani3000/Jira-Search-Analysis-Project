@@ -1,0 +1,634 @@
+Index: src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(revision 19093)
++++ src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -30,6 +30,7 @@
+ import java.io.ObjectOutputStream;
+ import java.io.ObjectStreamException;
+ import java.io.Serializable;
++import java.lang.reflect.Constructor;
+ import java.sql.Connection;
+ import java.util.ArrayList;
+ import java.util.Collections;
+@@ -113,6 +114,7 @@
+ import org.hibernate.proxy.EntityNotFoundDelegate;
+ import org.hibernate.stat.Statistics;
+ import org.hibernate.stat.StatisticsImpl;
++import org.hibernate.stat.ConcurrentStatisticsImpl;
+ import org.hibernate.stat.StatisticsImplementor;
+ import org.hibernate.tool.hbm2ddl.SchemaExport;
+ import org.hibernate.tool.hbm2ddl.SchemaUpdate;
+@@ -177,7 +179,7 @@
+ 	private final transient UpdateTimestampsCache updateTimestampsCache;
+ 	private final transient Map queryCaches;
+ 	private final transient Map allCacheRegions = new HashMap();
+-	private final transient StatisticsImpl statistics = new StatisticsImpl(this);
++	private final transient Statistics statistics;
+ 	private final transient EventListeners eventListeners;
+ 	private final transient CurrentSessionContext currentSessionContext;
+ 	private final transient EntityNotFoundDelegate entityNotFoundDelegate;
+@@ -195,6 +197,27 @@
+ 	        EventListeners listeners,
+ 			SessionFactoryObserver observer) throws HibernateException {
+ 		log.info("building session factory");
++
++		Statistics concurrentStatistics = null;
++		try {
++			Class concurrentStatsClass = ReflectHelper.classForName("org.hibernate.stat.ConcurrentStatisticsImpl");
++			Constructor constructor = concurrentStatsClass.getConstructor(new Class[]{SessionFactoryImplementor.class});
++			concurrentStatistics = (Statistics) constructor.newInstance(new Object[]{this});
++			log.debug("JDK 1.5 concurrent classes present");
++		} catch (Exception noJava5) {
++			log.debug("JDK 1.5 concurrent classes missing");
++		}
++
++		if (concurrentStatistics != null) {
++			this.statistics = concurrentStatistics;
++		} else {
++			this.statistics = new StatisticsImpl(this);
++		}
++
++		if (log.isDebugEnabled()) {
++			log.debug("Statistics initialized with " + statistics.getClass().getName());
++		}
++
+ 		this.properties = new Properties();
+ 		this.properties.putAll( cfg.getProperties() );
+ 		this.interceptor = cfg.getInterceptor();
+@@ -1191,7 +1214,7 @@
+ 	}
+ 
+ 	public StatisticsImplementor getStatisticsImplementor() {
+-		return statistics;
++		return (StatisticsImplementor) statistics;
+ 	}
+ 
+ 	public FilterDefinition getFilterDefinition(String filterName) throws HibernateException {
+Index: src/main/java/org/hibernate/stat/QueryStatistics.java
+===================================================================
+--- src/main/java/org/hibernate/stat/QueryStatistics.java	(revision 19093)
++++ src/main/java/org/hibernate/stat/QueryStatistics.java	(working copy)
+@@ -24,111 +24,30 @@
+  */
+ package org.hibernate.stat;
+ 
++import java.io.Serializable;
++
+ /**
+  * Query statistics (HQL and SQL)
+- * 
++ * <p/>
+  * Note that for a cached query, the cache miss is equals to the db count
+- * 
++ *
+  * @author Gavin King
++ * @author Alex Snaps
+  */
+-public class QueryStatistics extends CategorizedStatistics {
++public interface QueryStatistics extends Serializable {
++	long getExecutionCount();
+ 
+-	/*package*/ long cacheHitCount;
+-	/*package*/ long cacheMissCount;
+-	/*package*/ long cachePutCount;
+-	private long executionCount;
+-	private long executionRowCount;
+-	private long executionAvgTime;
+-	private long executionMaxTime;
+-	private long executionMinTime = Long.MAX_VALUE;
++	long getCacheHitCount();
+ 
+-	QueryStatistics(String query) {
+-		super(query);
+-	}
++	long getCachePutCount();
+ 
+-	/**
+-	 * queries executed to the DB
+-	 */
+-	public long getExecutionCount() {
+-		return executionCount;
+-	}
+-	
+-	/**
+-	 * Queries retrieved successfully from the cache
+-	 */
+-	public long getCacheHitCount() {
+-		return cacheHitCount;
+-	}
+-	
+-	public long getCachePutCount() {
+-		return cachePutCount;
+-	}
+-	
+-	public long getCacheMissCount() {
+-		return cacheMissCount;
+-	}
+-	
+-	/**
+-	 * Number of lines returned by all the executions of this query (from DB)
+-	 * For now, {@link org.hibernate.Query#iterate()} 
+-	 * and {@link org.hibernate.Query#scroll()()} do not fill this statistic
+-	 *
+-	 * @return The number of rows cumulatively returned by the given query; iterate
+-	 * and scroll queries do not effect this total as their number of returned rows
+-	 * is not known at execution time.
+-	 */
+-	public long getExecutionRowCount() {
+-		return executionRowCount;
+-	}
++	long getCacheMissCount();
+ 
+-	/**
+-	 * average time in ms taken by the excution of this query onto the DB
+-	 */
+-	public long getExecutionAvgTime() {
+-		return executionAvgTime;
+-	}
++	long getExecutionRowCount();
+ 
+-	/**
+-	 * max time in ms taken by the excution of this query onto the DB
+-	 */
+-	public long getExecutionMaxTime() {
+-		return executionMaxTime;
+-	}
+-	
+-	/**
+-	 * min time in ms taken by the excution of this query onto the DB
+-	 */
+-	public long getExecutionMinTime() {
+-		return executionMinTime;
+-	}
+-	
+-	/**
+-	 * add statistics report of a DB query
+-	 * 
+-	 * @param rows rows count returned
+-	 * @param time time taken
+-	 */
+-	void executed(long rows, long time) {
+-		if (time < executionMinTime) executionMinTime = time;
+-		if (time > executionMaxTime) executionMaxTime = time;
+-		executionAvgTime = ( executionAvgTime * executionCount + time ) / ( executionCount + 1 );
+-		executionCount++;
+-		executionRowCount += rows;
+-	}
++	long getExecutionAvgTime();
+ 
+-	public String toString() {
+-		return new StringBuffer()
+-				.append( "QueryStatistics" )
+-				.append( "[cacheHitCount=" ).append( this.cacheHitCount )
+-				.append( ",cacheMissCount=" ).append( this.cacheMissCount )
+-				.append( ",cachePutCount=" ).append( this.cachePutCount )
+-				.append( ",executionCount=" ).append( this.executionCount )
+-				.append( ",executionRowCount=" ).append( this.executionRowCount )
+-				.append( ",executionAvgTime=" ).append( this.executionAvgTime )
+-				.append( ",executionMaxTime=" ).append( this.executionMaxTime )
+-				.append( ",executionMinTime=" ).append( this.executionMinTime )
+-				.append( ']' )
+-				.toString();
+-	}
++	long getExecutionMaxTime();
+ 
++	long getExecutionMinTime();
+ }
+Index: src/main/java/org/hibernate/stat/SecondLevelCacheStatistics.java
+===================================================================
+--- src/main/java/org/hibernate/stat/SecondLevelCacheStatistics.java	(revision 19093)
++++ src/main/java/org/hibernate/stat/SecondLevelCacheStatistics.java	(working copy)
+@@ -24,71 +24,28 @@
+  */
+ package org.hibernate.stat;
+ 
+-import java.util.HashMap;
+-import java.util.Iterator;
++import java.io.Serializable;
+ import java.util.Map;
+ 
+-import org.hibernate.cache.CacheKey;
+-import org.hibernate.cache.Region;
+-
+ /**
+  * Second level cache statistics of a specific region
+- * 
++ *
+  * @author Gavin King
++ * @author Alex Snaps
+  */
+-public class SecondLevelCacheStatistics extends CategorizedStatistics {
++public interface SecondLevelCacheStatistics extends Serializable {
+ 	
+-    private transient Region region;
+-	long hitCount;
+-	long missCount;
+-	long putCount;
++	long getHitCount();
+ 
+-	SecondLevelCacheStatistics(Region region) {
+-		super( region.getName() );
+-		this.region = region;
+-	}
+-	public long getHitCount() {
+-		return hitCount;
+-	}
+-	public long getMissCount() {
+-		return missCount;
+-	}
+-	public long getPutCount() {
+-		return putCount;
+-	}
+-	public long getElementCountInMemory() {
+-		return region.getElementCountInMemory();
+-	}
+-	public long getElementCountOnDisk() {
+-		return region.getElementCountOnDisk();
+-	}
+-	public long getSizeInMemory() {
+-		return region.getSizeInMemory();
+-	}
+-	
+-	public Map getEntries() {
+-		Map map = new HashMap();
+-		Iterator iter = region.toMap().entrySet().iterator();
+-		while ( iter.hasNext() ) {
+-			Map.Entry me = (Map.Entry) iter.next();
+-			map.put( ( (CacheKey) me.getKey() ).getKey(), me.getValue() );
+-		}
+-		return map;
+-	}
++	long getMissCount();
+ 
+-	public String toString() {
+-		StringBuffer buf = new StringBuffer()
+-		    .append("SecondLevelCacheStatistics")
+-			.append("[hitCount=").append(this.hitCount)
+-			.append(",missCount=").append(this.missCount)
+-			.append(",putCount=").append(this.putCount);
+-		//not sure if this would ever be null but wanted to be careful
+-		if ( region != null ) {
+-			buf.append(",elementCountInMemory=").append(this.getElementCountInMemory())
+-				.append(",elementCountOnDisk=").append(this.getElementCountOnDisk())
+-				.append(",sizeInMemory=").append(this.getSizeInMemory());
+-		}
+-		buf.append(']');
+-		return buf.toString();
+-	}
++	long getPutCount();
++
++	long getElementCountInMemory();
++
++	long getElementCountOnDisk();
++
++	long getSizeInMemory();
++
++	Map getEntries();
+ }
+Index: src/main/java/org/hibernate/stat/CollectionStatistics.java
+===================================================================
+--- src/main/java/org/hibernate/stat/CollectionStatistics.java	(revision 19093)
++++ src/main/java/org/hibernate/stat/CollectionStatistics.java	(working copy)
+@@ -24,48 +24,23 @@
+  */
+ package org.hibernate.stat;
+ 
++import java.io.Serializable;
++
+ /**
+  * Collection related statistics
+- * 
++ *
+  * @author Gavin King
++ * @author Alex Snaps
+  */
+-public class CollectionStatistics extends CategorizedStatistics {
+-	
+-	CollectionStatistics(String role) {
+-		super(role);
+-	}
+-	
+-	long loadCount;
+-	long fetchCount;
+-	long updateCount;
+-	long removeCount;
+-	long recreateCount;
+-	
+-	public long getLoadCount() {
+-		return loadCount;
+-	}
+-	public long getFetchCount() {
+-		return fetchCount;
+-	}
+-	public long getRecreateCount() {
+-		return recreateCount;
+-	}
+-	public long getRemoveCount() {
+-		return removeCount;
+-	}
+-	public long getUpdateCount() {
+-		return updateCount;
+-	}
++public interface CollectionStatistics extends Serializable {
+ 
+-	public String toString() {
+-		return new StringBuffer()
+-		    .append("CollectionStatistics")
+-			.append("[loadCount=").append(this.loadCount)
+-			.append(",fetchCount=").append(this.fetchCount)
+-			.append(",recreateCount=").append(this.recreateCount)
+-			.append(",removeCount=").append(this.removeCount)
+-			.append(",updateCount=").append(this.updateCount)
+-			.append(']')
+-			.toString();
+-	}
+-}
+\ No newline at end of file
++	long getLoadCount();
++
++	long getFetchCount();
++
++	long getRecreateCount();
++
++	long getRemoveCount();
++
++	long getUpdateCount();
++}
+Index: src/main/java/org/hibernate/stat/EntityStatistics.java
+===================================================================
+--- src/main/java/org/hibernate/stat/EntityStatistics.java	(revision 19093)
++++ src/main/java/org/hibernate/stat/EntityStatistics.java	(working copy)
+@@ -24,55 +24,25 @@
+  */
+ package org.hibernate.stat;
+ 
++import java.io.Serializable;
+ 
+ /**
+  * Entity related statistics
+- * 
++ *
+  * @author Gavin King
++ * @author Alex Snaps
+  */
+-public class EntityStatistics extends CategorizedStatistics {
+-	
+-	EntityStatistics(String name) {
+-		super(name);
+-	}
++public interface EntityStatistics extends Serializable {
++	long getDeleteCount();
+ 
+-	long loadCount;
+-	long updateCount;
+-	long insertCount;
+-	long deleteCount;
+-	long fetchCount;
+-	long optimisticFailureCount;
++	long getInsertCount();
+ 
+-	public long getDeleteCount() {
+-		return deleteCount;
+-	}
+-	public long getInsertCount() {
+-		return insertCount;
+-	}
+-	public long getLoadCount() {
+-		return loadCount;
+-	}
+-	public long getUpdateCount() {
+-		return updateCount;
+-	}
+-	public long getFetchCount() {
+-		return fetchCount;
+-	}
+-	public long getOptimisticFailureCount() {
+-		return optimisticFailureCount;
+-	}
++	long getLoadCount();
+ 
+-	public String toString() {
+-		return new StringBuffer()
+-		    .append("EntityStatistics")
+-			.append("[loadCount=").append(this.loadCount)
+-			.append(",updateCount=").append(this.updateCount)
+-			.append(",insertCount=").append(this.insertCount)
+-			.append(",deleteCount=").append(this.deleteCount)
+-			.append(",fetchCount=").append(this.fetchCount)
+-			.append(",optimisticLockFailureCount=").append(this.optimisticFailureCount)
+-			.append(']')
+-			.toString();
+-	}
++	long getUpdateCount();
+ 
++	long getFetchCount();
++
++	long getOptimisticFailureCount();
++
+ }
+Index: src/main/java/org/hibernate/stat/StatisticsImpl.java
+===================================================================
+--- src/main/java/org/hibernate/stat/StatisticsImpl.java	(revision 19093)
++++ src/main/java/org/hibernate/stat/StatisticsImpl.java	(working copy)
+@@ -166,12 +166,12 @@
+ 	
+ 	public synchronized void loadEntity(String entityName) {
+ 		entityLoadCount++;
+-		getEntityStatistics(entityName).loadCount++;
++		((EntityStatisticsImpl) getEntityStatistics(entityName)).loadCount++;
+ 	}
+ 
+ 	public synchronized void fetchEntity(String entityName) {
+ 		entityFetchCount++;
+-		getEntityStatistics(entityName).fetchCount++;
++		((EntityStatisticsImpl) getEntityStatistics(entityName)).fetchCount++;
+ 	}
+ 
+ 	/**
+@@ -181,9 +181,9 @@
+ 	 * @return EntityStatistics object
+ 	 */
+ 	public synchronized EntityStatistics getEntityStatistics(String entityName) {
+-		EntityStatistics es = (EntityStatistics) entityStatistics.get(entityName);
+-		if (es==null) {
+-			es = new EntityStatistics(entityName);
++		EntityStatisticsImpl es = (EntityStatisticsImpl) entityStatistics.get(entityName);
++		if (es == null) {
++			es = new EntityStatisticsImpl(entityName);
+ 			entityStatistics.put(entityName, es);
+ 		}
+ 		return es;
+@@ -191,19 +191,19 @@
+ 	
+ 	public synchronized void updateEntity(String entityName) {
+ 		entityUpdateCount++;
+-		EntityStatistics es = getEntityStatistics(entityName);
++		EntityStatisticsImpl es = (EntityStatisticsImpl) getEntityStatistics(entityName);
+ 		es.updateCount++;
+ 	}
+ 
+ 	public synchronized void insertEntity(String entityName) {
+ 		entityInsertCount++;
+-		EntityStatistics es = getEntityStatistics(entityName);
++		EntityStatisticsImpl es = (EntityStatisticsImpl) getEntityStatistics(entityName);
+ 		es.insertCount++;
+ 	}
+ 
+ 	public synchronized void deleteEntity(String entityName) {
+ 		entityDeleteCount++;
+-		EntityStatistics es = getEntityStatistics(entityName);
++		EntityStatisticsImpl es = (EntityStatisticsImpl) getEntityStatistics(entityName);
+ 		es.deleteCount++;
+ 	}
+ 
+@@ -214,9 +214,9 @@
+ 	 * @return CollectionStatistics
+ 	 */
+ 	public synchronized CollectionStatistics getCollectionStatistics(String role) {
+-		CollectionStatistics cs = (CollectionStatistics) collectionStatistics.get(role);
++		CollectionStatisticsImpl cs = (CollectionStatisticsImpl) collectionStatistics.get(role);
+ 		if (cs==null) {
+-			cs = new CollectionStatistics(role);
++			cs = new CollectionStatisticsImpl(role);
+ 			collectionStatistics.put(role, cs);
+ 		}
+ 		return cs;
+@@ -224,27 +224,27 @@
+ 	
+ 	public synchronized void loadCollection(String role) {
+ 		collectionLoadCount++;
+-		getCollectionStatistics(role).loadCount++;
++		((CollectionStatisticsImpl) getCollectionStatistics(role)).loadCount++;
+ 	}
+ 
+ 	public synchronized void fetchCollection(String role) {
+ 		collectionFetchCount++;
+-		getCollectionStatistics(role).fetchCount++;
++		((CollectionStatisticsImpl) getCollectionStatistics(role)).fetchCount++;
+ 	}
+ 
+ 	public synchronized void updateCollection(String role) {
+ 		collectionUpdateCount++;
+-		getCollectionStatistics(role).updateCount++;
++		((CollectionStatisticsImpl) getCollectionStatistics(role)).updateCount++;
+ 	}
+ 
+ 	public synchronized void recreateCollection(String role) {
+ 		collectionRecreateCount++;
+-		getCollectionStatistics(role).recreateCount++;
++		((CollectionStatisticsImpl) getCollectionStatistics(role)).recreateCount++;
+ 	}
+ 
+ 	public synchronized void removeCollection(String role) {
+ 		collectionRemoveCount++;
+-		getCollectionStatistics(role).removeCount++;
++		((CollectionStatisticsImpl) getCollectionStatistics(role)).removeCount++;
+ 	}
+ 	
+ 	/**
+@@ -254,7 +254,7 @@
+ 	 * @return SecondLevelCacheStatistics
+ 	 */
+ 	public synchronized SecondLevelCacheStatistics getSecondLevelCacheStatistics(String regionName) {
+-		SecondLevelCacheStatistics slcs = ( SecondLevelCacheStatistics ) secondLevelCacheStatistics.get( regionName );
++		SecondLevelCacheStatisticsImpl slcs = (SecondLevelCacheStatisticsImpl) secondLevelCacheStatistics.get(regionName);
+ 		if ( slcs == null ) {
+ 			if ( sessionFactory == null ) {
+ 				return null;
+@@ -263,7 +263,7 @@
+ 			if ( region == null ) {
+ 				return null;
+ 			}
+-			slcs = new SecondLevelCacheStatistics( region );
++			slcs = new SecondLevelCacheStatisticsImpl(region);
+ 			secondLevelCacheStatistics.put( regionName, slcs );
+ 		}
+ 		return slcs;
+@@ -271,17 +271,17 @@
+ 
+ 	public synchronized void secondLevelCachePut(String regionName) {
+ 		secondLevelCachePutCount++;
+-		getSecondLevelCacheStatistics(regionName).putCount++;
++		((SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName)).putCount++;
+ 	}
+ 
+ 	public synchronized void secondLevelCacheHit(String regionName) {
+ 		secondLevelCacheHitCount++;
+-		getSecondLevelCacheStatistics(regionName).hitCount++;
++		((SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName)).hitCount++;
+ 	}
+ 
+ 	public synchronized void secondLevelCacheMiss(String regionName) {
+ 		secondLevelCacheMissCount++;
+-		getSecondLevelCacheStatistics(regionName).missCount++;
++		((SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName)).missCount++;
+ 	}
+ 
+ 	public synchronized void queryExecuted(String hql, int rows, long time) {
+@@ -291,7 +291,7 @@
+ 			queryExecutionMaxTimeQueryString = hql;
+ 		}
+ 		if (hql!=null) {
+-			QueryStatistics qs = getQueryStatistics(hql);
++			QueryStatisticsImpl qs = (QueryStatisticsImpl) getQueryStatistics(hql);
+ 			qs.executed(rows, time);
+ 		}
+ 	}
+@@ -299,30 +299,30 @@
+ 	public synchronized void queryCacheHit(String hql, String regionName) {
+ 		queryCacheHitCount++;
+ 		if (hql!=null) {
+-			QueryStatistics qs = getQueryStatistics(hql);
++			QueryStatisticsImpl qs = (QueryStatisticsImpl) getQueryStatistics(hql);
+ 			qs.cacheHitCount++;
+ 		}
+-		SecondLevelCacheStatistics slcs = getSecondLevelCacheStatistics(regionName);
++		SecondLevelCacheStatisticsImpl slcs = (SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName);
+ 		slcs.hitCount++;
+ 	}
+ 
+ 	public synchronized void queryCacheMiss(String hql, String regionName) {
+ 		queryCacheMissCount++;
+ 		if (hql!=null) {
+-			QueryStatistics qs = getQueryStatistics(hql);
++			QueryStatisticsImpl qs = (QueryStatisticsImpl) getQueryStatistics(hql);
+ 			qs.cacheMissCount++;
+ 		}
+-		SecondLevelCacheStatistics slcs = getSecondLevelCacheStatistics(regionName);
++		SecondLevelCacheStatisticsImpl slcs = (SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName);
+ 		slcs.missCount++;
+ 	}
+ 
+ 	public synchronized void queryCachePut(String hql, String regionName) {
+ 		queryCachePutCount++;
+ 		if (hql!=null) {
+-			QueryStatistics qs = getQueryStatistics(hql);
++			QueryStatisticsImpl qs = (QueryStatisticsImpl) getQueryStatistics(hql);
+ 			qs.cachePutCount++;
+ 		}
+-		SecondLevelCacheStatistics slcs = getSecondLevelCacheStatistics(regionName);
++		SecondLevelCacheStatisticsImpl slcs = (SecondLevelCacheStatisticsImpl) getSecondLevelCacheStatistics(regionName);
+ 		slcs.putCount++;
+ 	}
+ 
+@@ -333,9 +333,9 @@
+ 	 * @return QueryStatistics
+ 	 */
+ 	public synchronized QueryStatistics getQueryStatistics(String queryString) {
+-		QueryStatistics qs = (QueryStatistics) queryStatistics.get(queryString);
++		QueryStatisticsImpl qs = (QueryStatisticsImpl) queryStatistics.get(queryString);
+ 		if (qs==null) {
+-			qs = new QueryStatistics(queryString);
++			qs = new QueryStatisticsImpl(queryString);
+ 			queryStatistics.put(queryString, qs);
+ 		}
+ 		return qs;
+@@ -614,7 +614,7 @@
+ 
+ 	public void optimisticFailure(String entityName) {
+ 		optimisticFailureCount++;
+-		getEntityStatistics(entityName).optimisticFailureCount++;
++		((EntityStatisticsImpl) getEntityStatistics(entityName)).optimisticFailureCount++;
+ 	}
+ 
+ 	public long getOptimisticFailureCount() {

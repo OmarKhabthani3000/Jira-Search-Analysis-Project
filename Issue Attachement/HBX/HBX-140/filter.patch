@@ -1,0 +1,211 @@
+Index: org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/AnnotationBinder.java,v
+retrieving revision 1.64
+diff -u -r1.64 AnnotationBinder.java
+--- org/hibernate/cfg/AnnotationBinder.java	5 Mar 2005 19:58:08 -0000	1.64
++++ org/hibernate/cfg/AnnotationBinder.java	22 Mar 2005 11:24:41 -0000
+@@ -9,6 +9,7 @@
+ import org.hibernate.MappingException;
+ import org.hibernate.annotations.BatchSize;
+ import org.hibernate.annotations.Check;
++import org.hibernate.annotations.Filter;
+ import org.hibernate.annotations.Proxy;
+ import org.hibernate.annotations.Type;
+ import org.hibernate.annotations.Where;
+@@ -338,6 +339,7 @@
+ 		Proxy proxyAnn = (Proxy) annotatedClass.getAnnotation(Proxy.class);
+ 		BatchSize sizeAnn = (BatchSize) annotatedClass.getAnnotation(BatchSize.class);
+ 		Where whereAnn = (Where) annotatedClass.getAnnotation(Where.class);
++		Filter filterAnn = (Filter) annotatedClass.getAnnotation(Filter.class);
+ 		Entity entityAnn = (Entity) annotatedClass.getAnnotation(Entity.class);
+ 		org.hibernate.annotations.Entity hibEntityAnn = (org.hibernate.annotations.Entity)
+ 				annotatedClass.getAnnotation( org.hibernate.annotations.Entity.class );
+@@ -346,6 +348,7 @@
+ 		entityBinder.setBatchSize(sizeAnn);
+ 		entityBinder.setProxy(proxyAnn);
+ 		entityBinder.setWhere(whereAnn);
++		entityBinder.setFilter(filterAnn);
+ 		entityBinder.bindEntity();
+ 
+ 		if (! isSubClass) {
+@@ -699,7 +702,7 @@
+ 				getFetchMode( ann.fetch() ), 
+ 				(Ejb3JoinColumn[]) columns, getCascadeStrategy( ann.cascade() ),
+ 				inferredData.getDefaultAccess(), propertyHolder,
+-				bindBatchSize(annotedElt), mappings, bindWhere(annotedElt) );
++				bindBatchSize(annotedElt), mappings, bindWhere(annotedElt), bindFilter(annotedElt) );
+ 		}
+ 		else if ( annotedElt.isAnnotationPresent(ManyToMany.class) ) {
+ 			ManyToMany ann = annotedElt.getAnnotation(ManyToMany.class);
+@@ -746,7 +749,7 @@
+ 				assocTable, getCascadeStrategy( ann.cascade() ), 
+ 				inferredData.getDefaultAccess(), propertyHolder, ann.isInverse(),
+ 				joinColumns, inverseJoinColumns,
+-				bindBatchSize(annotedElt), bindWhere(annotedElt), mappings
++				bindBatchSize(annotedElt), bindWhere(annotedElt), bindFilter(annotedElt), mappings
+ 			);
+ 		}
+ 		else {
+@@ -814,6 +817,19 @@
+ 		return ann == null ? null : ann.clause();
+ 	}
+ 
++	private static Map<String, String> bindFilter(AnnotatedElement annotedElt) {
++		Filter ann = (Filter) annotedElt.getAnnotation(Filter.class);
++		Map<String, String> filters = new HashMap<String, String>();
++		if(ann != null) {
++			String[] clauses = ann.clauses();
++			String[] names = ann.names();
++			for(int i=0; i < clauses.length; i++) {
++				filters.put(clauses[i], names[i]);
++			}
++		}
++		return filters;
++	}
++	
+ 	private static int bindBatchSize(AnnotatedElement annotedElt) {
+ 		BatchSize batchAnn = annotedElt.getAnnotation(BatchSize.class);
+ 		return batchAnn == null ? -1 : batchAnn.size();
+@@ -1108,7 +1124,8 @@
+ 	private static void bindOneToMany(Class collectionType, String targetEntity,
+ 									  String propertyName, Class returnedClass, FetchMode fetchMode,
+ 									  Ejb3JoinColumn[] columns, String cascadeStrategy, String propertyAccessorName,
+-									  PropertyHolder propertyHolder, int batchSize, ExtendedMappings mappings, String where) {
++									  PropertyHolder propertyHolder, int batchSize, ExtendedMappings mappings, String where,
++									  Map<String, String> filters) {
+ 		for (Ejb3JoinColumn column : columns) {
+ 			if ( column.isSecondary() ) {
+ 				throw new NotYetImplementedException("Collections having FK in secondary table");
+@@ -1124,6 +1141,12 @@
+ 		oneToMany.setReferencedEntityName( getCollectionType(collectionType, targetEntity) );
+ 		mappings.addSecondPass( new CollectionSecondPass(mappings, collection, columns) );
+ 		mappings.addCollection(collection);
++		// Add filters
++		Iterator<String> iter = filters.keySet().iterator();
++		while(iter.hasNext()) {
++			String name = iter.next();
++			if ( StringHelper.isNotEmpty(filters.get(name) ) ) collection.addFilter(name, filters.get(name));
++		}
+ 		Property prop = makeProperty(propertyName, collection, true, true, false, cascadeStrategy, propertyAccessorName);
+ 		//we don't care about the join stuffs because the column is on the other side.
+ 		propertyHolder.addProperty(prop);
+@@ -1134,7 +1157,7 @@
+ 									   Table table, String cascadeStrategy, String propertyAccessorName,
+ 									   PropertyHolder propertyHolder, boolean isInverse,
+ 									   Ejb3JoinColumn[] joinColumns, Ejb3JoinColumn[] inverseJoinColumns,
+-									   int batchSize, String where, ExtendedMappings mappings) {
++									   int batchSize, String where, Map<String, String> filters, ExtendedMappings mappings) {
+ 			
+ 		log.debug("Binding ManyToMany: " + propertyName);
+ 		//log.debug( "Joincolumn: " + joinColumn.getMappingColumn().getName() );
+@@ -1155,6 +1178,12 @@
+ 			) 
+ 		);
+ 		mappings.addCollection(collection);
++		// Add filters
++		Iterator<String> iter = filters.keySet().iterator();
++		while(iter.hasNext()) {
++			String name = iter.next();
++			if ( StringHelper.isNotEmpty(filters.get(name) ) ) collection.addFilter(name, filters.get(name));
++		}
+ 		Property prop = makeProperty(propertyName, collection, true, true, false, cascadeStrategy, propertyAccessorName);
+ 		//we don't care about the join stuffs because the column is on the association table.
+ 		propertyHolder.addProperty(prop);
+@@ -1240,7 +1269,7 @@
+ 		key.setTypeName(null);
+ 		TableBinder.bindFk(collValue.getOwner(), columns, key);
+ 
+-		collValue.setKey(key);
++		collValue.setKey(key);	
+ 	}
+ 	
+ 	public static void bindManyToManySecondPass(
+Index: org/hibernate/cfg/annotations/EntityBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/annotations/EntityBinder.java,v
+retrieving revision 1.8
+diff -u -r1.8 EntityBinder.java
+--- org/hibernate/cfg/annotations/EntityBinder.java	5 Mar 2005 19:58:08 -0000	1.8
++++ org/hibernate/cfg/annotations/EntityBinder.java	22 Mar 2005 11:24:41 -0000
+@@ -11,6 +11,7 @@
+ import org.hibernate.annotations.PolymorphismType;
+ import org.hibernate.annotations.Proxy;
+ import org.hibernate.annotations.Where;
++import org.hibernate.annotations.Filter;
+ import org.hibernate.cfg.AnnotationBinder;
+ import org.hibernate.cfg.Ejb3JoinColumn;
+ import org.hibernate.cfg.ExtendedMappings;
+@@ -37,7 +38,9 @@
+ import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.LinkedList;
+ import java.util.List;
++import java.util.Map;
+ 
+ /**
+  * Stateful holder and processor for binding Entity information
+@@ -63,6 +66,7 @@
+ 	private boolean lazy;
+ 	private String proxyClassName;
+ 	private String where;
++	private Map<String, String> filters = new HashMap<String, String>();
+ 
+ 	private java.util.Map<String, Join> secondaryTables = new HashMap<String, Join>();
+ 	private java.util.Map<String, Object> secondaryTableJoins = new HashMap<String, Object>();
+@@ -145,6 +149,11 @@
+ 			rootClass.setMutable(mutable);
+ 			rootClass.setExplicitPolymorphism( isExplicitPolymorphism(polymorphismType) );
+ 			if ( StringHelper.isNotEmpty(where) ) rootClass.setWhere(where);
++			Iterator<String> iter = filters.keySet().iterator();
++			while(iter.hasNext()) {
++				String name = iter.next();
++				if ( StringHelper.isNotEmpty(filters.get(name) ) ) rootClass.addFilter(name, filters.get(name));
++			}
+ 		}
+ 		persistentClass.setOptimisticLockMode( getVersioning(optimisticLockType) );
+ 		persistentClass.setSelectBeforeUpdate(selectBeforeUpdate);
+@@ -227,6 +236,16 @@
+ 			where = whereAnn.clause();
+ 		}
+ 	}
++	
++	public void setFilter(Filter filterAnn) {
++		if(filterAnn != null) {
++			String[] clauses = filterAnn.clauses();
++			String[] names = filterAnn.names();
++			for(int i=0; i < clauses.length; i++) {
++				filters.put(clauses[i], names[i]);
++			}
++		}
++	}
+ 
+ 	private String getClassTableName(String tableName) {
+ 		if ( StringHelper.isEmpty(tableName) ) {
+Index: org/hibernate/annotations/Filter.java
+===================================================================
+RCS file: org/hibernate/annotations/Filter.java
+diff -N org/hibernate/annotations/Filter.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/annotations/Filter.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,19 @@
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.TYPE;
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Target;
++import java.lang.annotation.Retention;
++
++/**
++ * Where clause to add to the element (Class or Collection)
++ * @author Emmanuel Bernard
++ */
++@Target({TYPE, METHOD, FIELD}) @Retention(RUNTIME)
++public @interface Filter {
++	String[] names();
++	String[] clauses();
++}

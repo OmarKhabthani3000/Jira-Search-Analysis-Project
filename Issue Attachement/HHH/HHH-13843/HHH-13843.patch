@@ -1,0 +1,196 @@
+Index: hibernate-core/src/main/java/org/hibernate/tool/schema/extract/internal/DatabaseInformationCachedImpl.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/tool/schema/extract/internal/DatabaseInformationCachedImpl.java	(date 1580937619000)
++++ hibernate-core/src/main/java/org/hibernate/tool/schema/extract/internal/DatabaseInformationCachedImpl.java	(date 1580937619000)
+@@ -0,0 +1,57 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.tool.schema.extract.internal;
++
++import java.sql.SQLException;
++
++import org.hibernate.boot.model.relational.Namespace;
++import org.hibernate.boot.model.relational.QualifiedTableName;
++import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
++import org.hibernate.resource.transaction.spi.DdlTransactionIsolator;
++import org.hibernate.service.ServiceRegistry;
++import org.hibernate.tool.schema.extract.spi.NameSpaceTablesInformation;
++import org.hibernate.tool.schema.extract.spi.TableInformation;
++
++/**
++ * Will cache all database information by reading the tableinformation from the name space in one call.
++ * Schema migration becomes much faster when this object is used.
++ * @author ??
++ */
++public class DatabaseInformationCachedImpl extends DatabaseInformationImpl {
++	private NameSpaceTablesInformation defaultNameSpaceTablesInformation = null;
++	private final Namespace defaultNamespace;
++
++	/**
++	 *
++	 * @param serviceRegistry        ServiceRegistry
++	 * @param jdbcEnvironment        JdbcEnvironment
++	 * @param ddlTransactionIsolator DdlTransactionIsolator
++	 * @param defaultNamespace              NameSpace
++	 */
++	public DatabaseInformationCachedImpl(
++		ServiceRegistry serviceRegistry,
++		JdbcEnvironment jdbcEnvironment,
++		DdlTransactionIsolator ddlTransactionIsolator, Namespace defaultNamespace)
++		throws SQLException {
++		super(serviceRegistry, jdbcEnvironment, ddlTransactionIsolator, defaultNamespace.getName());
++		this.defaultNamespace = defaultNamespace;
++	}
++
++	@Override
++	public TableInformation getTableInformation(QualifiedTableName qualifiedTableName) {
++
++		if (defaultNameSpaceTablesInformation == null) {
++			defaultNameSpaceTablesInformation = getTablesInformation(defaultNamespace);
++		}
++		TableInformation tableInformation = defaultNameSpaceTablesInformation.getTableInformation(qualifiedTableName.getTableName().getText());
++		if (tableInformation != null) {
++			return tableInformation;
++		}
++		return super.getTableInformation(qualifiedTableName);
++	}
++
++}
+Index: hibernate-core/src/main/java/org/hibernate/tool/schema/internal/AbstractSchemaMigrator.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/tool/schema/internal/AbstractSchemaMigrator.java	(date 1580481936000)
++++ hibernate-core/src/main/java/org/hibernate/tool/schema/internal/AbstractSchemaMigrator.java	(date 1580937619000)
+@@ -93,11 +93,7 @@
+ 			final JdbcContext jdbcContext = tool.resolveJdbcContext( options.getConfigurationValues() );
+ 			final DdlTransactionIsolator ddlTransactionIsolator = tool.getDdlTransactionIsolator( jdbcContext );
+ 			try {
+-				final DatabaseInformation databaseInformation = Helper.buildDatabaseInformation(
+-						tool.getServiceRegistry(),
+-						ddlTransactionIsolator,
+-						metadata.getDatabase().getDefaultNamespace().getName()
+-				);
++				final DatabaseInformation databaseInformation = getDatabaseInformation(ddlTransactionIsolator, metadata.getDatabase().getDefaultNamespace());
+ 
+ 				final GenerationTarget[] targets = tool.buildGenerationTargets(
+ 						targetDescriptor,
+@@ -139,6 +135,8 @@
+ 		}
+ 	}
+ 
++	protected abstract DatabaseInformation getDatabaseInformation(DdlTransactionIsolator ddlTransactionIsolator, Namespace namespace);
++
+ 	protected abstract NameSpaceTablesInformation performTablesMigration(
+ 			Metadata metadata,
+ 			DatabaseInformation existingDatabase,
+Index: hibernate-core/src/main/java/org/hibernate/tool/schema/internal/GroupedSchemaMigratorImpl.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/tool/schema/internal/GroupedSchemaMigratorImpl.java	(date 1580481936000)
++++ hibernate-core/src/main/java/org/hibernate/tool/schema/internal/GroupedSchemaMigratorImpl.java	(date 1580937619000)
+@@ -6,14 +6,18 @@
+  */
+ package org.hibernate.tool.schema.internal;
+ 
++import java.sql.SQLException;
+ import java.util.Set;
+ 
+ import org.hibernate.boot.Metadata;
+ import org.hibernate.boot.model.naming.Identifier;
+ import org.hibernate.boot.model.relational.Namespace;
+ import org.hibernate.dialect.Dialect;
++import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
+ import org.hibernate.engine.jdbc.internal.Formatter;
+ import org.hibernate.mapping.Table;
++import org.hibernate.resource.transaction.spi.DdlTransactionIsolator;
++import org.hibernate.tool.schema.extract.internal.DatabaseInformationCachedImpl;
+ import org.hibernate.tool.schema.extract.spi.DatabaseInformation;
+ import org.hibernate.tool.schema.extract.spi.NameSpaceTablesInformation;
+ import org.hibernate.tool.schema.extract.spi.TableInformation;
+@@ -35,6 +39,20 @@
+ 		super( tool, schemaFilter );
+ 	}
+ 
++	protected DatabaseInformation getDatabaseInformation(DdlTransactionIsolator ddlTransactionIsolator, Namespace namespace) {
++		final JdbcEnvironment jdbcEnvironment = tool.getServiceRegistry().getService( JdbcEnvironment.class );
++		try {
++			return new DatabaseInformationCachedImpl(
++				tool.getServiceRegistry(),
++				jdbcEnvironment,
++				ddlTransactionIsolator,
++				namespace);
++		}
++		catch (SQLException e) {
++			throw jdbcEnvironment.getSqlExceptionHelper().convert( e, "Unable to build DatabaseInformationCached" );
++		}
++	}
++
+ 	@Override
+ 	protected NameSpaceTablesInformation performTablesMigration(
+ 			Metadata metadata,
+Index: hibernate-core/src/main/java/org/hibernate/tool/schema/internal/IndividuallySchemaMigratorImpl.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/tool/schema/internal/IndividuallySchemaMigratorImpl.java	(date 1580481936000)
++++ hibernate-core/src/main/java/org/hibernate/tool/schema/internal/IndividuallySchemaMigratorImpl.java	(date 1580937619000)
+@@ -14,6 +14,7 @@
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.jdbc.internal.Formatter;
+ import org.hibernate.mapping.Table;
++import org.hibernate.resource.transaction.spi.DdlTransactionIsolator;
+ import org.hibernate.tool.schema.extract.spi.DatabaseInformation;
+ import org.hibernate.tool.schema.extract.spi.NameSpaceTablesInformation;
+ import org.hibernate.tool.schema.extract.spi.TableInformation;
+@@ -35,6 +36,10 @@
+ 		super( tool, schemaFilter );
+ 	}
+ 
++	protected DatabaseInformation getDatabaseInformation(DdlTransactionIsolator ddlTransactionIsolator, Namespace namespace) {
++		return Helper.buildDatabaseInformation(tool.getServiceRegistry(), ddlTransactionIsolator, namespace.getName());
++	}
++
+ 	@Override
+ 	protected NameSpaceTablesInformation performTablesMigration(
+ 			Metadata metadata,
+Index: hibernate-core/src/test/java/org/hibernate/test/tool/schema/internal/CheckForExistingForeignKeyTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/tool/schema/internal/CheckForExistingForeignKeyTest.java	(date 1580481936000)
++++ hibernate-core/src/test/java/org/hibernate/test/tool/schema/internal/CheckForExistingForeignKeyTest.java	(date 1580937619000)
+@@ -18,6 +18,7 @@
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.ForeignKey;
+ import org.hibernate.mapping.Table;
++import org.hibernate.resource.transaction.spi.DdlTransactionIsolator;
+ import org.hibernate.tool.schema.extract.internal.ColumnInformationImpl;
+ import org.hibernate.tool.schema.extract.internal.ForeignKeyInformationImpl;
+ import org.hibernate.tool.schema.extract.internal.TableInformationImpl;
+@@ -49,6 +50,13 @@
+ 			super( null, null );
+ 		}
+ 
++		@Override
++		protected DatabaseInformation getDatabaseInformation(
++			DdlTransactionIsolator ddlTransactionIsolator, Namespace namespace)
++		{
++			return null;
++		}
++
+ 		/**
+ 		 * Needed implementation. Not used in test.
+ 		 */

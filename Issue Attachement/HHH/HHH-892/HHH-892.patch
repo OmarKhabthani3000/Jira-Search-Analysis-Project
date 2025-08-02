@@ -1,0 +1,169 @@
+Index: core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java	(revision 20026)
++++ core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java	(working copy)
+@@ -659,12 +659,20 @@
+ 					}
+ 				}
+ 			}
++			processResultVariablesInOrderByClause( qn );
+ 		}
+ 		finally {
+ 			popFromClause();
+ 		}
+ 	}
+ 
++	private void processResultVariablesInOrderByClause( QueryNode qn ) {
++		if ( qn.hasOrderByClause() ) {
++			qn.getOrderByClause().processResultVariables();
++		}
++	}
++
++
+ 	protected void postProcessDML(RestrictableStatement statement) throws SemanticException {
+ 		statement.getFromClause().resolve();
+ 
+Index: core/src/main/java/org/hibernate/hql/ast/tree/SelectClause.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/SelectClause.java	(revision 20026)
++++ core/src/main/java/org/hibernate/hql/ast/tree/SelectClause.java	(working copy)
+@@ -25,8 +25,11 @@
+ package org.hibernate.hql.ast.tree;
+ 
+ import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.LinkedHashMap;
+ import java.util.List;
++import java.util.TreeMap;
+ 
+ import org.hibernate.hql.antlr.SqlTokenTypes;
+ import org.hibernate.hql.ast.util.ASTAppender;
+@@ -54,6 +57,7 @@
+ 	private String[][] columnNames;
+ 	private List collectionFromElements;
+ 	private String[] aliases;
++	private LinkedHashMap aliasToColumnNamesMap;
+ 
+ 	// Currently we can only have one...
+ 	private AggregatedSelectExpression aggregatedSelectExpression;
+@@ -243,6 +247,7 @@
+ 	private void finishInitialization(ArrayList queryReturnTypeList) {
+ 		queryReturnTypes = ( Type[] ) queryReturnTypeList.toArray( new Type[queryReturnTypeList.size()] );
+ 		initializeColumnNames();
++		initializeAliasToColumnNamesMap();
+ 		prepared = true;
+ 	}
+ 
+@@ -255,6 +260,19 @@
+ 		columnNames = getSessionFactoryHelper().generateColumnNames( queryReturnTypes );
+ 	}
+ 
++	private void initializeAliasToColumnNamesMap() {
++		aliasToColumnNamesMap = new LinkedHashMap();
++		if ( aliases != null ) {
++			for ( int i = 0 ; i < aliases.length ; i ++ ) {
++				aliasToColumnNamesMap.put( aliases[ i ], columnNames[ i ] );
++			}
++		}
++	}
++
++	public String[] getColumnNames(String alias) {
++		return ( String[] ) aliasToColumnNamesMap.get( alias );
++	}
++
+ 	/**
+ 	 * Prepares a derived (i.e., not explicitly defined in the query) select clause.
+ 	 *
+Index: core/src/main/java/org/hibernate/hql/ast/tree/OrderByClause.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/OrderByClause.java	(revision 20026)
++++ core/src/main/java/org/hibernate/hql/ast/tree/OrderByClause.java	(working copy)
+@@ -24,8 +24,15 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
+ import org.hibernate.hql.antlr.HqlSqlTokenTypes;
++import org.hibernate.hql.antlr.SqlTokenTypes;
++import org.hibernate.hql.ast.util.ASTPrinter;
+ import org.hibernate.hql.ast.util.ASTUtil;
++import org.hibernate.util.StringHelper;
+ 
+ import antlr.collections.AST;
+ 
+@@ -46,4 +53,22 @@
+ 		}
+ 	}
+ 
++	public void processResultVariables() {
++		for ( Iterator it = ASTUtil.collectChildren( this, unresolvedIdentNodePredicate ).iterator(); it.hasNext(); ) {
++			IdentNode identNode	= ( IdentNode ) it.next();
++			String[] columnNames = getWalker().getSelectClause().getColumnNames( identNode.getText() );
++			if ( columnNames != null ) {
++				String text = StringHelper.join(", ", columnNames);
++				identNode.setText( text );
++				identNode.setType( SqlTokenTypes.SQL_TOKEN);
++				identNode.setResolved();
++			}
++		}
++	}
++
++	private static ASTUtil.FilterPredicate unresolvedIdentNodePredicate = new ASTUtil.IncludePredicate() {
++		public boolean include(AST node) {
++			return ( node instanceof IdentNode && ! ( ( IdentNode ) node ).isResolved() );
++		}
++	};
+ }
+Index: testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(revision 20026)
++++ testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(working copy)
+@@ -741,6 +741,27 @@
+ 			}
+ 		}
+ 
++		//this should fail on Oracle due to the alias being used in the where clause
++		resultList = s.createCriteria(Enrolment.class)
++			.setProjection( Projections.projectionList()
++					.add( Projections.count( "student" ).as( "studentCount" ) )
++					.add( Projections.groupProperty( "course" )))
++				.addOrder( Order.desc( "studentCount" ) )
++			.list();
++		//assertEquals( 1, resultList.size() );
++
++		//this should fail on Oracle due to the alias being used in the where clause
++		resultList = s.createCriteria(Student.class)
++			.add(Restrictions.eq("name", "Gavin King"))
++			.setProjection( Projections.projectionList()
++					.add( Projections.id().as( "studentNumber" ))
++					.add( Property.forName( "name" ), "name" )
++					.add( Property.forName( "cityState" ), "cityState" )
++					.add( Property.forName("preferredCourse"), "preferredCourse" )
++			)
++			.list();
++		assertEquals( 1, resultList.size() );
++		
+ 		Object[] aResult = ( Object[] ) s.createCriteria(Student.class)
+ 			.add( Restrictions.idEq( new Long( 667 ) ) )
+ 			.setProjection( Projections.projectionList()
+Index: testsuite/src/test/java/org/hibernate/test/jpa/ql/JPAQLComplianceTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/jpa/ql/JPAQLComplianceTest.java	(revision 20026)
++++ testsuite/src/test/java/org/hibernate/test/jpa/ql/JPAQLComplianceTest.java	(working copy)
+@@ -52,4 +52,12 @@
+ 		s.createQuery( "select c FROM Item c WHERE c.parts IS EMPTY" ).list();
+ 		s.close();
+ 	}
++
++	public void testOrderByAlias() {
++		Session s = openSession();
++		s.createQuery( "select c.name as myname FROM Item c ORDER BY myname" ).list();
++		s.createQuery( "select p.name as name, p.stockNumber as stockNo, p.unitPrice as uPrice FROM Part p ORDER BY name, stockNo, 100 * uPrice, abs( uPrice )" ).list();
++		s.createQuery( "select p.name, count( p.name ) as cnt, count( p.name ) FROM Part p GROUP BY p.name ORDER BY p.name, cnt, 3" ).list();
++		s.close();
++	}	
+ }

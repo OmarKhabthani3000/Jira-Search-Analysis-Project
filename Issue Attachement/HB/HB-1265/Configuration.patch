@@ -1,0 +1,253 @@
+--- Hibernate2/src/net/sf/hibernate/cfg/Configuration.java	2004-10-11 11:36:57.000000000 -0700
++++ Hibernate2.modified/src/net/sf/hibernate/cfg/Configuration.java	2004-08-30 11:29:34.000000000 -0700
+@@ -1,4 +1,4 @@
+-//$Id: Configuration.java,v 1.37 2004/09/13 04:53:30 oneovthafew Exp $
++//$Id: Configuration.java,v 1.36 2004/08/13 08:18:01 oneovthafew Exp $
+ package net.sf.hibernate.cfg;
+ 
+ import java.util.Enumeration;
+@@ -187,11 +187,7 @@
+ 	public Configuration addFile(File xmlFile) throws MappingException {
+ 		log.info( "Mapping file: " + xmlFile.getPath() );
+ 		try {
+-			//addInputStream( new FileInputStream(xmlFile) );
+-			List errors = new ArrayList();
+-			org.dom4j.Document doc= XMLHelper.createSAXReader(xmlFile.getName(), errors).read( xmlFile );
+-			if ( errors.size()!=0 ) throw new MappingException( "invalid mapping", (Throwable) errors.get(0) );
+-			add(doc);
++			addInputStream( new FileInputStream(xmlFile) );
+ 		}
+ 		catch (Exception e) {
+ 			log.error("Could not configure datastore from file: " + xmlFile.getPath(), e);
+@@ -226,13 +222,10 @@
+ 	public Configuration addURL(URL url) throws MappingException {
+ 		if ( log.isDebugEnabled() ) log.debug("Mapping URL:\n" + url);
+ 		try {
+-			List errors = new ArrayList();
+-			org.dom4j.Document doc = XMLHelper.createSAXReader(url.toExternalForm(), errors).read( url );
+-			if ( errors.size()!=0 ) throw new MappingException( "invalid mapping", (Throwable) errors.get(0) );
+-			add(doc);
++			addInputStream( url.openStream() );
+ 		}
+ 		catch (Exception e) {
+-			log.error("Could not configure datastore from XML", e);
++			log.error("Could not configure datastore from URL", e);
+ 			throw new MappingException(e);
+ 		}
+ 		return this;
+@@ -335,10 +328,7 @@
+      * classloader and then from the classloader that loaded Hibernate.
+      */
+     public Configuration addResource(String path) throws MappingException {
+-       return addResourceURL(path);
+-/*        log.info("Mapping resource: " + path);
+-	  		File file = new File(path);
+-			log.info("The absolute path is " + file.getAbsolutePath());
++        log.info("Mapping resource: " + path);
+         InputStream rsrc = Thread.currentThread().getContextClassLoader().getResourceAsStream(path);
+         if (rsrc==null) rsrc = Environment.class.getClassLoader().getResourceAsStream(path);
+         if (rsrc==null) throw new MappingException("Resource: " + path + " not found");
+@@ -348,25 +338,6 @@
+         catch (MappingException me) {
+             throw new MappingException("Error reading resource: " + path, me);
+         }
+-*/    }    
+-
+-    /**
+-     * Read mappings from an application resource trying different classloaders.
+-     * This method will try to load the resource first from the thread context
+-     * classloader and then from the classloader that loaded Hibernate.
+-     */
+-    public Configuration addResourceURL(String path) throws MappingException {
+-        log.info("Mapping URL resource: " + path);
+-        URL url = Thread.currentThread().getContextClassLoader().getResource(path);
+-        if (url ==null) url = Environment.class.getClassLoader().getResource(path);
+-        if (url==null) throw new MappingException("Resource: " + path + " not found");
+-        try {
+-           log.info("The URL for the resource is " + url.toExternalForm());
+-            return addURL(url);
+-        }
+-        catch (MappingException me) {
+-            throw new MappingException("Error reading resource: " + path, me);
+-        }
+     }    
+ 
+ 	/**
+@@ -604,14 +575,9 @@
+ 				subIter = table.getForeignKeyIterator();
+ 				while ( subIter.hasNext() ) {
+ 					ForeignKey fk = (ForeignKey) subIter.next();
+-					boolean create = tableInfo==null || (
+-						tableInfo.getForeignKeyMetadata( fk.getName() )==null && (
+-							//Icky workaround for MySQL bug:
+-							!(dialect instanceof net.sf.hibernate.dialect.MySQLDialect) ||
+-							tableInfo.getIndexMetadata( fk.getName() )==null
+-						)
+-					);
+-					if (create) script.add( fk.sqlCreateString(dialect, mapping) );
++					if ( tableInfo==null || tableInfo.getForeignKeyMetadata( fk.getName() ) == null ) {
++						script.add( fk.sqlCreateString(dialect, mapping) );
++					}
+ 				}
+ 			}
+ 			
+@@ -899,6 +865,7 @@
+ 	protected InputStream getConfigurationInputStream(String resource) throws HibernateException {
+ 
+ 		log.info("Configuration resource: " + resource);
++		log.info("Classloader path " + Environment.class);
+ 
+ 		InputStream stream = Environment.class.getResourceAsStream(resource);
+ 		if (stream==null) {
+@@ -910,29 +877,11 @@
+ 	}
+ 
+ 	/**
+-	 * Get the configuration file as an <tt>InputStream</tt>. Might be overridden
+-	 * by subclasses to allow the configuration to be located by some arbitrary
+-	 * mechanism.
+-	 */
+-	protected URL getConfigurationURL(String resource) throws HibernateException {
+-
+-		log.info("Configuration resource: " + resource);
+-
+-		URL url = Environment.class.getResource(resource);
+-		if (url==null) {
+-			log.warn(resource + " not found");
+-			throw new HibernateException(resource + " not found");
+-		}
+-		return url;
+-
+-	}
+-
+-	/**
+ 	 * Use the mappings and properties specified in an application
+ 	 * resource named <tt>hibernate.cfg.xml</tt>.
+ 	 */
+ 	public Configuration configure() throws HibernateException {
+-		configure(getConfigurationURL("/hibernate.cfg.xml"));
++		configure("/hibernate.cfg.xml");
+ 		return this;
+ 	}
+ 
+@@ -947,8 +896,6 @@
+ 		log.info("configuring from resource: " + resource);
+ 		InputStream stream = getConfigurationInputStream(resource);
+ 		return doConfigure(stream, resource);
+-		//configure(getConfigurationURL(resource));
+-		//return this;
+ 	}
+ 
+ 	/**
+@@ -962,7 +909,12 @@
+ 	 */
+ 	public Configuration configure(URL url) throws HibernateException {
+ 		log.info( "configuring from url: " + url.toString() );
+-		return doConfigure( url, url.toString() );
++		try {
++			return doConfigure( url.openStream(), url.toString() );
++		}
++		catch (IOException ioe) {
++			throw new HibernateException("could not configure from URL: " + url, ioe);
++		}
+ 	}
+ 
+ 	/**
+@@ -977,10 +929,7 @@
+ 	public Configuration configure(File configFile) throws HibernateException {
+ 		log.info( "configuring from file: " + configFile.getName() );
+ 		try {
+-			InputSource source = new InputSource(new FileInputStream(configFile));
+-			log.debug("Setting systemId to " + configFile.getAbsolutePath());
+-			source.setSystemId(configFile.getAbsolutePath());
+-			return doConfigure( source, configFile.toString() );
++			return doConfigure( new FileInputStream(configFile), configFile.toString() );
+ 		}
+ 		catch (FileNotFoundException fnfe) {
+ 			throw new HibernateException("could not find file: " + configFile, fnfe);
+@@ -997,33 +946,6 @@
+ 	 * @return A configuration configured via the stream
+ 	 * @throws HibernateException
+ 	 */
+-	protected Configuration doConfigure(InputSource source, String resourceName) throws HibernateException {
+-
+-		org.dom4j.Document doc;
+-		try {
+-			List errors = new ArrayList();
+-			doc = XMLHelper.createSAXReader(resourceName, errors).read( source );
+-			if ( errors.size()!=0 ) throw new MappingException( "invalid configuration", (Throwable) errors.get(0) );
+-		}
+-		catch (Exception e) {
+-			log.error("problem parsing configuration" + resourceName, e);
+-			throw new HibernateException("problem parsing configuration" + resourceName, e);
+-		}
+-		
+-		return doConfigure(doc);
+-
+-	}
+-
+-	/**
+-	 * Use the mappings and properties specified in the given application
+-	 * resource. The format of the resource is defined in
+-	 * <tt>hibernate-configuration-2.0.dtd</tt>.
+-	 *
+-	 * @param stream Inputstream to be read from
+-	 * @param resourceName The name to use in warning/error messages
+-	 * @return A configuration configured via the stream
+-	 * @throws HibernateException
+-	 */
+ 	protected Configuration doConfigure(InputStream stream, String resourceName) throws HibernateException {
+ 
+ 		org.dom4j.Document doc;
+@@ -1050,33 +972,6 @@
+ 	}
+ 
+ 	/**
+-	 * Use the mappings and properties specified in the given application
+-	 * resource. The format of the resource is defined in
+-	 * <tt>hibernate-configuration-2.0.dtd</tt>.
+-	 *
+-	 * @param stream Inputstream to be read from
+-	 * @param resourceName The name to use in warning/error messages
+-	 * @return A configuration configured via the stream
+-	 * @throws HibernateException
+-	 */
+-	protected Configuration doConfigure(URL url, String resourceName) throws HibernateException {
+-
+-		org.dom4j.Document doc;
+-		try {
+-			List errors = new ArrayList();
+-			doc = XMLHelper.createSAXReader(resourceName, errors).read( new InputSource(url.toExternalForm()) );
+-			if ( errors.size()!=0 ) throw new MappingException( "invalid configuration", (Throwable) errors.get(0) );
+-		}
+-		catch (Exception e) {
+-			log.error("problem parsing configuration" + resourceName, e);
+-			throw new HibernateException("problem parsing configuration" + resourceName, e);
+-		}
+-		
+-		return doConfigure(doc);
+-
+-	}
+-
+-	/**
+ 	 * Use the mappings and properties specified in the given XML document.
+ 	 * The format of the file is defined in
+ 	 * <tt>hibernate-configuration-2.0.dtd</tt>.
+@@ -1101,7 +996,6 @@
+ 
+ 	protected Configuration doConfigure(org.dom4j.Document doc) throws HibernateException {
+ 
+-	   log.info("DOCUMENT NAME: " + doc.getName());
+ 		Element sfNode = doc.getRootElement().element("session-factory");
+ 		String name = sfNode.attributeValue("name");
+ 		if (name!=null) properties.setProperty(Environment.SESSION_FACTORY_NAME, name);
+@@ -1117,8 +1011,7 @@
+ 				Attribute jar = mapElement.attribute("jar");
+ 				if (rsrc!=null) {
+ 					log.debug(name + "<-" + rsrc);
+-					//addResource( rsrc.getValue() );
+-					addResourceURL( rsrc.getValue());
++					addResource( rsrc.getValue() );
+ 				}
+ 				else if ( jar!=null ) {
+ 					log.debug(name + "<-" + jar);

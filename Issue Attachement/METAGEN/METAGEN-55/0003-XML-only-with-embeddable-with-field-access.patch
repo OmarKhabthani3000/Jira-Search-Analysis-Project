@@ -1,0 +1,126 @@
+From 4bb6cb477cd725649208e82c6c9a490f9f1d55cb Mon Sep 17 00:00:00 2001
+From: Martijn Blankestijn <martijnblankestijn@gmail.com>
+Date: Sun, 13 Feb 2011 17:57:50 +0100
+Subject: [PATCH 3/3] XML only with embeddable with field access
+
+---
+ .../hibernate/jpamodelgen/xml/XmlMetaEntity.java   |   18 +++++++++++++++++-
+ .../hibernate/jpamodelgen/test/xmlonly/Option.java |    6 ++++++
+ .../hibernate/jpamodelgen/test/xmlonly/Period.java |    8 ++++++++
+ .../jpamodelgen/test/xmlonly/XmlOnlyTest.java      |    7 +++++++
+ .../hibernate/jpamodelgen/test/xmlonly/xmlonly.xml |   16 ++++++++++++++++
+ 5 files changed, 54 insertions(+), 1 deletions(-)
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Option.java
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Period.java
+
+diff --git a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
+index c1534ed..2e8c060 100644
+--- a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
++++ b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
+@@ -388,9 +388,13 @@ public class XmlMetaEntity implements MetaEntity {
+ 				break;
+ 			}
+ 		}
++
++        for (org.hibernate.jpamodelgen.xml.jaxb.Embedded embedded : attributes.getEmbedded()) {
++            parseEmbedded( embedded);
++        }
+ 	}
+ 
+-	private void parseEmbeddableAttributes(EmbeddableAttributes attributes) {
++    private void parseEmbeddableAttributes(EmbeddableAttributes attributes) {
+ 		if ( attributes == null ) {
+ 			return;
+ 		}
+@@ -452,6 +456,18 @@ public class XmlMetaEntity implements MetaEntity {
+ 		return false;
+ 	}
+ 
++    private void parseEmbedded(org.hibernate.jpamodelgen.xml.jaxb.Embedded embedded) {
++        XmlMetaSingleAttribute attribute;
++        ElementKind elementKind = getElementKind( embedded.getAccess() );
++        String type = getType( embedded.getName(), null, elementKind );
++        if ( type != null ) {
++            attribute = new XmlMetaSingleAttribute( this, embedded.getName(), type );
++            members.add( attribute );
++        }
++    }
++
++
++
+ 	private String determineExplicitTargetEntity(String targetClass) {
+ 		String explicitTargetClass = targetClass;
+ 		if ( explicitTargetClass != null ) {
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Option.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Option.java
+new file mode 100644
+index 0000000..44da65c
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Option.java
+@@ -0,0 +1,6 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++public class Option {
++    private Long id;
++    private Period period;
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Period.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Period.java
+new file mode 100644
+index 0000000..52dfb19
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Period.java
+@@ -0,0 +1,8 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++import java.util.Date;
++
++public class Period {
++    private Date start;
++    private Date end;
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
+index be67676..c094da6 100644
+--- a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
+@@ -51,6 +51,13 @@ public class XmlOnlyTest extends CompilationTest {
+         assertPresenceOfFieldInMetamodelFor(Tire.class, "car", "Type should be inferred from field");
+     }
+ 
++    @Test
++    public void testMetaModelGeneratedForEmbeddable() {
++        assertPresenceOfFieldInMetamodelFor(Option.class, "period", "Embedded expected");
++        assertPresenceOfFieldInMetamodelFor(Period.class, "start", "Embedded expected");
++        assertPresenceOfFieldInMetamodelFor(Period.class, "end", "Embedded expected");
++    }
++
+ 	@Override
+ 	protected String getPackageNameOfCurrentTest() {
+ 		return XmlOnlyTest.class.getPackage().getName();
+diff --git a/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml b/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
+index ba1a1fd..60b6c72 100644
+--- a/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
++++ b/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
+@@ -63,5 +63,21 @@
+         </attributes>
+     </entity>
+ 
++    <entity class="Option" access="FIELD">
++        <attributes>
++            <id name="id"/>
++            <embedded name="period" />
++        </attributes>
++    </entity>
+ 
++    <embeddable class="Period" access="FIELD">
++        <attributes>
++            <basic name="start">
++                <temporal>DATE</temporal>
++            </basic>
++            <basic name="end">
++                <temporal>DATE</temporal>
++            </basic>
++        </attributes>
++    </embeddable>
+ </entity-mappings>
+-- 
+1.7.0.4
+

@@ -1,0 +1,108 @@
+Repeated flush containing cascade delete raises IllegalArgumentException 
+or ClassCastException.
+
+<hibernate-mapping>
+    <class name="dbData.T05" table="t05"  
+        dynamic-insert="true" dynamic-update="true" optimistic-lock="version">
+        <id name="iden" type="java.lang.String">
+            <meta attribute="use-in-equals">true</meta>
+            <column name="iden" length="10" />
+            <generator class="assigned" />
+        </id>
+        <version name="version" type="java.lang.Integer">
+            <column name="version" not-null="true" />
+        </version>
+        ...
+        <one-to-one name="t052" class="dbData.T052"
+            cascade="save-update, delete, delete-orphan, lock, merge, refresh">
+        </one-to-one>
+        ...
+</hibernate-mapping>
+<hibernate-mapping>
+    <class name="dbData.T052" table="t052"  
+        dynamic-insert="true" dynamic-update="true" optimistic-lock="version">
+        <id name="iden" type="java.lang.String">
+            <meta attribute="use-in-equals">true</meta>
+            <column name="iden" length="10" />
+            <generator class="foreign">
+                <param name="property">t05</param>
+            </generator>
+        </id>
+        <version name="version" type="java.lang.Integer">
+            <column name="version" not-null="true" />
+        </version>
+        <one-to-one name="t05" class="dbData.T05" constrained="true"></one-to-one>
+        ...
+    </class>
+</hibernate-mapping>
+
+Hibernate release 4.1.7.Final was used. 
+
+Application java code:
+	...
+	t05.setT052(null);
+	...
+	session.flush(); //update t05 -> cascade delete t052
+	...
+	session.getTransaction().commit();
+	-> IllegalArgumentException / ClassCastException
+	
+method java.lang.String dbData.T05.getIden() from class dbData.T05 is invoked
+on target dbData.T052
+
+Stack:
+	I added source lines and state of variables on important lines.
+	Read it from last to first.
+
+NativeMethodAccessorImpl.invoke0(Method, Object, Object[]) line: not available [native method]	
+NativeMethodAccessorImpl.invoke(Object, Object[]) line: 39	
+DelegatingMethodAccessorImpl.invoke(Object, Object[]) line: 25	
+Method.invoke(Object, Object...) line: 597
+
+164:	return method.invoke( target, (Object[]) null );
+			method==public java.lang.String dbData.T05.getIden()
+			target==dbData.T052@4db2fad0	
+BasicPropertyAccessor$BasicGetter.get(Object) line: 164
+
+341:	id = idGetter.get( entity );
+			entity==dbData.T052@4db2fad0
+PojoEntityTuplizer(AbstractEntityTuplizer).getIdentifier(Object, SessionImplementor) line: 341
+
+4425:	return getEntityTuplizer().getIdentifier( entity, session );
+			entity==dbData.T052@4db2fad0
+SingleTableEntityPersister(AbstractEntityPersister).getIdentifier(Object, SessionImplementor) line: 4425	
+
+4147:	id = getIdentifier( entity, session );
+			entity==dbData.T052@4db2fad0
+SingleTableEntityPersister(AbstractEntityPersister).isTransient(Object, SessionImplementor) line: 4147	
+
+209:	isUnsaved = persister.isTransient(entity, session);
+			persister<=SingleTableEntityPersister(dbData.T05)
+208:	EntityPersister persister = session.getEntityPersister(entityName, entity);
+			entityName==dbData.T05
+			entity==dbData.T052@4db2fad0
+ForeignKeys.isTransient(String, Object, Boolean, SessionImplementor) line: 209	
+
+102:	if ( ForeignKeys.isTransient( persister.getEntityName(), entity, null, source ) ) {
+			persister<=SingleTableEntityPersister(dbData.T05)
+100:	persister = source.getEntityPersister( event.getEntityName(), entity );
+97:		if ( entityEntry == null ) {
+
+			entityEntry<=null
+92:		EntityEntry entityEntry = persistenceContext.getEntry( entity );
+			entity==dbData.T052@4db2fad0
+DefaultDeleteEventListener.onDelete(DeleteEvent, Set) line: 102	
+
+SessionImpl.fireDelete(DeleteEvent, Set) line: 950	
+
+		object==dbData.T052@4db2fad0
+		entityName==dbData.T05
+SessionImpl.delete(String, Object, boolean, Set) line: 935	
+
+Cascade.cascadeProperty(Object, Object, Type, CascadeStyle, String, Object, boolean) line: 262	
+Cascade.cascade(EntityPersister, Object, Object) line: 165	
+DefaultFlushEventListener(AbstractFlushingEventListener).cascadeOnFlush(EventSource, EntityPersister, Object, Object) line: 160	
+DefaultFlushEventListener(AbstractFlushingEventListener).prepareEntityFlushes(EventSource, PersistenceContext) line: 151	
+DefaultFlushEventListener(AbstractFlushingEventListener).flushEverythingToExecutions(FlushEvent) line: 88	
+DefaultFlushEventListener.onFlush(FlushEvent) line: 51	
+SessionImpl.flush() line: 1210

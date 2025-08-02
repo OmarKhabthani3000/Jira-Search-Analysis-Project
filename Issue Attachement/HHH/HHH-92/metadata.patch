@@ -1,0 +1,70 @@
+diff -u -r tool\hbm2ddl\DatabaseMetadata.java src.patch1\org\hibernate\tool\hbm2ddl\DatabaseMetadata.java
+--- tool\hbm2ddl\DatabaseMetadata.java	Mon Dec 20 02:12:24 2004
++++ tool\hbm2ddl\DatabaseMetadata.java	Fri Jan 14 18:15:43 2005
+@@ -29,6 +29,9 @@
+ 	
+ 	private final Map tables = new HashMap();
+ 	private final Set sequences = new HashSet();
++	private final Set schemas = new HashSet();
++	private String userName = null;
++	private boolean haveUserSchema = false;
+ 
+ 	private DatabaseMetaData meta;
+ 	private SQLExceptionConverter sqlExceptionConverter;
+@@ -37,6 +40,8 @@
+ 		sqlExceptionConverter = dialect.buildSQLExceptionConverter();
+ 		meta = connection.getMetaData();
+ 		initSequences(connection, dialect);
++		userName = meta.getUserName();
++		initSchemas();		
+ 	}
+ 
+ 	private static final String[] TYPES = {"TABLE"};
+@@ -73,9 +78,21 @@
+ 						rs = meta.getTables(catalog, schema, name, TYPES);
+ 					}
+ 					
++					
+ 					while ( rs.next() ) {
+ 						String tableName = rs.getString("TABLE_NAME");
+-						if ( name.equalsIgnoreCase(tableName) ) {
++						
++						// if schema is not specified in the mapping
++						// only match the tables for the current user
++						
++						boolean ok = true;
++
++						if (schema == null && haveUserSchema) {
++							String tableSchema = rs.getString("TABLE_SCHEM");
++							if (!tableSchema.equals(userName))
++								ok = false;
++						}
++						if ( ok && name.equalsIgnoreCase(tableName) ) {
+ 							table = new TableMetadata(rs, meta);
+ 							tables.put(name, table);
+ 							return table;
+@@ -119,6 +136,24 @@
+ 				if (statement!=null) statement.close();
+ 			}
+ 			
++		}
++	}
++	
++	private void initSchemas() throws SQLException {
++		if (meta.supportsSchemasInTableDefinitions()) { 	
++	 		ResultSet rs = null;
++	  		try  {
++	  	  		rs = meta.getSchemas();
++		  		while ( rs.next() ) {
++		  			String schema = rs.getString(1);
++				  	schemas.add(schema);
++				  	if (schema.equals(userName))
++				  		haveUserSchema = true;
++				}
++			}
++			finally {
++				if (rs!=null) rs.close();
++			}
+ 		}
+ 	}
+ 

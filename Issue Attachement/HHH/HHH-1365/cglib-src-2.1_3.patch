@@ -1,0 +1,70 @@
+diff -rbu cglib-src-2.1_3/src/proxy/net/sf/cglib/core/AbstractClassGenerator.java cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/core/AbstractClassGenerator.java
+--- cglib-src-2.1_3/src/proxy/net/sf/cglib/core/AbstractClassGenerator.java	2005-10-10 10:42:44.000000000 -0400
++++ cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/core/AbstractClassGenerator.java	2006-06-28 21:30:52.000000000 -0400
+@@ -39,6 +39,7 @@
+     private NamingPolicy namingPolicy = DefaultNamingPolicy.INSTANCE;
+     private Source source;
+     private ClassLoader classLoader;
++    private Class protDomainSrc;
+     private String namePrefix;
+     private Object key;
+     private boolean useCache = true;
+@@ -119,6 +120,13 @@
+         this.useCache = useCache;
+     }
+ 
++    /*
++     * Sets a class to provide the ProtectionDomain 'by example'
++     */
++    public void setProtDomainSrc(Class protDomainSrc) {
++        this.protDomainSrc = protDomainSrc;
++    }
++
+     /**
+      * @see #setUseCache
+      */
+@@ -216,7 +224,7 @@
+                             byte[] b = strategy.generate(this);
+                             String className = ClassNameReader.getClassName(new ClassReader(b));
+                             getClassNameCache(loader).add(className);
+-                            gen = ReflectUtils.defineClass(className, b, loader);
++                            gen = ReflectUtils.defineClass(className, b, loader, protDomainSrc);
+                         }
+                        
+                         if (useCache) {
+diff -rbu cglib-src-2.1_3/src/proxy/net/sf/cglib/core/ReflectUtils.java cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/core/ReflectUtils.java
+--- cglib-src-2.1_3/src/proxy/net/sf/cglib/core/ReflectUtils.java	2005-06-06 20:11:24.000000000 -0400
++++ cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/core/ReflectUtils.java	2006-06-28 21:26:56.000000000 -0400
+@@ -380,7 +380,19 @@
+     }
+         
+     public static Class defineClass(String className, byte[] b, ClassLoader loader) throws Exception {
+-        Object[] args = new Object[]{className, b, new Integer(0), new Integer(b.length), PROTECTION_DOMAIN };
++	return defineClass(className, b, loader, null );
++    }
++        
++    public static Class defineClass(String className, byte[] b, ClassLoader loader, final Class protDomainSrc) throws Exception {
++        ProtectionDomain pd = ( protDomainSrc == null 
++			? PROTECTION_DOMAIN
++			: (ProtectionDomain)AccessController.doPrivileged(new PrivilegedAction() {
++            			public Object run() {
++			                return protDomainSrc.getProtectionDomain();
++			            }
++			        }
++			));
++        Object[] args = new Object[]{className, b, new Integer(0), new Integer(b.length), pd };
+         return (Class)DEFINE_CLASS.invoke(loader, args);
+     }
+         
+diff -rbu cglib-src-2.1_3/src/proxy/net/sf/cglib/proxy/Enhancer.java cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/proxy/Enhancer.java
+--- cglib-src-2.1_3/src/proxy/net/sf/cglib/proxy/Enhancer.java	2005-10-11 10:22:18.000000000 -0400
++++ cglib-src-2.1_3-fixed/src/proxy/net/sf/cglib/proxy/Enhancer.java	2006-06-28 21:37:48.000000000 -0400
+@@ -171,6 +171,8 @@
+         } else {
+             this.superclass = superclass;
+         }
++	// Ensure we can load the class into the same package
++	setProtDomainSrc(superclass);
+     }
+ 
+     /**

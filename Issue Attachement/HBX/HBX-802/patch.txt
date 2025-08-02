@@ -1,0 +1,237 @@
+Index: tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	(revision 10682)
++++ tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	(working copy)
+@@ -42,6 +42,20 @@
+ 			return that.getDeclarationName().compareTo(what.getDeclarationName());				
+ 		}
+ 	};
++	
++	/**
++	 * Used to sort properties according to their name.
++	 */
++	private static final Comparator PROPERTY_COMPARATOR = new Comparator()
++	{
++		public int compare(Object o1, Object o2)
++		{
++			Property property1 = (Property) o1;
++			Property property2 = (Property) o2;
++			
++			return property1.getName().compareTo(property2.getName());
++		}
++	};
+ 
+ 	/**
+      * Name to use if the schema is not specified.
+@@ -504,5 +518,17 @@
+     		return Collections.EMPTY_LIST;
+     	}
+     }
++    
++    public List getOrderedProperties(POJOClass pojoClass)
++    {
++    	List orderedProperties = new ArrayList();
++    	
++    	for (Iterator iterator = pojoClass.getAllPropertiesIterator(); iterator.hasNext(); )
++    		orderedProperties.add(iterator.next());
++    	
++    	Collections.sort(orderedProperties, PROPERTY_COMPARATOR);
++    	
++    	return orderedProperties;
++    }
+ 
+ }
+\ No newline at end of file
+Index: tools/src/templates/doc/entities/entity.ftl
+===================================================================
+--- tools/src/templates/doc/entities/entity.ftl	(revision 10682)
++++ tools/src/templates/doc/entities/entity.ftl	(working copy)
+@@ -158,99 +158,102 @@
+ 			</table>
+ 		</#if>
+ 
+-		<table id="property_summary">
+-			<thead>
+-				<tr>
+-					<th class="MainTableHeading" colspan="5">
+-						Property Summary
+-					</th>
+-				</tr>
+-				<tr>
+-					<th style="width: 14%">
+-						Name
+-					</th>
+-					<th style="width: 14%">
+-						Column
+-					</th>
+-					<th style="width: 14%">
+-						Access
+-					</th>
+-					<th style="width: 14%">
+-						Type
+-					</th>
+-					<th style="width: 44%">
+-						Description
+-					</th>
+-				</tr>
+-			</thead>
+-			<tbody>
+-
+-				<#foreach property in class.allPropertiesIterator>
+-					<#assign columnIterator = property.getValue().columnIterator>
+-					<#assign rowspan = property.getValue().getColumnSpan()>
++		<#assign properties = dochelper.getOrderedProperties(class)>
++		<#if !properties.empty>
++			<table id="property_summary">
++				<thead>
+ 					<tr>
+-						<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
+-							<a href="#field_summary">
+-								${property.name}
+-							</a>
+-						</td>
+-
+-						<#if (rowspan > 0)>
+-							<#assign column = columnIterator.next()>
+-							<#if column.isFormula()>
++						<th class="MainTableHeading" colspan="5">
++							Property Summary
++						</th>
++					</tr>
++					<tr>
++						<th style="width: 14%">
++							Name
++						</th>
++						<th style="width: 14%">
++							Column
++						</th>
++						<th style="width: 14%">
++							Access
++						</th>
++						<th style="width: 14%">
++							Type
++						</th>
++						<th style="width: 44%">
++							Description
++						</th>
++					</tr>
++				</thead>
++				<tbody>
++	
++					<#foreach property in properties>
++						<#assign columnIterator = property.getValue().columnIterator>
++						<#assign rowspan = property.getValue().getColumnSpan()>
++						<tr>
++							<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
++								<a href="#field_summary">
++									${property.name}
++								</a>
++							</td>
++	
++							<#if (rowspan > 0)>
++								<#assign column = columnIterator.next()>
++								<#if column.isFormula()>
++									<td>
++										&nbsp;
++									</td>
++								<#else>
++									<td>
++										<a href="#property_summary">
++											${column.getName()}
++										</a>
++									</td>
++								</#if>
++							<#else>
+ 								<td>
+ 									&nbsp;
+ 								</td>
+-							<#else>
+-								<td>
+-									<a href="#property_summary">
+-										${column.getName()}
+-									</a>
+-								</td>
+ 							</#if>
+-						<#else>
+-							<td>
+-								&nbsp;
++	
++							<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
++								${property.getPropertyAccessorName()} (<a href="#property_summary">get</a> / <a href="#property_summary">set</a>)
+ 							</td>
++	
++							<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
++								<#if dochelper.getComponentPOJO(property)?exists>
++									<a href="${docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(dochelper.getComponentPOJO(property)))}" target="generalFrame">
++										${class.getJavaTypeName(property, jdk5)?html?default("&nbsp;")}
++									</a>
++								<#else>
++									${class.getJavaTypeName(property, jdk5)?html?default("&nbsp;")}
++								</#if>
++							</td>
++	
++							<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
++								<#if class.hasFieldJavaDoc(property)>
++									${class.getFieldDescription(property)?default("&nbsp;")}
++								<#else>
++									&nbsp;
++								</#if>
++							</td>
++						</tr>
++						<#if (rowspan > 1)>
++							<#foreach column in columnIterator>
++								<tr>
++									<td>
++										<a href="#property_summary">
++											${column.name}
++										</a>
++									</td>
++								</tr>
++							</#foreach>
+ 						</#if>
++					</#foreach>
++	
++				</tbody>
++			</table>
++		</#if>
+ 
+-						<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
+-							${property.getPropertyAccessorName()} (<a href="#property_summary">get</a> / <a href="#property_summary">set</a>)
+-						</td>
+-
+-						<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
+-							<#if dochelper.getComponentPOJO(property)?exists>
+-								<a href="${docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(dochelper.getComponentPOJO(property)))}" target="generalFrame">
+-									${class.getJavaTypeName(property, jdk5)?html?default("&nbsp;")}
+-								</a>
+-							<#else>
+-								${class.getJavaTypeName(property, jdk5)?html?default("&nbsp;")}
+-							</#if>
+-						</td>
+-
+-						<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
+-							<#if class.hasFieldJavaDoc(property)>
+-								${class.getFieldDescription(property)?default("&nbsp;")}
+-							<#else>
+-								&nbsp;
+-							</#if>
+-						</td>
+-					</tr>
+-					<#if (rowspan > 1)>
+-						<#foreach column in columnIterator>
+-							<tr>
+-								<td>
+-									<a href="#property_summary">
+-										${column.name}
+-									</a>
+-								</td>
+-							</tr>
+-						</#foreach>
+-					</#if>
+-				</#foreach>
+-
+-			</tbody>
+-		</table>
+-
+ 	</body>
+ </html>

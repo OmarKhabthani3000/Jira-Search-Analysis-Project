@@ -1,0 +1,1444 @@
+Index: org/hibernate/EmptyInterceptor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/EmptyInterceptor.java,v
+retrieving revision 1.1
+diff -u -r1.1 EmptyInterceptor.java
+--- org/hibernate/EmptyInterceptor.java	14 May 2005 17:42:03 -0000	1.1
++++ org/hibernate/EmptyInterceptor.java	10 Jul 2005 18:08:58 -0000
+@@ -84,5 +84,7 @@
+ 	public void afterTransactionBegin(Transaction tx) {}
+ 	public void afterTransactionCompletion(Transaction tx) {}
+ 	public void beforeTransactionCompletion(Transaction tx) {}
++
++	public void prepareSQL(String sql) {}
+ 	
+ }
+\ No newline at end of file
+Index: org/hibernate/Interceptor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/Interceptor.java,v
+retrieving revision 1.5
+diff -u -r1.5 Interceptor.java
+--- org/hibernate/Interceptor.java	29 Apr 2005 15:13:02 -0000	1.5
++++ org/hibernate/Interceptor.java	10 Jul 2005 18:08:58 -0000
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ import java.util.Iterator;
+ 
++import org.hibernate.jdbc.JDBCInterceptor;
+ import org.hibernate.type.Type;
+ 
+ /**
+@@ -24,7 +25,7 @@
+  * @see org.hibernate.cfg.Configuration#setInterceptor(Interceptor)
+  * @author Gavin King
+  */
+-public interface Interceptor {
++public interface Interceptor extends JDBCInterceptor {
+ 	/**
+ 	 * Called just before an object is initialized. The interceptor may change the <tt>state</tt>, which will
+ 	 * be propagated to the persistent object. Note that when this method is called, <tt>entity</tt> will be
+Index: org/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.146
+diff -u -r1.146 SessionImpl.java
+--- org/hibernate/impl/SessionImpl.java	4 Jul 2005 02:40:29 -0000	1.146
++++ org/hibernate/impl/SessionImpl.java	10 Jul 2005 18:09:02 -0000
+@@ -247,7 +247,7 @@
+ 		this.autoCloseSessionEnabled = autoCloseSessionEnabled;
+ 		this.connectionReleaseMode = connectionReleaseMode;
+ 
+-		this.jdbcContext = new JDBCContext( this, connection );
++		this.jdbcContext = new JDBCContext( this, connection, interceptor );
+ 
+ 		if ( factory.getStatistics().isStatisticsEnabled() ) {
+ 			factory.getStatisticsImplementor().openSession();
+@@ -1537,4 +1537,5 @@
+ 	public void setReadOnly(Object entity, boolean readOnly) {
+ 		persistenceContext.setReadOnly(entity, readOnly);
+ 	}
++	
+ }
+Index: org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/StatelessSessionImpl.java,v
+retrieving revision 1.5
+diff -u -r1.5 StatelessSessionImpl.java
+--- org/hibernate/impl/StatelessSessionImpl.java	4 Jul 2005 02:40:29 -0000	1.5
++++ org/hibernate/impl/StatelessSessionImpl.java	10 Jul 2005 18:09:02 -0000
+@@ -1,539 +1,543 @@
+-//$Id: StatelessSessionImpl.java,v 1.5 2005/07/04 02:40:29 oneovthafew Exp $
+-package org.hibernate.impl;
+-
+-import java.io.Serializable;
+-import java.sql.Connection;
+-import java.util.Collections;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+-import org.hibernate.CacheMode;
+-import org.hibernate.ConnectionReleaseMode;
+-import org.hibernate.Criteria;
+-import org.hibernate.EmptyInterceptor;
+-import org.hibernate.EntityMode;
+-import org.hibernate.FlushMode;
+-import org.hibernate.HibernateException;
+-import org.hibernate.Interceptor;
+-import org.hibernate.LockMode;
+-import org.hibernate.MappingException;
+-import org.hibernate.Query;
+-import org.hibernate.QueryException;
+-import org.hibernate.SQLQuery;
+-import org.hibernate.ScrollMode;
+-import org.hibernate.ScrollableResults;
+-import org.hibernate.SessionException;
+-import org.hibernate.StatelessSession;
+-import org.hibernate.Transaction;
+-import org.hibernate.collection.PersistentCollection;
+-import org.hibernate.engine.EntityKey;
+-import org.hibernate.engine.NamedQueryDefinition;
+-import org.hibernate.engine.NamedSQLQueryDefinition;
+-import org.hibernate.engine.PersistenceContext;
+-import org.hibernate.engine.QueryParameters;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.engine.StatefulPersistenceContext;
+-import org.hibernate.engine.Versioning;
+-import org.hibernate.event.SessionEventListenerConfig;
+-import org.hibernate.hql.QueryTranslator;
+-import org.hibernate.id.IdentifierGeneratorFactory;
+-import org.hibernate.jdbc.Batcher;
+-import org.hibernate.jdbc.JDBCContext;
+-import org.hibernate.loader.criteria.CriteriaLoader;
+-import org.hibernate.loader.custom.CustomLoader;
+-import org.hibernate.loader.custom.CustomQuery;
+-import org.hibernate.persister.entity.EntityPersister;
+-import org.hibernate.persister.entity.OuterJoinLoadable;
+-import org.hibernate.proxy.HibernateProxy;
+-import org.hibernate.type.Type;
+-import org.hibernate.util.CollectionHelper;
+-
+-/**
+- * @author Gavin King
+- */
+-public class StatelessSessionImpl implements SessionImplementor, JDBCContext.Context, StatelessSession {
+-	
+-	private JDBCContext jdbcContext;
+-	private SessionFactoryImpl factory;
+-	private boolean closed;
+-	
+-	StatelessSessionImpl(
+-			Connection connection, 
+-			SessionFactoryImpl factory
+-	) {
+-		this.factory = factory;
+-		this.jdbcContext = new JDBCContext( this, connection );
+-	}
+-	
+-	public void delete(Object entity) {
+-		delete(null, entity);
+-	}
+-
+-	public Serializable insert(Object entity) {
+-		return insert(null, entity);
+-	}
+-
+-	public void update(Object entity) {
+-		update(null, entity);
+-	}
+-
+-	public Serializable insert(String entityName, Object entity) {
+-		EntityPersister persister = getEntityPersister(entityName, entity);
+-		Serializable id = persister.getIdentifierGenerator().generate(this, entity);
+-		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
+-		if ( id == IdentifierGeneratorFactory.POST_INSERT_INDICATOR ) {
+-			id = persister.insert(state, entity, this);
+-		}
+-		else {
+-			persister.insert(id, state, entity, this);			
+-		}
+-		return id;
+-	}
+-	
+-	public void update(String entityName, Object entity) {
+-		EntityPersister persister = getEntityPersister(entityName, entity);
+-		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
+-		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
+-		Object oldVersion;
+-		if ( persister.isVersioned() ) {
+-			oldVersion = persister.getVersion(entity, EntityMode.POJO);
+-			Object newVersion = Versioning.increment( oldVersion, persister.getVersionType() );
+-			Versioning.setVersion(state, newVersion, persister);
+-			persister.setPropertyValues(entity, state, EntityMode.POJO);
+-		}
+-		else {
+-			oldVersion = null;
+-		}
+-		persister.update(id, state, null, false, null, oldVersion, entity, null, this);
+-	}
+-	
+-	public void delete(String entityName, Object entity) {
+-		EntityPersister persister = getEntityPersister(entityName, entity);
+-		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
+-		Object version = persister.getVersion(entity, EntityMode.POJO);
+-		persister.delete(id, version, entity, this);
+-	}
+-	
+-	public void close() {
+-		managedClose();
+-	}
+-
+-	public ConnectionReleaseMode getConnectionReleaseMode() {
+-		return factory.getSettings().getConnectionReleaseMode();
+-	}
+-
+-	public boolean isAutoCloseSessionEnabled() {
+-		return factory.getSettings().isAutoCloseSessionEnabled();
+-	}
+-
+-	public boolean isFlushBeforeCompletionEnabled() {
+-		return true;
+-	}
+-
+-	public boolean isFlushModeNever() {
+-		return false;
+-	}
+-
+-	public void managedClose() {
+-		jdbcContext.getConnectionManager().close();
+-		closed = true;
+-	}
+-
+-	public void managedFlush() {
+-		getBatcher().executeBatch();
+-	}
+-
+-	public boolean shouldAutoClose() {
+-		return isAutoCloseSessionEnabled() && isOpen();
+-	}
+-
+-	public void afterTransactionCompletion(boolean successful, Transaction tx) {}
+-
+-	public void beforeTransactionCompletion(Transaction tx) {}
+-
+-	public String bestGuessEntityName(Object object) {
+-		if (object instanceof HibernateProxy) {
+-			object = ( (HibernateProxy) object ).getHibernateLazyInitializer().getImplementation();
+-		}
+-		return guessEntityName(object);
+-	}
+-
+-	public Connection connection() {
+-		return jdbcContext.connection();
+-	}
+-
+-	public int executeUpdate(String query, QueryParameters queryParameters) 
+-	throws HibernateException {
+-		//TODO
+-		return 0;
+-	}
+-
+-	public Batcher getBatcher() {
+-		return jdbcContext.getConnectionManager()
+-				.getBatcher();
+-	}
+-
+-	public CacheMode getCacheMode() {
+-		return CacheMode.IGNORE;
+-	}
+-
+-	public int getDontFlushFromFind() {
+-		return 0;
+-	}
+-
+-	public Map getEnabledFilters() {
+-		return CollectionHelper.EMPTY_MAP;
+-	}
+-
+-	public Serializable getContextEntityIdentifier(Object object) {
+-		return null;
+-	}
+-
+-	public EntityMode getEntityMode() {
+-		return EntityMode.POJO;
+-	}
+-
+-	public EntityPersister getEntityPersister(String entityName, Object object) 
+-	throws HibernateException {
+-		if (entityName==null) {
+-			return factory.getEntityPersister( guessEntityName(object) );
+-		}
+-		else {
+-			return factory.getEntityPersister( entityName )
+-					.getSubclassEntityPersister( object, getFactory(), EntityMode.POJO );
+-		}
+-	}
+-
+-	public Object getEntityUsingInterceptor(EntityKey key) throws HibernateException {
+-		return null;
+-	}
+-
+-	public SessionFactoryImplementor getFactory() {
+-		return factory;
+-	}
+-
+-	public Type getFilterParameterType(String filterParameterName) {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public Object getFilterParameterValue(String filterParameterName) {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public FlushMode getFlushMode() {
+-		return FlushMode.COMMIT;
+-	}
+-
+-	public Interceptor getInterceptor() {
+-		return EmptyInterceptor.INSTANCE;
+-	}
+-
+-	public SessionEventListenerConfig getListeners() {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public PersistenceContext getPersistenceContext() {
+-		return temporaryPersistenceContext;
+-	}
+-
+-	public long getTimestamp() {
+-		throw new UnsupportedOperationException();
+-	}
+-	
+-	private PersistenceContext temporaryPersistenceContext = new StatefulPersistenceContext(this);
+-	
+-	public Object get(Class entityClass, Serializable id) {
+-		return get( entityClass.getName(), id );
+-	}
+-	
+-	public Object get(Class entityClass, Serializable id, LockMode lockMode) {
+-		return get( entityClass.getName(), id, lockMode );
+-	}
+-	
+-	public Object get(String entityName, Serializable id) {
+-		return get(entityName, id, LockMode.NONE);
+-	}
+-
+-	public Object get(String entityName, Serializable id, LockMode lockMode) {
+-		Object result = getFactory().getEntityPersister(entityName)
+-				.load(id, null, lockMode, this);
+-		temporaryPersistenceContext.clear();
+-		return result;
+-	}
+-
+-	public String guessEntityName(Object entity) throws HibernateException {
+-		return entity.getClass().getName();
+-	}
+-
+-	public Object immediateLoad(String entityName, Serializable id) throws HibernateException {
+-		throw new SessionException("proxies cannot be fetched by a stateless session");
+-	}
+-
+-	public void initializeCollection(PersistentCollection collection, boolean writing) 
+-	throws HibernateException {
+-		throw new SessionException("collections cannot be fetched by a stateless session");
+-	}
+-
+-	public Object instantiate(String entityName, Serializable id) throws HibernateException {
+-		return getFactory().getEntityPersister(entityName).instantiate(id, EntityMode.POJO);
+-	}
+-
+-	public Object internalLoad(String entityName, Serializable id, boolean eager, boolean nullable) 
+-	throws HibernateException {
+-		EntityPersister persister = getFactory().getEntityPersister(entityName);
+-		if ( !eager && persister.hasProxy() ) {
+-			return persister.createProxy(id, this);
+-		}
+-		Object loaded = temporaryPersistenceContext.getEntity( new EntityKey(id, persister, EntityMode.POJO) );
+-		//TODO: if not loaded, throw an exception
+-		return loaded==null ? get(entityName, id) : loaded;
+-	}
+-
+-	public boolean isConnected() {
+-		return jdbcContext.getConnectionManager().isLogicallyConnected();
+-	}
+-
+-	public boolean isOpen() {
+-		return !closed;
+-	}
+-
+-	public boolean isTransactionInProgress() {
+-		return jdbcContext.isTransactionInProgress();
+-	}
+-
+-	public Iterator iterate(String query, QueryParameters queryParameters) throws HibernateException {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public Iterator iterateFilter(Object collection, String filter, QueryParameters queryParameters) 
+-	throws HibernateException {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public List listFilter(Object collection, String filter, QueryParameters queryParameters) 
+-	throws HibernateException {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public void setAutoClear(boolean enabled) {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public void setCacheMode(CacheMode cm) {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public void setFlushMode(FlushMode fm) {
+-		throw new UnsupportedOperationException();
+-	}
+-	
+-	public Transaction beginTransaction() {
+-		return jdbcContext.beginTransaction();
+-	}
+-
+-	public boolean isEventSource() {
+-		return false;
+-	}
+-	
+-	//COPY/PASTE FROM SessionImpl:
+-
+-	public Query createQuery(String queryString) {
+-		QueryImpl query = new QueryImpl(queryString, this);
+-		query.setComment(queryString);
+-		return query;
+-	}
+-
+-	private Query createQuery(String queryString, FlushMode queryFlushMode) {
+-		QueryImpl query = new QueryImpl(queryString, queryFlushMode, this);
+-		query.setComment(queryString);
+-		return query;
+-	}
+-	
+-	public Query getNamedQuery(String queryName) throws MappingException {
+-		NamedQueryDefinition nqd = factory.getNamedQuery(queryName);
+-		final Query query;
+-		if ( nqd != null ) {
+-			query = createQuery( 
+-					nqd.getQueryString(), 
+-					nqd.getFlushMode()
+-			);
+-			query.setComment("named HQL query " + queryName);
+-		}
+-		else {
+-			NamedSQLQueryDefinition nsqlqd = factory.getNamedSQLQuery( queryName );
+-			if (nsqlqd==null) {
+-				throw new MappingException("Named query not known: " + queryName);
+-			}
+-			query = new SQLQueryImpl(nsqlqd, this);
+-			nqd = nsqlqd;
+-			query.setComment("named native SQL query " + queryName);
+-		}
+-		query.setCacheable( nqd.isCacheable() );
+-		query.setCacheRegion( nqd.getCacheRegion() );
+-		if ( nqd.getTimeout()!=null ) query.setTimeout( nqd.getTimeout().intValue() );
+-		if ( nqd.getFetchSize()!=null ) query.setFetchSize( nqd.getFetchSize().intValue() );
+-		return query;
+-	}
+-
+-	public List list(String query, QueryParameters queryParameters) throws HibernateException {
+-
+-		queryParameters.validateParameters();
+-		QueryTranslator[] q = getQueries(query, false);
+-
+-		List results = CollectionHelper.EMPTY_LIST;
+-
+-		//execute the queries and return all result lists as a single list
+-		boolean success = false;
+-		try {
+-			for ( int i = 0; i < q.length; i++ ) {
+-				List currentResults = q[i].list(this, queryParameters);
+-				currentResults.addAll(results);
+-				results = currentResults;
+-			}
+-			success = true;
+-		}
+-		finally {
+-			afterOperation(success);
+-		}
+-		temporaryPersistenceContext.clear();
+-		return results;
+-	}
+-
+-	public void afterOperation(boolean success) {
+-		if ( !jdbcContext.isTransactionInProgress() ) {
+-			jdbcContext.afterNontransactionalQuery(success);
+-		}
+-	}
+-	
+-	private QueryTranslator[] getQueries(String query, boolean scalar) throws HibernateException {
+-
+-		// take the union of the query spaces (ie. the queried tables)
+-		QueryTranslator[] q = factory.getQuery( query, scalar, getEnabledFilters() );
+-		return prepareQueries(q);
+-
+-	}
+-
+-	private QueryTranslator[] prepareQueries(QueryTranslator[] q) {
+-		HashSet qs = new HashSet();
+-		for ( int i = 0; i < q.length; i++ ) {
+-			qs.addAll( q[i].getQuerySpaces() );
+-		}
+-		return q;
+-	}
+-
+-	public Criteria createCriteria(Class persistentClass, String alias) {
+-		return new CriteriaImpl( persistentClass.getName(), alias, this );
+-	}
+-
+-	public Criteria createCriteria(String entityName, String alias) {
+-		return new CriteriaImpl(entityName, alias, this);
+-	}
+-
+-	public Criteria createCriteria(Class persistentClass) {
+-		return new CriteriaImpl( persistentClass.getName(), this );
+-	}
+-
+-	public Criteria createCriteria(String entityName) {
+-		return new CriteriaImpl(entityName, this);
+-	}
+-
+-	public ScrollableResults scroll(CriteriaImpl criteria, ScrollMode scrollMode) {
+-		String entityName = criteria.getEntityOrClassName();
+-		CriteriaLoader loader = new CriteriaLoader(
+-				getOuterJoinLoadable(entityName),
+-				factory,
+-				criteria,
+-				entityName,
+-		        getEnabledFilters()
+-			);
+-		return loader.scroll(this, scrollMode);
+-	}
+-
+-	public List list(CriteriaImpl criteria) throws HibernateException {
+-
+-		String[] implementors = factory.getImplementors( criteria.getEntityOrClassName() );
+-		int size = implementors.length;
+-
+-		CriteriaLoader[] loaders = new CriteriaLoader[size];
+-		Set spaces = new HashSet();
+-		for( int i=0; i <size; i++ ) {
+-
+-			loaders[i] = new CriteriaLoader(
+-					getOuterJoinLoadable( implementors[i] ),
+-					factory,
+-					criteria,
+-					implementors[i],
+-			        getEnabledFilters()
+-			);
+-
+-			spaces.addAll( loaders[i].getQuerySpaces() );
+-
+-		}
+-
+-
+-		List results = Collections.EMPTY_LIST;
+-		boolean success = false;
+-		try {
+-			for( int i=0; i<size; i++ ) {
+-				final List currentResults = loaders[i].list(this);
+-				currentResults.addAll(results);
+-				results = currentResults;
+-			}
+-			success = true;
+-		}
+-		finally {
+-			afterOperation(success);
+-		}
+-		temporaryPersistenceContext.clear();
+-		return results;
+-	}
+-
+-	private OuterJoinLoadable getOuterJoinLoadable(String entityName) throws MappingException {
+-		EntityPersister persister = factory.getEntityPersister(entityName);
+-		if ( !(persister instanceof OuterJoinLoadable) ) {
+-			throw new MappingException( "class persister is not OuterJoinLoadable: " + entityName );
+-		}
+-		return ( OuterJoinLoadable ) persister;
+-	}
+-
+-	public SQLQuery createSQLQuery(String sql) {
+-		SQLQueryImpl query = new SQLQueryImpl(sql, this);
+-		query.setComment("dynamic native SQL query");
+-		return query;
+-	}
+-
+-	public List listCustomQuery(CustomQuery customQuery, QueryParameters queryParameters) 
+-	throws HibernateException {
+-
+-		CustomLoader loader = new CustomLoader( customQuery, getFactory() );
+-
+-		boolean success = false;
+-		List results;
+-		try {
+-			results = loader.list(this, queryParameters);
+-			success = true;
+-		}
+-		finally {
+-			afterOperation(success);
+-		}
+-		temporaryPersistenceContext.clear();
+-		return results;
+-	}
+-
+-	public ScrollableResults scrollCustomQuery(CustomQuery customQuery, QueryParameters queryParameters) 
+-	throws HibernateException {
+-		CustomLoader loader = new CustomLoader( customQuery, getFactory() );
+-		return loader.scroll(queryParameters, this);
+-	}
+-
+-	public ScrollableResults scroll(String query, QueryParameters queryParameters) throws HibernateException {
+-		QueryTranslator[] q = factory.getQuery( query, false, getEnabledFilters() );
+-		if ( q.length != 1 ) throw new QueryException( "implicit polymorphism not supported for scroll() queries" );
+-		return q[0].scroll(queryParameters, this);
+-	}
+-
+-}
++//$Id: StatelessSessionImpl.java,v 1.5 2005/07/04 02:40:29 oneovthafew Exp $
++package org.hibernate.impl;
++
++import java.io.Serializable;
++import java.sql.Connection;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import org.hibernate.CacheMode;
++import org.hibernate.ConnectionReleaseMode;
++import org.hibernate.Criteria;
++import org.hibernate.EmptyInterceptor;
++import org.hibernate.EntityMode;
++import org.hibernate.FlushMode;
++import org.hibernate.HibernateException;
++import org.hibernate.Interceptor;
++import org.hibernate.LockMode;
++import org.hibernate.MappingException;
++import org.hibernate.Query;
++import org.hibernate.QueryException;
++import org.hibernate.SQLQuery;
++import org.hibernate.ScrollMode;
++import org.hibernate.ScrollableResults;
++import org.hibernate.SessionException;
++import org.hibernate.StatelessSession;
++import org.hibernate.Transaction;
++import org.hibernate.collection.PersistentCollection;
++import org.hibernate.engine.EntityKey;
++import org.hibernate.engine.NamedQueryDefinition;
++import org.hibernate.engine.NamedSQLQueryDefinition;
++import org.hibernate.engine.PersistenceContext;
++import org.hibernate.engine.QueryParameters;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.StatefulPersistenceContext;
++import org.hibernate.engine.Versioning;
++import org.hibernate.event.SessionEventListenerConfig;
++import org.hibernate.hql.QueryTranslator;
++import org.hibernate.id.IdentifierGeneratorFactory;
++import org.hibernate.jdbc.Batcher;
++import org.hibernate.jdbc.JDBCContext;
++import org.hibernate.loader.criteria.CriteriaLoader;
++import org.hibernate.loader.custom.CustomLoader;
++import org.hibernate.loader.custom.CustomQuery;
++import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.persister.entity.OuterJoinLoadable;
++import org.hibernate.proxy.HibernateProxy;
++import org.hibernate.type.Type;
++import org.hibernate.util.CollectionHelper;
++
++/**
++ * @author Gavin King
++ */
++public class StatelessSessionImpl implements SessionImplementor, JDBCContext.Context, StatelessSession {
++	
++	private JDBCContext jdbcContext;
++	private SessionFactoryImpl factory;
++	private boolean closed;
++	
++	StatelessSessionImpl(
++			Connection connection, 
++			SessionFactoryImpl factory
++	) {
++		this.factory = factory;
++		this.jdbcContext = new JDBCContext( this, connection, EmptyInterceptor.INSTANCE );
++	}
++	
++	public void delete(Object entity) {
++		delete(null, entity);
++	}
++
++	public Serializable insert(Object entity) {
++		return insert(null, entity);
++	}
++
++	public void update(Object entity) {
++		update(null, entity);
++	}
++
++	public Serializable insert(String entityName, Object entity) {
++		EntityPersister persister = getEntityPersister(entityName, entity);
++		Serializable id = persister.getIdentifierGenerator().generate(this, entity);
++		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
++		if ( id == IdentifierGeneratorFactory.POST_INSERT_INDICATOR ) {
++			id = persister.insert(state, entity, this);
++		}
++		else {
++			persister.insert(id, state, entity, this);			
++		}
++		return id;
++	}
++	
++	public void update(String entityName, Object entity) {
++		EntityPersister persister = getEntityPersister(entityName, entity);
++		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
++		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
++		Object oldVersion;
++		if ( persister.isVersioned() ) {
++			oldVersion = persister.getVersion(entity, EntityMode.POJO);
++			Object newVersion = Versioning.increment( oldVersion, persister.getVersionType() );
++			Versioning.setVersion(state, newVersion, persister);
++			persister.setPropertyValues(entity, state, EntityMode.POJO);
++		}
++		else {
++			oldVersion = null;
++		}
++		persister.update(id, state, null, false, null, oldVersion, entity, null, this);
++	}
++	
++	public void delete(String entityName, Object entity) {
++		EntityPersister persister = getEntityPersister(entityName, entity);
++		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
++		Object version = persister.getVersion(entity, EntityMode.POJO);
++		persister.delete(id, version, entity, this);
++	}
++	
++	public void close() {
++		managedClose();
++	}
++
++	public ConnectionReleaseMode getConnectionReleaseMode() {
++		return factory.getSettings().getConnectionReleaseMode();
++	}
++
++	public boolean isAutoCloseSessionEnabled() {
++		return factory.getSettings().isAutoCloseSessionEnabled();
++	}
++
++	public boolean isFlushBeforeCompletionEnabled() {
++		return true;
++	}
++
++	public boolean isFlushModeNever() {
++		return false;
++	}
++
++	public void managedClose() {
++		jdbcContext.getConnectionManager().close();
++		closed = true;
++	}
++
++	public void managedFlush() {
++		getBatcher().executeBatch();
++	}
++
++	public boolean shouldAutoClose() {
++		return isAutoCloseSessionEnabled() && isOpen();
++	}
++
++	public void afterTransactionCompletion(boolean successful, Transaction tx) {}
++
++	public void beforeTransactionCompletion(Transaction tx) {}
++
++	public String bestGuessEntityName(Object object) {
++		if (object instanceof HibernateProxy) {
++			object = ( (HibernateProxy) object ).getHibernateLazyInitializer().getImplementation();
++		}
++		return guessEntityName(object);
++	}
++
++	public Connection connection() {
++		return jdbcContext.connection();
++	}
++
++	public int executeUpdate(String query, QueryParameters queryParameters) 
++	throws HibernateException {
++		//TODO
++		return 0;
++	}
++
++	public Batcher getBatcher() {
++		return jdbcContext.getConnectionManager()
++				.getBatcher();
++	}
++
++	public CacheMode getCacheMode() {
++		return CacheMode.IGNORE;
++	}
++
++	public int getDontFlushFromFind() {
++		return 0;
++	}
++
++	public Map getEnabledFilters() {
++		return CollectionHelper.EMPTY_MAP;
++	}
++
++	public Serializable getContextEntityIdentifier(Object object) {
++		return null;
++	}
++
++	public EntityMode getEntityMode() {
++		return EntityMode.POJO;
++	}
++
++	public EntityPersister getEntityPersister(String entityName, Object object) 
++	throws HibernateException {
++		if (entityName==null) {
++			return factory.getEntityPersister( guessEntityName(object) );
++		}
++		else {
++			return factory.getEntityPersister( entityName )
++					.getSubclassEntityPersister( object, getFactory(), EntityMode.POJO );
++		}
++	}
++
++	public Object getEntityUsingInterceptor(EntityKey key) throws HibernateException {
++		return null;
++	}
++
++	public SessionFactoryImplementor getFactory() {
++		return factory;
++	}
++
++	public Type getFilterParameterType(String filterParameterName) {
++		throw new UnsupportedOperationException();
++	}
++
++	public Object getFilterParameterValue(String filterParameterName) {
++		throw new UnsupportedOperationException();
++	}
++
++	public FlushMode getFlushMode() {
++		return FlushMode.COMMIT;
++	}
++
++	public Interceptor getInterceptor() {
++		return EmptyInterceptor.INSTANCE;
++	}
++
++	public SessionEventListenerConfig getListeners() {
++		throw new UnsupportedOperationException();
++	}
++
++	public PersistenceContext getPersistenceContext() {
++		return temporaryPersistenceContext;
++	}
++
++	public long getTimestamp() {
++		throw new UnsupportedOperationException();
++	}
++	
++	private PersistenceContext temporaryPersistenceContext = new StatefulPersistenceContext(this);
++	
++	public Object get(Class entityClass, Serializable id) {
++		return get( entityClass.getName(), id );
++	}
++	
++	public Object get(Class entityClass, Serializable id, LockMode lockMode) {
++		return get( entityClass.getName(), id, lockMode );
++	}
++	
++	public Object get(String entityName, Serializable id) {
++		return get(entityName, id, LockMode.NONE);
++	}
++
++	public Object get(String entityName, Serializable id, LockMode lockMode) {
++		Object result = getFactory().getEntityPersister(entityName)
++				.load(id, null, lockMode, this);
++		temporaryPersistenceContext.clear();
++		return result;
++	}
++
++	public String guessEntityName(Object entity) throws HibernateException {
++		return entity.getClass().getName();
++	}
++
++	public Object immediateLoad(String entityName, Serializable id) throws HibernateException {
++		throw new SessionException("proxies cannot be fetched by a stateless session");
++	}
++
++	public void initializeCollection(PersistentCollection collection, boolean writing) 
++	throws HibernateException {
++		throw new SessionException("collections cannot be fetched by a stateless session");
++	}
++
++	public Object instantiate(String entityName, Serializable id) throws HibernateException {
++		return getFactory().getEntityPersister(entityName).instantiate(id, EntityMode.POJO);
++	}
++
++	public Object internalLoad(String entityName, Serializable id, boolean eager, boolean nullable) 
++	throws HibernateException {
++		EntityPersister persister = getFactory().getEntityPersister(entityName);
++		if ( !eager && persister.hasProxy() ) {
++			return persister.createProxy(id, this);
++		}
++		Object loaded = temporaryPersistenceContext.getEntity( new EntityKey(id, persister, EntityMode.POJO) );
++		//TODO: if not loaded, throw an exception
++		return loaded==null ? get(entityName, id) : loaded;
++	}
++
++	public boolean isConnected() {
++		return jdbcContext.getConnectionManager().isLogicallyConnected();
++	}
++
++	public boolean isOpen() {
++		return !closed;
++	}
++
++	public boolean isTransactionInProgress() {
++		return jdbcContext.isTransactionInProgress();
++	}
++
++	public Iterator iterate(String query, QueryParameters queryParameters) throws HibernateException {
++		throw new UnsupportedOperationException();
++	}
++
++	public Iterator iterateFilter(Object collection, String filter, QueryParameters queryParameters) 
++	throws HibernateException {
++		throw new UnsupportedOperationException();
++	}
++
++	public List listFilter(Object collection, String filter, QueryParameters queryParameters) 
++	throws HibernateException {
++		throw new UnsupportedOperationException();
++	}
++
++	public void setAutoClear(boolean enabled) {
++		throw new UnsupportedOperationException();
++	}
++
++	public void setCacheMode(CacheMode cm) {
++		throw new UnsupportedOperationException();
++	}
++
++	public void setFlushMode(FlushMode fm) {
++		throw new UnsupportedOperationException();
++	}
++	
++	public Transaction beginTransaction() {
++		return jdbcContext.beginTransaction();
++	}
++
++	public boolean isEventSource() {
++		return false;
++	}
++	
++	//COPY/PASTE FROM SessionImpl:
++
++	public Query createQuery(String queryString) {
++		QueryImpl query = new QueryImpl(queryString, this);
++		query.setComment(queryString);
++		return query;
++	}
++
++	private Query createQuery(String queryString, FlushMode queryFlushMode) {
++		QueryImpl query = new QueryImpl(queryString, queryFlushMode, this);
++		query.setComment(queryString);
++		return query;
++	}
++	
++	public Query getNamedQuery(String queryName) throws MappingException {
++		NamedQueryDefinition nqd = factory.getNamedQuery(queryName);
++		final Query query;
++		if ( nqd != null ) {
++			query = createQuery( 
++					nqd.getQueryString(), 
++					nqd.getFlushMode()
++			);
++			query.setComment("named HQL query " + queryName);
++		}
++		else {
++			NamedSQLQueryDefinition nsqlqd = factory.getNamedSQLQuery( queryName );
++			if (nsqlqd==null) {
++				throw new MappingException("Named query not known: " + queryName);
++			}
++			query = new SQLQueryImpl(nsqlqd, this);
++			nqd = nsqlqd;
++			query.setComment("named native SQL query " + queryName);
++		}
++		query.setCacheable( nqd.isCacheable() );
++		query.setCacheRegion( nqd.getCacheRegion() );
++		if ( nqd.getTimeout()!=null ) query.setTimeout( nqd.getTimeout().intValue() );
++		if ( nqd.getFetchSize()!=null ) query.setFetchSize( nqd.getFetchSize().intValue() );
++		return query;
++	}
++
++	public List list(String query, QueryParameters queryParameters) throws HibernateException {
++
++		queryParameters.validateParameters();
++		QueryTranslator[] q = getQueries(query, false);
++
++		List results = CollectionHelper.EMPTY_LIST;
++
++		//execute the queries and return all result lists as a single list
++		boolean success = false;
++		try {
++			for ( int i = 0; i < q.length; i++ ) {
++				List currentResults = q[i].list(this, queryParameters);
++				currentResults.addAll(results);
++				results = currentResults;
++			}
++			success = true;
++		}
++		finally {
++			afterOperation(success);
++		}
++		temporaryPersistenceContext.clear();
++		return results;
++	}
++
++	public void afterOperation(boolean success) {
++		if ( !jdbcContext.isTransactionInProgress() ) {
++			jdbcContext.afterNontransactionalQuery(success);
++		}
++	}
++	
++	private QueryTranslator[] getQueries(String query, boolean scalar) throws HibernateException {
++
++		// take the union of the query spaces (ie. the queried tables)
++		QueryTranslator[] q = factory.getQuery( query, scalar, getEnabledFilters() );
++		return prepareQueries(q);
++
++	}
++
++	private QueryTranslator[] prepareQueries(QueryTranslator[] q) {
++		HashSet qs = new HashSet();
++		for ( int i = 0; i < q.length; i++ ) {
++			qs.addAll( q[i].getQuerySpaces() );
++		}
++		return q;
++	}
++
++	public Criteria createCriteria(Class persistentClass, String alias) {
++		return new CriteriaImpl( persistentClass.getName(), alias, this );
++	}
++
++	public Criteria createCriteria(String entityName, String alias) {
++		return new CriteriaImpl(entityName, alias, this);
++	}
++
++	public Criteria createCriteria(Class persistentClass) {
++		return new CriteriaImpl( persistentClass.getName(), this );
++	}
++
++	public Criteria createCriteria(String entityName) {
++		return new CriteriaImpl(entityName, this);
++	}
++
++	public ScrollableResults scroll(CriteriaImpl criteria, ScrollMode scrollMode) {
++		String entityName = criteria.getEntityOrClassName();
++		CriteriaLoader loader = new CriteriaLoader(
++				getOuterJoinLoadable(entityName),
++				factory,
++				criteria,
++				entityName,
++		        getEnabledFilters()
++			);
++		return loader.scroll(this, scrollMode);
++	}
++
++	public List list(CriteriaImpl criteria) throws HibernateException {
++
++		String[] implementors = factory.getImplementors( criteria.getEntityOrClassName() );
++		int size = implementors.length;
++
++		CriteriaLoader[] loaders = new CriteriaLoader[size];
++		Set spaces = new HashSet();
++		for( int i=0; i <size; i++ ) {
++
++			loaders[i] = new CriteriaLoader(
++					getOuterJoinLoadable( implementors[i] ),
++					factory,
++					criteria,
++					implementors[i],
++			        getEnabledFilters()
++			);
++
++			spaces.addAll( loaders[i].getQuerySpaces() );
++
++		}
++
++
++		List results = Collections.EMPTY_LIST;
++		boolean success = false;
++		try {
++			for( int i=0; i<size; i++ ) {
++				final List currentResults = loaders[i].list(this);
++				currentResults.addAll(results);
++				results = currentResults;
++			}
++			success = true;
++		}
++		finally {
++			afterOperation(success);
++		}
++		temporaryPersistenceContext.clear();
++		return results;
++	}
++
++	private OuterJoinLoadable getOuterJoinLoadable(String entityName) throws MappingException {
++		EntityPersister persister = factory.getEntityPersister(entityName);
++		if ( !(persister instanceof OuterJoinLoadable) ) {
++			throw new MappingException( "class persister is not OuterJoinLoadable: " + entityName );
++		}
++		return ( OuterJoinLoadable ) persister;
++	}
++
++	public SQLQuery createSQLQuery(String sql) {
++		SQLQueryImpl query = new SQLQueryImpl(sql, this);
++		query.setComment("dynamic native SQL query");
++		return query;
++	}
++
++	public List listCustomQuery(CustomQuery customQuery, QueryParameters queryParameters) 
++	throws HibernateException {
++
++		CustomLoader loader = new CustomLoader( customQuery, getFactory() );
++
++		boolean success = false;
++		List results;
++		try {
++			results = loader.list(this, queryParameters);
++			success = true;
++		}
++		finally {
++			afterOperation(success);
++		}
++		temporaryPersistenceContext.clear();
++		return results;
++	}
++
++	public ScrollableResults scrollCustomQuery(CustomQuery customQuery, QueryParameters queryParameters) 
++	throws HibernateException {
++		CustomLoader loader = new CustomLoader( customQuery, getFactory() );
++		return loader.scroll(queryParameters, this);
++	}
++
++	public ScrollableResults scroll(String query, QueryParameters queryParameters) throws HibernateException {
++		QueryTranslator[] q = factory.getQuery( query, false, getEnabledFilters() );
++		if ( q.length != 1 ) throw new QueryException( "implicit polymorphism not supported for scroll() queries" );
++		return q[0].scroll(queryParameters, this);
++	}
++	
++	public void prepareSQL(String sql) {
++		// no where to log it
++	}
++
++}
+Index: org/hibernate/jdbc/AbstractBatcher.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/AbstractBatcher.java,v
+retrieving revision 1.27
+diff -u -r1.27 AbstractBatcher.java
+--- org/hibernate/jdbc/AbstractBatcher.java	6 Jul 2005 21:25:52 -0000	1.27
++++ org/hibernate/jdbc/AbstractBatcher.java	10 Jul 2005 18:09:03 -0000
+@@ -13,6 +13,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.HibernateException;
++import org.hibernate.Interceptor;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.SessionFactoryImplementor;
+@@ -36,9 +37,10 @@
+ 	protected static final Log log = LogFactory.getLog(AbstractBatcher.class);
+ 	protected static final Log SQL_LOG = LogFactory.getLog("org.hibernate.SQL");
+ 
++	private final JDBCInterceptor interceptor;
+ 	private final ConnectionManager connectionManager;
+ 	private final SessionFactoryImplementor factory;
+-
++	
+ 	private PreparedStatement batchUpdate;
+ 	private String batchUpdateSQL;
+ 
+@@ -48,9 +50,10 @@
+ 
+ 	private boolean releasing = false;
+ 
+-	public AbstractBatcher(ConnectionManager connectionManager) {
++	public AbstractBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor) {
+ 		this.connectionManager = connectionManager;
+ 		this.factory = connectionManager.getFactory();
++		this.interceptor = interceptor;
+ 	}
+ 
+ 	protected PreparedStatement getStatement() {
+@@ -321,6 +324,7 @@
+ 	}
+ 	
+ 	private void log(String sql) {
++		interceptor.prepareSQL(sql);
+ 		SQL_LOG.debug(sql);
+ 		if ( factory.getSettings().isShowSqlEnabled() ) System.out.println("Hibernate: " + sql);
+ 	}
+Index: org/hibernate/jdbc/BatcherFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/BatcherFactory.java,v
+retrieving revision 1.4
+diff -u -r1.4 BatcherFactory.java
+--- org/hibernate/jdbc/BatcherFactory.java	9 May 2005 22:12:48 -0000	1.4
++++ org/hibernate/jdbc/BatcherFactory.java	10 Jul 2005 18:09:03 -0000
+@@ -2,10 +2,11 @@
+ package org.hibernate.jdbc;
+ 
+ 
++
+ /**
+  * Factory for <tt>Batcher</tt> instances.
+  * @author Gavin King
+  */
+ public interface BatcherFactory {
+-	public Batcher createBatcher(ConnectionManager connectionManager);
++	public Batcher createBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor);
+ }
+Index: org/hibernate/jdbc/BatchingBatcher.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/BatchingBatcher.java,v
+retrieving revision 1.8
+diff -u -r1.8 BatchingBatcher.java
+--- org/hibernate/jdbc/BatchingBatcher.java	9 May 2005 22:12:48 -0000	1.8
++++ org/hibernate/jdbc/BatchingBatcher.java	10 Jul 2005 18:09:03 -0000
+@@ -17,8 +17,8 @@
+ 	private int batchSize;
+ 	private int[] expectedRowCounts;
+ 
+-	public BatchingBatcher(ConnectionManager connectionManager) {
+-		super( connectionManager );
++	public BatchingBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor) {
++		super( connectionManager, interceptor);
+ 		expectedRowCounts = new int[ getFactory().getSettings().getJdbcBatchSize() ];
+ 	}
+ 
+Index: org/hibernate/jdbc/BatchingBatcherFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/BatchingBatcherFactory.java,v
+retrieving revision 1.5
+diff -u -r1.5 BatchingBatcherFactory.java
+--- org/hibernate/jdbc/BatchingBatcherFactory.java	9 May 2005 22:12:48 -0000	1.5
++++ org/hibernate/jdbc/BatchingBatcherFactory.java	10 Jul 2005 18:09:03 -0000
+@@ -1,6 +1,8 @@
+ //$Id: BatchingBatcherFactory.java,v 1.5 2005/05/09 22:12:48 steveebersole Exp $
+ package org.hibernate.jdbc;
+ 
++import org.hibernate.Interceptor;
++
+ 
+ /**
+  * A BatcherFactory implementation which constructs Batcher instances
+@@ -10,8 +12,8 @@
+  */
+ public class BatchingBatcherFactory implements BatcherFactory {
+ 
+-	public Batcher createBatcher(ConnectionManager connectionManager) {
+-		return new BatchingBatcher( connectionManager );
++	public Batcher createBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor) {
++		return new BatchingBatcher( connectionManager, interceptor );
+ 	}
+ 
+ }
+Index: org/hibernate/jdbc/ConnectionManager.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/ConnectionManager.java,v
+retrieving revision 1.8
+diff -u -r1.8 ConnectionManager.java
+--- org/hibernate/jdbc/ConnectionManager.java	6 Jul 2005 21:25:52 -0000	1.8
++++ org/hibernate/jdbc/ConnectionManager.java	10 Jul 2005 18:09:03 -0000
+@@ -1,20 +1,21 @@
+ // $Id: ConnectionManager.java,v 1.8 2005/07/06 21:25:52 oneovthafew Exp $
+ package org.hibernate.jdbc;
+ 
++import java.io.IOException;
++import java.io.ObjectInputStream;
++import java.io.ObjectOutputStream;
++import java.io.Serializable;
++import java.sql.Connection;
++import java.sql.SQLException;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.hibernate.ConnectionReleaseMode;
+ import org.hibernate.HibernateException;
++import org.hibernate.Interceptor;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.util.JDBCExceptionReporter;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-
+-import java.sql.Connection;
+-import java.sql.SQLException;
+-import java.io.Serializable;
+-import java.io.ObjectInputStream;
+-import java.io.IOException;
+-import java.io.ObjectOutputStream;
+ 
+ /**
+  * Encapsulates JDBC Connection management logic needed by Hibernate.
+@@ -46,6 +47,7 @@
+ 	private final boolean wasConnectionSupplied;
+ 	private transient boolean shouldObtainConnection;
+ 	private transient Batcher batcher;
++	private final JDBCInterceptor interceptor;
+  
+ 	/**
+ 	 * Constructs a ConnectionManager.
+@@ -61,11 +63,13 @@
+ 	        SessionFactoryImplementor factory,
+ 	        Callback callback,
+ 	        ConnectionReleaseMode releaseMode,
+-	        Connection connection) {
++	        Connection connection, 
++	        JDBCInterceptor interceptor) {
+ 		this.factory = factory;
+ 		this.callback = callback;
+-
+-		this.batcher = factory.getSettings().getBatcherFactory().createBatcher( this );
++		this.interceptor = interceptor;
++		
++		this.batcher = factory.getSettings().getBatcherFactory().createBatcher( this, interceptor );
+ 
+ 		this.releaseMode = releaseMode;
+ 
+@@ -361,8 +365,8 @@
+ 	private void readObject(ObjectInputStream ois) throws IOException, ClassNotFoundException {
+ 		factory = ( SessionFactoryImplementor ) ois.readObject();
+ 		ois.defaultReadObject();
+-
+-		this.batcher = factory.getSettings().getBatcherFactory().createBatcher( this );
++		
++		this.batcher = factory.getSettings().getBatcherFactory().createBatcher( this, interceptor );
+ 	}
+ 
+ 	/**
+@@ -385,4 +389,5 @@
+ 			}
+ 		}
+ 	}
++
+ }
+Index: org/hibernate/jdbc/JDBCContext.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/JDBCContext.java,v
+retrieving revision 1.15
+diff -u -r1.15 JDBCContext.java
+--- org/hibernate/jdbc/JDBCContext.java	6 Jul 2005 22:21:25 -0000	1.15
++++ org/hibernate/jdbc/JDBCContext.java	10 Jul 2005 18:09:04 -0000
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ import java.sql.Connection;
+ import java.sql.SQLException;
++
+ import javax.transaction.TransactionManager;
+ 
+ import org.apache.commons.logging.Log;
+@@ -49,13 +50,14 @@
+ 	private boolean isTransactionCallbackRegistered;
+ 	private boolean isHibernateTransactionActive;
+ 
+-	public JDBCContext(Context owner, Connection connection) {
++	public JDBCContext(Context owner, Connection connection, JDBCInterceptor interceptor) {
+ 		this.owner = owner;
+ 		this.connectionManager = new ConnectionManager(
+ 		        owner.getFactory(),
+ 		        this,
+ 		        owner.getConnectionReleaseMode(),
+-		        connection
++		        connection,
++		        interceptor
+ 		);
+ 
+ 		final boolean registerSynchronization = owner.isAutoCloseSessionEnabled()
+@@ -335,4 +337,5 @@
+ 				);
+ 		}
+ 	}
++
+ }
+Index: org/hibernate/jdbc/NonBatchingBatcher.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/NonBatchingBatcher.java,v
+retrieving revision 1.5
+diff -u -r1.5 NonBatchingBatcher.java
+--- org/hibernate/jdbc/NonBatchingBatcher.java	9 May 2005 22:12:48 -0000	1.5
++++ org/hibernate/jdbc/NonBatchingBatcher.java	10 Jul 2005 18:09:04 -0000
+@@ -14,8 +14,8 @@
+  */
+ public class NonBatchingBatcher extends AbstractBatcher {
+ 
+-	public NonBatchingBatcher(ConnectionManager connectionManager) {
+-		super( connectionManager );
++	public NonBatchingBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor) {
++		super( connectionManager, interceptor );
+ 	}
+ 
+ 	public void addToBatch(int expectedRowCount) throws SQLException, HibernateException {
+Index: org/hibernate/jdbc/NonBatchingBatcherFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/jdbc/NonBatchingBatcherFactory.java,v
+retrieving revision 1.4
+diff -u -r1.4 NonBatchingBatcherFactory.java
+--- org/hibernate/jdbc/NonBatchingBatcherFactory.java	9 May 2005 22:12:48 -0000	1.4
++++ org/hibernate/jdbc/NonBatchingBatcherFactory.java	10 Jul 2005 18:09:04 -0000
+@@ -2,6 +2,7 @@
+ package org.hibernate.jdbc;
+ 
+ 
++
+ /**
+  * A BatcherFactory implementation which constructs Batcher instances
+  * that do not perform batch operations.
+@@ -10,8 +11,8 @@
+  */
+ public class NonBatchingBatcherFactory implements BatcherFactory {
+ 
+-	public Batcher createBatcher(ConnectionManager connectionManager) {
+-		return new NonBatchingBatcher( connectionManager );
++	public Batcher createBatcher(ConnectionManager connectionManager, JDBCInterceptor interceptor) {
++		return new NonBatchingBatcher( connectionManager, interceptor );
+ 	}
+ 
+ }
+Index: org/hibernate/jdbc/JDBCInterceptor.java
+===================================================================
+RCS file: org/hibernate/jdbc/JDBCInterceptor.java
+diff -N org/hibernate/jdbc/JDBCInterceptor.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/jdbc/JDBCInterceptor.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,11 @@
++package org.hibernate.jdbc;
++
++public interface JDBCInterceptor {
++
++	/**
++	 * Called when sql string is being prepared 
++	 * @param sql
++	 */
++	void prepareSQL(String sql);
++
++}

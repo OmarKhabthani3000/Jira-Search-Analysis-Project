@@ -1,0 +1,62 @@
+From c2200e04182acdebeb560ceb1b438e220b00f73f Mon Sep 17 00:00:00 2001
+From: William Burns <william.burns@redprairie.com>
+Date: Mon, 12 Mar 2012 11:16:42 -0500
+Subject: [PATCH] Changed command factory lookup to only grab the hibernate
+ specific one.  Also fixed usage of interface to allow for
+ better extensibility.
+
+---
+ .../cache/infinispan/InfinispanRegionFactory.java  |   19 ++++++++++++++++---
+ 1 files changed, 16 insertions(+), 3 deletions(-)
+
+diff --git a/hibernate-infinispan/src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java b/hibernate-infinispan/src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java
+index e0eb006..d9a0c67 100644
+--- a/hibernate-infinispan/src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java
++++ b/hibernate-infinispan/src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java
+@@ -33,10 +33,12 @@ import org.hibernate.cache.infinispan.util.CacheAdapterImpl;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.internal.util.config.ConfigurationHelper;
+ import org.infinispan.AdvancedCache;
++import org.infinispan.commands.module.ModuleCommandFactory;
+ import org.infinispan.config.Configuration;
+ import org.infinispan.factories.GlobalComponentRegistry;
+ import org.infinispan.manager.DefaultCacheManager;
+ import org.infinispan.manager.EmbeddedCacheManager;
++import org.infinispan.transaction.lookup.TransactionManagerLookup;
+ import org.infinispan.util.logging.Log;
+ import org.infinispan.util.logging.LogFactory;
+ 
+@@ -290,7 +292,7 @@ public class InfinispanRegionFactory implements RegionFactory {
+       }
+    }
+ 
+-   protected HibernateTransactionManagerLookup createTransactionManagerLookup(
++   protected TransactionManagerLookup createTransactionManagerLookup(
+             Settings settings, Properties properties) {
+       return new HibernateTransactionManagerLookup(settings, properties);
+    }
+@@ -445,8 +447,19 @@ public class InfinispanRegionFactory implements RegionFactory {
+    private CacheCommandFactory getCacheCommandFactory(AdvancedCache cache) {
+       GlobalComponentRegistry globalCr = cache.getComponentRegistry().getGlobalComponentRegistry();
+       // TODO: This is a hack, make it easier to retrieve in Infinispan!
+-      return (CacheCommandFactory) ((Map) globalCr.getComponent("org.infinispan.modules.command.factories"))
+-            .values().iterator().next();
++      CacheCommandFactory returnedFactory = null;
++      @SuppressWarnings("unchecked")
++      Map<Byte, ModuleCommandFactory> factories = 
++              (Map<Byte, ModuleCommandFactory>) globalCr.getComponent(
++                  "org.infinispan.modules.command.factories");
++      for (ModuleCommandFactory factory : factories.values()) {
++          if (factory instanceof CacheCommandFactory) {
++              returnedFactory = (CacheCommandFactory)factory;
++              break;
++          }
++      }
++      
++      return returnedFactory;
+    }
+ 
+    protected AdvancedCache createCacheWrapper(AdvancedCache cache) {
+-- 
+1.7.5.4
+

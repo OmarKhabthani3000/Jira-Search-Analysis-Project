@@ -1,0 +1,84 @@
+Index: core/src/main/java/org/hibernate/dialect/Dialect.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/Dialect.java	(revision 20346)
++++ core/src/main/java/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -33,9 +33,6 @@
+ import java.util.Properties;
+ import java.util.Set;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+ import org.hibernate.HibernateException;
+ import org.hibernate.LockMode;
+ import org.hibernate.LockOptions;
+@@ -69,6 +66,8 @@
+ import org.hibernate.type.StandardBasicTypes;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Represents a dialect of SQL implemented by a particular RDBMS.
+@@ -1920,4 +1919,23 @@
+ 		// oddly most database in fact seem to, so true is the default.
+ 		return true;
+ 	}
++
++	/**
++	 * Produce a prefix used for column aliases with this dialect.
++	 * Typically this consists of all the characters in the column
++	 * name until the first non-letter character (such as '_') is encountered
++	 * 
++	 * Alias root is subsequently truncated to getMaxAliasLength().
++	 * @param name The column name
++	 * @return The alias root.
++	 * @see org.hibernate.mapping.Column#getAlias(Dialect)
++	 */
++	public String getColumnAliasRoot(String name) {
++		int lastLetter = StringHelper.lastIndexOfLetter(name);
++		if (lastLetter == -1) {
++			return null;
++		} else {
++			return name.substring(0, lastLetter+1);
++		}
++	}
+ }
+Index: core/src/main/java/org/hibernate/mapping/Column.java
+===================================================================
+--- core/src/main/java/org/hibernate/mapping/Column.java	(revision 20346)
++++ core/src/main/java/org/hibernate/mapping/Column.java	(working copy)
+@@ -31,7 +31,6 @@
+ import org.hibernate.dialect.function.SQLFunctionRegistry;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.sql.Template;
+-import org.hibernate.util.StringHelper;
+ 
+ /**
+  * A column of a relational database table
+@@ -115,18 +114,17 @@
+ 	 * in length.
+ 	 */
+ 	public String getAlias(Dialect dialect) {
+-		String alias = name;
+-		String unique = Integer.toString(uniqueInteger) + '_';
+-		int lastLetter = StringHelper.lastIndexOfLetter(name);
+-		if ( lastLetter == -1 ) {
++		String alias = dialect.getColumnAliasRoot(name);
++		if ( alias == null ) {
+ 			alias = "column";
+ 		}
+-		else if ( lastLetter < name.length()-1 ) {
+-			alias = name.substring(0, lastLetter+1);
+-		}
++		
++		String unique = Integer.toString(uniqueInteger) + '_';
++		
+ 		if ( alias.length() > dialect.getMaxAliasLength() ) {
+ 			alias = alias.substring( 0, dialect.getMaxAliasLength() - unique.length() );
+ 		}
++		
+ 		boolean useRawName = name.equals(alias) && 
+ 			!quoted && 
+ 			!name.toLowerCase().equals("rowid");

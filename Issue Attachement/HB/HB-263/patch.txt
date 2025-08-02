@@ -1,0 +1,173 @@
+Index: src/net/sf/hibernate/dialect/AS400DB2Dialect.java
+===================================================================
+RCS file: src/net/sf/hibernate/dialect/AS400DB2Dialect.java
+diff -N src/net/sf/hibernate/dialect/AS400DB2Dialect.java
+--- nul	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/dialect/AS400DB2Dialect.java	15 Aug 2003 15:39:23 -0000
+@@ -0,0 +1,20 @@
++package net.sf.hibernate.dialect;
++
++/**
++ * An SQL dialect for DB2 for iSeries.
++ * @author Brian Koehler
++ */
++public class AS400DB2Dialect extends DB2Dialect
++{
++
++    public AS400DB2Dialect()
++    {
++        super();
++    }
++
++    public boolean useAliasesInOrderBy()
++    {
++        return true;
++    }
++
++}
+Index: src/net/sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: f:/cvs/idg/Hibernate/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.1
+diff -u -r1.1 Dialect.java
+--- src/net/sf/hibernate/dialect/Dialect.java	15 Aug 2003 15:27:35 -0000	1.1
++++ src/net/sf/hibernate/dialect/Dialect.java	15 Aug 2003 15:39:23 -0000
+@@ -420,6 +420,16 @@
+ 		return '"';
+ 	}
+ 
++    /**
++     * Does the database require alias names from the column selection to
++     * be included in the order by clause?
++     * @return true if order by clause requires alias names from select clause
++     */
++    public boolean useAliasesInOrderBy()
++    {
++        return false;
++    }
++    
+ }
+ 
+ 
+Index: src/net/sf/hibernate/sql/QuerySelect.java
+===================================================================
+RCS file: f:/cvs/idg/Hibernate/src/net/sf/hibernate/sql/QuerySelect.java,v
+retrieving revision 1.1
+diff -u -r1.1 QuerySelect.java
+--- src/net/sf/hibernate/sql/QuerySelect.java	15 Aug 2003 15:27:50 -0000	1.1
++++ src/net/sf/hibernate/sql/QuerySelect.java	15 Aug 2003 15:39:23 -0000
+@@ -2,11 +2,13 @@
+ 
+ import java.util.HashSet;
+ import java.util.Iterator;
++import java.util.StringTokenizer;
+ 
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.util.StringHelper;
+ 
+ public class QuerySelect {
++    private boolean useAliasesInOrderBy;
+ 	private JoinFragment joins;
+ 	private StringBuffer select = new StringBuffer();
+ 	private StringBuffer where = new StringBuffer();
+@@ -46,6 +48,7 @@
+ 	
+ 	public QuerySelect(Dialect dialect) {
+ 		joins = new QueryJoinFragment(dialect, false);
++        useAliasesInOrderBy = dialect.useAliasesInOrderBy();
+ 	}
+ 	
+ 	public JoinFragment getJoinFragment() {
+@@ -121,9 +124,91 @@
+ 		}
+ 		if ( groupBy.length() > 0 ) buf.append(" group by ").append( groupBy.toString() );
+ 		if ( having.length() > 0 ) buf.append(" having ").append( having.toString() );
+-		if ( orderBy.length() > 0 ) buf.append(" order by ").append( orderBy.toString() );
++
++        String temp = orderBy.toString();
++        if (useAliasesInOrderBy)
++        {
++            /*
++             * Parse order by string.  For each column attempt to find the
++             * matching column in the select.  If found, determine the alias used
++             * and add the alias to the order by column.  If not found do nothing,
++             * the SQL engine will throw an exception.
++             */
++            StringBuffer newOrderBy = new StringBuffer();
++            StringTokenizer tokenizer = new StringTokenizer(orderBy.toString(), ",");
++            while (tokenizer.hasMoreTokens())
++            {
++                String token = tokenizer.nextToken();
++                String modifier = null;
++                
++                if (token.toLowerCase().endsWith("asc"))
++                {
++                    token = token.substring(0, token.length() - 3).trim();
++                    modifier = "asc";
++                }
++                else if (token.toLowerCase().endsWith("desc"))
++                {
++                    token = token.substring(0, token.length() - 4).trim();
++                    modifier = "desc";
++                }
++                
++                String alias = findAliasInSelect(token);
++
++                if (newOrderBy.length() > 0)
++                {
++                    newOrderBy.append(", ");
++                }
++
++                if (alias != null)
++                {
++                    newOrderBy.append(alias);
++                }
++                else
++                {
++                    newOrderBy.append(token);
++                }
++                
++                if (modifier != null)
++                {
++                    newOrderBy.append(" ").append(modifier);
++                }
++            }
++            
++            temp = newOrderBy.toString();
++        }
++        if ( temp.length() > 0 ) buf.append(" order by ").append(temp);
++        
+ 		return buf.toString();
+ 	}
++
++    private String findAliasInSelect(String columnName)
++    {
++        /*
++         * Find the specified column name in the select buffer and return the
++         * given alias if found; otherwise return null.
++         */
++        String alias = null;
++        
++        String selectClause = select.toString();
++        int startPosition = selectClause.indexOf(columnName);
++        if (startPosition > -1)
++        {
++            startPosition = selectClause.indexOf("as", startPosition);
++            startPosition += 2;
++            if (startPosition > -1)
++            {
++                int endPosition = selectClause.indexOf(",", startPosition);
++                if (endPosition < 0)
++                {
++                    endPosition = selectClause.length();
++                }
++                
++                alias = select.substring(startPosition, endPosition).trim();
++            }
++        }
++        
++        return alias;
++    }
+ 
+ 	private void appendTokens(StringBuffer buf, Iterator iter) {
+ 		boolean lastSpaceable=true;

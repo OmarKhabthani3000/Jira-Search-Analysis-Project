@@ -1,0 +1,134 @@
+Index: FieldInterceptionHelper.java
+===================================================================
+--- FieldInterceptionHelper.java	(revision 16518)
++++ FieldInterceptionHelper.java	(working copy)
+@@ -44,18 +44,45 @@
+ 	// Another option here would be to remove the Hibernate.isPropertyInitialized()
+ 	// method and have the users go through the SessionFactory to get this information.
+ 
++	static final Class cglibInterface;
++	static final Class javaassistInterface;
++	static {
++		Class tempCglibInterface = null;
++		try {
++			tempCglibInterface = Class
++					.forName(
++							"org.hibernate.repackage.cglib.transform.impl.InterceptFieldEnabled",
++							false,
++							FieldInterceptionHelper.class
++									.getClassLoader());
++		} catch (Exception exc) {
++			// not loaded
++		}
++		cglibInterface = tempCglibInterface;
++
++		Class tempJavaassistInterface = null;
++		try {
++			tempJavaassistInterface = Class
++					.forName(
++							"org.hibernate.bytecode.javassist.FieldHandled",
++							false,
++							FieldInterceptionHelper.class
++									.getClassLoader());
++		} catch (Exception exc) {
++			// not loaded
++		}
++		javaassistInterface = tempJavaassistInterface;
++	}
++
+ 	private FieldInterceptionHelper() {
+ 	}
+ 
+ 	public static boolean isInstrumented(Class entityClass) {
+-		Class[] definedInterfaces = entityClass.getInterfaces();
+-		for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-			if ( "org.hibernate.repackage.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() )
+-			     || "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-				return true;
+-			}
+-		}
+-		return false;
++		return cglibInterface != null
++				&& cglibInterface.isAssignableFrom(entityClass)
++				|| javaassistInterface != null
++				&& javaassistInterface
++						.isAssignableFrom(entityClass);
+ 	}
+ 
+ 	public static boolean isInstrumented(Object entity) {
+@@ -63,20 +90,23 @@
+ 	}
+ 
+ 	public static FieldInterceptor extractFieldInterceptor(Object entity) {
+-		if ( entity == null ) {
++		if (entity == null) {
+ 			return null;
+ 		}
+-		Class[] definedInterfaces = entity.getClass().getInterfaces();
+-		for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-			if ( "org.hibernate.repackage.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() ) ) {
+-				// we have a CGLIB enhanced entity
+-				return CGLIBHelper.extractFieldInterceptor( entity );
+-			}
+-			else if ( "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-				// we have a Javassist enhanced entity
+-				return JavassistHelper.extractFieldInterceptor( entity );
+-			}
++
++		final Class entityClass = entity.getClass();
++
++		if (cglibInterface != null
++				&& cglibInterface.isAssignableFrom(entityClass)) {
++			return CGLIBHelper.extractFieldInterceptor(entity);
+ 		}
++
++		if (javaassistInterface != null
++				&& javaassistInterface
++						.isAssignableFrom(entityClass)) {
++			return JavassistHelper.extractFieldInterceptor(entity);
++		}
++
+ 		return null;
+ 	}
+ 
+@@ -85,19 +115,28 @@
+ 	        String entityName,
+ 	        Set uninitializedFieldNames,
+ 	        SessionImplementor session) {
+-		if ( entity != null ) {
+-			Class[] definedInterfaces = entity.getClass().getInterfaces();
+-			for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-				if ( "org.hibernate.repackage.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() ) ) {
+-					// we have a CGLIB enhanced entity
+-					return CGLIBHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
+-				}
+-				else if ( "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-					// we have a Javassist enhanced entity
+-					return JavassistHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
+-				}
+-			}
++		if (entity == null)
++			return null;
++
++		final Class entityClass = entity.getClass();
++
++		if (cglibInterface != null
++				&& cglibInterface.isAssignableFrom(entityClass)) {
++			// we have a CGLIB enhanced entity
++			return CGLIBHelper.injectFieldInterceptor(entity,
++					entityName, uninitializedFieldNames,
++					session);
++		}
++
++		if (javaassistInterface != null
++				&& javaassistInterface
++						.isAssignableFrom(entityClass)) {
++			// we have a Javassist enhanced entity
++			return JavassistHelper.injectFieldInterceptor(entity,
++					entityName, uninitializedFieldNames,
++					session);
+ 		}
++
+ 		return null;
+ 	}
+ 

@@ -1,0 +1,297 @@
+From 978652f6da5b66eb1928acc75fea98a0c68a6a33 Mon Sep 17 00:00:00 2001
+From: Martijn Blankestijn <martijnblankestijn@gmail.com>
+Date: Sun, 13 Feb 2011 13:18:00 +0100
+Subject: [PATCH] XML-only field access type Set attribute not generated
+
+---
+ .../jpamodelgen/xml/XmlMetaEmbeddable.java         |    2 +-
+ .../hibernate/jpamodelgen/xml/XmlMetaEntity.java   |   64 ++++++++++++++------
+ .../hibernate/jpamodelgen/test/xmlonly/Car.java    |   19 ++++++
+ .../hibernate/jpamodelgen/test/xmlonly/Course.java |    9 +++
+ .../jpamodelgen/test/xmlonly/Teacher.java          |    8 +++
+ .../hibernate/jpamodelgen/test/xmlonly/Tire.java   |   18 ++++++
+ .../jpamodelgen/test/xmlonly/XmlOnlyTest.java      |   13 ++++
+ .../hibernate/jpamodelgen/test/xmlonly/xmlonly.xml |   35 ++++++++++-
+ 8 files changed, 148 insertions(+), 20 deletions(-)
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Car.java
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Course.java
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Teacher.java
+ create mode 100644 src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Tire.java
+
+diff --git a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEmbeddable.java b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEmbeddable.java
+index 0df6714..bfc6f25 100644
+--- a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEmbeddable.java
++++ b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEmbeddable.java
+@@ -43,7 +43,7 @@ public class XmlMetaEmbeddable extends XmlMetaEntity {
+ 
+ 	public List<MetaAttribute> getMembers() {
+ 		if ( !initialized ) {
+-			context.logMessage( Diagnostic.Kind.OTHER, "Entity " + getQualifiedName() + "was lazily initialised." );
++			context.logMessage( Diagnostic.Kind.OTHER, "Entity " + getQualifiedName() + " was lazily initialised." );
+ 			init();
+ 			initialized = true;
+ 		}
+diff --git a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
+index d5ef07d..ee389e1 100644
+--- a/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
++++ b/src/main/java/org/hibernate/jpamodelgen/xml/XmlMetaEntity.java
+@@ -27,8 +27,7 @@ import javax.lang.model.element.ElementKind;
+ import javax.lang.model.element.ExecutableElement;
+ import javax.lang.model.element.Name;
+ import javax.lang.model.element.TypeElement;
+-import javax.lang.model.type.DeclaredType;
+-import javax.lang.model.type.TypeMirror;
++import javax.lang.model.type.*;
+ import javax.tools.Diagnostic;
+ 
+ import org.hibernate.jpamodelgen.AccessTypeInformation;
+@@ -191,29 +190,57 @@ public class XmlMetaEntity implements MetaEntity {
+ 	}
+ 
+ 	private String[] getCollectionTypes(String propertyName, String explicitTargetEntity, String explicitMapKeyClass, ElementKind expectedElementKind) {
+-		String types[] = new String[3];
+ 		for ( Element elem : element.getEnclosedElements() ) {
+-			if ( expectedElementKind.equals( elem.getKind() ) ) {
+-				continue;
+-			}
+-
+-			if ( !elem.getSimpleName().toString().equals( propertyName ) ) {
++			if ( !expectedElementKind.equals( elem.getKind() ) ) {
+ 				continue;
+ 			}
+ 
+-			DeclaredType type = ( ( DeclaredType ) elem.asType() );
+-			determineTargetType( type, propertyName, explicitTargetEntity, types );
+-			determineCollectionType( type, types );
+-			if ( types[1].equals( "javax.persistence.metamodel.MapAttribute" ) ) {
+-				determineMapType( type, explicitMapKeyClass, types );
+-			}
+-			return types;
+-
++			if ( ElementKind.METHOD.equals(elem.getKind())) {
++                if (!propertyName.equals(determinePropertyName(elem))) {
++                    continue;
++                }
++            }
++            else if(!elem.getSimpleName().toString().equals( propertyName )) {
++                continue;
++            }
++
++            DeclaredType type = determineDeclaredType(elem);
++            if (type != null) {
++                String types[] = new String[3];
++                determineTypes(propertyName, explicitTargetEntity, explicitMapKeyClass, type, types);
++                return types;
++            }
+ 		}
+ 		return null;
+ 	}
+ 
+-	private void determineMapType(DeclaredType type, String explicitMapKeyClass, String[] types) {
++    private DeclaredType determineDeclaredType(Element elem) {
++        DeclaredType type = null;
++        if (elem.asType() instanceof DeclaredType) {
++            type = ( ( DeclaredType ) elem.asType() );
++        }
++        else if (elem.asType() instanceof ExecutableType) {
++            ExecutableType executableType = (ExecutableType) elem.asType();
++            type = (DeclaredType) executableType.getReturnType();
++        }
++        return type;
++    }
++
++    /** Convert method name to property name: 'getSomething' to 'something'. */
++    private String determinePropertyName(Element elem) {
++        return elem.getSimpleName().subSequence(3,4).toString().toLowerCase()
++                + elem.getSimpleName().subSequence(4,elem.getSimpleName().length());
++    }
++
++    private void determineTypes(String propertyName, String explicitTargetEntity, String explicitMapKeyClass, DeclaredType type, String types[]) {
++        determineTargetType( type, propertyName, explicitTargetEntity, types );
++        determineCollectionType( type, types );
++        if ( types[1].equals( "javax.persistence.metamodel.MapAttribute" ) ) {
++            determineMapType( type, explicitMapKeyClass, types );
++        }
++    }
++
++    private void determineMapType(DeclaredType type, String explicitMapKeyClass, String[] types) {
+ 		if ( explicitMapKeyClass != null ) {
+ 			types[2] = explicitMapKeyClass;
+ 		}
+@@ -539,7 +566,8 @@ public class XmlMetaEntity implements MetaEntity {
+ 	private ElementKind getElementKind(org.hibernate.jpamodelgen.xml.jaxb.AccessType accessType) {
+ 		// if no explicit access type was specified in xml we use the entity access type
+ 		if ( accessType == null ) {
+-			return TypeUtils.getElementKindForAccessType( accessTypeInfo.getDefaultAccessType() );
++//            return TypeUtils.getElementKindForAccessType( accessTypeInfo.getDefaultAccessType());
++			return TypeUtils.getElementKindForAccessType( accessTypeInfo.getAccessType() );
+ 		}
+ 
+ 		if ( org.hibernate.jpamodelgen.xml.jaxb.AccessType.FIELD.equals( accessType ) ) {
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Car.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Car.java
+new file mode 100644
+index 0000000..123ec4e
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Car.java
+@@ -0,0 +1,19 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++import java.util.Set;
++
++public class Car {
++    public Long getId() {
++        return 1L;
++    }
++
++    public void setId(Long id) {
++    }
++
++    public Set<Tire> getTires() {
++        return null;
++    }
++
++    public void setTires(Set<Tire> tires) {
++    }
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Course.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Course.java
+new file mode 100644
+index 0000000..aa203bb
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Course.java
+@@ -0,0 +1,9 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++import java.util.Set;
++
++public class Course {
++    private Long id;
++    private String name;
++    private Set<Teacher> qualifiedTeachers;
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Teacher.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Teacher.java
+new file mode 100644
+index 0000000..aaf4a99
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Teacher.java
+@@ -0,0 +1,8 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++import java.util.Set;
++
++public class Teacher {
++    private Long id;
++    private Set<Course> qualifiedFor;
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Tire.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Tire.java
+new file mode 100644
+index 0000000..b45a524
+--- /dev/null
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/Tire.java
+@@ -0,0 +1,18 @@
++package org.hibernate.jpamodelgen.test.xmlonly;
++
++public class Tire {
++    public Long getId() {
++        return 1L;
++    }
++
++    public void setId(Long id) {
++    }
++
++    public Car getCar() {
++        return null;
++    }
++
++    public void setCar(Car car) {
++    }
++
++}
+diff --git a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
+index b53c2da..be67676 100644
+--- a/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
++++ b/src/test/java/org/hibernate/jpamodelgen/test/xmlonly/XmlOnlyTest.java
+@@ -28,6 +28,7 @@ import org.hibernate.jpamodelgen.test.util.CompilationTest;
+ import org.hibernate.jpamodelgen.test.util.TestUtil;
+ 
+ import static org.hibernate.jpamodelgen.test.util.TestUtil.assertMetamodelClassGeneratedFor;
++import static org.hibernate.jpamodelgen.test.util.TestUtil.assertPresenceOfFieldInMetamodelFor;
+ 
+ /**
+  * @author Hardy Ferentschik
+@@ -38,6 +39,18 @@ public class XmlOnlyTest extends CompilationTest {
+ 		assertMetamodelClassGeneratedFor( XmlOnly.class );
+ 	}
+ 
++    @Test
++    public void testMetaModelGeneratedForManyToManyFieldAccessWithoutTargetEntity() {
++        assertPresenceOfFieldInMetamodelFor(Course.class, "qualifiedTeachers", "Type should be inferred from field");
++        assertPresenceOfFieldInMetamodelFor(Teacher.class, "qualifiedFor", "Type should be inferred from field");
++    }
++
++    @Test
++    public void testMetaModelGeneratedForManyToManyPropertyAccessWithoutTargetEntity() {
++        assertPresenceOfFieldInMetamodelFor(Car.class, "tires", "Type should be inferred from field");
++        assertPresenceOfFieldInMetamodelFor(Tire.class, "car", "Type should be inferred from field");
++    }
++
+ 	@Override
+ 	protected String getPackageNameOfCurrentTest() {
+ 		return XmlOnlyTest.class.getPackage().getName();
+diff --git a/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml b/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
+index 6f94048..ba1a1fd 100644
+--- a/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
++++ b/src/test/resources/org/hibernate/jpamodelgen/test/xmlonly/xmlonly.xml
+@@ -19,16 +19,49 @@
+ 
+ <entity-mappings xmlns="http://java.sun.com/xml/ns/persistence/orm"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+-                 xsi:schemaLocation="http://java.sun.com/xml/ns/persistence/orm orm_2_0.xsd"
++                 xsi:schemaLocation="http://java.sun.com/xml/ns/persistence/orm http://java.sun.com/xml/ns/persistence/orm_2_0.xsd"
+                  version="2.0"
+         >
+     <persistence-unit-metadata>
+         <xml-mapping-metadata-complete/>
+     </persistence-unit-metadata>
++
+     <package>org.hibernate.jpamodelgen.test.xmlonly</package>
++
+     <entity class="XmlOnly" access="FIELD" metadata-complete="true">
+         <attributes>
+             <id name="id"/>
+         </attributes>
+     </entity>
++
++    <entity class="Course" access="FIELD">
++        <attributes>
++            <id name="id" />
++            <basic name="name" />
++            <many-to-many name="qualifiedTeachers" />
++        </attributes>
++    </entity>
++
++    <entity class="Teacher" access="FIELD">
++        <attributes>
++            <id name="id" />
++             <many-to-many name="qualifiedFor" mapped-by="qualifiedTeachers"/>
++        </attributes>
++    </entity>
++
++    <entity class="Car" access="PROPERTY">
++        <attributes>
++            <id name="id" />
++            <one-to-many name="tires" mapped-by="car" />
++        </attributes>
++    </entity>
++
++    <entity class="Tire" access="PROPERTY">
++        <attributes>
++            <id name="id" />
++            <many-to-one name="car"/>
++        </attributes>
++    </entity>
++
++
+ </entity-mappings>
+-- 
+1.7.0.4
+

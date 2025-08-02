@@ -1,0 +1,736 @@
+--- src/org/hibernate/search/backend/Workspace.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/backend/Workspace.java	Thu Jan 24 15:50:49 2008
+@@ -112,10 +112,12 @@
+ 		lockProvider( provider );
+ 		if ( modificationOperation ) dpStatistics.get( provider ).operations++;
+ 		try {
++			DocumentBuilder documentBuilder = searchFactoryImplementor.getDocumentBuilders().get( entity );
+ 			Analyzer analyzer = entity != null ?
+-					searchFactoryImplementor.getDocumentBuilders().get( entity ).getAnalyzer() :
++					documentBuilder.getAnalyzer() :
+ 					new SimpleAnalyzer(); //never used
+ 			writer = new IndexWriter( provider.getDirectory(), analyzer, false ); //has been created at init time
++			writer.setSimilarity( documentBuilder.getSimilarity() );
+ 
+ 			LuceneIndexingParameters indexingParams = searchFactoryImplementor.getIndexingParameters( provider );
+ 			if ( isBatch ) {
+--- src/org/hibernate/search/engine/DocumentBuilder.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/engine/DocumentBuilder.java	Thu Feb 14 11:14:24 2008
+@@ -17,6 +17,7 @@
+ import org.apache.lucene.document.Document;
+ import org.apache.lucene.document.Field;
+ import org.apache.lucene.index.Term;
++import org.apache.lucene.search.Similarity;
+ import org.hibernate.Hibernate;
+ import org.hibernate.annotations.common.AssertionFailure;
+ import org.hibernate.annotations.common.reflection.ReflectionManager;
+@@ -74,6 +75,7 @@
+ 	private int level = 0;
+ 	private int maxLevel = Integer.MAX_VALUE;
+ 	private ScopedAnalyzer analyzer;
++	private Similarity similarity;
+ 
+ 
+ 	public DocumentBuilder(XClass clazz, Analyzer defaultAnalyzer, DirectoryProvider[] directoryProviders,
+@@ -156,6 +158,17 @@
+ 				bindClassAnnotation(prefix, propertiesMetadata, classBridgeAnn);
+ 			}
+ 
++			org.hibernate.search.annotations.Similarity similarityAnn = currClass.getAnnotation(org.hibernate.search.annotations.Similarity.class);
++			if(similarityAnn != null) {
++				Class similarityClass = similarityAnn.impl();
++				try {
++					similarity = (Similarity) similarityClass.newInstance();
++				}
++				catch (Exception e) {
++					log.error("Exception attempting to instantiate a Similarity of class "+similarityClass.getName());
++				}
++			}
++
+ 			//rejecting non properties because the object is loaded from Hibernate, so indexing a non property does not make sense
+ 			List<XProperty> methods = currClass.getDeclaredProperties( XClass.ACCESS_PROPERTY );
+ 			for (XProperty method : methods) {
+@@ -594,6 +607,10 @@
+ 
+ 	public Analyzer getAnalyzer() {
+ 		return analyzer;
++	}
++
++	public Similarity getSimilarity() {
++		return similarity;
+ 	}
+ 
+ 	private static void setAccessible(XMember member) {
+--- src/org/hibernate/search/query/FullTextQueryImpl.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/query/FullTextQueryImpl.java	Thu Feb 14 13:43:47 2008
+@@ -15,14 +15,7 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.lucene.index.Term;
+-import org.apache.lucene.search.BooleanClause;
+-import org.apache.lucene.search.BooleanQuery;
+-import org.apache.lucene.search.Filter;
+-import org.apache.lucene.search.Hits;
+-import org.apache.lucene.search.IndexSearcher;
+-import org.apache.lucene.search.Searcher;
+-import org.apache.lucene.search.Sort;
+-import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.search.*;
+ import org.hibernate.Criteria;
+ import org.hibernate.HibernateException;
+ import org.hibernate.LockMode;
+@@ -114,7 +107,7 @@
+ 
+ 		SearchFactoryImplementor searchFactoryImplementor = ContextHelper.getSearchFactoryBySFI( session );
+ 		//find the directories
+-		IndexSearcher searcher = buildSearcher( searchFactoryImplementor );
++		Searcher searcher = buildSearcher( searchFactoryImplementor );
+ 		if ( searcher == null ) {
+ 			return new IteratorImpl( new ArrayList<EntityInfo>( 0 ), noLoader );
+ 		}
+@@ -139,9 +132,9 @@
+ 		}
+ 		finally {
+ 			try {
+-				searchFactoryImplementor.getReaderProvider().closeReader( searcher.getIndexReader() );
++				searchFactoryImplementor.getReaderProvider().closeSearcher( searcher );
+ 			}
+-			catch (SearchException e) {
++			catch (Exception e) {
+ 				log.warn( "Unable to properly close searcher during lucene query: " + getQueryString(), e );
+ 			}
+ 		}
+@@ -194,7 +187,7 @@
+ 		SearchFactoryImplementor searchFactory = ContextHelper.getSearchFactoryBySFI( session );
+ 
+ 		//find the directories
+-		IndexSearcher searcher = buildSearcher( searchFactory );
++		Searcher searcher = buildSearcher( searchFactory );
+ 		//FIXME: handle null searcher
+ 		Hits hits;
+ 		try {
+@@ -208,9 +201,9 @@
+ 		catch (IOException e) {
+ 			//close only in case of exception
+ 			try {
+-				searchFactory.getReaderProvider().closeReader( searcher.getIndexReader() );
++				searchFactory.getReaderProvider().closeSearcher( searcher );
+ 			}
+-			catch (SearchException ee) {
++			catch (Exception ee) {
+ 				//we have the initial issue already
+ 			}
+ 			throw new HibernateException( "Unable to query Lucene index", e );
+@@ -225,7 +218,7 @@
+ 	public List list() throws HibernateException {
+ 		SearchFactoryImplementor searchFactoryImplementor = ContextHelper.getSearchFactoryBySFI( session );
+ 		//find the directories
+-		IndexSearcher searcher = buildSearcher( searchFactoryImplementor );
++		Searcher searcher = buildSearcher( searchFactoryImplementor );
+ 		if ( searcher == null ) return new ArrayList( 0 );
+ 		Hits hits;
+ 		try {
+@@ -248,9 +241,9 @@
+ 		}
+ 		finally {
+ 			try {
+-				searchFactoryImplementor.getReaderProvider().closeReader( searcher.getIndexReader() );
++				searchFactoryImplementor.getReaderProvider().closeSearcher( searcher );
+ 			}
+-			catch (SearchException e) {
++			catch (Exception e) {
+ 				log.warn( "Unable to properly close searcher during lucene query: " + getQueryString(), e );
+ 			}
+ 		}
+@@ -410,60 +403,72 @@
+ 	 * can return null
+ 	 * TODO change classesAndSubclasses by side effect, which is a mismatch with the Searcher return, fix that.
+ 	 */
+-	private IndexSearcher buildSearcher(SearchFactoryImplementor searchFactoryImplementor) {
++	private Searcher buildSearcher(SearchFactoryImplementor searchFactoryImplementor) {
+ 		Map<Class, DocumentBuilder<Object>> builders = searchFactoryImplementor.getDocumentBuilders();
+-		List<DirectoryProvider> directories = new ArrayList<DirectoryProvider>();
++
++		Map<DirectoryProvider, Similarity> directoryProvidersAndSimilarities = new HashMap<DirectoryProvider, Similarity>();
++
+ 		if ( classes == null || classes.length == 0 ) {
+-			//no class means all classes
+ 			for (DocumentBuilder builder : builders.values()) {
+-				final DirectoryProvider[] directoryProviders =
+-						builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
+-				for (DirectoryProvider provider : directoryProviders) {
+-					if ( !directories.contains( provider ) ) {
+-						directories.add( provider );
+-					}
+-				}
++				final DirectoryProvider[] directoryProviders = builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
++				populateDirectoryProviders(directoryProvidersAndSimilarities, directoryProviders, builder.getSimilarity());
+ 			}
+ 			classesAndSubclasses = null;
+ 		}
+ 		else {
+ 			Set<Class> involvedClasses = new HashSet<Class>( classes.length );
+ 			Collections.addAll( involvedClasses, classes );
++
++			// Store all of the affected classes in a deduped list
+ 			for (Class clazz : classes) {
+ 				DocumentBuilder builder = builders.get( clazz );
+ 				if ( builder != null ) involvedClasses.addAll( builder.getMappedSubclasses() );
+ 			}
++
+ 			for (Class clazz : involvedClasses) {
+ 				DocumentBuilder builder = builders.get( clazz );
++				final DirectoryProvider[] directoryProviders = builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
++
+ 				//TODO should we rather choose a polymorphic path and allow non mapped entities
+-				if ( builder == null )
+-					throw new HibernateException( "Not a mapped entity (don't forget to add @Indexed): " + clazz );
+-				final DirectoryProvider[] directoryProviders = 
+-						builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
+-				for (DirectoryProvider provider : directoryProviders) {
+-					if ( !directories.contains( provider ) ) {
+-						directories.add( provider );
+-					}
+-				}
++				if ( builder == null ) throw new HibernateException( "Not a mapped entity (don't forget to add @Indexed): " + clazz );
++
++				populateDirectoryProviders(directoryProvidersAndSimilarities, directoryProviders, builder.getSimilarity());
+ 			}
+ 			classesAndSubclasses = involvedClasses;
+ 		}
+ 
+-		//set up the searcher
+-		final DirectoryProvider[] directoryProviders = directories.toArray( new DirectoryProvider[directories.size()] );
+-		return new IndexSearcher( searchFactoryImplementor.getReaderProvider().openReader( directoryProviders ) );
++		// Set up the searcher
++		return searchFactoryImplementor.getReaderProvider().openSearcher(directoryProvidersAndSimilarities);
++	}
++
++	private static void populateDirectoryProviders(Map<DirectoryProvider, Similarity> directoryProvidersAndSimilarities, DirectoryProvider[] directoryProviders, Similarity similarity)
++	{
++		if (similarity==null) {
++			similarity = Similarity.getDefault();
++		}
++
++		for (DirectoryProvider provider : directoryProviders) {
++			Similarity existingProviderSimilarity = directoryProvidersAndSimilarities.get(provider);
++			if( existingProviderSimilarity==null ) {
++				directoryProvidersAndSimilarities.put(provider, similarity);
++			}
++			else {
++				if(!existingProviderSimilarity.getClass().equals(similarity.getClass())) {
++					throw new HibernateException("Cannot have two different similarities active on directory "+provider.getDirectory());
++				}
++			}
++		}
+ 	}
+ 
+ 	private void setResultSize(Hits hits) {
+ 		resultSize = hits.length();
+ 	}
+ 
+-
+ 	public int getResultSize() {
+ 		if ( resultSize == null ) {
+ 			//get result size without object initialization
+ 			SearchFactoryImplementor searchFactoryImplementor = ContextHelper.getSearchFactoryBySFI( session );
+-			IndexSearcher searcher = buildSearcher( searchFactoryImplementor );
++			Searcher searcher = buildSearcher( searchFactoryImplementor );
+ 			if ( searcher == null ) {
+ 				resultSize = 0;
+ 			}
+@@ -479,9 +484,9 @@
+ 				finally {
+ 					//searcher cannot be null
+ 					try {
+-						searchFactoryImplementor.getReaderProvider().closeReader( searcher.getIndexReader() );
++						searchFactoryImplementor.getReaderProvider().closeSearcher( searcher );
+ 					}
+-					catch (SearchException e) {
++					catch (Exception e) {
+ 						log.warn( "Unable to properly close searcher during lucene query: " + getQueryString(), e );
+ 					}
+ 				}
+--- src/org/hibernate/search/query/ScrollableResultsImpl.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/query/ScrollableResultsImpl.java	Tue Jan 22 16:41:14 2008
+@@ -19,6 +19,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.lucene.search.Hits;
+ import org.apache.lucene.search.IndexSearcher;
++import org.apache.lucene.search.Searcher;
+ import org.hibernate.HibernateException;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.search.SearchException;
+@@ -51,7 +52,7 @@
+  */
+ public class ScrollableResultsImpl implements ScrollableResults {
+ 	private static Log log = LogFactory.getLog( ScrollableResultsImpl.class );
+-	private final IndexSearcher searcher;
++	private final Searcher searcher;
+ 	private final SearchFactory searchFactory;
+ 	private final Hits hits;
+ 	private final int first;
+@@ -64,7 +65,7 @@
+ 	private Map<EntityInfo, Object[]> resultContext;
+ 
+ 	public ScrollableResultsImpl(
+-			IndexSearcher searcher, Hits hits, int first, int max, int fetchSize, DocumentExtractor extractor,
++			Searcher searcher, Hits hits, int first, int max, int fetchSize, DocumentExtractor extractor,
+ 			Loader loader, SearchFactory searchFactory
+ 	) {
+ 		this.searcher = searcher;
+@@ -219,9 +220,10 @@
+ 
+ 	public void close() throws HibernateException {
+ 		try {
+-			searchFactory.getReaderProvider().closeReader( searcher.getIndexReader() );
++			searcher.close();
++			//searchFactory.getReaderProvider().closeReader( searcher.getIndexReader() );
+ 		}
+-		catch (SearchException e) {
++		catch (Exception e) {
+ 			log.warn( "Unable to properly close searcher in ScrollableResults", e );
+ 		}
+ 	}
+--- src/org/hibernate/search/reader/NotSharedReaderProvider.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/reader/NotSharedReaderProvider.java	Thu Feb 14 11:11:24 2008
+@@ -2,13 +2,16 @@
+ package org.hibernate.search.reader;
+ 
+ import java.io.IOException;
+-import java.util.Properties;
++import java.util.*;
+ 
+ import org.apache.lucene.index.IndexReader;
++import org.apache.lucene.index.MultiReader;
++import org.apache.lucene.search.*;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
+ import static org.hibernate.search.reader.ReaderProviderHelper.buildMultiReader;
+ import static org.hibernate.search.reader.ReaderProviderHelper.clean;
++import static org.hibernate.search.reader.ReaderProviderHelper.getIndexReaders;
+ import org.hibernate.search.store.DirectoryProvider;
+ 
+ /**
+@@ -32,17 +35,86 @@
+ 		return buildMultiReader( length, readers );
+ 	}
+ 
+-
+ 	public void closeReader(IndexReader reader) {
+-		try {
+-			reader.close();
++		for(IndexReader ir:getIndexReaders(reader)) {
++			try {
++				ir.close();
++			}
++			catch (IOException e) {
++				clean( new SearchException("Unable to close IndexReader"), ir );
++			}
+ 		}
+-		catch (IOException e) {
+-			//TODO extract subReaders and close each one individually
+-			clean( new SearchException( "Unable to close multiReader" ), reader );
++	}
++
++	public void closeSearcher(Searcher searcher)
++	{
++		for(IndexReader ir:getIndexReaders(searcher)) {
++			try {
++				ir.close();
++			}
++			catch (IOException e) {
++				clean( new SearchException("Unable to close IndexReader"), ir );
++			}
+ 		}
+ 	}
+ 
+ 	public void initialize(Properties props, SearchFactoryImplementor searchFactoryImplementor) {
++	}
++
++	public Searcher openSearcher(Map<DirectoryProvider, Similarity> providersWithSimilarities) {
++
++		List<Searcher> searchables = new ArrayList<Searcher>(providersWithSimilarities.values().size());
++
++		Map<Class, Set<Map.Entry<DirectoryProvider, Similarity>>> similarityMap = new HashMap<Class, Set<Map.Entry<DirectoryProvider, Similarity>>>();
++
++		// Unfortunately it isn't possible to key on similarity here because the default implementation of Similarity
++		// does not support the equals() semantics that we would require to group by the same class, rather than
++		// the individual instance
++		for(Map.Entry<DirectoryProvider, Similarity> entry : providersWithSimilarities.entrySet()) {
++			Class similarityClass = entry.getValue().getClass();
++			Set<Map.Entry<DirectoryProvider, Similarity>> dps = similarityMap.get(similarityClass);
++			if(dps==null) {
++				dps = new HashSet();
++				similarityMap.put(similarityClass, dps);
++			}
++			dps.add(entry);
++		}
++
++		for(Class similarityClass : similarityMap.keySet()) {
++			Set<Map.Entry<DirectoryProvider, Similarity>> directoryProviderSet = similarityMap.get(similarityClass);
++			DirectoryProvider[] directoryProviders = new DirectoryProvider[directoryProviderSet.size()];
++			int idx = 0 ;
++			Similarity similarityImpl = null;
++			for(Map.Entry<DirectoryProvider, Similarity> dps : directoryProviderSet)
++			{
++				directoryProviders[idx++] = dps.getKey();
++				similarityImpl = dps.getValue();
++			}
++
++			IndexReader[] indexReaders = new IndexReader[directoryProviders.length];
++			try {
++				int i = 0;
++				for(DirectoryProvider directoryProvider:directoryProviders)
++				{
++					indexReaders[i] = IndexReader.open(directoryProvider.getDirectory());
++				}
++			}
++			catch (IOException e) {
++				e.printStackTrace();
++			}
++
++			IndexReader multiReader = buildMultiReader(indexReaders.length, indexReaders);
++			IndexSearcher is = new IndexSearcher(multiReader);
++			is.setSimilarity(similarityImpl);
++			searchables.add(is);
++		}
++
++		try {
++			return new MultiSearcher(searchables.toArray(new Searchable[searchables.size()]));
++		}
++		catch (IOException e) {
++			e.printStackTrace();
++			return null;
++		}
+ 	}
+ }
+--- src/org/hibernate/search/reader/ReaderProvider.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/reader/ReaderProvider.java	Wed Feb 06 11:54:46 2008
+@@ -2,8 +2,12 @@
+ package org.hibernate.search.reader;
+ 
+ import java.util.Properties;
++import java.util.Set;
++import java.util.Map;
+ 
+ import org.apache.lucene.index.IndexReader;
++import org.apache.lucene.search.Searcher;
++import org.apache.lucene.search.Similarity;
+ import org.hibernate.search.store.DirectoryProvider;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
+ 
+@@ -30,5 +34,9 @@
+ 	 */
+ 	void closeReader(IndexReader reader);
+ 
++	void closeSearcher(Searcher searcher);
++
+ 	void initialize(Properties props, SearchFactoryImplementor searchFactoryImplementor);
++
++	Searcher openSearcher(Map<DirectoryProvider, Similarity> providersWithSimilarities);
+ }
+--- src/org/hibernate/search/reader/ReaderProviderHelper.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/reader/ReaderProviderHelper.java	Thu Feb 14 11:51:44 2008
+@@ -2,10 +2,14 @@
+ package org.hibernate.search.reader;
+ 
+ import java.io.IOException;
++import java.util.*;
++import java.lang.reflect.Field;
+ 
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.index.MultiReader;
++import org.apache.lucene.search.*;
+ import org.hibernate.search.SearchException;
++import org.hibernate.HibernateException;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -18,22 +22,22 @@
+ 		else if ( length == 1 ) {
+ 			//everything should be the same so wrap in an MultiReader
+ 			//return readers[0];
+-			try {
+-				return new MultiReader( readers );
+-			}
+-			catch (IOException e) {
+-				clean( new SearchException( "Unable to open a MultiReader", e ), readers );
+-				return null; //never happen, but please the compiler
+-			}
++			//try {
++				return new WrappedMultiReader( readers );
++			//}
++			//catch (IOException e) {
++			//	clean( new SearchException( "Unable to open a MultiReader", e ), readers );
++			//	return null; //never happen, but please the compiler
++			//}
+ 		}
+ 		else {
+-			try {
+-				return new MultiReader( readers );
+-			}
+-			catch (IOException e) {
+-				clean( new SearchException( "Unable to open a MultiReader", e ), readers );
+-				return null; //never happen, but please the compiler
+-			}
++			//try {
++				return new WrappedMultiReader( readers );
++			//}
++			//catch (IOException e) {
++			//	clean( new SearchException( "Unable to open a MultiReader", e ), readers );
++			//	return null; //never happen, but please the compiler
++			//}
+ 		}
+ 	}
+ 
+@@ -49,5 +53,104 @@
+ 			}
+ 		}
+ 		throw e;
++	}
++
++	public static void clean(SearchException e, Collection<IndexReader> readers) {
++		for (IndexReader reader : readers) {
++			if ( reader != null ) {
++				try {
++					reader.close();
++				}
++				catch (IOException ee) {
++					//swallow
++				}
++			}
++		}
++		throw e;
++	}
++
++	/**
++	 * Find the underlying IndexReaders for the given searchable
++	 * @param searchable The searchable to find the IndexReaders for
++	 * @return A list of all base IndexReaders used within this searchable
++	 */
++	public static Set<IndexReader> getIndexReaders(Searchable searchable)
++	{
++		Set<IndexReader> readers = new HashSet<IndexReader>();
++		getIndexReadersInternal(readers, searchable);
++		return readers;
++	}
++
++	/**
++	 * Find the underlying IndexReaders for the given reader
++	 * @param reader The reader to find the IndexReaders for
++	 * @return A list of all base IndexReaders used within this searchable
++	 */
++	public static Set<IndexReader> getIndexReaders(IndexReader reader)
++	{
++		Set<IndexReader> readers = new HashSet<IndexReader>();
++		getIndexReadersInternal(readers, reader);
++		return readers;
++	}
++
++	private static void getIndexReadersInternal(Set<IndexReader> readers, Object obj)
++	{
++		if(obj instanceof MultiSearcher) {
++			for(Searchable s : ((MultiSearcher)obj).getSearchables()) {
++				getIndexReadersInternal(readers, s);
++			}
++		}
++		else if (obj instanceof IndexSearcher) {
++			getIndexReadersInternal(readers, ((IndexSearcher)obj).getIndexReader());
++		}
++		else if (obj instanceof WrappedMultiReader) {
++			for(IndexReader ir:((WrappedMultiReader)obj).getSubReaders()) {
++				getIndexReadersInternal(readers, ir);
++			}
++		}
++		else if (obj instanceof MultiReader) {
++			throw new HibernateException("Unexpected instance of an unwrapped MultiReader. It is not possible to determine the index readers of a MultiReader.");
++		}
++		else if(obj instanceof IndexReader) {
++			readers.add((IndexReader)obj);
++		}
++	}
++
++	private static class WrappedMultiReader extends MultiReader {
++
++		private static Field subReadersField;
++
++		static {
++			try	{
++				subReadersField = MultiReader.class.getDeclaredField("subReaders");
++				subReadersField.setAccessible(true);
++			}
++			catch (NoSuchFieldException e) {
++				// ignore
++			}
++		}
++
++		public WrappedMultiReader(IndexReader[] subReaders) {
++			super(subReaders);
++		}
++
++		public WrappedMultiReader(IndexReader[] subReaders, boolean closeSubReaders) {
++			super(subReaders, closeSubReaders);
++		}
++
++		public IndexReader[] getSubReaders()
++		{
++			// TODO: In Lucene 2.3 we can just do this as subReaders is protected, not private
++			//return this.subReaders;
++
++			IndexReader[] subReaders = null;
++			try	{
++				subReaders = (IndexReader[]) subReadersField.get(this);
++			}
++			catch (IllegalAccessException e) {
++
++			}
++			return subReaders;
++		}
+ 	}
+ }
+--- src/org/hibernate/search/reader/SharedReaderProvider.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/reader/SharedReaderProvider.java	Thu Feb 14 13:34:59 2008
+@@ -3,11 +3,7 @@
+ 
+ import java.io.IOException;
+ import java.lang.reflect.Field;
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.Map;
+-import java.util.Properties;
+-import java.util.Set;
++import java.util.*;
+ import java.util.concurrent.locks.Lock;
+ import java.util.concurrent.locks.ReentrantLock;
+ 
+@@ -15,11 +11,13 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.index.MultiReader;
++import org.apache.lucene.search.*;
+ import org.hibernate.annotations.common.AssertionFailure;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
+ import static org.hibernate.search.reader.ReaderProviderHelper.buildMultiReader;
+ import static org.hibernate.search.reader.ReaderProviderHelper.clean;
++import static org.hibernate.search.reader.ReaderProviderHelper.getIndexReaders;
+ import org.hibernate.search.store.DirectoryProvider;
+ 
+ /**
+@@ -54,9 +52,8 @@
+ 	 */
+ 	private Map<IndexReader, ReaderData> searchIndexReaderSemaphores = new HashMap<IndexReader, ReaderData>();
+ 
+-	public IndexReader openReader(DirectoryProvider[] directoryProviders) {
+-		boolean trace = log.isTraceEnabled();
+-		int length = directoryProviders.length;
++	private IndexReader[] getReaders(DirectoryProvider[] directoryProviders, int length, boolean trace)
++	{
+ 		IndexReader[] readers = new IndexReader[length];
+ 		if ( trace ) log.trace( "Opening IndexReader for directoryProviders: " + length );
+ 
+@@ -118,7 +115,76 @@
+ 			}
+ 			readers[index] = reader;
+ 		}
+-		return buildMultiReader( length, readers );
++		return readers;
++	}
++
++	public IndexReader openReader(DirectoryProvider[] directoryProviders) {
++		boolean trace = log.isTraceEnabled();
++		int length = directoryProviders.length;
++		IndexReader[] indexReaders = getReaders(directoryProviders, length, trace);
++		return buildMultiReader( length, indexReaders );
++	}
++
++	public Searcher openSearcher(Map<DirectoryProvider, Similarity> providersWithSimilarities)
++	{
++		boolean trace = log.isTraceEnabled();
++
++		// Shortcut for common case where only one directory is being read
++		if(providersWithSimilarities.values().size()==1) {
++			IndexReader[] indexReaders = getReaders(providersWithSimilarities.keySet().toArray(new DirectoryProvider[1]), 1, trace);
++			IndexSearcher is = new IndexSearcher(indexReaders[0]);
++			is.setSimilarity(providersWithSimilarities.values().iterator().next());
++			return is;
++		}
++		else {
++			List<Searcher> searchables = new ArrayList<Searcher>(providersWithSimilarities.values().size());
++
++			Map<Class, Set<Map.Entry<DirectoryProvider, Similarity>>> similarityMap = new HashMap<Class, Set<Map.Entry<DirectoryProvider, Similarity>>>();
++
++			// Unfortunately it isn't possible to key on similarity here because the default implementation of Similarity
++			// does not support the equals() semantics that we would require to group by the same class, rather than
++			// the individual instance
++			for(Map.Entry<DirectoryProvider, Similarity> entry : providersWithSimilarities.entrySet()) {
++				Class similarityClass = entry.getValue().getClass();
++				Set<Map.Entry<DirectoryProvider, Similarity>> dps = similarityMap.get(similarityClass);
++				if(dps==null) {
++					dps = new HashSet();
++					similarityMap.put(similarityClass, dps);
++				}
++				dps.add(entry);
++			}
++
++			for(Class similarityClass : similarityMap.keySet()) {
++				Set<Map.Entry<DirectoryProvider, Similarity>> directoryProviderSet = similarityMap.get(similarityClass);
++				DirectoryProvider[] directoryProviders = new DirectoryProvider[directoryProviderSet.size()];
++				int idx = 0 ;
++				Similarity similarityImpl = null;
++				for(Map.Entry<DirectoryProvider, Similarity> dps : directoryProviderSet)
++				{
++					directoryProviders[idx++] = dps.getKey();
++					similarityImpl = dps.getValue();
++				}
++
++				IndexReader[] indexReaders = getReaders(directoryProviders, directoryProviders.length, trace);
++				IndexReader multiReader = buildMultiReader(indexReaders.length, indexReaders);
++				IndexSearcher is = new IndexSearcher(multiReader);
++				is.setSimilarity(similarityImpl);
++				searchables.add(is);
++			}
++
++			try {
++				if(searchables.size()==1) {
++					return searchables.get(0);
++				}
++				else {
++					return new MultiSearcher(searchables.toArray(new Searchable[searchables.size()]));
++				}
++			}
++			catch (IOException e) {
++				log.error("IO error creating a MultiSearcher", e);
++				return null;
++			}
++		}
+ 	}
+ 
+ 	private IndexReader replaceActiveReader(IndexReader outOfDateReader, Lock directoryProviderLock, DirectoryProvider directoryProvider, IndexReader[] readers) {
+@@ -202,6 +268,13 @@
+ 		return reader;
+ 	}
+ 
++	public void closeSearcher(Searcher searcher)
++	{
++		boolean trace = log.isTraceEnabled();
++		Set<IndexReader> indexReaders = getIndexReaders(searcher);
++		closeReadersInternal(trace, indexReaders.toArray(new IndexReader[indexReaders.size()]));
++	}
++
+ 	public void closeReader(IndexReader reader) {
+ 		boolean trace = log.isTraceEnabled();
+ 		if ( reader == null ) return;
+@@ -219,6 +292,11 @@
+ 			throw new AssertionFailure( "Everything should be wrapped in a MultiReader" );
+ 		}
+ 
++		closeReadersInternal(trace, readers);
++	}
++
++	private void closeReadersInternal(boolean trace, IndexReader[] readers)
++	{
+ 		for (IndexReader subReader : readers) {
+ 			ReaderData readerData;
+ 			//TODO can we avoid that lock?

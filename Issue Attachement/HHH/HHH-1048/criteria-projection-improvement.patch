@@ -1,0 +1,177 @@
+==== //depot/Tony/hibernate/org/hibernate/criterion/ProjectionList.java#1 - c:\depot\Tony\hibernate\org\hibernate\criterion\ProjectionList.java ====
+@@ -6,6 +6,7 @@
+ 
+ import org.hibernate.Criteria;
+ import org.hibernate.HibernateException;
++import org.hibernate.impl.CriteriaImpl;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ 
+@@ -35,7 +36,9 @@
+ 	throws HibernateException {
+ 		List types = new ArrayList( getLength() );
+ 		for ( int i=0; i<getLength(); i++ ) {
+-			Type[] elemTypes = getProjection(i).getTypes(criteria, criteriaQuery);
++			Projection proj = getProjection(i);
++			Criteria projCriteria = getProjectionCriteria(criteria, proj);
++			Type[] elemTypes = proj.getTypes(projCriteria, criteriaQuery);
+ 			ArrayHelper.addAll(types, elemTypes);
+ 		}
+ 		return ArrayHelper.toTypeArray(types);
+@@ -46,7 +49,8 @@
+ 		StringBuffer buf = new StringBuffer();
+ 		for ( int i=0; i<getLength(); i++ ) {
+ 			Projection proj = getProjection(i);
+-			buf.append( proj.toSqlString(criteria, loc, criteriaQuery) );
++			Criteria projCriteria = getProjectionCriteria(criteria, proj);
++			buf.append( proj.toSqlString(projCriteria, loc, criteriaQuery) );
+ 			loc += proj.getColumnAliases(loc).length;
+ 			if ( i<elements.size()-1 ) buf.append(", ");
+ 		}
+@@ -59,7 +63,8 @@
+ 		for ( int i=0; i<getLength(); i++ ) {
+ 			Projection proj = getProjection(i);
+ 			if ( proj.isGrouped() ) {
+-				buf.append( proj.toGroupSqlString(criteria, criteriaQuery) )
++				Criteria projCriteria = getProjectionCriteria(criteria, proj);
++				buf.append( proj.toGroupSqlString(projCriteria, criteriaQuery) )
+ 					.append(", ");
+ 			}
+ 		}
+@@ -88,7 +93,9 @@
+ 
+ 	public Type[] getTypes(String alias, Criteria criteria, CriteriaQuery criteriaQuery) {
+ 		for ( int i=0; i<getLength(); i++ ) {
+-			Type[] result = getProjection(i).getTypes(alias, criteria, criteriaQuery);
++			Projection proj = getProjection(i);
++			Criteria projCriteria = getProjectionCriteria(criteria, proj);
++			Type[] result = getProjection(i).getTypes(alias, projCriteria, criteriaQuery);
+ 			if (result!=null) return result;
+ 		}
+ 		return null;
+@@ -122,4 +129,20 @@
+ 		}
+ 		return false;
+ 	}
++
++	private Criteria getProjectionCriteria(Criteria criteria, Projection proj)
++	{
++		Criteria projectionCriteria = null;
++		if (criteria instanceof CriteriaImpl) {
++			projectionCriteria = ((CriteriaImpl) criteria).getProjectionCriteria(proj);
++		}
++		
++		if (projectionCriteria == null) {
++			// if it's not a root then it's already got the right association 
++			return criteria;
++		}
++		else {
++			return projectionCriteria;
++		}
++	}
+ }
+==== //depot/Tony/hibernate/org/hibernate/impl/CriteriaImpl.java#2 - c:\depot\Tony\hibernate\org\hibernate\impl\CriteriaImpl.java ====
+@@ -20,6 +20,8 @@
+ import org.hibernate.criterion.NaturalIdentifier;
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
++import org.hibernate.criterion.ProjectionList;
++import org.hibernate.criterion.Projections;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.util.StringHelper;
+@@ -37,8 +39,8 @@
+ 	private List criterionEntries = new ArrayList();
+ 	private List orderEntries = new ArrayList();
+ 	private List havingEntries = new ArrayList();
+-	private Projection projection;
+-	private Criteria projectionCriteria;
++	private ProjectionList projectionList = Projections.projectionList();
++	private Map projectionCriteria = new HashMap();
+ 	private Map fetchModes = new HashMap();
+ 	private List subcriteriaList = new ArrayList();
+ 	private final String entityOrClassName;
+@@ -227,8 +229,8 @@
+ 		}
+ 
+ 		public Criteria setProjection(Projection projection) {
+-			CriteriaImpl.this.projection = projection;
+-			CriteriaImpl.this.projectionCriteria = this;
++			CriteriaImpl.this.projectionList.add(projection);
++			CriteriaImpl.this.projectionCriteria.put(projection, this);
+ 			setResultTransformer(PROJECTION);
+ 			return this;
+ 		}
+@@ -364,7 +366,7 @@
+ 			(rootAlias==null ? "" : rootAlias) + 
+ 			subcriteriaList.toString() + 
+ 			criterionEntries.toString() + 
+-			( projection==null ? "" : projection.toString() ) +
++			( projectionList==null ? "" : projectionList.toString() ) +
+ 			')';
+ 	}
+ 
+@@ -497,18 +499,23 @@
+ 	}
+ 
+ 	public Criteria setProjection(Projection projection) {
+-		this.projection = projection;
+-		this.projectionCriteria = this;
++		this.projectionList.add(projection);
++		this.projectionCriteria.put(projection, this);
+ 		setResultTransformer(PROJECTION);
+ 		return this;
+ 	}
+ 	
+ 	public Projection getProjection() {
+-		return projection;
++		return projectionList;
+ 	}
+ 	
+-	public Criteria getProjectionCriteria() {
+-		return projectionCriteria;
++	public Criteria getProjectionCriteria(Projection projection) {
++		if (projection == projectionList) {
++			return this;
++		}
++		else {
++			return (Criteria) projectionCriteria.get(projection);
++		}
+ 	}
+ 
+ 	protected void before() {
+@@ -534,7 +541,7 @@
+ 	}
+ 	
+ 	public boolean isLookupByNaturalKey() {
+-		if (projection!=null) return false;
++		if ( projectionList.getLength()!=0 ) return false;
+ 		if ( subcriteriaList.size()>0 ) return false;
+ 		if ( criterionEntries.size()!=1 ) return false;
+ 		CriterionEntry ce = (CriterionEntry) criterionEntries.get(0);
+==== //depot/Tony/hibernate/org/hibernate/loader/criteria/CriteriaQueryTranslator.java#2 - c:\depot\Tony\hibernate\org\hibernate\loader\criteria\CriteriaQueryTranslator.java ====
+@@ -277,9 +277,10 @@
+ 	public String getGroupBy() {
+ 		/*String[] aliases = rootCriteria.getProjection().getGroupColumnAliases(0);
+ 		return StringHelper.join(", ", aliases);*/
+-		if ( rootCriteria.getProjection().isGrouped() ) {
++		Projection proj = rootCriteria.getProjection();
++		if ( proj.isGrouped() ) {
+ 			return rootCriteria.getProjection()
+-				.toGroupSqlString( rootCriteria.getProjectionCriteria(), this );
++				.toGroupSqlString( rootCriteria.getProjectionCriteria(proj), this );
+ 		}
+ 		else {
+ 			return "";
+@@ -299,8 +300,9 @@
+ 	}
+ 
+ 	public String getSelect() {
+-		return rootCriteria.getProjection().toSqlString(
+-				rootCriteria.getProjectionCriteria(), 
++		Projection proj = rootCriteria.getProjection();
++		return proj.toSqlString(
++				rootCriteria.getProjectionCriteria(proj), 
+ 				0, 
+ 				this
+ 		);

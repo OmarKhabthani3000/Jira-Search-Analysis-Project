@@ -1,0 +1,181 @@
+Index: /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/engine/JoinHelper.java
+===================================================================
+--- /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/engine/JoinHelper.java	(revision 14238)
++++ /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/engine/JoinHelper.java	(working copy)
+@@ -54,7 +54,7 @@
+ 			OuterJoinLoadable lhsPersister,
+ 			Mapping mapping
+ 	) {
+-		if ( type.useLHSPrimaryKey() ) {
++		if ( type.useLHSPrimaryKey()) {
+ 			return StringHelper.qualify( alias, lhsPersister.getIdentifierColumnNames() );
+ 		}
+ 		else {
+@@ -61,7 +61,7 @@
+ 			String propertyName = type.getLHSPropertyName();
+ 			if (propertyName==null) {
+ 				return ArrayHelper.slice( 
+-						lhsPersister.toColumns(alias, property), 
++						property < 0 ? lhsPersister.toIdentifierColumns(alias) : lhsPersister.toColumns(alias, property), 
+ 						begin, 
+ 						type.getColumnSpan(mapping) 
+ 					);
+@@ -83,7 +83,7 @@
+ 			OuterJoinLoadable lhsPersister,
+ 			Mapping mapping
+ 	) {
+-		if ( type.useLHSPrimaryKey() ) {
++		if ( type.useLHSPrimaryKey()) {
+ 			//return lhsPersister.getSubclassPropertyColumnNames(property);
+ 			return lhsPersister.getIdentifierColumnNames();
+ 		}
+@@ -93,7 +93,7 @@
+ 				//slice, to get the columns for this component
+ 				//property
+ 				return ArrayHelper.slice( 
+-						lhsPersister.getSubclassPropertyColumnNames(property),
++						property < 0 ? lhsPersister.getIdentifierColumnNames() : lhsPersister.getSubclassPropertyColumnNames(property),
+ 						begin, 
+ 						type.getColumnSpan(mapping) 
+ 					);
+@@ -111,7 +111,7 @@
+ 		int property, 
+ 		OuterJoinLoadable lhsPersister
+ 	) {
+-		if ( type.useLHSPrimaryKey() ) {
++		if ( type.useLHSPrimaryKey() || property < 0) {
+ 			return lhsPersister.getTableName();
+ 		}
+ 		else {
+Index: /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/loader/JoinWalker.java
+===================================================================
+--- /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/loader/JoinWalker.java	(revision 14238)
++++ /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/loader/JoinWalker.java	(working copy)
+@@ -28,6 +28,7 @@
+ import org.hibernate.sql.JoinFragment;
+ import org.hibernate.type.AbstractComponentType;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.EmbeddedComponentType;
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.ForeignKeyDirection;
+ import org.hibernate.type.Type;
+@@ -378,28 +379,48 @@
+ 		int n = persister.countSubclassProperties();
+ 		for ( int i=0; i<n; i++ ) {
+ 			Type type = persister.getSubclassPropertyType(i);
+-			if ( type.isAssociationType() ) {
+-				walkEntityAssociationTree(
+-					(AssociationType) type,
+-					persister,
+-					i,
+-					alias,
+-					path,
+-					persister.isSubclassPropertyNullable(i),
+-					currentDepth
+-				);
++			walkSingleType(persister, alias, path, currentDepth, i, type);
++		}
++		
++		Type type = persister.getIdentifierType();
++		walkSingleType(persister, alias, path, currentDepth, -1, type);
++	}
++
++	private void walkSingleType(final OuterJoinLoadable persister,
++			final String alias, final String path, final int currentDepth,
++			int i, Type type) {
++		if ( type.isAssociationType() ) {
++			walkEntityAssociationTree(
++				(AssociationType) type,
++				persister,
++				i,
++				alias,
++				path,
++				persister.isSubclassPropertyNullable(i),
++				currentDepth
++			);
++		}
++		else if ( type.isComponentType() ) {
++			String propertyName;
++			if (i < 0){
++				if (type instanceof EmbeddedComponentType){
++					propertyName = "";
++				} else {
++					propertyName = persister.getIdentifierPropertyName();
++				}
+ 			}
+-			else if ( type.isComponentType() ) {
+-				walkComponentTree(
+-					(AbstractComponentType) type,
+-					i,
+-					0,
+-					persister,
+-					alias,
+-					subPath( path, persister.getSubclassPropertyName(i) ),
+-					currentDepth
+-				);
++			else {
++				propertyName = persister.getSubclassPropertyName(i);
+ 			}
++			walkComponentTree(
++				(AbstractComponentType) type,
++				i,
++				0,
++				persister,
++				alias,
++				subPath( path, propertyName ),
++				currentDepth
++			);
+ 		}
+ 	}
+ 
+Index: /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 14238)
++++ /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -1435,6 +1435,16 @@
+ 		}
+ 		return result;
+ 	}
++	
++	public String[] toIdentifierColumns(String name) {
++		final String alias = generateTableAlias( name, 0);
++		String[] cols = getIdentifierColumnNames();
++		String[] result = new String[cols.length];
++		for ( int j = 0; j < cols.length; j++ ) {
++			result[j] = StringHelper.qualify( alias, cols[j] );
++		}
++		return result;
++	}
+ 
+ 	private int getSubclassPropertyIndex(String propertyName) {
+ 		return ArrayHelper.indexOf(subclassPropertyNameClosure, propertyName);
+@@ -3836,4 +3846,13 @@
+ 	}
+ 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++	/* (non-Javadoc)
++	 * @see org.hibernate.persister.entity.EntityPersister#getPropertySpaces()
++	 */
++	public Serializable[] getPropertySpaces() {
++		// TODO Auto-generated method stub
++		return null;
++	}
++
++	
+ }
+Index: /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/OuterJoinLoadable.java
+===================================================================
+--- /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/OuterJoinLoadable.java	(revision 14238)
++++ /home/hceylan/sw/biletix/hibernate-core/src/org/hibernate/persister/entity/OuterJoinLoadable.java	(working copy)
+@@ -86,5 +86,10 @@
+ 	public String getPropertyTableName(String propertyName);
+ 	
+ 	public EntityType getEntityType();
++	
++	/**
++	 * return the alised identifier column names
++	 */
++	public String[] toIdentifierColumns(String alias);
+ 
+ }
+

@@ -1,0 +1,467 @@
+Index: core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(revision 14020)
++++ core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(working copy)
+@@ -137,6 +137,7 @@
+ 	private final boolean isArray;
+ 	protected final boolean hasIndex;
+ 	protected final boolean hasIdentifier;
++	protected final boolean shouldInsertIdentifier;
+ 	private final boolean isLazy;
+ 	private final boolean isExtraLazy;
+ 	private final boolean isInverse;
+@@ -417,6 +418,7 @@
+ 			//unquotedIdentifierColumnName = null;
+ 			identifierGenerator = null;
+ 		}
++		shouldInsertIdentifier = hasIdentifier && !(identifierGenerator instanceof org.hibernate.id.IdentityGenerator);
+ 		
+ 		//GENERATE THE SQL:
+ 				
+@@ -1133,7 +1135,7 @@
+ 
+ 								//TODO: copy/paste from insertRows()
+ 								int loc = writeKey( st, id, offset, session );
+-								if ( hasIdentifier ) {
++								if ( shouldInsertIdentifier ) {
+ 									loc = writeIdentifier( st, collection.getIdentifier(entry, i), loc, session );
+ 								}
+ 								if ( hasIndex /*&& !indexIsFormula*/ ) {
+@@ -1354,7 +1356,7 @@
+ 							offset += expectation.prepare( st );
+ 							//TODO: copy/paste from recreate()
+ 							offset = writeKey( st, id, offset, session );
+-							if ( hasIdentifier ) {
++							if ( shouldInsertIdentifier ) {
+ 								offset = writeIdentifier( st, collection.getIdentifier(entry, i), offset, session );
+ 							}
+ 							if ( hasIndex /*&& !indexIsFormula*/ ) {
+Index: core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	(revision 14020)
++++ core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	(working copy)
+@@ -77,7 +77,7 @@
+ 				.setTableName( qualifiedTableName )
+ 				.addColumns( keyColumnNames );
+ 		
+-		if ( hasIdentifier) insert.addColumn( identifierColumnName );
++		if ( shouldInsertIdentifier) insert.addColumn( identifierColumnName );
+ 		
+ 		if ( hasIndex /*&& !indexIsFormula*/ ) {
+ 			insert.addColumns( indexColumnNames, indexColumnIsSettable );
+Index: testsuite/src/test/java/org/hibernate/test/idbag/Category.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/Category.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/Category.java	(revision 0)
+@@ -0,0 +1,24 @@
++package org.hibernate.test.idbag;
++
++public class Category {
++	private int id;
++	private String name;
++	
++	public Category() {}
++
++	public int getId() {
++		return id;
++	}
++
++	public void setId(int id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++}
+Index: testsuite/src/test/java/org/hibernate/test/idbag/IdBagTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/IdBagTest.java	(revision 14020)
++++ testsuite/src/test/java/org/hibernate/test/idbag/IdBagTest.java	(working copy)
+@@ -23,7 +23,10 @@
+ 	}
+ 
+ 	public String[] getMappings() {
+-		return new String[] { "idbag/UserGroup.hbm.xml" };
++		return new String[] { 
++				"idbag/UserGroup.hbm.xml", 
++				"idbag/NativeIdGen.hbm.xml"
++		};
+ 	}
+ 
+ 	public static Test suite() {
+@@ -97,5 +100,161 @@
+ 		s.close();		
+ 	}
+ 
++	/**
++	 * @author Karl Chu
++	 */
++	public void testNativeIdentityInsert() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		
++		Category cat1 = new Category();
++		cat1.setName("Cat 1");
++		
++		Link link1 = new Link();
++		link1.setName("Link 1");
++		link1.getCategories().add(cat1);
++		
++		s.save(cat1);
++		s.save(link1);
++		s.flush(); // This would have caused an exception before native
++				   // native id generation was implemented
++		s.clear();
++		
++		Link l = (Link)s.get(Link.class, link1.getId());
++		Category c = (Category)s.get(Category.class, cat1.getId());
++		
++		assertEquals(1, l.getCategories().size());
++		assertSame(c, l.getCategories().get(0));
++		
++		t.commit();
++		s.close();
++	}
++	
++	Product product1;
++	Product product2;
++	Product product3;
++	Invoice inv;
++
++	/**
++	 * @author Karl Chu
++	 */
++	private void idbagWithCompositeElementThatContainsAManyToOne_Setup() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		
++		product1 = new Product("Star Wars DVD");
++		product2 = new Product("100TB Hard Drive");
++		product3 = new Product("Something else");
++
++		s.save(product1);
++		s.save(product2);
++		s.save(product3);
++
++		inv = new Invoice();
++		inv.setNumber("123");
++		InvoiceItem item = new InvoiceItem();
++		inv.getItems().add(new InvoiceItem(product1, 1));
++		inv.getItems().add(new InvoiceItem(product2, 1));
++
++		s.save(inv);
++
++		t.commit();
++		s.close();
++	}
++	
++	/**
++	 * @author Karl Chu
++	 */
++	private void idbagWithCompositeElementThatContainsAManyToOne_CleanUp()
++	{
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++	
++		s.delete(inv);
++		s.delete(product1);
++		s.delete(product2);
++		s.delete(product3);
++
++		t.commit();
++		s.close();
++	}
++
++	/**
++	 * @author Karl Chu
++	 */
++	public void testIdbagWithCompositeElementThatContainsAManyToOne_Insert() {
++		idbagWithCompositeElementThatContainsAManyToOne_Setup();
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++
++		Invoice invLoaded = (Invoice)s.get(Invoice.class, inv.getId());
++		assertEquals("Expected 2 things in the invoice", 2, invLoaded.getItems().size());
++		
++		t.commit();
++		s.close();		
++		
++		idbagWithCompositeElementThatContainsAManyToOne_CleanUp();
++	}
++
++	/**
++	 * Don't know if this test is actually necessary
++	 * @author Karl Chu
++	 */
++	public void testIdbagWithCompositeElementThatContainsAManyToOne_Update() {
++		idbagWithCompositeElementThatContainsAManyToOne_Setup();
++		{		
++			Session s = openSession();
++			Transaction t = s.beginTransaction();
++	
++			Invoice invToUpdate = (Invoice)s.get(Invoice.class, inv.getId());
++			((InvoiceItem)invToUpdate.getItems().get(0)).setQuantity(10); // update information of an element
++			invToUpdate.getItems().add(new InvoiceItem(product3, 1)); // update the idbag collection
++	
++			t.commit();
++			s.close();		
++		}
++		{
++			Session s = openSession();
++			Transaction t = s.beginTransaction();
++	
++			Invoice invLoaded = (Invoice)s.get(Invoice.class, inv.getId());
++			assertEquals(10, ((InvoiceItem)invLoaded.getItems().get(0)).getQuantity());
++			assertEquals("The collection should have a new item", 3, invLoaded.getItems().size());
++			
++			t.commit();
++			s.close();		
++		}
++		idbagWithCompositeElementThatContainsAManyToOne_CleanUp();
++	}
++
++	/**
++	 * Don't know if this test is actually necessary
++	 * @author Karl Chu
++	 */
++	public void testIdbagWithCompositeElementThatContainsAManyToOne_Delete() {
++		idbagWithCompositeElementThatContainsAManyToOne_Setup();
++		{		
++			Session s = openSession();
++			Transaction t = s.beginTransaction();
++	
++			Invoice invToUpdate = (Invoice)s.get(Invoice.class, inv.getId());
++			invToUpdate.getItems().remove(0);
++			
++			t.commit();
++			s.close();		
++		}
++		{
++			Session s = openSession();
++			Transaction t = s.beginTransaction();
++	
++			Invoice invLoaded = (Invoice)s.get(Invoice.class, inv.getId());
++			assertEquals("The collection should only have one item", 1, invLoaded.getItems().size());
++
++			t.commit();
++			s.close();		
++		}
++		idbagWithCompositeElementThatContainsAManyToOne_CleanUp();
++	}
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/idbag/Invoice.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/Invoice.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/Invoice.java	(revision 0)
+@@ -0,0 +1,29 @@
++package org.hibernate.test.idbag;
++
++import java.util.ArrayList;
++import java.util.List;
++
++public class Invoice {
++	private int id;
++	private String number;
++	private List items = new ArrayList();
++	
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	public String getNumber() {
++		return number;
++	}
++	public void setNumber(String number) {
++		this.number = number;
++	}
++	public List getItems() {
++		return items;
++	}
++	public void setItems(List items) {
++		this.items = items;
++	}	
++}
+Index: testsuite/src/test/java/org/hibernate/test/idbag/InvoiceItem.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/InvoiceItem.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/InvoiceItem.java	(revision 0)
+@@ -0,0 +1,26 @@
++package org.hibernate.test.idbag;
++
++public class InvoiceItem {
++	private Product product;
++	private int quantity;
++	
++	public InvoiceItem() {}
++	
++	public InvoiceItem(Product product, int quantity) {
++		this.product = product;
++		this.quantity = quantity;
++	}
++	
++	public Product getProduct() {
++		return product;
++	}
++	public void setProduct(Product product) {
++		this.product = product;
++	}
++	public int getQuantity() {
++		return quantity;
++	}
++	public void setQuantity(int quantity) {
++		this.quantity = quantity;
++	}
++}
+Index: testsuite/src/test/java/org/hibernate/test/idbag/Link.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/Link.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/Link.java	(revision 0)
+@@ -0,0 +1,36 @@
++package org.hibernate.test.idbag;
++
++import java.util.ArrayList;
++import java.util.List;
++
++public class Link {
++	private int id;
++	private String name;
++	private List categories = new ArrayList();
++	
++	public Link() {}
++
++	public int getId() {
++		return id;
++	}
++
++	public void setId(int id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public List getCategories() {
++		return categories;
++	}
++
++	public void setCategories(List categories) {
++		this.categories = categories;
++	}
++}
+Index: testsuite/src/test/java/org/hibernate/test/idbag/NativeIdGen.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/NativeIdGen.hbm.xml	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/NativeIdGen.hbm.xml	(revision 0)
+@@ -0,0 +1,62 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- 
++
++  This mapping demonstrates how to use an idbag to represent
++  a many-to-many association where the association table has
++  an auto-generated surrogate key.
++     
++-->
++
++<hibernate-mapping package="org.hibernate.test.idbag">
++
++	<class name="Category" table="`Category`">
++		<id name="id">
++			<generator class="native"/>
++		</id>
++		<property name="name"/>
++	</class>
++
++	<class name="Link" table="`Link`">
++		<id name="id">
++			<generator class="native"/>
++		</id>
++		<property name="name"/>
++		<idbag name="categories" table="`LinkCategory`" lazy="true">
++			<collection-id type="int" column="id">
++				<generator class="native"/>
++			</collection-id>
++			<key column="LinkId"/>
++			<many-to-many class="Category" column="CategoryId"/>
++		</idbag>
++	</class>
++	
++	<class name="Invoice" table="`Invoice`">
++		<id name="id">
++			<generator class="native"/>
++		</id>
++		<property name="number"/>
++		<idbag name="items" table="`InvoiceItem`" lazy="true">
++			<collection-id type="int" column="Id">
++				<generator class="native"/>
++			</collection-id>
++			<key column="InvoiceId"/>
++			<composite-element class="InvoiceItem">
++				<property name="quantity"/>
++				<!-- Could add more properties, but for testing, this would suffice -->
++				<many-to-one name="product" column="ProductId"/>
++			</composite-element>	
++		</idbag>
++	</class>
++	
++	<class name="Product" table="`Product`">
++		<id name="id">
++			<generator class="native"/>
++		</id>
++		<property name="name"/>
++	</class>
++</hibernate-mapping>
++	
+\ No newline at end of file
+
+Property changes on: testsuite\src\test\java\org\hibernate\test\idbag\NativeIdGen.hbm.xml
+___________________________________________________________________
+Name: svn:keywords
+   + Id HeadUrl
+
+Index: testsuite/src/test/java/org/hibernate/test/idbag/Product.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/idbag/Product.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/idbag/Product.java	(revision 0)
+@@ -0,0 +1,24 @@
++package org.hibernate.test.idbag;
++
++public class Product {
++	private int id;
++	private String name;
++	
++	public Product() {}
++	public Product(String name) {
++		this.name = name;
++	}
++	
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++}

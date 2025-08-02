@@ -1,0 +1,280 @@
+Index: tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java	(revision 10661)
++++ tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java	(working copy)
+@@ -45,6 +45,11 @@
+      * The Hibernate image.
+      */
+     private DocFile hibernateImageDocFile;
++    
++    /**
++     * The extends image.
++     */
++    private DocFile extendsImageDocFile;
+ 
+     /**
+      * The CSS stylesheet file.
+@@ -159,6 +164,8 @@
+ 
+         hibernateImageDocFile = new DocFile("hibernate_logo.gif",
+                 assetsDocFolder);
++        
++        extendsImageDocFile = new DocFile("inherit.gif", assetsDocFolder);
+ 
+         cssStylesDocFile = new DocFile("doc-style.css", assetsDocFolder);
+         
+@@ -281,7 +288,17 @@
+ 
+         return hibernateImageDocFile;
+     }
++    
++    /**
++     * Returns the DocFile for the extends Image.
++     * 
++     * @return the value.
++     */
++    public DocFile getExtendsImageDocFile() {
+ 
++        return extendsImageDocFile;
++    }
++
+     /**
+      * Returns the DocFile for the main index.
+      * 
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java	(revision 10661)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java	(working copy)
+@@ -2,6 +2,7 @@
+ 
+ import java.io.Serializable;
+ import java.util.ArrayList;
++import java.util.Collections;
+ import java.util.Iterator;
+ import java.util.List;
+ 
+@@ -151,6 +152,14 @@
+ 	public POJOClass getSuperClass() {
+ 		return null;
+ 	}
++	
++	/*
++	 * @see org.hibernate.tool.hbm2x.pojo.POJOClass#getSuperClasses()
++	 */
++	public List getSuperClasses()
++	{
++		return Collections.EMPTY_LIST;
++	}
+ 
+ 	public String toString() {
+ 		return getClass().getName() + "(" + (clazz==null?"<none>":clazz.getComponentClassName()) + ")";
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(revision 10661)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(working copy)
+@@ -3,36 +3,36 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.Enumeration;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Properties;
++import java.util.Set;
+ import java.util.StringTokenizer;
+-import java.util.Set;
+-import java.util.HashSet;
+ 
++import org.hibernate.cfg.Configuration;
+ import org.hibernate.id.MultipleHiLoPerTableGenerator;
+ import org.hibernate.id.PersistentIdentifierGenerator;
++import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.Component;
+ import org.hibernate.mapping.Formula;
+ import org.hibernate.mapping.KeyValue;
++import org.hibernate.mapping.ManyToOne;
++import org.hibernate.mapping.OneToMany;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.RootClass;
+ import org.hibernate.mapping.Selectable;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Subclass;
++import org.hibernate.mapping.Table;
+ import org.hibernate.mapping.ToOne;
+ import org.hibernate.mapping.UniqueKey;
+ import org.hibernate.mapping.Value;
+-import org.hibernate.mapping.Collection;
+-import org.hibernate.mapping.OneToMany;
+-import org.hibernate.mapping.ManyToOne;
+-import org.hibernate.mapping.Table;
+ import org.hibernate.tool.hbm2x.Cfg2JavaTool;
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.StringHelper;
+-import org.hibernate.cfg.Configuration;
+ 
+ public class EntityPOJOClass extends BasicPOJOClass {
+ 
+@@ -786,9 +786,28 @@
+ 	}
+ 	
+ 	public POJOClass getSuperClass(){
++		if (!isSubclass())
++			return null;
+ 		return new EntityPOJOClass(clazz.getSuperclass(),c2j);
+ 	}
+ 	
++	/*
++	 * @see org.hibernate.tool.hbm2x.pojo.POJOClass#getSuperClasses()
++	 */
++	public List getSuperClasses()
++	{
++		List superClasses = new ArrayList();
++		
++		POJOClass superClass = getSuperClass();
++		while (superClass != null)
++		{
++			superClasses.add(superClass);
++			superClass = superClass.getSuperClass();
++		}
++		
++		return superClasses;
++	}
++	
+ 	public String toString() {
+ 		return getClass().getName() + "(" + (clazz==null?"<none>":clazz.getEntityName()) + ")";
+ 	}
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java	(revision 10661)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java	(working copy)
+@@ -100,6 +100,7 @@
+ 	public List getPropertyClosureForSuperclassMinimalConstructor();
+ 	
+ 	public POJOClass getSuperClass();
++	public List getSuperClasses();
+ 	
+ 	public String getJavaTypeName(Property p, boolean useGenerics);
+ 	public String getFieldInitialization(Property p, boolean useGenerics);
+Index: tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java	(revision 10661)
++++ tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java	(working copy)
+@@ -40,6 +40,11 @@
+     private static final String FILE_HIBERNATE_IMAGE = "doc/hibernate_logo.gif";
+ 
+     /**
++     * Extends Image.
++     */
++    private static final String FILE_EXTENDS_IMAGE = "doc/inherit.gif";
++
++    /**
+      * Main index page.
+      */
+     private static final String FILE_INDEX = "doc/index.html";
+@@ -292,6 +297,10 @@
+ 
+             DocFileManager.copy(FILE_HIBERNATE_IMAGE,
+                     hibernateLogoDocFile.getFile() );
++            
++            DocFile extendsImageDocFile = docFileManager.getExtendsImageDocFile();
++            
++            DocFileManager.copy(FILE_EXTENDS_IMAGE, extendsImageDocFile.getFile());
+ 
+             DocFile mainIndexDocFile = docFileManager.getMainIndexDocFile();
+ 
+Index: tools/src/templates/doc/entities/entity.ftl
+===================================================================
+--- tools/src/templates/doc/entities/entity.ftl	(revision 10661)
++++ tools/src/templates/doc/entities/entity.ftl	(working copy)
+@@ -8,14 +8,27 @@
+ 	<BODY>
+ 
+ 		<H4>${class.packageName}</H4>
+-		<H3>Entity : ${class.getShortName()}</H3>
+-		<#if class.isInterface()>
+-			Interface Name :
+-		<#else>
+-			Class Name :
+-		</#if>
+-		${class.qualifiedDeclarationName}
+-		<BR>
++		<H3>Entity ${class.getShortName()}</H3>
++		
++		<div class="EntityHierarchy">
++			<ul>
++				<li>
++					<#list class.superClasses?reverse as superClass>
++						<#-- whitespace is significant here -->
++						<#if superClass_index gt 0><img src="${docFileManager.getRef(docFile, docFileManager.getExtendsImageDocFile())}" alt="extended by"/></#if><a href="${docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(superClass))}">${superClass.qualifiedDeclarationName}</a>
++						<ul <#if superClass_index == 0>class="first"</#if>>
++							<li>
++					</#list>
++					<#-- whitespace is significant here -->
++					<#if class.subclass><img src="${docFileManager.getRef(docFile, docFileManager.getExtendsImageDocFile())}" alt="extended by"/></#if>${class.qualifiedDeclarationName}
++					<#list class.superClasses as superClass>
++							</li>
++						</ul>
++					</#list>
++				</li>
++			</ul>
++		</div>
++
+ 		<#if class.getMetaAsString("class-description")?has_content>
+ 			<HR>
+ 			<BR>
+Index: tools/src/templates/doc/inherit.gif
+===================================================================
+Cannot display: file marked as a binary type.
+svn:mime-type = application/octet-stream
+
+Property changes on: tools\src\templates\doc\inherit.gif
+___________________________________________________________________
+Name: svn:mime-type
+   + application/octet-stream
+
+Index: tools/src/templates/doc/doc-style.css
+===================================================================
+--- tools/src/templates/doc/doc-style.css	(revision 10661)
++++ tools/src/templates/doc/doc-style.css	(working copy)
+@@ -67,3 +67,39 @@
+ .HeaderLink {
+ 	text-decoration: none;
+ }
++
++/* entity hierarchy */
++
++.EntityHierarchy
++{
++	border: solid 1px #CCCCCC;
++	background: #F4F4F4;
++	padding: 5px;
++	font: bold 90% monospace;
++}
++
++.EntityHierarchy a
++{
++	font-weight: normal;
++}
++
++.EntityHierarchy ul
++{
++	margin: 0;
++	list-style: none;
++	padding-left: 0;
++}
++* html .EntityHierarchy ul /* ie6 only */
++{
++	margin-left: 0;
++}
++
++.EntityHierarchy ul.first
++{
++	padding-left: 15px;
++}
++
++.EntityHierarchy ul ul
++{
++	padding-left: 30px;
++}

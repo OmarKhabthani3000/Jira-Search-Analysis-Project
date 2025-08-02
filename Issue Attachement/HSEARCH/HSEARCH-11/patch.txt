@@ -1,0 +1,341 @@
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/annotations/Indexed.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/annotations/Indexed.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/annotations/Indexed.java	(working copy)
+@@ -18,4 +18,8 @@
+ 	 * The filename of the index
+ 	 */
+ 	String index() default "";
++	/**
++	 * The index should be optimized after N operations
++	 */
++	long optimize() default 0L;
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(working copy)
+@@ -16,6 +16,7 @@
+ import org.hibernate.search.backend.AddLuceneWork;
+ import org.hibernate.search.backend.DeleteLuceneWork;
+ import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.backend.OptimizeLuceneWork;
+ import org.hibernate.search.backend.Workspace;
+ import org.hibernate.search.engine.DocumentBuilder;
+ 
+@@ -39,6 +40,9 @@
+ 		else if ( DeleteLuceneWork.class.isAssignableFrom( luceneWork.getClass() ) ) {
+ 			performWork( (DeleteLuceneWork) luceneWork );
+ 		}
++		else if ( OptimizeLuceneWork.class.isAssignableFrom( luceneWork.getClass() )) {
++			performWork( (OptimizeLuceneWork) luceneWork);
++		}
+ 		else {
+ 			throw new AssertionFailure( "Unknown work type: " + luceneWork.getClass() );
+ 		}
+@@ -106,4 +110,22 @@
+ 			}
+ 		}
+ 	}
++	
++	public void performWork( OptimizeLuceneWork work ) {
++		Class entity = work.getEntityClass();
++		optimize( entity );
++	}
++	
++	private void optimize( Class entity) {
++		if ( log.isTraceEnabled() )
++			log.trace( "optimizing Lucene index: " + entity );
++	
++		IndexWriter writer = workspace.getIndexWriter( entity );
++		try {
++			writer.optimize();
++		}
++		catch (IOException e) {
++			throw new SearchException( "Unable to optimize to Lucene index: " + entity, e );
++		}
++	}
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/OptimizeLuceneWork.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/OptimizeLuceneWork.java	(revision 0)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/OptimizeLuceneWork.java	(revision 0)
+@@ -0,0 +1,9 @@
++package org.hibernate.search.backend;
++
++import java.io.Serializable;
++
++public class OptimizeLuceneWork extends LuceneWork {
++	public OptimizeLuceneWork(Serializable id, Class entity) {
++		super( id, entity );
++	}
++}
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/WorkType.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/WorkType.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/backend/WorkType.java	(working copy)
+@@ -7,6 +7,7 @@
+ public enum WorkType {
+ 	ADD,
+ 	UPDATE,
+-	DELETE
++	DELETE,
++	OPTIMIZE
+ 	//add INDEX at some point to behave differently during the queue process?
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/engine/DocumentBuilder.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/engine/DocumentBuilder.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/engine/DocumentBuilder.java	(working copy)
+@@ -41,6 +41,7 @@
+ import org.hibernate.search.backend.AddLuceneWork;
+ import org.hibernate.search.backend.DeleteLuceneWork;
+ import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.backend.OptimizeLuceneWork;
+ import org.hibernate.search.backend.WorkType;
+ import org.hibernate.search.bridge.BridgeFactory;
+ import org.hibernate.search.bridge.FieldBridge;
+@@ -344,9 +354,16 @@
+ 			queue.add( new AddLuceneWork( id, entityClass, doc ) );
+ 			searchForContainers = true;
+ 		}
++		else if ( workType == WorkType.OPTIMIZE ) {
++			queue.add( new OptimizeLuceneWork(id, entityClass));
++		}
+ 		else {
+ 			throw new AssertionFailure("Unknown WorkType: " + workType);
+ 		}
++		
++		if(workType != WorkType.OPTIMIZE && directoryProvider.optimize()) {
++			queue.add(new OptimizeLuceneWork(id, entityClass));
++		}
+ 
+ 		/**
+ 		 * When references are changed, either null or another one, we expect dirty checking to be triggered (both sides
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/FullTextSession.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/FullTextSession.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/FullTextSession.java	(working copy)
+@@ -22,4 +22,6 @@
+ 	 * Indexation is batched per transaction
+ 	 */
+ 	void index(Object entity);
++	
++	void optimize(Class clazz);
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/impl/FullTextSessionImpl.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/impl/FullTextSessionImpl.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/impl/FullTextSessionImpl.java	(working copy)
+@@ -102,6 +102,14 @@
+ 		//an other solution would be to subclass SessionImpl instead of having this LuceneSession delecation model
+ 		// this is an open discussion
+ 	}
++	
++	public void optimize(Class clazz) {
++		SearchFactory searchFactory = ContextHelper.getSearchFactory( session );
++		DocumentBuilder<Object> builder = searchFactory.getDocumentBuilders().get( clazz );
++		if ( builder != null ) {
++			searchFactory.optimize(clazz);
++		}
++	}
+ 
+ 	public Query createSQLQuery(String sql, String returnAlias, Class returnClass) {
+ 		return session.createSQLQuery( sql, returnAlias, returnClass );
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/SearchFactory.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/SearchFactory.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/SearchFactory.java	(working copy)
+@@ -1,6 +1,7 @@
+ //$Id: $
+ package org.hibernate.search;
+ 
++import java.io.IOException;
+ import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.Map;
+@@ -10,6 +11,8 @@
+ 
+ import org.apache.lucene.analysis.Analyzer;
+ import org.apache.lucene.analysis.standard.StandardAnalyzer;
++import org.apache.lucene.index.IndexWriter;
++import org.apache.lucene.store.Directory;
+ import org.hibernate.annotations.common.reflection.ReflectionManager;
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.java.JavaReflectionManager;
+@@ -168,4 +171,24 @@
+ 		DocumentBuilder<Object> documentBuilder = getDocumentBuilders().get( entity );
+ 		return documentBuilder == null ? null : documentBuilder.getDirectoryProvider();
+ 	}
++	
++	public void optimize() {
++		Set<Class> clazzs = getDocumentBuilders().keySet();
++		for(Class clazz : clazzs) {
++			optimize(clazz);
++		}
++	}
++	
++	public void optimize(Class clazz) {
++		Analyzer analyzer = getDocumentBuilders().get(clazz).getAnalyzer();
++		DirectoryProvider dp = getDirectoryProvider(clazz);
++		Directory d = dp.getDirectory();
++		try {
++			IndexWriter iw = new IndexWriter(d, analyzer);
++			iw.optimize();
++			iw.close();
++		} catch (IOException e) {
++			e.printStackTrace();
++		}
++	}
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/AbstractDirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/AbstractDirectoryProvider.java	(revision 0)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/AbstractDirectoryProvider.java	(revision 0)
+@@ -0,0 +1,32 @@
++package org.hibernate.search.store;
++
++import java.util.Properties;
++
++import org.apache.lucene.store.Directory;
++import org.hibernate.search.SearchFactory;
++
++public abstract class AbstractDirectoryProvider<TDirectory extends Directory>  implements DirectoryProvider{
++
++	private long operationCount = 0;
++	
++	private long optimizeEveryNOperations = 0;
++
++	public abstract TDirectory getDirectory();
++
++	public abstract void initialize(String directoryProviderName, Properties properties,
++			SearchFactory searchFactory);
++
++	synchronized public boolean optimize() {
++		if(optimizeEveryNOperations > 0) {
++			if(++operationCount % optimizeEveryNOperations == 0) {
++				operationCount = 0;
++				return true;
++			}
++		}
++		return false;
++	}
++
++	public void setOptimizeEveryNOperations(long optimizeEveryNOperations) {
++		this.optimizeEveryNOperations = optimizeEveryNOperations;
++	}
++}
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProvider.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProvider.java	(working copy)
+@@ -28,5 +28,9 @@
+ 	 * Returns an initialized Lucene Directory. This method call <b>must</b> be threadsafe
+ 	 */
+ 	TDirectory getDirectory();
++	
++	public boolean optimize();
++	
++	public void setOptimizeEveryNOperations(long optimizeEveryNOperations);
+ }
+ 
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProviderFactory.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(working copy)
+@@ -57,6 +57,7 @@
+ 					className, DirectoryProviderFactory.class
+ 			);
+ 			provider = directoryClass.newInstance();
++			provider.setOptimizeEveryNOperations(getOptimizeEveryNOperationsCount(entity, cfg));
+ 		}
+ 		catch (Exception e) {
+ 			throw new HibernateException( "Unable to instanciate directory provider: " + className, e );
+@@ -127,4 +128,35 @@
+ 					"Trying to extract the index name from a non @Indexed class: " + clazz.getName() );
+ 		}
+ 	}
++	
++	private static long getOptimizeEveryNOperationsCount(XClass clazz, Configuration cfg) {
++		//yuk
++		ReflectionManager reflectionManager = SearchFactory.getReflectionManager(cfg);
++		//get the most specialized (ie subclass > superclass) non default operations count
++		//if none return 0
++		PersistentClass pc = cfg.getClassMapping( clazz.getName() );
++		XClass rootIndex = null;
++		do {
++			XClass currentClazz = reflectionManager.toXClass( pc.getMappedClass() );
++			Indexed indexAnn = currentClazz.getAnnotation( Indexed.class );
++			if ( indexAnn != null ) {
++				if ( indexAnn.index().length() != 0 ) {
++					return indexAnn.optimize();
++				}
++				else {
++					rootIndex = currentClazz;
++				}
++			}
++			pc = pc.getSuperclass();
++		}
++		while ( pc != null );
++		//there is nobody outthere with a non default @Indexed.index
++		if ( rootIndex != null ) {
++			return 0L;
++		}
++		else {
++			throw new HibernateException(
++					"Trying to extract the operations count name from a non @Indexed class: " + clazz.getName() );
++		}
++	}
+ }
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSDirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSDirectoryProvider.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSDirectoryProvider.java	(working copy)
+@@ -22,7 +22,7 @@
+  * @author Emmanuel Bernard
+  * @author Sylvain Vieujot
+  */
+-public class FSDirectoryProvider implements DirectoryProvider<FSDirectory> {
++public class FSDirectoryProvider extends AbstractDirectoryProvider<FSDirectory> {
+ 	private FSDirectory directory;
+ 	private static Log log = LogFactory.getLog( FSDirectoryProvider.class );
+ 	private String indexName;
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSMasterDirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSMasterDirectoryProvider.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSMasterDirectoryProvider.java	(working copy)
+@@ -31,7 +31,7 @@
+  * @author Emmanuel Bernard
+  */
+ //TODO rename copy?
+-public class FSMasterDirectoryProvider implements DirectoryProvider<FSDirectory> {
++public class FSMasterDirectoryProvider extends AbstractDirectoryProvider<FSDirectory> {
+ 	private static Log log = LogFactory.getLog( FSMasterDirectoryProvider.class );
+ 	private FSDirectory directory;
+ 	private int current;
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSSlaveDirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSSlaveDirectoryProvider.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/FSSlaveDirectoryProvider.java	(working copy)
+@@ -31,7 +31,7 @@
+  *
+  * @author Emmanuel Bernard
+  */
+-public class FSSlaveDirectoryProvider implements DirectoryProvider<FSDirectory> {
++public class FSSlaveDirectoryProvider extends AbstractDirectoryProvider<FSDirectory> {
+ 	private static Log log = LogFactory.getLog( FSSlaveDirectoryProvider.class );
+ 	private FSDirectory directory1;
+ 	private FSDirectory directory2;
+Index: /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/RAMDirectoryProvider.java
+===================================================================
+--- /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/RAMDirectoryProvider.java	(revision 11594)
++++ /home/hahnand/devel/src/HibernateExt/search/src/java/org/hibernate/search/store/RAMDirectoryProvider.java	(working copy)
+@@ -16,7 +16,7 @@
+  * @author Emmanuel Bernard
+  * @author Sylvain Vieujot
+  */
+-public class RAMDirectoryProvider implements DirectoryProvider<RAMDirectory> {
++public class RAMDirectoryProvider extends AbstractDirectoryProvider<RAMDirectory> {
+ 
+ 	private RAMDirectory directory;
+ 	private String indexName;

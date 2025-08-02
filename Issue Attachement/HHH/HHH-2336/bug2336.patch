@@ -1,0 +1,107 @@
+Index: C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/CustomCollectionType.java
+===================================================================
+--- C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/CustomCollectionType.java	(revision 11214)
++++ C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/CustomCollectionType.java	(working copy)
+@@ -87,4 +87,8 @@
+ 			return super.renderLoggableString( value, factory );
+ 		}
+ 	}
++    
++    public UserCollectionType getUserType() {
++        return userType;
++    }
+ }
+Index: C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/TypeFactory.java
+===================================================================
+--- C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/TypeFactory.java	(revision 11214)
++++ C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/type/TypeFactory.java	(working copy)
+@@ -257,16 +257,20 @@
+ 
+ 	}
+ 
+-	public static CollectionType customCollection(String typeName, String role, String propertyRef,
++	public static CollectionType customCollection(String typeName, Properties typeParameters, String role, String propertyRef,
+ 			boolean embedded) {
+ 		Class typeClass;
+ 		try {
+ 			typeClass = ReflectHelper.classForName( typeName );
+ 		}
+ 		catch (ClassNotFoundException cnfe) {
+-			throw new MappingException( "user colllection type class not found: " + typeName, cnfe );
++			throw new MappingException( "user collection type class not found: " + typeName, cnfe );
+ 		}
+-		return new CustomCollectionType( typeClass, role, propertyRef, embedded );
++        CustomCollectionType result = new CustomCollectionType( typeClass, role, propertyRef, embedded );
++        if ( typeParameters != null ) {
++            TypeFactory.injectParameters( result.getUserType(), typeParameters );
++        }
++        return result;
+ 	}
+ 
+ 	// Collection Types:
+Index: C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/cfg/HbmBinder.java	(revision 11214)
++++ C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -1345,7 +1345,16 @@
+ 		}
+ 
+ 		Attribute typeNode = node.attribute( "collection-type" );
+-		if ( typeNode != null ) collection.setTypeName( typeNode.getValue() );
++		if ( typeNode != null ) {
++            String typeName = typeNode.getValue();
++            TypeDef typeDef = mappings.getTypeDef(typeName);
++            if (typeDef != null) {
++                collection.setTypeName( typeDef.getTypeClass() );
++                collection.setTypeParameters( typeDef.getParameters() );
++            } else {
++                collection.setTypeName( typeName );
++            }            
++        }
+ 
+ 		// FETCH STRATEGY
+ 
+Index: C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/mapping/Collection.java
+===================================================================
+--- C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/mapping/Collection.java	(revision 11214)
++++ C:/holger/dev/projects/workspace/Hibernate_Branch_3_2/Hibernate3/src/org/hibernate/mapping/Collection.java	(working copy)
+@@ -5,6 +5,7 @@
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
++import java.util.Properties;
+ 
+ import org.hibernate.FetchMode;
+ import org.hibernate.MappingException;
+@@ -56,6 +57,7 @@
+ 	private boolean optimisticLocked = true;
+ 	private Class collectionPersisterClass;
+ 	private String typeName;
++    private Properties typeParameters;
+ 	private final java.util.Map filters = new HashMap();
+ 	private final java.util.Map manyToManyFilters = new HashMap();
+ 	private final java.util.Set synchronizedTables = new HashSet();
+@@ -345,7 +347,7 @@
+ 			return getDefaultCollectionType();
+ 		}
+ 		else {
+-			return TypeFactory.customCollection( typeName, role, referencedPropertyName, isEmbedded() );
++			return TypeFactory.customCollection( typeName, typeParameters, role, referencedPropertyName, isEmbedded() );
+ 		}
+ 	}
+ 
+@@ -541,6 +543,14 @@
+ 		this.typeName = typeName;
+ 	}
+ 
++    public void setTypeParameters(Properties parameterMap) {
++        this.typeParameters = parameterMap;
++    }
++    
++    public Properties getTypeParameters() {
++        return typeParameters;
++    }
++
+ 	public boolean[] getColumnInsertability() {
+ 		return ArrayHelper.EMPTY_BOOLEAN_ARRAY;
+ 	}

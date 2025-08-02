@@ -1,0 +1,129 @@
+Index: C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java
+===================================================================
+--- C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java	(revision 9974)
++++ C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java	(working copy)
+@@ -313,7 +314,7 @@
+ 					result = loaded;
+ 				}
+ 			} 
+-			while ( keyToRead.equals( loadedKeys[0] ) && resultSet.next() );
++			while ( keyToRead.equals( loadedKeys[getRootKeyIndex()] ) && resultSet.next() );
+ 		}
+ 		catch ( SQLException sqle ) {
+ 			throw JDBCExceptionHelper.convert(
+@@ -353,9 +355,6 @@
+ 	        final QueryParameters queryParameters,
+ 	        final boolean returnProxies) throws HibernateException {
+ 
+-		// note that for sequential scrolling, we make the assumption that
+-		// the first persister element is the "root entity"
+-
+ 		try {
+ 			if ( resultSet.isAfterLast() ) {
+ 				// don't even bother trying to read further
+@@ -372,13 +371,7 @@
+ 			// not the most efficient.  But the call here is needed, and there
+ 			// currently is no other way without refactoring of the doQuery()/getRowFromResultSet()
+ 			// methods
+-			final EntityKey currentKey = getKeyFromResultSet(
+-					0,
+-					getEntityPersisters()[0],
+-					null,
+-					resultSet,
+-					session
+-				);
++			final EntityKey currentKey = getKeyToRead(resultSet, session);
+ 
+ 			return sequentialLoad( resultSet, session, queryParameters, returnProxies, currentKey );
+ 		}
+@@ -437,13 +430,7 @@
+ 			if ( resultSet.isAfterLast() && isLogicallyAfterLast ) {
+ 				// position cursor to the last row
+ 				resultSet.last();
+-				keyToRead = getKeyFromResultSet(
+-						0,
+-						getEntityPersisters()[0],
+-						null,
+-						resultSet,
+-						session
+-					);
++				keyToRead = getKeyToRead(resultSet, session);
+ 			}
+ 			else {
+ 				// Since the result set cursor is always left at the first
+@@ -457,21 +444,9 @@
+ 				// the last physical sequential row for the logical row in which
+ 				// we are interested in processing
+ 				boolean firstPass = true;
+-				final EntityKey lastKey = getKeyFromResultSet(
+-						0,
+-						getEntityPersisters()[0],
+-						null,
+-						resultSet,
+-						session
+-					);
++				final EntityKey lastKey = getKeyToRead(resultSet, session);
+ 				while ( resultSet.previous() ) {
+-					EntityKey checkKey = getKeyFromResultSet(
+-							0,
+-							getEntityPersisters()[0],
+-							null,
+-							resultSet,
+-							session
+-						);
++					EntityKey checkKey = getKeyToRead(resultSet, session);
+ 
+ 					if ( firstPass ) {
+ 						firstPass = false;
+@@ -488,13 +463,7 @@
+ 			// Read backwards until we read past the first physical sequential
+ 			// row with the key we are interested in loading
+ 			while ( resultSet.previous() ) {
+-				EntityKey checkKey = getKeyFromResultSet(
+-						0,
+-						getEntityPersisters()[0],
+-						null,
+-						resultSet,
+-						session
+-					);
++				EntityKey checkKey = getKeyToRead(resultSet, session);
+ 
+ 				if ( !keyToRead.equals( checkKey ) ) {
+ 					break;
+@@ -518,6 +487,20 @@
+ 		}
+ 	}
+ 
++	private EntityKey getKeyToRead(final ResultSet resultSet, final SessionImplementor session) throws SQLException {
++		return getKeyFromResultSet(
++				getRootKeyIndex(),
++				getEntityPersisters()[getRootKeyIndex()],
++				null,
++				resultSet,
++				session
++			);
++	}
++
++	protected int getRootKeyIndex() {
++		return 0;
++	}
++
+ 	private static EntityKey getOptionalObjectKey(QueryParameters queryParameters, SessionImplementor session) {
+ 		final Object optionalObject = queryParameters.getOptionalObject();
+ 		final Serializable optionalId = queryParameters.getOptionalId();
+Index: C:/projects/workspace/Hibernate3/src/org/hibernate/loader/criteria/CriteriaLoader.java
+===================================================================
+--- C:/projects/workspace/Hibernate3/src/org/hibernate/loader/criteria/CriteriaLoader.java	(revision 9974)
++++ C:/projects/workspace/Hibernate3/src/org/hibernate/loader/criteria/CriteriaLoader.java	(working copy)
+@@ -166,4 +166,11 @@
+ 				.transformList(results);
+ 	}
+ 
++	protected boolean needsFetchingScroll() {
++		return collectionPersisters != null;
++	}
++	
++	protected int getRootKeyIndex() {
++		return aliases.length-1;
++	}
+ }

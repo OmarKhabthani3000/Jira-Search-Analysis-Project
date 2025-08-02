@@ -1,0 +1,283 @@
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/dialect/Dialect.java hibernate-3.2.6.patch/src/org/hibernate/dialect/Dialect.java
+--- hibernate-3.2.6.ga/src/org/hibernate/dialect/Dialect.java	2007-06-08 11:48:54.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/dialect/Dialect.java	2008-07-03 18:30:41.000000000 +1000
+@@ -1762,4 +1762,15 @@
+ 	public boolean supportsBindAsCallableArgument() {
+ 		return true;
+ 	}
++	
++	/**
++	 * Add a comment to the SQL string. 
++	 * 
++	 * @param sql          StringBuffer holding the SQL.
++	 * @param comment      Comment to add to the SQL. May be null.
++	 */
++	public void addCommentToSql(StringBuffer sql, String comment) {
++	    if (StringHelper.isNotEmpty(comment))
++	        sql.insert(0, "/* " + comment + " */ ");
++	}
+ }
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java hibernate-3.2.6.patch/src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java
+--- hibernate-3.2.6.ga/src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	2007-03-15 22:38:25.000000000 +1100
++++ hibernate-3.2.6.patch/src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	2008-07-03 11:09:57.000000000 +1000
+@@ -57,7 +57,7 @@
+ 			//      the difficulty is the ordering of the tables here vs the cascade attributes on the persisters ->
+ 			//          the table info gotten here should really be self-contained (i.e., a class representation
+ 			//          defining all the needed attributes), then we could then get an array of those
+-			final Delete delete = new Delete()
++			final Delete delete = new Delete(walker.getSessionFactoryHelper().getFactory().getDialect())
+ 					.setTableName( tableNames[i] )
+ 					.setWhere( "(" + StringHelper.join( ", ", columnNames[i] ) + ") IN (" + idSubselect + ")" );
+ 			if ( getFactory().getSettings().isCommentsEnabled() ) {
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/loader/Loader.java hibernate-3.2.6.patch/src/org/hibernate/loader/Loader.java
+--- hibernate-3.2.6.ga/src/org/hibernate/loader/Loader.java	2007-10-17 07:04:41.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/loader/Loader.java	2008-07-04 11:08:43.000000000 +1000
+@@ -201,22 +201,15 @@
+ 		sql = applyLocks( sql, parameters.getLockModes(), dialect );
+ 		
+ 		return getFactory().getSettings().isCommentsEnabled() ?
+-				prependComment( sql, parameters ) : sql;
++				prependComment( sql, parameters, dialect ) : sql;
+ 	}
+ 
+-	private String prependComment(String sql, QueryParameters parameters) {
++	private String prependComment(String sql, QueryParameters parameters, Dialect dialect) {
+ 		String comment = parameters.getComment();
+-		if ( comment == null ) {
+-			return sql;
+-		}
+-		else {
+-			return new StringBuffer( comment.length() + sql.length() + 5 )
+-					.append( "/* " )
+-					.append( comment )
+-					.append( " */ " )
+-					.append( sql )
+-					.toString();
+-		}
++		final StringBuffer sb = new StringBuffer((comment == null ? 0 : comment.length()) + sql.length() + 7);
++		sb.append(sql);
++		dialect.addCommentToSql(sb, comment);
++		return sb.toString();
+ 	}
+ 
+ 	/**
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/persister/collection/BasicCollectionPersister.java hibernate-3.2.6.patch/src/org/hibernate/persister/collection/BasicCollectionPersister.java
+--- hibernate-3.2.6.ga/src/org/hibernate/persister/collection/BasicCollectionPersister.java	2006-06-23 05:51:43.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/persister/collection/BasicCollectionPersister.java	2008-07-03 11:10:26.000000000 +1000
+@@ -55,7 +55,7 @@
+ 	 */
+ 	protected String generateDeleteString() {
+ 		
+-		Delete delete = new Delete()
++		Delete delete = new Delete(getDialect())
+ 				.setTableName( qualifiedTableName )
+ 				.setPrimaryKeyColumnNames( keyColumnNames );
+ 		
+@@ -128,7 +128,7 @@
+ 	 */
+ 	protected String generateDeleteRowString() {
+ 		
+-		Delete delete = new Delete()
++		Delete delete = new Delete(getDialect())
+ 			.setTableName( qualifiedTableName );
+ 		
+ 		if ( hasIdentifier ) {
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/persister/entity/AbstractEntityPersister.java hibernate-3.2.6.patch/src/org/hibernate/persister/entity/AbstractEntityPersister.java
+--- hibernate-3.2.6.ga/src/org/hibernate/persister/entity/AbstractEntityPersister.java	2007-10-19 08:28:23.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/persister/entity/AbstractEntityPersister.java	2008-07-03 11:15:55.000000000 +1000
+@@ -1956,7 +1956,7 @@
+ 	 * Generate the SQL that deletes a row by id (and version)
+ 	 */
+ 	protected String generateDeleteString(int j) {
+-		Delete delete = new Delete()
++		Delete delete = new Delete(getFactory().getDialect())
+ 				.setTableName( getTableName( j ) )
+ 				.setPrimaryKeyColumnNames( getKeyColumns( j ) );
+ 		if ( j == 0 ) {
+@@ -2708,7 +2708,7 @@
+ 		int span = getTableSpan();
+ 		String[] deleteStrings = new String[span];
+ 		for ( int j = span - 1; j >= 0; j-- ) {
+-			Delete delete = new Delete()
++			Delete delete = new Delete(getFactory().getDialect())
+ 					.setTableName( getTableName( j ) )
+ 					.setPrimaryKeyColumnNames( getKeyColumns( j ) );
+ 			if ( getFactory().getSettings().isCommentsEnabled() ) {
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/Delete.java hibernate-3.2.6.patch/src/org/hibernate/sql/Delete.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/Delete.java	2006-08-05 14:28:22.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/Delete.java	2008-07-03 17:32:39.000000000 +1000
+@@ -1,6 +1,7 @@
+ //$Id: Delete.java 10227 2006-08-05 04:28:22Z steve.ebersole@jboss.com $
+ package org.hibernate.sql;
+ 
++import org.hibernate.dialect.Dialect;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -16,6 +17,13 @@
+ 	private String where;
+ 
+ 	private String comment;
++	
++	private final Dialect dialect;
++	
++	public Delete(Dialect dialect) {
++	    this.dialect = dialect;
++	}
++	
+ 	public Delete setComment(String comment) {
+ 		this.comment = comment;
+ 		return this;
+@@ -28,9 +36,6 @@
+ 
+ 	public String toStatementString() {
+ 		StringBuffer buf = new StringBuffer( tableName.length() + 10 );
+-		if ( comment!=null ) {
+-			buf.append( "/* " ).append(comment).append( " */ " );
+-		}
+ 		buf.append( "delete from " ).append(tableName);
+ 		if ( where != null || primaryKeyColumnNames != null || versionColumnName != null ) {
+ 			buf.append( " where " );
+@@ -53,6 +58,9 @@
+ 			}
+ 			buf.append( versionColumnName ).append( "=?" );
+ 		}
++
++		dialect.addCommentToSql(buf, comment);
++		
+ 		return buf.toString();
+ 	}
+ 
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/Insert.java hibernate-3.2.6.patch/src/org/hibernate/sql/Insert.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/Insert.java	2006-03-25 05:10:04.000000000 +1100
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/Insert.java	2008-07-03 17:32:53.000000000 +1000
+@@ -76,9 +76,6 @@
+ 
+ 	public String toStatementString() {
+ 		StringBuffer buf = new StringBuffer( columns.size()*15 + tableName.length() + 10 );
+-		if ( comment != null ) {
+-			buf.append( "/* " ).append( comment ).append( " */ " );
+-		}
+ 		buf.append("insert into ")
+ 			.append(tableName);
+ 		if ( columns.size()==0 ) {
+@@ -103,6 +100,9 @@
+ 			}
+ 			buf.append(')');
+ 		}
++
++		dialect.addCommentToSql(buf, comment);
++
+ 		return buf.toString();
+ 	}
+ }
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/InsertSelect.java hibernate-3.2.6.patch/src/org/hibernate/sql/InsertSelect.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/InsertSelect.java	2005-06-08 06:06:10.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/InsertSelect.java	2008-07-03 17:33:07.000000000 +1000
+@@ -57,9 +57,6 @@
+ 		if ( select == null ) throw new HibernateException( "no select defined for insert-select" );
+ 
+ 		StringBuffer buf = new StringBuffer( (columnNames.size() * 15) + tableName.length() + 10 );
+-		if ( comment!=null ) {
+-			buf.append( "/* " ).append( comment ).append( " */ " );
+-		}
+ 		buf.append( "insert into " ).append( tableName );
+ 		if ( !columnNames.isEmpty() ) {
+ 			buf.append( " (" );
+@@ -73,6 +70,9 @@
+ 			buf.append( ")" );
+ 		}
+ 		buf.append( ' ' ).append( select.toStatementString() );
++
++		dialect.addCommentToSql(buf, comment);
++                
+ 		return buf.toString();
+ 	}
+ }
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/QuerySelect.java hibernate-3.2.6.patch/src/org/hibernate/sql/QuerySelect.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/QuerySelect.java	2005-06-03 12:04:13.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/QuerySelect.java	2008-07-03 17:33:17.000000000 +1000
+@@ -112,7 +112,6 @@
+ 
+ 	public String toQueryString() {
+ 		StringBuffer buf = new StringBuffer(50);
+-		if (comment!=null) buf.append("/* ").append(comment).append(" */ ");
+ 		buf.append("select ");
+ 		if (distinct) buf.append("distinct ");
+ 		String from = joins.toFromFragmentString();
+@@ -151,6 +150,8 @@
+ 		if ( having.length() > 0 ) buf.append(" having ").append( having.toString() );
+ 		if ( orderBy.length() > 0 ) buf.append(" order by ").append( orderBy.toString() );
+ 
++		dialect.addCommentToSql(buf, comment);
++
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+ 
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/Select.java hibernate-3.2.6.patch/src/org/hibernate/sql/Select.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/Select.java	2005-06-15 12:57:03.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/Select.java	2008-07-03 17:33:40.000000000 +1000
+@@ -34,9 +34,6 @@
+ 	 */
+ 	public String toStatementString() {
+ 		StringBuffer buf = new StringBuffer(guesstimatedBufferSize);
+-		if ( StringHelper.isNotEmpty(comment) ) {
+-			buf.append("/* ").append(comment).append(" */ ");
+-		}
+ 		
+ 		buf.append("select ").append(selectClause)
+ 				.append(" from ").append(fromClause);
+@@ -72,6 +69,8 @@
+ 			buf.append( dialect.getForUpdateString(lockMode) );
+ 		}
+ 		
++		dialect.addCommentToSql(buf, comment);
++
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+ 
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/SimpleSelect.java hibernate-3.2.6.patch/src/org/hibernate/sql/SimpleSelect.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/SimpleSelect.java	2005-07-24 16:53:06.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/SimpleSelect.java	2008-07-03 17:33:51.000000000 +1000
+@@ -126,10 +126,6 @@
+ 				10 
+ 			);
+ 		
+-		if ( comment!=null ) {
+-			buf.append("/* ").append(comment).append(" */ ");
+-		}
+-		
+ 		buf.append("select ");
+ 		Set uniqueColumns = new HashSet();
+ 		Iterator iter = columns.iterator();
+@@ -161,6 +157,8 @@
+ 		if (lockMode!=null) {
+ 			buf.append( dialect.getForUpdateString(lockMode) );
+ 		}
++		
++		dialect.addCommentToSql(buf, comment);
+ 
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+diff -ur hibernate-3.2.6.ga/src/org/hibernate/sql/Update.java hibernate-3.2.6.patch/src/org/hibernate/sql/Update.java
+--- hibernate-3.2.6.ga/src/org/hibernate/sql/Update.java	2005-08-11 06:23:55.000000000 +1000
++++ hibernate-3.2.6.patch/src/org/hibernate/sql/Update.java	2008-07-03 17:34:02.000000000 +1000
+@@ -132,9 +132,6 @@
+ 
+ 	public String toStatementString() {
+ 		StringBuffer buf = new StringBuffer( (columns.size() * 15) + tableName.length() + 10 );
+-		if ( comment!=null ) {
+-			buf.append( "/* " ).append( comment ).append( " */ " );
+-		}
+ 		buf.append( "update " ).append( tableName ).append( " set " );
+ 		boolean assignmentsAppended = false;
+ 		Iterator iter = columns.entrySet().iterator();
+@@ -184,6 +181,8 @@
+ 			buf.append( versionColumnName ).append( "=?" );
+ 		}
+ 
++		dialect.addCommentToSql(buf, comment);
++
+ 		return buf.toString();
+ 	}
+ }

@@ -1,0 +1,240 @@
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
+index d221014..2447161 100644
+--- a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
+@@ -26,6 +26,8 @@
+ import org.hibernate.test.bytecode.enhancement.lazy.LazyLoadingTestTask;
+ import org.hibernate.test.bytecode.enhancement.lazy.basic.LazyBasicFieldAccessTestTask;
+ import org.hibernate.test.bytecode.enhancement.lazy.basic.LazyBasicPropertyAccessTestTask;
++import org.hibernate.test.bytecode.enhancement.mappedBy.HHH10159TestTask;
++import org.hibernate.test.bytecode.enhancement.mappedBy.HHH10159TestTask2;
+ import org.hibernate.test.bytecode.enhancement.merge.CompositeMergeTestTask;
+ import org.hibernate.test.bytecode.enhancement.pk.EmbeddedPKTestTask;
+ import org.hibernate.test.bytecode.enhancement.ondemandload.LazyCollectionWithClearedSessionTestTask;
+@@ -122,4 +124,11 @@
+ 	public void testLazyBasicFieldNotInitialized() {
+ 		EnhancerTestUtils.runEnhancerTestTask( LazyBasicFieldNotInitializedTestTask.class );
+ 	}
++
++	@Test
++	@TestForIssue( jiraKey = "HHH-10159" )
++	public void testHHH10159() {
++		EnhancerTestUtils.runEnhancerTestTask( HHH10159TestTask.class );
++		EnhancerTestUtils.runEnhancerTestTask( HHH10159TestTask2.class );
++	}
+ }
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Address.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Address.java
+new file mode 100644
+index 0000000..0a14e79
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Address.java
+@@ -0,0 +1,26 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import java.util.LinkedHashSet;
++import java.util.Set;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++
++@Entity
++public class Address {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++
++	@OneToMany(fetch = FetchType.LAZY)
++	private Set<Address> address = new LinkedHashSet<Address>();
++
++	@OneToMany(fetch = FetchType.LAZY, mappedBy = "address", cascade=CascadeType.ALL, orphanRemoval=true)
++	private Set<Country> linkedCountries = new LinkedHashSet<Country>();
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Country.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Country.java
+new file mode 100644
+index 0000000..51b5a8a
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Country.java
+@@ -0,0 +1,19 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++
++@Entity
++public abstract class Country {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++	
++	@ManyToOne(fetch = FetchType.LAZY)
++	private Address address;
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask.java
+new file mode 100644
+index 0000000..cfc10e3
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask.java
+@@ -0,0 +1,26 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.test.bytecode.enhancement.AbstractEnhancerTestTask;
++
++public class HHH10159TestTask extends AbstractEnhancerTestTask {
++
++	public Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] {Address.class, Country.class};
++	}
++
++	public void prepare() {
++		Configuration cfg = new Configuration();
++		cfg.setProperty( Environment.ENABLE_LAZY_LOAD_NO_TRANS, "true" );
++		cfg.setProperty( Environment.USE_SECOND_LEVEL_CACHE, "false" );
++		super.prepare( cfg );
++	}
++
++	public void execute() {
++	}
++
++	protected void cleanup() {
++	}
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask2.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask2.java
+new file mode 100644
+index 0000000..9512031
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/HHH10159TestTask2.java
+@@ -0,0 +1,26 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.test.bytecode.enhancement.AbstractEnhancerTestTask;
++
++public class HHH10159TestTask2 extends AbstractEnhancerTestTask {
++
++	public Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] {X.class, Y.class, Z.class};
++	}
++
++	public void prepare() {
++		Configuration cfg = new Configuration();
++		cfg.setProperty( Environment.ENABLE_LAZY_LOAD_NO_TRANS, "true" );
++		cfg.setProperty( Environment.USE_SECOND_LEVEL_CACHE, "false" );
++		super.prepare( cfg );
++	}
++
++	public void execute() {
++	}
++
++	protected void cleanup() {
++	}
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/X.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/X.java
+new file mode 100644
+index 0000000..4b87572
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/X.java
+@@ -0,0 +1,27 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import java.util.Set;
++
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinTable;
++import javax.persistence.OneToMany;
++
++@Entity
++public class X {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++
++
++	@OneToMany(fetch = FetchType.LAZY)
++	@JoinTable(name = "y_x",
++	joinColumns = {@JoinColumn(name="x_id", referencedColumnName="id")},
++	inverseJoinColumns = {@JoinColumn(name="y_id", referencedColumnName="id")})
++	private Set<Y> y;
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Y.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Y.java
+new file mode 100644
+index 0000000..11f0392
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Y.java
+@@ -0,0 +1,30 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import java.util.Set;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinTable;
++import javax.persistence.OneToMany;
++
++@Entity
++public abstract class Y {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++	
++	@OneToMany(fetch = FetchType.LAZY, mappedBy = "y", cascade=CascadeType.ALL, orphanRemoval=true)
++	private Set<Z> z;
++
++	@OneToMany(fetch = FetchType.LAZY)
++	@JoinTable(name = "y_x",
++		joinColumns = {@JoinColumn(name="y_id", referencedColumnName="id")},
++		inverseJoinColumns = {@JoinColumn(name="x_id", referencedColumnName="id")})
++	private Set<X> x;
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Z.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Z.java
+new file mode 100644
+index 0000000..bc6b6a5
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/mappedBy/Z.java
+@@ -0,0 +1,19 @@
++package org.hibernate.test.bytecode.enhancement.mappedBy;
++
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++
++@Entity
++public abstract class Z {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++	
++	@ManyToOne(fetch = FetchType.LAZY)
++	private Y y;
++
++}

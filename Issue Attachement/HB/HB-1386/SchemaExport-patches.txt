@@ -1,0 +1,514 @@
+Index: SchemaExport.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/SchemaExport.java,v
+retrieving revision 1.15
+diff -u -r1.15 SchemaExport.java
+--- SchemaExport.java	4 Jun 2004 01:28:51 -0000	1.15
++++ SchemaExport.java	13 Jan 2005 07:05:45 -0000
+@@ -1,6 +1,7 @@
+ //$Id: SchemaExport.java,v 1.15 2004/06/04 01:28:51 steveebersole Exp $
+ package net.sf.hibernate.tool.hbm2ddl;
+ 
++import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileWriter;
+ import java.io.IOException;
+@@ -49,11 +50,20 @@
+ 	}
+ 	
+ 	/**
+-	 * Create a schema exporter for the given Configuration, with the given
+-	 * database connection properties.
+-	 */
+-	public SchemaExport(Configuration cfg, Properties connectionProperties) throws HibernateException {
+-		this.connectionProperties = connectionProperties;
++     * Create a schema exporter for the given Configuration with the given
++     * database connection properties. The Configuration will be searched for
++     * properties not specified in the given connection properties collection.
++     * 
++     * @param cfg
++     *            The Hibernate Configuration to use.
++     * @param connectionProperties
++     *            The Properties collection to search for the Hibernate JDBC
++     *            connection properties.
++     */
++	public SchemaExport(Configuration cfg, Properties connectionProperties) 
++            throws HibernateException {
++		this.connectionProperties = new Properties(cfg.getProperties());
++        this.connectionProperties.putAll(connectionProperties);
+ 		dialect = Dialect.getDialect(connectionProperties);
+ 		dropSQL = cfg.generateDropSchemaScript(dialect);
+ 		createSQL = cfg.generateSchemaCreationScript(dialect);
+@@ -81,23 +91,43 @@
+ 	 * @param export export the script to the database
+ 	 */
+ 	public void create(boolean script, boolean export) {
+-		execute(script, export, false, true);
++		execute(script, export, false, true, null);
+ 	}
+ 	
++    /**
++     * Run the schema creation script against a database using the
++     * supplied database Connection.  Drops the old tables.
++     * @param script print the DDL to the console
++     * @param conn the JDBC connection to use to connect to the database
++     */
++    public void create(boolean script, Connection conn) {
++        execute(script, true, false, true, conn);
++    }
++   
+ 	/**
+ 	 * Run the drop schema script.
+ 	 * @param script print the DDL to the console
+ 	 * @param export export the script to the database
+ 	 */
+ 	public void drop(boolean script, boolean export) {
+-		execute(script, export, true, true);
++		execute(script, export, true, true, null);
+ 	}
+-	
+-	private void execute(boolean script, boolean export, boolean justDrop, boolean format) {
++
++    /**
++     * Run the drop schema script against a database using the
++     * supplied database Connection.
++     * @param script print the DDL to the console
++     * @param conn the JDBC connection to use to connect to the database
++     */
++    public void drop(boolean script, Connection conn) {
++        execute(script, true, true, true, conn);
++    }
++    
++	private void execute(boolean script, boolean export, boolean justDrop, 
++            boolean format, Connection connection) {
+ 		
+ 		log.info("Running hbm2ddl schema export");
+ 		
+-		Connection connection = null;
+ 		FileWriter fileOutput = null;
+ 		ConnectionProvider connectionProvider = null;
+ 		Statement statement = null;
+@@ -115,8 +145,11 @@
+ 			
+ 			if (export) {
+ 				log.info("exporting generated schema to database");
+-				connectionProvider = ConnectionProviderFactory.newConnectionProvider(props);
+-				connection = connectionProvider.getConnection();
++                if (connection == null) {
++                    connectionProvider = 
++                        ConnectionProviderFactory.newConnectionProvider(props);
++                    connection = connectionProvider.getConnection();
++                }
+ 				if ( !connection.getAutoCommit() ) {
+ 					connection.commit();
+ 					connection.setAutoCommit(true);
+@@ -172,8 +205,12 @@
+ 				if (connection!=null) {
+ 					JDBCExceptionReporter.logWarnings( connection.getWarnings() );
+ 					connection.clearWarnings();
+-					connectionProvider.closeConnection(connection);
+-					connectionProvider.close();
++                    if (connectionProvider == null) {
++                        connection.close();
++                    } else {
++            			connectionProvider.closeConnection(connection);
++            			connectionProvider.close();
++                    }
+ 				}
+ 			}
+ 			catch(Exception e) {
+@@ -283,7 +320,7 @@
+ 				else {
+ 					String filename = args[i];
+ 					if ( filename.endsWith( ".jar" ) ) {
+-						cfg.addJar(filename);
++						cfg.addJar(new File(filename));
+ 					}
+ 					else {
+ 						cfg.addFile(filename);
+@@ -297,13 +334,13 @@
+ 				new SchemaExport(cfg, props)
+ 					.setOutputFile(outFile)
+ 					.setDelimiter(delim)
+-					.execute(script, export, drop, formatSQL);
++					.execute(script, export, drop, formatSQL, null);
+ 			}
+ 			else {
+ 				new SchemaExport(cfg)
+ 					.setOutputFile(outFile)
+ 					.setDelimiter(delim)
+-					.execute(script, export, drop, formatSQL);
++					.execute(script, export, drop, formatSQL, null);
+ 			}
+ 		}
+ 		catch(Exception e) {
+Index: SchemaExportTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/SchemaExportTask.java,v
+retrieving revision 1.11
+diff -u -r1.11 SchemaExportTask.java
+--- SchemaExportTask.java	23 Nov 2004 17:10:25 -0000	1.11
++++ SchemaExportTask.java	13 Jan 2005 07:05:45 -0000
+@@ -3,20 +3,29 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.cfg.Configuration;
++import net.sf.hibernate.cfg.Environment;
+ import net.sf.hibernate.cfg.NamingStrategy;
++import net.sf.hibernate.connection.ConnectionProviderFactory;
+ import net.sf.hibernate.util.ArrayHelper;
++import net.sf.hibernate.util.PropertiesHelper;
+ import net.sf.hibernate.util.ReflectHelper;
+ 
++import org.apache.tools.ant.AntClassLoader;
+ import org.apache.tools.ant.BuildException;
+ import org.apache.tools.ant.DirectoryScanner;
+ import org.apache.tools.ant.Project;
+ import org.apache.tools.ant.taskdefs.MatchingTask;
+ import org.apache.tools.ant.types.FileSet;
++import org.apache.tools.ant.types.Path;
++import org.apache.tools.ant.types.Reference;
+ 
+ import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
++import java.sql.Connection;
++import java.sql.Driver;
++import java.sql.SQLException;
+ import java.util.Iterator;
+ import java.util.LinkedList;
+ import java.util.List;
+@@ -32,6 +41,8 @@
+  *
+  * &lt;schemaexport
+  *     properties="${build.classes.dir}/hibernate.properties"
++ *     config="hibernate.cfg.xml"
++ *     dialect="net.sf.hibernate.dialect.HSQLDialect"
+  *     quiet="no"
+  *     text="no"
+  *     drop="no"
+@@ -40,16 +51,47 @@
+  *     &lt;fileset dir="${build.classes.dir}"&gt;
+  *         &lt;include name="*.hbm.xml"/&gt;
+  *     &lt;/fileset&gt;
++ *     driver_class="org.hsqldb.jdbcDriver"
++ *     username="dbuser"
++ *     password="dbpassword"
++ *     url="jdbc:hsqldb:hsql://localhost"
+  * &lt;/schemaexport&gt;
+  * </pre>
+  * 
++ * The classpath specified in the taskdef needs to include the locations of 
++ * all the Hibernate jars, all the jars Hibernate depends on, all of the
++ * class files (or jars containing them) for all your Hibernated classes,
++ * and whatever else those classes need to be able to find in order to load.
++ * 
++ * If you are connecting to the database, you should also include the
++ * paths to all the drivers you will need.  You can try leaving this out
++ * and instead set the path to the specific driver you need on each
++ * individual task.  It may or may not work depending of various Ant 
++ * classloader issues.  
++ * 
++ * You can specify the dialect and, if needed, the connection properties 
++ * in several places.  Each property will be taken from the first place 
++ * on this list where it is found:
++ * 
++ * <ol>
++ * <li>The SchemaExportTask attributes specified in Ant.
++ * <li>The Ant project's properties.
++ * <li>The properties file specified in the task attribute.
++ * <li>The first hibernate.properties file found on the classpath.
++ * </ol>
++ * 
++ * All the properties will be interpreted as if they were provided in a
++ * hibernate.properties file.  
++ * 
++ * @see net.sf.hibernate.cfg.Environment Hibernate Properties
+  * @see SchemaExport
+- * @author Rong C Ou
++ * @author Rong C Ou, Jeremy Grodberg
+  */
+ public class SchemaExportTask extends MatchingTask {
+ 	
+ 	private List fileSets = new LinkedList();
+ 	private File propertiesFile = null;
++    private Properties taskProperties = new Properties();
+ 	private String configurationFile = null;
+ 	private String outputFile = null;
+ 	private boolean quiet = false;
+@@ -57,6 +99,7 @@
+ 	private boolean drop = false;
+ 	private String delimiter = null;
+ 	private String namingStrategy = null;
++    private Path classpath = null;
+ 
+ 	public void addFileset(FileSet set) {
+ 		fileSets.add(set);
+@@ -126,22 +169,101 @@
+ 	public void setOutput(String outputFile) {
+ 		this.outputFile = outputFile;
+ 	}
+-	
++    
++    /**
++     * Set the Hibernate dialect
++     * @param dialect The dialect to use when exporting the schema
++     */
++    public void setDialect(String dialect) {
++        taskProperties.put(Environment.DIALECT, dialect);
++    }
++
++    /**
++     * Set the JDBC driver
++     * @param driver The JDBC driver class to use when exporting the schema
++     */
++    public void setDriver(String driver) {
++        taskProperties.put(Environment.DRIVER, driver);
++    }
++
++    /**
++     * Set the database user name
++     * @param dialect The user name to use when connecting to the database
++     */
++    public void setUsername(String username) {
++        taskProperties.put(Environment.USER, username);
++    }
++
++    /**
++     * Set the database password
++     * @param dialect The password to use when connecting to the database
++     */
++    public void setPassword(String password) {
++        taskProperties.put(Environment.PASS, password);
++    }
++
++    /**
++     * Set the database connection URL
++     * @param dialect The URL to use to connect to the database
++     */
++    public void setUrl(String url) {
++        taskProperties.put(Environment.URL, url);
++    }
++
++    /**
++     * Set the classpath for loading the driver.
++     */
++    public void setClasspath(Path classpath) {
++        if (this.classpath == null) {
++            this.classpath = classpath;
++        } else {
++            this.classpath.append(classpath);
++        }
++    }
++
++    /**
++     * Set the classpath for loading the driver using the classpath reference.
++     */
++    public void setClasspathRef(Reference r) {
++        if (this.classpath == null) {
++            this.classpath = new Path(getProject());
++        }
++        this.classpath.createPath().setRefid(r);
++    }
++
+ 	/**
+ 	 * Execute the task
+ 	 */
+ 	public void execute() throws BuildException {
+ 		try {
+ 			Configuration cfg = getConfiguration();
+-			SchemaExport schemaExport = getSchemaExport(cfg);
+-
+-			if (drop) {
+-				schemaExport.drop(!quiet, !text);
+-			} 
+-			else {
+-				schemaExport.create(!quiet, !text);
+-			}
+-		} 
++            Properties props = assembleProperties(cfg);
++			SchemaExport schemaExport = getSchemaExport(cfg, props);
++            
++            /*
++             * If the build script specifies a classpath, then we have
++             * to load the driver ourselves since there is no way to tell
++             * hibernate to do it.  Otherwise we let Hibernate handle all
++             * the details.
++             */
++            if (classpath != null) {
++                Connection conn = null;
++                if (!text)  // i.e. if exporting to the database
++                    conn = getConnection(props);
++
++                if (drop) {
++                    schemaExport.drop(!quiet, conn);
++                } else {
++                    schemaExport.create(!quiet, conn);
++                }
++            } else {
++                if (drop) {
++                    schemaExport.drop(!quiet, !text);
++                } else {
++                    schemaExport.create(!quiet, !text);
++                }
++            }
++        } 
+ 		catch (HibernateException e) {
+ 			throw new BuildException("Schema text failed: " + e.getMessage(), e);
+ 		} 
+@@ -151,9 +273,12 @@
+ 		catch (IOException e) {
+ 			throw new BuildException("IOException : " + e.getMessage(), e);
+ 		}
+-		catch (Exception e) {
+-			throw new BuildException(e);
+-		}
++        catch (SQLException e) {
++            throw new BuildException("SQLException : " + e.getMessage(), e);
++        }
++        catch (Exception e) {
++            throw new BuildException(e);
++        }
+ 	}
+ 
+ 	private String[] getFiles() {
+@@ -162,7 +287,7 @@
+ 		for ( Iterator i = fileSets.iterator(); i.hasNext(); ) {
+ 			
+ 			FileSet fs = (FileSet) i.next();
+-			DirectoryScanner ds = fs.getDirectoryScanner(project);
++			DirectoryScanner ds = fs.getDirectoryScanner(getProject());
+ 
+ 			String[] dsFiles = ds.getIncludedFiles();
+ 			for (int j = 0; j < dsFiles.length; j++) {
+@@ -198,20 +323,120 @@
+ 		return cfg;
+ 	}
+ 
+-	private SchemaExport getSchemaExport(Configuration cfg) throws HibernateException, IOException {
++    /**
++     * Merges properties from various sources. Assembles the properties
++     * according to the following priority:
++     * 
++     * <ol>
++     * <li>The SchemaExportTask attributes specified in Ant.</li>
++     * <li>The Ant project's properties.</li>
++     * <li>The properties file specified in the task attribute.</li>
++     * <li>The properties assciated with the Configuration, which are typically
++     * the properties in the hibernate.properites file.</li>
++     * </ol>
++     * 
++     * @param cfg
++     *            The Hibernate Configuration to search for connection
++     *            properties.
++     * @return A merged Properties collection.
++     */
++	private Properties assembleProperties(Configuration cfg) 
++            throws FileNotFoundException, IOException {
++        Properties properties = new Properties(cfg.getProperties());
++        if (propertiesFile != null) {
++            properties.load( new FileInputStream(propertiesFile) );
++        }
++
++        properties.putAll(getProject().getProperties());
++        properties.putAll(taskProperties);
++        return properties;
++    }
++    
++    private SchemaExport getSchemaExport(Configuration cfg, Properties props) 
++            throws HibernateException, IOException {
+ 		SchemaExport schemaExport;
+-		if (propertiesFile == null) {
+-			schemaExport = new SchemaExport(cfg);
+-		} 
+-		else {
+-			Properties properties = new Properties();
+-			properties.load( new FileInputStream(propertiesFile) );
+-			schemaExport = new SchemaExport(cfg, properties);
+-		}
++        
++        schemaExport = new SchemaExport(cfg, props);
+ 		schemaExport.setOutputFile(outputFile);
+ 		schemaExport.setDelimiter(delimiter);
+ 		return schemaExport;
+ 	}
++    
++	/**
++     * Loads the JDBC driver and gets a connection to the database. Because we
++     * want to use the classpath specified in the build script and not the one
++     * Ant was started with, we cannot rely on Hibernate to find the JDBC driver
++     * for us. We get Ant to find it and then pass an open connection to
++     * SchemaExport.
++     * 
++     * @param properties
++     *            A set of Properties to use to look for JDBC connection
++     *            configuration parameters if they were not specified as task
++     *            attributes.
++     * @return An open connection to the target database.
++     * @throws BuildException
++     */
++    private Connection getConnection(Properties props) 
++            throws BuildException, SQLException {
++        String driver = props.getProperty(Environment.DRIVER);
++        if (driver == null) {
++            throw new BuildException("Driver class name not set (missing"
++                    + " driver attribute and " + Environment.DRIVER
++                    + " property).", getLocation());
++        }
++        String url = props.getProperty(Environment.URL);
++        if (url == null) {
++            throw new BuildException("JDBC connection URL not set (missing"
++                    + " url attribute and " + Environment.URL + " property).",
++                    getLocation());
++        }
++
++        // Load the JDBC driver using the supplied classpath
++        Driver driverInstance = null;
++        try {
++            Class driverClass;
++            if (classpath != null) {
++                log("Loading " + driver
++                        + " using AntClassLoader with classpath " + classpath,
++                        Project.MSG_VERBOSE);
++
++                AntClassLoader cl = new AntClassLoader(getProject(), classpath);
++                driverClass = cl.loadClass(driver);
++            } else {
++                throw new BuildException("Internal Error in "
++                        + "SchemaExportTask.  Attempted to bypass Hibernate"
++                        + "for no good reason.");
++            }
++            driverInstance = (Driver) driverClass.newInstance();
++        } catch (ClassNotFoundException e) {
++            throw new BuildException("Class Not Found: JDBC driver " + driver
++                    + " could not be loaded", e, getLocation());
++        } catch (IllegalAccessException e) {
++            throw new BuildException("Illegal Access: JDBC driver " + driver
++                    + " could not be loaded", e, getLocation());
++        } catch (InstantiationException e) {
++            throw new BuildException("Instantiation Exception: JDBC driver "
++                    + driver + " could not be loaded", e, getLocation());
++        }
++
++        
++        Properties connProps = 
++            ConnectionProviderFactory.getConnectionProperties(props);
++        Connection conn = driverInstance.connect(url,connProps);
++        
++        /* Okay, it is kind of silly to worry about the isolation level
++         * when we are dropping all the tables, but what the heck.  
++         */
++        Integer isolation = 
++            PropertiesHelper.getInteger(Environment.ISOLATION, props);
++        if (isolation != null) {
++            log("JDBC isolation level: "
++                    + Environment.isolationLevelToString(isolation.intValue()),
++                    Project.MSG_VERBOSE);
++            conn.setTransactionIsolation( isolation.intValue() );
++        }
++        return conn;
++    }
+ 
+ 	public void setNamingStrategy(String namingStrategy) {
+ 		this.namingStrategy = namingStrategy;

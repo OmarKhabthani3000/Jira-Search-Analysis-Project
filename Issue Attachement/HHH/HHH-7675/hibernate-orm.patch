@@ -1,0 +1,138 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/loader/JoinWalker.java b/hibernate-core/src/main/java/org/hibernate/loader/JoinWalker.java
+index de6d11e..dc7b9a4 100755
+--- a/hibernate-core/src/main/java/org/hibernate/loader/JoinWalker.java
++++ b/hibernate-core/src/main/java/org/hibernate/loader/JoinWalker.java
+@@ -379,7 +379,7 @@
+ 	 * @param currentDepth The current join depth
+ 	 * @throws org.hibernate.MappingException ???
+ 	 */
+-	private void walkEntityAssociationTree(
++	protected void walkEntityAssociationTree(
+ 			final AssociationType associationType,
+ 			final OuterJoinLoadable persister,
+ 			final int propertyNumber,
+@@ -508,7 +508,7 @@
+ 	 * @param currentDepth The current join depth
+ 	 * @throws org.hibernate.MappingException ???
+ 	 */
+-	private void walkEntityTree(
++	protected void walkEntityTree(
+ 			final OuterJoinLoadable persister,
+ 			final String alias,
+ 			final PropertyPath path,
+@@ -555,7 +555,7 @@
+ 	 * @param currentDepth The current join depth
+ 	 * @throws org.hibernate.MappingException ???
+ 	 */
+-	private void walkComponentTree(
++	protected void walkComponentTree(
+ 			final CompositeType componentType,
+ 			final int propertyNumber,
+ 			int begin,
+diff --git a/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java b/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+index 1b009ce..05dfc9c 100755
+--- a/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
++++ b/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+@@ -25,6 +25,7 @@
+ package org.hibernate.loader.criteria;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Set;
+ 
+@@ -45,6 +46,7 @@
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.sql.JoinType;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.CompositeType;
+ import org.hibernate.type.Type;
+ 
+ /**
+@@ -308,4 +310,58 @@
+ 	protected boolean hasRestriction(PropertyPath path)	{
+ 		return translator.hasRestriction( path.getFullPath() );
+ 	}
++
++	@Override
++	protected void walkEntityTree(
++			final OuterJoinLoadable persister,
++			final String alias,
++			final PropertyPath path,
++			final int currentDepth) throws MappingException {
++		int n = persister.countSubclassProperties();
++
++		LinkedHashMap<String, Integer> propertyNumberPerPath = new LinkedHashMap<String, Integer>(n);
++		for ( int propertyNumber = 0; propertyNumber < n; propertyNumber++ ) {
++			PropertyPath propertyPath = path.append( persister.getSubclassPropertyName(propertyNumber) );
++			propertyNumberPerPath.put( propertyPath.getFullPath(), propertyNumber );
++		}
++
++		ArrayList<Integer> orderedPropertyNumbers = new ArrayList<Integer>(n);
++		if (null!=translator && null!=translator.getOrderedAssociationPath()) {
++			for(String propertyPath : translator.getOrderedAssociationPath()) {
++				Integer propertyNumber = propertyNumberPerPath.remove( propertyPath );
++				if (null!=propertyNumber) {
++					orderedPropertyNumbers.add( propertyNumber );
++				}
++			}
++		}
++		orderedPropertyNumbers.addAll( propertyNumberPerPath.values() );
++
++		for ( int i : orderedPropertyNumbers) {
++			Type type = persister.getSubclassPropertyType(i);
++			if ( type.isAssociationType() ) {
++				walkEntityAssociationTree(
++					( AssociationType ) type,
++					persister,
++					i,
++						alias,
++					path,
++					persister.isSubclassPropertyNullable(i),
++					currentDepth
++				);
++			}
++			else if ( type.isComponentType() ) {
++				walkComponentTree(
++						( CompositeType ) type,
++						i,
++						0,
++						persister,
++						alias,
++						path.append( persister.getSubclassPropertyName(i) ),
++						currentDepth
++				);
++			}
++		}
++
++	}
+ }
+diff --git a/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java b/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+index 0aca3b9..3ff3a81 100755
+--- a/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
++++ b/hibernate-core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+@@ -80,28 +80,28 @@
+ 	private final Map /* <String, CriteriaInfoProvider> */ nameCriteriaInfoMap = new LinkedHashMap();
+ 	private final Map criteriaSQLAliasMap = new HashMap();
+ 	private final Map aliasCriteriaMap = new HashMap();
+-	private final Map associationPathCriteriaMap = new LinkedHashMap();
++	private final LinkedHashMap associationPathCriteriaMap = new LinkedHashMap();
+ 	private final Map<String,JoinType> associationPathJoinTypesMap = new LinkedHashMap<String,JoinType>();
+ 	private final Map withClauseMap = new HashMap();
+-	
++
+ 	private final SessionFactoryImplementor sessionFactory;
+ 	private final SessionFactoryHelper helper;
+ 
+@@ -132,6 +132,10 @@
+ 	public JoinType getJoinType(String path) {
+ 		JoinType result = associationPathJoinTypesMap.get( path );
+ 		return ( result == null ? JoinType.INNER_JOIN : result );
++	}
++
++	public Set<String> getOrderedAssociationPath() {
++		return associationPathCriteriaMap.keySet();
+ 	}
+ 
+ 	public Criteria getCriteria(String path) {
+

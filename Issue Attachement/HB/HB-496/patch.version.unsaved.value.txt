@@ -1,0 +1,780 @@
+Index: src/net/sf/hibernate/hibernate-mapping-2.0.dtd
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/hibernate-mapping-2.0.dtd,v
+retrieving revision 1.34.2.26
+diff -u -r1.34.2.26 hibernate-mapping-2.0.dtd
+--- src/net/sf/hibernate/hibernate-mapping-2.0.dtd	24 Nov 2003 03:25:29 -0000	1.34.2.26
++++ src/net/sf/hibernate/hibernate-mapping-2.0.dtd	25 Nov 2003 05:02:32 -0000
+@@ -95,11 +95,13 @@
+   <!ATTLIST version access CDATA #IMPLIED>
+   <!ATTLIST version column CDATA #IMPLIED>
+   <!ATTLIST version type CDATA "integer">
++  <!ATTLIST version unsaved-value (undefined|null|negative) "undefined">
+ 
+ <!ELEMENT timestamp (meta*)>
+   <!ATTLIST timestamp name CDATA #REQUIRED>
+   <!ATTLIST timestamp column CDATA #IMPLIED>
+   <!ATTLIST timestamp access CDATA #IMPLIED>
++  <!ATTLIST timestamp unsaved-value (null) "null">
+ 
+ <!-- Subclass declarations are nested beneath the root class declaration to achieve
+ polymorphic persistence. -->
+Index: src/net/sf/hibernate/cfg/Binder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Binder.java,v
+retrieving revision 1.26.2.43
+diff -u -r1.26.2.43 Binder.java
+--- src/net/sf/hibernate/cfg/Binder.java	24 Nov 2003 03:25:29 -0000	1.26.2.43
++++ src/net/sf/hibernate/cfg/Binder.java	25 Nov 2003 05:02:33 -0000
+@@ -401,6 +401,15 @@
+ 			true :
+ 			"true".equals( insertNode.getValue() )
+ 		);
++		
++		// Version unsaved value
++		Attribute nullValueNode = node.attribute("unsaved-value");
++		if (nullValueNode!=null) {
++			model.setNullValue( nullValueNode.getValue() );
++		}
++		else {
++			model.setNullValue("undefined");
++		}
+ 
+ 		if ( log.isDebugEnabled() ) {
+ 			String msg = "Mapped property: " + model.getName();
+Index: src/net/sf/hibernate/engine/Cascades.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Cascades.java,v
+retrieving revision 1.17.2.12
+diff -u -r1.17.2.12 Cascades.java
+--- src/net/sf/hibernate/engine/Cascades.java	24 Nov 2003 03:25:29 -0000	1.17.2.12
++++ src/net/sf/hibernate/engine/Cascades.java	25 Nov 2003 05:02:34 -0000
+@@ -9,6 +9,7 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.LockMode;
++import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.ReplicationMode;
+ import net.sf.hibernate.collection.CollectionPersister;
+ import net.sf.hibernate.collection.PersistentCollection;
+@@ -308,7 +309,7 @@
+ 		 * Does the given identifier belong to a new instance?
+ 		 */
+ 		public boolean isUnsaved(Serializable id) {
+-			if ( log.isTraceEnabled() ) log.trace("unsaved-value: " + value);
++			if ( log.isTraceEnabled() ) log.trace("id unsaved-value: " + value);
+ 			return id==null || value.equals(id);
+ 		}
+ 	}
+@@ -318,7 +319,7 @@
+ 	 */
+ 	public static final IdentifierValue SAVE_ANY = new IdentifierValue() {
+ 		public final boolean isUnsaved(Serializable id) {
+-			log.trace("unsaved-value strategy ANY");
++			log.trace("id unsaved-value strategy ANY");
+ 			return true;
+ 		}
+ 	};
+@@ -327,7 +328,7 @@
+ 	 */
+ 	public static final IdentifierValue SAVE_NONE = new IdentifierValue() {
+ 		public final boolean isUnsaved(Serializable id) {
+-			log.trace("unsaved-value strategy NONE");
++			log.trace("id unsaved-value strategy NONE");
+ 			return false;
+ 		}
+ 	};
+@@ -337,8 +338,100 @@
+ 	 */
+ 	public static final IdentifierValue SAVE_NULL = new IdentifierValue() {
+ 		public final boolean isUnsaved(Serializable id) {
+-			log.trace("unsaved-value strategy NULL");
++			log.trace("id unsaved-value strategy NULL");
+ 			return id==null;
++		}
++	};
++	
++	/**
++	 * A strategy for determining if a version value is an version of
++	 * a new transient instance or a previously persistent transient instance.
++	 * The strategy is determined by the <tt>unsaved-value</tt> attribute in
++	 * the mapping file.
++	 */
++	public static class VersionValue {
++		
++		private final Object value;
++		protected VersionValue() {
++			this.value = null;
++		}
++		
++		/**
++		 * Assume the transient instance is newly instantiated if
++		 * its version is null or equal to <tt>value</tt>
++		 * @param value value to compare to
++		 */
++		public VersionValue(Object value) {
++			this.value = value;
++		}
++		/**
++		 * Does the given version belong to a new instance?
++		 * 
++		 * @param version version to check
++		 * @return true is unsaved, false is saved, null is undefined
++		 */
++		public Boolean isUnsaved(Object version) throws MappingException  {
++			if ( log.isTraceEnabled() ) log.trace("version unsaved-value: " + value);
++			return Boolean.valueOf(version==null || value.equals(version));
++		}
++	}
++
++	/*
++	 * used to be none and any strategies but this is kind of a non sense for version
++	 * especially for non since an 'update where' would be generated
++	 * Lot's of hack to support none ?
++	 */
++	
++	/**
++	 * Assume the transient instance is newly instantiated if the version
++	 * is null.
++	 */
++	public static final VersionValue VERSION_SAVE_NULL = new VersionValue() {
++		public final Boolean isUnsaved(Object version) {
++			log.trace("version unsaved-value strategy NULL");
++			return Boolean.valueOf(version==null);
++		}
++	};
++	
++	/**
++	 * Assume the transient instance is newly instantiated if the version
++	 * is null.
++	 */
++	public static final VersionValue VERSION_UNDEFINED = new VersionValue() {
++		public final Boolean isUnsaved(Object version) {
++			
++			log.trace("version unsaved-value strategy Undefined");
++			return null;
++		}
++	};
++	
++	/**
++	 * Assume the transient instance is newly instantiated if the version
++	 * is negative.
++	 */
++	public static final VersionValue VERSION_NEGATIVE = new VersionValue() {
++		private final Integer ZERO_INT = new Integer(0);
++		private final Long ZERO_LONG = new Long(0);
++		private final Short ZERO_SHORT = new Short((short) 0);
++		
++		public final Boolean isUnsaved(Object version) throws MappingException {
++			try {
++				//this is dirty but I don't know how to access version value otherwise
++				if (version instanceof Integer) {
++					return Boolean.valueOf(ZERO_INT.compareTo(version) > 0);
++				} else if (version instanceof Short) {
++					return Boolean.valueOf(ZERO_SHORT.compareTo(version) > 0);
++				} else if (version instanceof Long) {
++					return Boolean.valueOf(ZERO_LONG.compareTo(version) > 0);
++				}
++				throw new MappingException("unsaved-value negative can only be used with short, int and long types");
++			} catch (Exception e) {
++				if (e instanceof MappingException) {
++					throw (MappingException) e;
++				} else {
++					throw new MappingException("Could not parse version into comparable number: " + version.toString(), e);
++				}
++			}
+ 		}
+ 	};
+ 	
+Index: src/net/sf/hibernate/mapping/Property.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/mapping/Property.java,v
+retrieving revision 1.14.2.9
+diff -u -r1.14.2.9 Property.java
+--- src/net/sf/hibernate/mapping/Property.java	9 Nov 2003 23:03:42 -0000	1.14.2.9
++++ src/net/sf/hibernate/mapping/Property.java	25 Nov 2003 05:02:34 -0000
+@@ -28,6 +28,11 @@
+ 	private boolean insertable;
+ 	private String propertyAccessorName;
+ 	private java.util.Map metaAttributes;
++	/** 
++	 * identify value considered as null
++	 * Used for unsaved-value
++	 */
++	private String nullValue;
+ 	
+ 	public Property(Value value) {
+ 		this.value=value;
+@@ -202,6 +207,21 @@
+ 		return isFormula() ? 
+ 			getColumnSpan()==0 :
+ 			getValue().isValid(mapping);
++	}
++	
++	/** return the value identified as null 
++	 * @return the null value
++	 */
++	public String getNullValue() {
++		return nullValue;
++	}
++	
++	/**
++	 * Sets the nullValue.
++	 * @param nullValue The nullValue to set
++	 */
++	public void setNullValue(String nullValue) {
++		this.nullValue = nullValue;
+ 	}
+ 
+ }
+Index: src/net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.33.2.53
+diff -u -r1.33.2.53 AbstractEntityPersister.java
+--- src/net/sf/hibernate/persister/AbstractEntityPersister.java	22 Nov 2003 20:18:55 -0000	1.33.2.53
++++ src/net/sf/hibernate/persister/AbstractEntityPersister.java	25 Nov 2003 05:02:35 -0000
+@@ -146,6 +146,7 @@
+ 	private final VersionType versionType;
+ 	private final Getter versionGetter;
+ 	private final int versionProperty;
++	private final Cascades.VersionValue unsavedVersionValue;
+ 	
+ 	// other properties (for this concrete class only, not the 
+ 	// subclass closure)
+@@ -413,9 +414,13 @@
+ 	
+ 	public boolean isUnsaved(Object object) throws HibernateException {
+ 		if ( isVersioned() ) {
+-			// let this take precedence, since it works for
++			// let this take precedence if defined, since it works for
+ 			// assigned identifiers
+-			if ( getVersion(object)==null ) return true;
++			// Caution, this will take precedence to id unsaved-value assigned or other
++			Boolean result = unsavedVersionValue.isUnsaved(getVersion(object));
++			if (result != null) {
++					return result.booleanValue(); 
++			}
+ 		}
+ 		if ( hasIdentifierPropertyOrEmbeddedCompositeIdentifier() ) {
+ 			return unsavedIdentifierValue.isUnsaved( getIdentifier(object) );
+@@ -637,7 +642,7 @@
+ 				throw new MappingException("Bad identifier type: " + idType.getClass().getName() );
+ 			}
+ 			catch (Exception e) {
+-				throw new MappingException("Could not parse unsaved-value: " + unsavedValue);
++				throw new MappingException("Could not parse identifier unsaved-value: " + unsavedValue);
+ 			}
+ 		}
+ 		
+@@ -650,7 +655,7 @@
+ 			versionColumnName = null;
+ 		}
+ 		
+-		if ( model.isVersioned() ) {
++		if ( model.isVersioned() )  {
+ 			//versionPropertyName = model.getVersion().getName();
+ 			versioned = true;
+ 			versionGetter = model.getVersion().getGetter(mappedClass);
+@@ -661,6 +666,30 @@
+ 			versioned = false;
+ 			versionType = null;
+ 			versionGetter = null;
++		}
++		
++		// VERSION UNSAVED-VALUE:
++		String versionUnsavedValue = null;
++		if (model.isVersioned()) {
++			versionUnsavedValue = model.getVersion().getNullValue();
++		}
++		
++		if ( versionUnsavedValue==null || "null".equals(versionUnsavedValue) ) {
++			unsavedVersionValue = Cascades.VERSION_SAVE_NULL;
++		
++		} else if ( "undefined".equals(versionUnsavedValue) ) {
++			unsavedVersionValue=Cascades.VERSION_UNDEFINED;
++		} else if ( "negative".equals(versionUnsavedValue) ) {
++			unsavedVersionValue=Cascades.VERSION_NEGATIVE;
++			/*
++			 * used to be none and any strategies but this is kind of a non sense for version
++			 * especially for non since an 'update where' would be generated
++			 * Lot's of hack to support none ?
++			 */
++		}
++		else {
++			// this should not happend since the DTD prevent it.
++			throw new MappingException("Could not parse version unsaved-value: " + versionUnsavedValue);
+ 		}
+ 		
+ 		// PROPERTIES
+Index: src/net/sf/hibernate/type/CalendarType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/CalendarType.java,v
+retrieving revision 1.9.2.3
+diff -u -r1.9.2.3 CalendarType.java
+--- src/net/sf/hibernate/type/CalendarType.java	21 Nov 2003 16:06:40 -0000	1.9.2.3
++++ src/net/sf/hibernate/type/CalendarType.java	25 Nov 2003 05:02:35 -0000
+@@ -94,6 +94,14 @@
+ 	public Object seed() {
+ 		return Calendar.getInstance();
+ 	}
++
++	/** 
++	 * @see net.sf.hibernate.type.VersionType#stringToObject(java.lang.String)
++	 */
++	public Object stringToObject(String xml) throws Exception {
++		
++		return fromString(xml);
++	}
+ 	
+ }
+ 
+Index: src/net/sf/hibernate/type/TimestampType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/TimestampType.java,v
+retrieving revision 1.6.2.4
+diff -u -r1.6.2.4 TimestampType.java
+--- src/net/sf/hibernate/type/TimestampType.java	25 Nov 2003 01:58:04 -0000	1.6.2.4
++++ src/net/sf/hibernate/type/TimestampType.java	25 Nov 2003 05:02:35 -0000
+@@ -108,6 +108,13 @@
+ 			throw new HibernateException("could not parse XML", pe);
+ 		}
+ 	}
++	/**
++	 * @see net.sf.hibernate.type.VersionType#stringToObject(java.lang.String)
++	 */
++	public Object stringToObject(String xml) throws Exception {
++		
++		return fromString(xml);
++	}
+ 
+ 	
+ }
+Index: src/net/sf/hibernate/type/VersionType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/VersionType.java,v
+retrieving revision 1.4
+diff -u -r1.4 VersionType.java
+--- src/net/sf/hibernate/type/VersionType.java	25 Apr 2003 03:40:37 -0000	1.4
++++ src/net/sf/hibernate/type/VersionType.java	25 Nov 2003 05:02:35 -0000
+@@ -16,6 +16,15 @@
+ 	 * @return an instance of the type
+ 	 */
+ 	public Object next(Object current);
++	
++	
++	/**
++	 * Convert the value from the mapping file to a Java object.
++	 * @param xml the value of <tt>discriminator-value</tt> or <tt>unsaved-value</tt> attribute
++	 * @return Object
++	 * @throws Exception
++	 */
++	public Object stringToObject(String xml) throws Exception;
+ }
+ 
+ 
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/Attic/AllTests.java,v
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 AllTests.java
+--- test/org/hibernate/test/AllTests.java	8 Nov 2003 09:17:42 -0000	1.1.2.1
++++ test/org/hibernate/test/AllTests.java	25 Nov 2003 05:02:35 -0000
+@@ -1,34 +1,35 @@
+-//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
+-package org.hibernate.test;
+-
+-import junit.framework.Test;
+-import junit.framework.TestSuite;
+-import junit.textui.TestRunner;
+-
+-/**
+- * @author Gavin King
+- */
+-public class AllTests {
+-	
+-	public static Test suite() {
+-
+-		TestSuite suite = new TestSuite();
+-
+-		suite.addTest( FooBarTest.suite() );
+-		suite.addTest( FumTest.suite() );
+-		suite.addTest( MasterDetailTest.suite() );
+-		suite.addTest( ParentChildTest.suite() );
+-		suite.addTest( ABCTest.suite() );
+-		suite.addTest( ABCProxyTest.suite() );
+-		suite.addTest( SQLFunctionsTest.suite() );
+-		suite.addTest( SQLLoaderTest.suite() );
+-		suite.addTest( ODMGTest.suite() );
+-		suite.addTest( MultiTableTest.suite() );
+-		
+-		return suite;
+-	}
+-
+-	public static void main(String args[]) {
+-		TestRunner.run( suite() );
+-	}
+-}
++//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
++package org.hibernate.test;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++
++/**
++ * @author Gavin King
++ */
++public class AllTests {
++	
++	public static Test suite() {
++
++		TestSuite suite = new TestSuite();
++
++		suite.addTest( FooBarTest.suite() );
++		suite.addTest( FumTest.suite() );
++		suite.addTest( MasterDetailTest.suite() );
++		suite.addTest( ParentChildTest.suite() );
++		suite.addTest( ABCTest.suite() );
++		suite.addTest( ABCProxyTest.suite() );
++		suite.addTest( SQLFunctionsTest.suite() );
++		suite.addTest( SQLLoaderTest.suite() );
++		suite.addTest( ODMGTest.suite() );
++		suite.addTest( MultiTableTest.suite() );
++		suite.addTest( VersionTest.suite() );
++		
++		return suite;
++	}
++
++	public static void main(String args[]) {
++		TestRunner.run( suite() );
++	}
++}
+Index: test/org/hibernate/test/Version.hbm.xml
+===================================================================
+RCS file: test/org/hibernate/test/Version.hbm.xml
+diff -N test/org/hibernate/test/Version.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Version.hbm.xml	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,25 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd">
++<hibernate-mapping>
++  <class name="org.hibernate.test.VersionNull">
++    <id type="integer" name="id" column="id_" unsaved-value="0">
++      <generator class="assigned"/>
++    </id>
++    <version name="version" type="integer" unsaved-value="null"/>
++    <property name="label"/>
++  </class>
++  <class name="org.hibernate.test.VersionNegative">
++    <id type="integer" name="id" column="id_" unsaved-value="0">
++      <generator class="assigned"/>
++    </id>
++    <version name="version" type="integer" unsaved-value="negative"/>
++    <property name="label"/>
++  </class>
++  <class name="org.hibernate.test.VersionUndefined">
++    <id type="integer" name="id" column="id_" unsaved-value="null">
++      <generator class="native"/>
++    </id>
++    <version name="version" type="integer" />
++    <property name="label"/>
++  </class>
++</hibernate-mapping>
+Index: test/org/hibernate/test/Version.java
+===================================================================
+RCS file: test/org/hibernate/test/Version.java
+diff -N test/org/hibernate/test/Version.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Version.java	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,39 @@
++package org.hibernate.test;
++
++/**
++ * Basic version class
++ */
++public abstract class Version {
++	private Integer id;
++	private String label;
++	
++	/**
++	 * @return
++	 */
++	public Integer getId() {
++		return id;
++	}
++
++	/**
++	 * @param integer
++	 */
++	public void setId(Integer integer) {
++		id = integer;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getLabel() {
++		return label;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setLabel(String string) {
++		label = string;
++	}
++
++}
++
+Index: test/org/hibernate/test/VersionNegative.java
+===================================================================
+RCS file: test/org/hibernate/test/VersionNegative.java
+diff -N test/org/hibernate/test/VersionNegative.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/VersionNegative.java	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,28 @@
++package org.hibernate.test;
++
++/**
++ * Version with unsaved-value=negative
++ */
++public class VersionNegative extends Version {
++	private int version;
++	
++	/** constructor */
++	public VersionNegative() {
++		version = -1;
++	}
++	
++	/**
++	 * @return
++	 */
++	public int getVersion() {
++		return version;
++	}
++
++	/**
++	 * @param i
++	 */
++	public void setVersion(int i) {
++		version = i;
++	}
++
++}
+Index: test/org/hibernate/test/VersionNull.java
+===================================================================
+RCS file: test/org/hibernate/test/VersionNull.java
+diff -N test/org/hibernate/test/VersionNull.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/VersionNull.java	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,23 @@
++package org.hibernate.test;
++
++/**
++ * Version with unsaved-value=null
++ */
++public class VersionNull extends Version {
++	private Integer version;
++	
++	/**
++	 * @return
++	 */
++	public Integer getVersion() {
++		return version;
++	}
++
++	/**
++	 * @param integer
++	 */
++	public void setVersion(Integer integer) {
++		version = integer;
++	}
++
++}
+Index: test/org/hibernate/test/VersionTest.java
+===================================================================
+RCS file: test/org/hibernate/test/VersionTest.java
+diff -N test/org/hibernate/test/VersionTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/VersionTest.java	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,148 @@
++package org.hibernate.test;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++import net.sf.hibernate.Session;
++import net.sf.hibernate.StaleObjectStateException;
++import net.sf.hibernate.Transaction;
++
++/**
++ * @author ebernard
++ */
++public class VersionTest extends TestCase {
++	
++	/**
++	 * @param x
++	 */
++	public VersionTest(String x) {
++		super(x);
++	}
++
++	/** 
++	 * @see org.hibernate.test.TestCase#getMappings()
++	 */
++	protected String[] getMappings() {
++		return new String[] {
++			"Version.hbm.xml"
++		};
++	}
++	
++	public static Test suite() {
++		return new TestSuite(VersionTest.class);
++	}
++	
++	public static void main(String[] args) throws Exception {
++		TestRunner.run( suite() );
++	}
++	
++	public void testUnsavedNegative() throws Exception {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		VersionNegative vn = new VersionNegative();
++		vn.setId(new Integer(1)); //not unsaved-value => should update wo version
++		vn.setVersion(-1);
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn); //should save
++			s.flush();
++		} catch (Exception e) {
++			fail("Should not fail since version is 0 and object not in DB" + e);
++		}
++		
++		vn = new VersionNegative();
++		vn.setId(new Integer(0));
++		s.saveOrUpdate(vn);
++		t.commit();
++		s.close();
++		
++		s = openSession();
++		t = s.beginTransaction();
++		vn = new VersionNegative();
++		vn.setId(new Integer(0)); //unsaved-value => should save wo version
++		vn.setVersion(4);
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn);
++			t.commit();
++		} catch (StaleObjectStateException e) {
++			//success
++		} catch (Exception e) {
++			fail("Should not fail since version is != 0 and object in DB");
++		}
++		s.close();
++	}
++	
++	public void testUnsavedNull() throws Exception {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		VersionNull vn = new VersionNull();
++		vn.setId(new Integer(1)); //not unsaved-value => should update wo version
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn); //should save
++			s.flush();
++		} catch (Exception e) {
++			fail("Should not fail since version is null and object not in DB");
++		}
++		
++		vn = new VersionNull();
++		vn.setId(new Integer(0));
++		s.saveOrUpdate(vn);
++		t.commit();
++		s.close();
++		
++		s = openSession();
++		t = s.beginTransaction();
++		vn = new VersionNull();
++		vn.setId(new Integer(0)); //unsaved-value => should save wo version
++		vn.setVersion(new Integer(4));
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn);
++			t.commit();
++		} catch (StaleObjectStateException e) {
++			//success
++		} catch (Exception e) {
++			fail("Should not fail since version is not null and object in DB");
++		}
++		s.close();
++	}
++	
++	
++	
++	public void testUnsavedUndefined() throws Exception {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		VersionUndefined vn = new VersionUndefined();
++		// //unsaved-value => should save wo version
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn); //should save
++			s.flush();
++		} catch (Exception e) {
++			fail("Should not fail since unsaved-value of id should save ans object not in DB");
++		}
++		
++		t.commit();
++		s.close();
++		
++		s = openSession();
++		t = s.beginTransaction();
++		vn = new VersionUndefined();
++		vn.setId(new Integer(1)); // not unsaved-value => should update wo version
++		vn.setVersion(new Integer(4));
++		vn.setLabel("test");
++		try {
++			s.saveOrUpdate(vn);
++			t.commit();
++		} catch (StaleObjectStateException e) {
++			//success
++		} catch (Exception e) {
++			fail("Should not fail since id not to unsaved value and object in DB");
++		}
++		s.close();
++	}
++	
++	
++}
+Index: test/org/hibernate/test/VersionUndefined.java
+===================================================================
+RCS file: test/org/hibernate/test/VersionUndefined.java
+diff -N test/org/hibernate/test/VersionUndefined.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/VersionUndefined.java	25 Nov 2003 05:02:36 -0000
+@@ -0,0 +1,23 @@
++package org.hibernate.test;
++
++/**
++ * Version wo unsaved-value
++ */
++public class VersionUndefined extends Version {
++	public Integer version;
++	
++	/**
++	 * @return
++	 */
++	public Integer getVersion() {
++		return version;
++	}
++
++	/**
++	 * @param integer
++	 */
++	public void setVersion(Integer integer) {
++		version = integer;
++	}
++
++}

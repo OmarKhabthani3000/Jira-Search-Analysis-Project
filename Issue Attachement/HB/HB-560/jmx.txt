@@ -1,0 +1,173 @@
+Index: HibernateService.java
+===================================================================
+retrieving revision 1.1
+diff -u -r1.1 HibernateService.java
+--- HibernateService.java	17 Dec 2003 12:46:00 -0000	1.1
++++ HibernateService.java	17 Dec 2003 13:45:01 -0000
+@@ -1,9 +1,10 @@
+-//$Id: HibernateService.java,v 1.1 2003/12/17 12:46:00 drai Exp $
++//$Id: HibernateService.java,v 1.9.2.2 2003/12/05 02:45:54 oneovthafew Exp $
+ package net.sf.hibernate.jmx;
+ 
+ import java.util.Properties;
+ 
+ import javax.naming.InitialContext;
++import javax.naming.NamingException;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -12,6 +13,7 @@
+ import net.sf.hibernate.SessionFactory;
+ import net.sf.hibernate.cfg.Configuration;
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.metadata.ClassMetadata;
+ import net.sf.hibernate.util.NamingHelper;
+ import net.sf.hibernate.util.PropertiesHelper;
+ 
+@@ -32,6 +34,7 @@
+ 	private String mapResources;
+ 	private String boundName;
+ 	private Properties properties = new Properties();
++	private SessionFactory sessionFactory = null;
+ 	
+ 	/**
+ 	 * The name of the current bean
+@@ -151,11 +154,16 @@
+ 		}
+ 	}
+ 	
++	private SessionFactory getSessionFactory() throws NamingException {
++	    InitialContext context = NamingHelper.getInitialContext( getProperties() );
++	    return ( (SessionFactory) context.lookup(boundName) );
++	}
++	
+ 	public void stop() {
+ 		log.info("stopping service");
++		sessionFactory = null;
+ 		try {
+-			InitialContext context = NamingHelper.getInitialContext( getProperties() );
+-			( (SessionFactory) context.lookup(boundName) ).close();
++			getSessionFactory().close();
+ 			//context.unbind(boundName);
+ 		}
+ 		catch (Exception e) {
+@@ -176,6 +184,27 @@
+ 		return cfg.buildSessionFactory();
+ 	}
+ 	
++	public void evictClass(String className) throws Exception {
++	    Class clazz = Class.forName(className);
++	    getSessionFactory().evict(clazz);
++	    log.info( "class evicted: " + className );
++	}
++	
++	public void evictCollection(String roleName) throws Exception {
++	    getSessionFactory().evictCollection(roleName);
++	    log.info( "collection evicted: " + roleName );
++	   }
++	
++	public void evictQueries() throws Exception {
++	    getSessionFactory().evictQueries();
++	    log.info( "queries evicted" );
++	}
++	
++	public void evictQueries(String cacheRegion) throws Exception {
++	    getSessionFactory().evictQueries(cacheRegion);
++	    log.info( "queries evicted: " + cacheRegion );
++	}
++	
+ 	public String getTransactionStrategy() {
+ 		return getProperty(Environment.TRANSACTION_STRATEGY);
+ 	}
+@@ -218,6 +247,10 @@
+ 	public String getCacheProvider() {
+ 		return getProperty(Environment.CACHE_PROVIDER);
+ 	}
++	
++	public String getCacheRegionPrefix() {
++	    return getProperty(Environment.CACHE_REGION_PREFIX);
++	}
+ 
+ 	public String getDefaultSchema() {
+ 		return getProperty(Environment.DEFAULT_SCHEMA);
+@@ -246,6 +279,10 @@
+ 	public void setCacheProvider(String cacheProvider) {
+ 		setProperty(Environment.CACHE_PROVIDER, cacheProvider);
+ 	}
++	
++	public void setCacheRegionPrefix(String cacheRegionPrefix) {
++	    setProperty(Environment.CACHE_REGION_PREFIX, cacheRegionPrefix);
++	}
+ 
+ 	public void setDefaultSchema(String schema) {
+ 		setProperty(Environment.DEFAULT_SCHEMA, schema);
+@@ -270,7 +307,7 @@
+ 	public void setQuerySubstitutions(String substitutions) {
+ 		setProperty(Environment.QUERY_SUBSTITUTIONS, substitutions);
+ 	}
+-
++	
+ }
+ 
+ 
+Index: HibernateServiceMBean.java
+===================================================================
+retrieving revision 1.1
+diff -u -r1.1 HibernateServiceMBean.java
+--- HibernateServiceMBean.java	17 Dec 2003 12:46:00 -0000	1.1
++++ HibernateServiceMBean.java	17 Dec 2003 13:45:01 -0000
+@@ -1,4 +1,4 @@
+-//$Id: HibernateServiceMBean.java,v 1.1 2003/12/17 12:46:00 drai Exp $
++//$Id: HibernateServiceMBean.java,v 1.5.2.3 2003/12/05 02:45:54 oneovthafew Exp $
+ package net.sf.hibernate.jmx;
+ 
+ import net.sf.hibernate.HibernateException;
+@@ -188,6 +188,14 @@
+ 	 */
+ 	public String getCacheProvider();
+ 	/**
++	 * Set the cache region name prefix
++	 */
++	public void setCacheRegionPrefix(String cacheRegionPrefix);
++	/**
++	 * Get the cache region name prefix
++	 */
++	public String getCacheRegionPrefix();
++	/**
+ 	 * Enable/disable the query cache
+ 	 */
+ 	public void setUseQueryCache(boolean enabled);
+@@ -233,6 +241,33 @@
+ 	 * Unbind the <tt>SessionFactory</tt> or stub from JNDI
+ 	 */
+ 	public void stop();
++	
++	/**
++	 * Call the <tt>SessionFactory</tt> evict for the class name
++	 * @param className
++	 * @throws Exception
++	 */
++	public void evictClass(String className) throws Exception;
++	
++	/**
++	 * Call the <tt>SessionFactory</tt> evict for the collection role name
++	 * @param roleName
++	 * @throws Exception
++	 */
++	public void evictCollection(String roleName) throws Exception;
++	
++	/**
++	 * Call the <tt>SessionFactory</tt> evict for the queries
++	 * @throws Exception
++	 */
++	public void evictQueries() throws Exception;
++	
++	/**
++	 * Call the <tt>SessionFactory</tt> evict for the queries region name
++	 * @param cacheRegion
++	 * @throws Exception
++	 */
++	public void evictQueries(String cacheRegion) throws Exception;
+ 	
+ }
+ 

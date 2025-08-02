@@ -1,0 +1,370 @@
+--- SQL ---
+create table header (id int, record int, entered date, source varchar(20), fullname varchar(30));
+create table detail (id int, record int, data varchar(255), amount numeric(5,2));
+
+insert into header values (1, 1000, '6/29/2007', 'SYSTEM-2', 'Buford Beauregard');
+insert into detail values (1, 1000, 'foo', 34.34);
+insert into detail values (2, 1000, 'foo', 34.34);
+insert into detail values (3, 1000, 'foo2', 54.64);
+insert into detail values (4, 1000, 'foo5', 4.36);
+insert into detail values (5, 1000, 'foo8', 1.14);
+
+--- CODE ---
+package com.briceg.foo;
+
+import java.util.*;
+
+import org.apache.log4j.*;
+import org.dom4j.*;
+import org.hibernate.*;
+
+public class XMLTest
+{
+   private static Logger log = Logger.getLogger(XMLTest.class);
+   public static void main(String[] args)
+   {
+      Session session = HibernateUtil.currentSession();
+      Session dom4jSession = session.getSession(EntityMode.DOM4J);
+      
+      Transaction tx = session.beginTransaction();
+
+      List results = dom4jSession
+          .createQuery("from Header").list();
+      for ( int i=0; i<results.size(); i++ ) {
+          log.info("XML[" + ((Element)results.get(i)).asXML() + "]");
+      }
+      
+      tx.commit();
+      session.close();
+   
+   }
+}
+
+--- CONFIG ---
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping PUBLIC
+    "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+    "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
+<hibernate-mapping>
+	<class entity-name="Header" table="header" node="recordInfo">
+		<id name="id" type="long" column="id" node="id" />
+		<property name="entered" type="date"/>
+		<property name="source"  type="string"/>
+		<property name="fullname" type="string"/>				
+		<property name="record" type="long"/>
+	    <set name="details" node="details" embed-xml="true" >
+	        <key column="record" property-ref="record"/>
+        	<one-to-many entity-name="Details" embed-xml="true" node="detail"/>
+	    </set>
+	</class>
+</hibernate-mapping>
+
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping PUBLIC
+    "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+    "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
+
+
+<hibernate-mapping>
+	<class entity-name="Details" table="detail" node="detail">
+		<id name="id" type="long" column="id" node="id" />
+		<property name="data" node="data" type="string" />
+		<property name="amount" node="amount" type="string"/>
+	</class>
+</hibernate-mapping>
+
+
+--- STACK TRACE ---
+2007-06-30 19:54:39,577 [main] ERROR org.hibernate.AssertionFailure - an assertion failure occured (this may indicate a bug in Hibernate, but is more likely due to unsafe use of the session)
+org.hibernate.AssertionFailure: null owner
+	at org.hibernate.collection.PersistentElementHolder.<init>(PersistentElementHolder.java:61)
+	at org.hibernate.type.SetType.instantiate(SetType.java:23)
+	at org.hibernate.type.CollectionType.getCollection(CollectionType.java:572)
+	at org.hibernate.type.CollectionType.resolveKey(CollectionType.java:375)
+	at org.hibernate.type.CollectionType.resolve(CollectionType.java:368)
+	at org.hibernate.engine.TwoPhaseLoad.initializeEntity(TwoPhaseLoad.java:116)
+	at org.hibernate.loader.Loader.initializeEntitiesAndCollections(Loader.java:854)
+	at org.hibernate.loader.Loader.doQuery(Loader.java:729)
+	at org.hibernate.loader.Loader.doQueryAndInitializeNonLazyCollections(Loader.java:236)
+	at org.hibernate.loader.Loader.doList(Loader.java:2220)
+	at org.hibernate.loader.Loader.listIgnoreQueryCache(Loader.java:2104)
+	at org.hibernate.loader.Loader.list(Loader.java:2099)
+	at org.hibernate.loader.hql.QueryLoader.list(QueryLoader.java:378)
+	at org.hibernate.hql.ast.QueryTranslatorImpl.list(QueryTranslatorImpl.java:338)
+	at org.hibernate.engine.query.HQLQueryPlan.performList(HQLQueryPlan.java:172)
+	at org.hibernate.impl.SessionImpl.list(SessionImpl.java:1121)
+	at org.hibernate.impl.QueryImpl.list(QueryImpl.java:79)
+	at com.briceg.foo.XMLTest.main(XMLTest.java:21)
+
+
+--- DESCRIPTION ---
+2007-06-30 20:18:18,869 [main] DEBUG org.hibernate.engine.TwoPhaseLoad - resolving associations for [Header#10001]
+2007-06-30 20:18:18,873 [main] DEBUG org.hibernate.engine.loading.LoadContexts - creating collection wrapper:[Header.details#1000]
+
+The PersistentElementHolder constructor is trying to locate the owner of the collection (EntityKey[Header#100001]) using the owner's key but the key is the property-ref value so it is not being found in the PersistenceContext as it is looking it up with EntityKey[Header#1000].
+
+--- LOG ---
+2007-06-30 20:18:16,383 [main] INFO  org.hibernate.cfg.Environment - Hibernate 3.2.4.sp1
+2007-06-30 20:18:16,389 [main] INFO  org.hibernate.cfg.Environment - hibernate.properties not found
+2007-06-30 20:18:16,393 [main] INFO  org.hibernate.cfg.Environment - Bytecode provider name : cglib
+2007-06-30 20:18:16,398 [main] INFO  org.hibernate.cfg.Environment - using JDK 1.4 java.sql.Timestamp handling
+2007-06-30 20:18:16,509 [main] INFO  org.hibernate.cfg.Configuration - configuring from resource: /hibernate.cfg.xml
+2007-06-30 20:18:16,509 [main] INFO  org.hibernate.cfg.Configuration - Configuration resource: /hibernate.cfg.xml
+2007-06-30 20:18:16,856 [main] DEBUG org.hibernate.util.DTDEntityResolver - trying to resolve system-id [http://hibernate.sourceforge.net/hibernate-configuration-3.0.dtd]
+2007-06-30 20:18:16,857 [main] DEBUG org.hibernate.util.DTDEntityResolver - recognized hibernate namespace; attempting to resolve on classpath under org/hibernate/
+2007-06-30 20:18:16,858 [main] DEBUG org.hibernate.util.DTDEntityResolver - located [http://hibernate.sourceforge.net/hibernate-configuration-3.0.dtd] in classpath
+2007-06-30 20:18:16,934 [main] DEBUG org.hibernate.cfg.Configuration - connection.driver_class=org.postgresql.Driver
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - connection.url=jdbc:postgresql://127.0.0.1:5432/playground
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - connection.username=********
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - connection.password=***********
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - connection.pool_size=1
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - dialect=org.hibernate.dialect.MySQLDialect
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - show_sql=true
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - hbm2ddl.auto=create
+2007-06-30 20:18:16,935 [main] DEBUG org.hibernate.cfg.Configuration - null<-org.dom4j.tree.DefaultAttribute@dc57db [Attribute: name resource value "Header.hbm.xml"]
+2007-06-30 20:18:16,935 [main] INFO  org.hibernate.cfg.Configuration - Reading mappings from resource : Header.hbm.xml
+2007-06-30 20:18:16,937 [main] DEBUG org.hibernate.util.DTDEntityResolver - trying to resolve system-id [http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd]
+2007-06-30 20:18:16,937 [main] DEBUG org.hibernate.util.DTDEntityResolver - recognized hibernate namespace; attempting to resolve on classpath under org/hibernate/
+2007-06-30 20:18:16,937 [main] DEBUG org.hibernate.util.DTDEntityResolver - located [http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd] in classpath
+2007-06-30 20:18:17,212 [main] INFO  org.hibernate.cfg.HbmBinder - Mapping class: Header -> header
+2007-06-30 20:18:17,225 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: id -> id
+2007-06-30 20:18:17,238 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: entered -> entered
+2007-06-30 20:18:17,239 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: source -> source
+2007-06-30 20:18:17,239 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: fullname -> fullname
+2007-06-30 20:18:17,239 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: record -> record
+2007-06-30 20:18:17,245 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: details
+2007-06-30 20:18:17,246 [main] DEBUG org.hibernate.cfg.Configuration - null<-org.dom4j.tree.DefaultAttribute@105d88a [Attribute: name resource value "HeaderDetail.hbm.xml"]
+2007-06-30 20:18:17,246 [main] INFO  org.hibernate.cfg.Configuration - Reading mappings from resource : HeaderDetail.hbm.xml
+2007-06-30 20:18:17,248 [main] DEBUG org.hibernate.util.DTDEntityResolver - trying to resolve system-id [http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd]
+2007-06-30 20:18:17,248 [main] DEBUG org.hibernate.util.DTDEntityResolver - recognized hibernate namespace; attempting to resolve on classpath under org/hibernate/
+2007-06-30 20:18:17,249 [main] DEBUG org.hibernate.util.DTDEntityResolver - located [http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd] in classpath
+2007-06-30 20:18:17,299 [main] INFO  org.hibernate.cfg.HbmBinder - Mapping class: Details -> detail
+2007-06-30 20:18:17,300 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: id -> id
+2007-06-30 20:18:17,301 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: data -> data
+2007-06-30 20:18:17,301 [main] DEBUG org.hibernate.cfg.HbmBinder - Mapped property: amount -> amount
+2007-06-30 20:18:17,301 [main] INFO  org.hibernate.cfg.Configuration - Configured SessionFactory: null
+2007-06-30 20:18:17,302 [main] DEBUG org.hibernate.cfg.Configuration - properties: {hibernate.connection.password=**********, java.runtime.name=Java(TM) 2 Runtime Environment, Standard Edition, sun.boot.library.path=/opt/jdk1.5.0_10/jre/lib/i386, java.vm.version=1.5.0_10-b03, hibernate.connection.username=brice, java.vm.vendor=Sun Microsystems Inc., java.vendor.url=http://java.sun.com/, path.separator=:, java.vm.name=Java HotSpot(TM) Client VM, file.encoding.pkg=sun.io, user.country=US, sun.os.patch.level=unknown, java.vm.specification.name=Java Virtual Machine Specification, user.dir=/home/brice/workspace3.1/HibernatePlayground, java.runtime.version=1.5.0_10-b03, java.awt.graphicsenv=sun.awt.X11GraphicsEnvironment, hbm2ddl.auto=create, java.endorsed.dirs=/opt/jdk1.5.0_10/jre/lib/endorsed, os.arch=i386, java.io.tmpdir=/tmp, line.separator=
+, java.vm.specification.vendor=Sun Microsystems Inc., os.name=Linux, sun.jnu.encoding=UTF-8, java.library.path=/opt/jdk1.5.0_10/jre/lib/i386/client:/opt/jdk1.5.0_10/jre/lib/i386:/opt/jdk1.5.0_10/jre/../lib/i386:/usr/lib/firefox-1.5.0.10, java.specification.name=Java Platform API Specification, java.class.version=49.0, hibernate.connection.pool_size=1, sun.management.compiler=HotSpot Client Compiler, os.version=2.6.19-1.2911.fc6, connection.password=**********, user.home=/home/brice, user.timezone=America/Indiana/Indianapolis, connection.username=brice, java.awt.printerjob=sun.print.PSPrinterJob, file.encoding=UTF-8, java.specification.version=1.5, hibernate.connection.driver_class=org.postgresql.Driver, show_sql=true, user.name=brice, java.class.path=/home/brice/workspace3.1/HibernatePlayground/build/classes:/home/brice/workspace3.1/HibernatePlayground/lib/antlr-2.7.5H3.jar:/home/brice/workspace3.1/HibernatePlayground/lib/asm.jar:/home/brice/workspace3.1/HibernatePlayground/lib/asm-attrs.jar:/home/brice/workspace3.1/HibernatePlayground/lib/cglib-2.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/commons-collections-2.1.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/commons-logging-1.0.4.jar:/home/brice/workspace3.1/HibernatePlayground/lib/dom4j-1.6.jar:/home/brice/workspace3.1/HibernatePlayground/lib/ehcache-1.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/jta.jar:/home/brice/workspace3.1/HibernatePlayground/lib/log4j-1.2.9.jar:/opt/jars/postgresql-8.1-404.jdbc3.jar:/home/brice/workspace3.1/Hibernate3.2/build/classes:/home/brice/downloads/hibernate-3.2/lib/asm.jar:/home/brice/downloads/hibernate-3.2/lib/asm-attrs.jar:/home/brice/downloads/hibernate-3.2/lib/cglib-2.1.3.jar:/home/brice/downloads/hibernate-3.2/lib/commons-collections-2.1.1.jar:/home/brice/downloads/hibernate-3.2/lib/commons-logging-1.0.4.jar:/home/brice/downloads/hibernate-3.2/lib/concurrent-1.3.2.jar:/home/brice/downloads/hibernate-3.2/lib/dom4j-1.6.1.jar:/home/brice/downloads/hibernate-3.2/lib/javassist.jar:/home/brice/downloads/hibernate-3.2/lib/jta.jar:/home/brice/downloads/hibernate-3.2/lib/antlr-2.7.6.jar:/home/brice/downloads/hibernate-3.2/lib/jacc-1_0-fr.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-common.jar:/home/brice/downloads/hibernate-3.2/lib/log4j-1.2.11.jar:/home/brice/downloads/hibernate-3.2/lib/proxool-0.8.3.jar:/home/brice/downloads/hibernate-3.2/lib/syndiag2.jar:/home/brice/downloads/hibernate-3.2/lib/ant-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-antlr-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-junit-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-launcher-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-swing-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/c3p0-0.9.1.jar:/home/brice/downloads/hibernate-3.2/lib/checkstyle-all.jar:/home/brice/downloads/hibernate-3.2/lib/cleanimports.jar:/home/brice/downloads/hibernate-3.2/lib/connector.jar:/home/brice/downloads/hibernate-3.2/lib/ehcache-1.2.3.jar:/home/brice/downloads/hibernate-3.2/lib/jaas.jar:/home/brice/downloads/hibernate-3.2/lib/jaxen-1.1-beta-7.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-cache.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-jmx.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-system.jar:/home/brice/downloads/hibernate-3.2/lib/jdbc2_0-stdext.jar:/home/brice/downloads/hibernate-3.2/lib/jgroups-2.2.8.jar:/home/brice/downloads/hibernate-3.2/lib/junit-3.8.1.jar:/home/brice/downloads/hibernate-3.2/lib/oscache-2.1.jar:/home/brice/downloads/hibernate-3.2/lib/swarmcache-1.0rc2.jar:/home/brice/downloads/hibernate-3.2/lib/versioncheck.jar:/home/brice/downloads/hibernate-3.2/lib/xerces-2.6.2.jar:/home/brice/downloads/hibernate-3.2/lib/xml-apis.jar:/home/brice/downloads/hibernate-3.2/exploded/antlr-hib.jar, hibernate.bytecode.use_reflection_optimizer=false, hibernate.show_sql=true, java.vm.specification.version=1.0, java.home=/opt/jdk1.5.0_10/jre, sun.arch.data.model=32, hibernate.dialect=org.hibernate.dialect.MySQLDialect, hibernate.connection.url=jdbc:postgresql://127.0.0.1:5432/playground, connection.pool_size=1, user.language=en, java.specification.vendor=Sun Microsystems Inc., java.vm.info=mixed mode, java.version=1.5.0_10, java.ext.dirs=/opt/jdk1.5.0_10/jre/lib/ext, sun.boot.class.path=/opt/jdk1.5.0_10/jre/lib/rt.jar:/opt/jdk1.5.0_10/jre/lib/i18n.jar:/opt/jdk1.5.0_10/jre/lib/sunrsasign.jar:/opt/jdk1.5.0_10/jre/lib/jsse.jar:/opt/jdk1.5.0_10/jre/lib/jce.jar:/opt/jdk1.5.0_10/jre/lib/charsets.jar:/opt/jdk1.5.0_10/jre/classes, java.vendor=Sun Microsystems Inc., connection.driver_class=org.postgresql.Driver, file.separator=/, hibernate.hbm2ddl.auto=create, java.vendor.url.bug=http://java.sun.com/cgi-bin/bugreport.cgi, sun.io.unicode.encoding=UnicodeLittle, sun.cpu.endian=little, sun.desktop=gnome, connection.url=jdbc:postgresql://127.0.0.1:5432/playground, dialect=org.hibernate.dialect.MySQLDialect, sun.cpu.isalist=}
+2007-06-30 20:18:17,302 [main] DEBUG org.hibernate.cfg.Configuration - Preparing to build session factory with filters : {}
+2007-06-30 20:18:17,302 [main] DEBUG org.hibernate.cfg.Configuration - processing extends queue
+2007-06-30 20:18:17,303 [main] DEBUG org.hibernate.cfg.Configuration - processing collection mappings
+2007-06-30 20:18:17,303 [main] DEBUG org.hibernate.cfg.CollectionSecondPass - Second pass for collection: Header.details
+2007-06-30 20:18:17,303 [main] INFO  org.hibernate.cfg.HbmBinder - Mapping collection: Header.details -> detail
+2007-06-30 20:18:17,304 [main] DEBUG org.hibernate.cfg.CollectionSecondPass - Mapped collection key: record, one-to-many: Details
+2007-06-30 20:18:17,304 [main] DEBUG org.hibernate.cfg.Configuration - processing native query and ResultSetMapping mappings
+2007-06-30 20:18:17,305 [main] DEBUG org.hibernate.cfg.Configuration - processing association property references
+2007-06-30 20:18:17,305 [main] DEBUG org.hibernate.cfg.Configuration - processing foreign key constraints
+2007-06-30 20:18:17,524 [main] INFO  org.hibernate.connection.DriverManagerConnectionProvider - Using Hibernate built-in connection pool (not for production use!)
+2007-06-30 20:18:17,524 [main] INFO  org.hibernate.connection.DriverManagerConnectionProvider - Hibernate connection pool size: 1
+2007-06-30 20:18:17,524 [main] INFO  org.hibernate.connection.DriverManagerConnectionProvider - autocommit mode: false
+2007-06-30 20:18:17,530 [main] INFO  org.hibernate.connection.DriverManagerConnectionProvider - using driver: org.postgresql.Driver at URL: jdbc:postgresql://127.0.0.1:5432/playground
+2007-06-30 20:18:17,530 [main] INFO  org.hibernate.connection.DriverManagerConnectionProvider - connection properties: ****************************
+2007-06-30 20:18:17,530 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - total checked-out connections: 0
+2007-06-30 20:18:17,530 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - opening new JDBC connection
+2007-06-30 20:18:17,708 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - created connection to: jdbc:postgresql://127.0.0.1:5432/playground, Isolation Level: 2
+2007-06-30 20:18:17,727 [main] INFO  org.hibernate.cfg.SettingsFactory - RDBMS: PostgreSQL, version: 8.1.9
+2007-06-30 20:18:17,728 [main] INFO  org.hibernate.cfg.SettingsFactory - JDBC driver: PostgreSQL Native Driver, version: PostgreSQL 8.1 JDBC3 with SSL (build 404)
+2007-06-30 20:18:17,728 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - returning connection to pool, pool size: 1
+2007-06-30 20:18:17,752 [main] INFO  org.hibernate.dialect.Dialect - Using dialect: org.hibernate.dialect.MySQLDialect
+2007-06-30 20:18:17,758 [main] INFO  org.hibernate.transaction.TransactionFactoryFactory - Using default transaction strategy (direct JDBC transactions)
+2007-06-30 20:18:17,767 [main] INFO  org.hibernate.transaction.TransactionManagerLookupFactory - No TransactionManagerLookup configured (in JTA environment, use of read-write or transactional second-level cache is not recommended)
+2007-06-30 20:18:17,768 [main] INFO  org.hibernate.cfg.SettingsFactory - Automatic flush during beforeCompletion(): disabled
+2007-06-30 20:18:17,768 [main] INFO  org.hibernate.cfg.SettingsFactory - Automatic session close at end of transaction: disabled
+2007-06-30 20:18:17,768 [main] INFO  org.hibernate.cfg.SettingsFactory - JDBC batch size: 15
+2007-06-30 20:18:17,768 [main] INFO  org.hibernate.cfg.SettingsFactory - JDBC batch updates for versioned data: disabled
+2007-06-30 20:18:17,769 [main] INFO  org.hibernate.cfg.SettingsFactory - Scrollable result sets: enabled
+2007-06-30 20:18:17,769 [main] DEBUG org.hibernate.cfg.SettingsFactory - Wrap result sets: disabled
+2007-06-30 20:18:17,769 [main] INFO  org.hibernate.cfg.SettingsFactory - JDBC3 getGeneratedKeys(): disabled
+2007-06-30 20:18:17,769 [main] INFO  org.hibernate.cfg.SettingsFactory - Connection release mode: auto
+2007-06-30 20:18:17,770 [main] INFO  org.hibernate.cfg.SettingsFactory - Maximum outer join fetch depth: 2
+2007-06-30 20:18:17,770 [main] INFO  org.hibernate.cfg.SettingsFactory - Default batch fetch size: 1
+2007-06-30 20:18:17,770 [main] INFO  org.hibernate.cfg.SettingsFactory - Generate SQL with comments: disabled
+2007-06-30 20:18:17,770 [main] INFO  org.hibernate.cfg.SettingsFactory - Order SQL updates by primary key: disabled
+2007-06-30 20:18:17,770 [main] INFO  org.hibernate.cfg.SettingsFactory - Order SQL inserts for batching: disabled
+2007-06-30 20:18:17,771 [main] INFO  org.hibernate.cfg.SettingsFactory - Query translator: org.hibernate.hql.ast.ASTQueryTranslatorFactory
+2007-06-30 20:18:17,773 [main] INFO  org.hibernate.hql.ast.ASTQueryTranslatorFactory - Using ASTQueryTranslatorFactory
+2007-06-30 20:18:17,773 [main] INFO  org.hibernate.cfg.SettingsFactory - Query language substitutions: {}
+2007-06-30 20:18:17,773 [main] INFO  org.hibernate.cfg.SettingsFactory - JPA-QL strict compliance: disabled
+2007-06-30 20:18:17,773 [main] INFO  org.hibernate.cfg.SettingsFactory - Second-level cache: enabled
+2007-06-30 20:18:17,773 [main] INFO  org.hibernate.cfg.SettingsFactory - Query cache: disabled
+2007-06-30 20:18:17,774 [main] INFO  org.hibernate.cfg.SettingsFactory - Cache provider: org.hibernate.cache.NoCacheProvider
+2007-06-30 20:18:17,775 [main] INFO  org.hibernate.cfg.SettingsFactory - Optimize cache for minimal puts: disabled
+2007-06-30 20:18:17,775 [main] INFO  org.hibernate.cfg.SettingsFactory - Structured second-level cache entries: disabled
+2007-06-30 20:18:17,777 [main] DEBUG org.hibernate.exception.SQLExceptionConverterFactory - Using dialect defined converter
+2007-06-30 20:18:17,782 [main] INFO  org.hibernate.cfg.SettingsFactory - Echoing all SQL to stdout
+2007-06-30 20:18:17,783 [main] INFO  org.hibernate.cfg.SettingsFactory - Statistics: disabled
+2007-06-30 20:18:17,783 [main] INFO  org.hibernate.cfg.SettingsFactory - Deleted entity synthetic identifier rollback: disabled
+2007-06-30 20:18:17,783 [main] INFO  org.hibernate.cfg.SettingsFactory - Default entity-mode: pojo
+2007-06-30 20:18:17,783 [main] INFO  org.hibernate.cfg.SettingsFactory - Named query checking : enabled
+2007-06-30 20:18:17,849 [main] INFO  org.hibernate.impl.SessionFactoryImpl - building session factory
+2007-06-30 20:18:17,850 [main] DEBUG org.hibernate.impl.SessionFactoryImpl - Session factory constructed with filter configurations : {}
+2007-06-30 20:18:17,851 [main] DEBUG org.hibernate.impl.SessionFactoryImpl - instantiating session factory with properties: {java.runtime.name=Java(TM) 2 Runtime Environment, Standard Edition, hibernate.connection.password=**********, sun.boot.library.path=/opt/jdk1.5.0_10/jre/lib/i386, java.vm.version=1.5.0_10-b03, hibernate.connection.username=brice, java.vm.vendor=Sun Microsystems Inc., java.vendor.url=http://java.sun.com/, path.separator=:, java.vm.name=Java HotSpot(TM) Client VM, file.encoding.pkg=sun.io, user.country=US, sun.os.patch.level=unknown, java.vm.specification.name=Java Virtual Machine Specification, user.dir=/home/brice/workspace3.1/HibernatePlayground, java.runtime.version=1.5.0_10-b03, java.awt.graphicsenv=sun.awt.X11GraphicsEnvironment, hbm2ddl.auto=create, java.endorsed.dirs=/opt/jdk1.5.0_10/jre/lib/endorsed, os.arch=i386, java.io.tmpdir=/tmp, line.separator=
+, java.vm.specification.vendor=Sun Microsystems Inc., os.name=Linux, sun.jnu.encoding=UTF-8, java.library.path=/opt/jdk1.5.0_10/jre/lib/i386/client:/opt/jdk1.5.0_10/jre/lib/i386:/opt/jdk1.5.0_10/jre/../lib/i386:/usr/lib/firefox-1.5.0.10, java.specification.name=Java Platform API Specification, java.class.version=49.0, hibernate.connection.pool_size=1, sun.management.compiler=HotSpot Client Compiler, os.version=2.6.19-1.2911.fc6, user.home=/home/brice, connection.password=**********, user.timezone=America/Indiana/Indianapolis, java.awt.printerjob=sun.print.PSPrinterJob, connection.username=brice, java.specification.version=1.5, file.encoding=UTF-8, hibernate.connection.driver_class=org.postgresql.Driver, show_sql=true, java.class.path=/home/brice/workspace3.1/HibernatePlayground/build/classes:/home/brice/workspace3.1/HibernatePlayground/lib/antlr-2.7.5H3.jar:/home/brice/workspace3.1/HibernatePlayground/lib/asm.jar:/home/brice/workspace3.1/HibernatePlayground/lib/asm-attrs.jar:/home/brice/workspace3.1/HibernatePlayground/lib/cglib-2.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/commons-collections-2.1.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/commons-logging-1.0.4.jar:/home/brice/workspace3.1/HibernatePlayground/lib/dom4j-1.6.jar:/home/brice/workspace3.1/HibernatePlayground/lib/ehcache-1.1.jar:/home/brice/workspace3.1/HibernatePlayground/lib/jta.jar:/home/brice/workspace3.1/HibernatePlayground/lib/log4j-1.2.9.jar:/opt/jars/postgresql-8.1-404.jdbc3.jar:/home/brice/workspace3.1/Hibernate3.2/build/classes:/home/brice/downloads/hibernate-3.2/lib/asm.jar:/home/brice/downloads/hibernate-3.2/lib/asm-attrs.jar:/home/brice/downloads/hibernate-3.2/lib/cglib-2.1.3.jar:/home/brice/downloads/hibernate-3.2/lib/commons-collections-2.1.1.jar:/home/brice/downloads/hibernate-3.2/lib/commons-logging-1.0.4.jar:/home/brice/downloads/hibernate-3.2/lib/concurrent-1.3.2.jar:/home/brice/downloads/hibernate-3.2/lib/dom4j-1.6.1.jar:/home/brice/downloads/hibernate-3.2/lib/javassist.jar:/home/brice/downloads/hibernate-3.2/lib/jta.jar:/home/brice/downloads/hibernate-3.2/lib/antlr-2.7.6.jar:/home/brice/downloads/hibernate-3.2/lib/jacc-1_0-fr.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-common.jar:/home/brice/downloads/hibernate-3.2/lib/log4j-1.2.11.jar:/home/brice/downloads/hibernate-3.2/lib/proxool-0.8.3.jar:/home/brice/downloads/hibernate-3.2/lib/syndiag2.jar:/home/brice/downloads/hibernate-3.2/lib/ant-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-antlr-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-junit-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-launcher-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/ant-swing-1.6.5.jar:/home/brice/downloads/hibernate-3.2/lib/c3p0-0.9.1.jar:/home/brice/downloads/hibernate-3.2/lib/checkstyle-all.jar:/home/brice/downloads/hibernate-3.2/lib/cleanimports.jar:/home/brice/downloads/hibernate-3.2/lib/connector.jar:/home/brice/downloads/hibernate-3.2/lib/ehcache-1.2.3.jar:/home/brice/downloads/hibernate-3.2/lib/jaas.jar:/home/brice/downloads/hibernate-3.2/lib/jaxen-1.1-beta-7.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-cache.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-jmx.jar:/home/brice/downloads/hibernate-3.2/lib/jboss-system.jar:/home/brice/downloads/hibernate-3.2/lib/jdbc2_0-stdext.jar:/home/brice/downloads/hibernate-3.2/lib/jgroups-2.2.8.jar:/home/brice/downloads/hibernate-3.2/lib/junit-3.8.1.jar:/home/brice/downloads/hibernate-3.2/lib/oscache-2.1.jar:/home/brice/downloads/hibernate-3.2/lib/swarmcache-1.0rc2.jar:/home/brice/downloads/hibernate-3.2/lib/versioncheck.jar:/home/brice/downloads/hibernate-3.2/lib/xerces-2.6.2.jar:/home/brice/downloads/hibernate-3.2/lib/xml-apis.jar:/home/brice/downloads/hibernate-3.2/exploded/antlr-hib.jar, user.name=brice, hibernate.bytecode.use_reflection_optimizer=false, hibernate.show_sql=true, java.vm.specification.version=1.0, sun.arch.data.model=32, java.home=/opt/jdk1.5.0_10/jre, hibernate.connection.url=jdbc:postgresql://127.0.0.1:5432/playground, hibernate.dialect=org.hibernate.dialect.MySQLDialect, java.specification.vendor=Sun Microsystems Inc., user.language=en, connection.pool_size=1, java.vm.info=mixed mode, java.version=1.5.0_10, java.ext.dirs=/opt/jdk1.5.0_10/jre/lib/ext, sun.boot.class.path=/opt/jdk1.5.0_10/jre/lib/rt.jar:/opt/jdk1.5.0_10/jre/lib/i18n.jar:/opt/jdk1.5.0_10/jre/lib/sunrsasign.jar:/opt/jdk1.5.0_10/jre/lib/jsse.jar:/opt/jdk1.5.0_10/jre/lib/jce.jar:/opt/jdk1.5.0_10/jre/lib/charsets.jar:/opt/jdk1.5.0_10/jre/classes, java.vendor=Sun Microsystems Inc., file.separator=/, connection.driver_class=org.postgresql.Driver, java.vendor.url.bug=http://java.sun.com/cgi-bin/bugreport.cgi, hibernate.hbm2ddl.auto=create, sun.cpu.endian=little, sun.io.unicode.encoding=UnicodeLittle, sun.desktop=gnome, connection.url=jdbc:postgresql://127.0.0.1:5432/playground, sun.cpu.isalist=, dialect=org.hibernate.dialect.MySQLDialect}
+2007-06-30 20:18:18,125 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister - Static SQL for entity: Header
+2007-06-30 20:18:18,126 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Version select: select id from header where id =?
+2007-06-30 20:18:18,126 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Snapshot select: select header_.id, header_.entered as entered0_, header_.source as source0_, header_.fullname as fullname0_, header_.record as record0_ from header header_ where header_.id=?
+2007-06-30 20:18:18,126 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Insert 0: insert into header (entered, source, fullname, record, id) values (?, ?, ?, ?, ?)
+2007-06-30 20:18:18,126 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Update 0: update header set entered=?, source=?, fullname=?, record=? where id=?
+2007-06-30 20:18:18,126 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Delete 0: delete from header where id=?
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister - Static SQL for entity: Details
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Version select: select id from detail where id =?
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Snapshot select: select details_.id, details_.data as data1_, details_.amount as amount1_ from detail details_ where details_.id=?
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Insert 0: insert into detail (data, amount, id) values (?, ?, ?)
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Update 0: update detail set data=?, amount=? where id=?
+2007-06-30 20:18:18,127 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister -  Delete 0: delete from detail where id=?
+2007-06-30 20:18:18,138 [main] DEBUG org.hibernate.persister.collection.AbstractCollectionPersister - Static SQL for collection: Header.details
+2007-06-30 20:18:18,138 [main] DEBUG org.hibernate.persister.collection.AbstractCollectionPersister -  Row insert: update detail set record=? where id=?
+2007-06-30 20:18:18,138 [main] DEBUG org.hibernate.persister.collection.AbstractCollectionPersister -  Row delete: update detail set record=null where record=? and id=?
+2007-06-30 20:18:18,138 [main] DEBUG org.hibernate.persister.collection.AbstractCollectionPersister -  One-shot delete: update detail set record=null where record=?
+2007-06-30 20:18:18,172 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=?
+2007-06-30 20:18:18,172 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=?
+2007-06-30 20:18:18,173 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=? for update
+2007-06-30 20:18:18,173 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=? for update
+2007-06-30 20:18:18,173 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=? for update
+2007-06-30 20:18:18,191 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for action ACTION_MERGE on entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=?
+2007-06-30 20:18:18,191 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for action ACTION_REFRESH on entity Header: select header0_.id as id0_0_, header0_.entered as entered0_0_, header0_.source as source0_0_, header0_.fullname as fullname0_0_, header0_.record as record0_0_ from header header0_ where header0_.id=?
+2007-06-30 20:18:18,192 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=?
+2007-06-30 20:18:18,192 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=?
+2007-06-30 20:18:18,192 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=? for update
+2007-06-30 20:18:18,192 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=? for update
+2007-06-30 20:18:18,192 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=? for update
+2007-06-30 20:18:18,193 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for action ACTION_MERGE on entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=?
+2007-06-30 20:18:18,193 [main] DEBUG org.hibernate.loader.entity.EntityLoader - Static select for action ACTION_REFRESH on entity Details: select details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.id=?
+2007-06-30 20:18:18,203 [main] DEBUG org.hibernate.loader.collection.OneToManyLoader - Static select for one-to-many Header.details: select details0_.record as record1_, details0_.id as id1_, details0_.id as id1_0_, details0_.data as data1_0_, details0_.amount as amount1_0_ from detail details0_ where details0_.record=?
+2007-06-30 20:18:18,206 [main] DEBUG org.hibernate.impl.SessionFactoryObjectFactory - initializing class SessionFactoryObjectFactory
+2007-06-30 20:18:18,208 [main] DEBUG org.hibernate.impl.SessionFactoryObjectFactory - registered: ff808081137f246401137f2465db0000 (unnamed)
+2007-06-30 20:18:18,209 [main] INFO  org.hibernate.impl.SessionFactoryObjectFactory - Not binding factory to JNDI, no JNDI name configured
+2007-06-30 20:18:18,209 [main] DEBUG org.hibernate.impl.SessionFactoryImpl - instantiated session factory
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing extends queue
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing collection mappings
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing native query and ResultSetMapping mappings
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing association property references
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing foreign key constraints
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing extends queue
+2007-06-30 20:18:18,214 [main] DEBUG org.hibernate.cfg.Configuration - processing collection mappings
+2007-06-30 20:18:18,215 [main] DEBUG org.hibernate.cfg.Configuration - processing native query and ResultSetMapping mappings
+2007-06-30 20:18:18,215 [main] DEBUG org.hibernate.cfg.Configuration - processing association property references
+2007-06-30 20:18:18,216 [main] DEBUG org.hibernate.cfg.Configuration - processing foreign key constraints
+2007-06-30 20:18:18,217 [main] INFO  org.hibernate.tool.hbm2ddl.SchemaExport - Running hbm2ddl schema export
+2007-06-30 20:18:18,217 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - import file not found: /import.sql
+2007-06-30 20:18:18,217 [main] INFO  org.hibernate.tool.hbm2ddl.SchemaExport - exporting generated schema to database
+2007-06-30 20:18:18,217 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - total checked-out connections: 0
+2007-06-30 20:18:18,218 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - using pooled JDBC connection, pool size: 0
+2007-06-30 20:18:18,218 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - drop table if exists detail
+2007-06-30 20:18:18,221 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - Unsuccessful: drop table if exists detail
+2007-06-30 20:18:18,221 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - ERROR: syntax error at or near "exists"
+2007-06-30 20:18:18,222 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - drop table if exists header
+2007-06-30 20:18:18,222 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - Unsuccessful: drop table if exists header
+2007-06-30 20:18:18,222 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - ERROR: syntax error at or near "exists"
+2007-06-30 20:18:18,222 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - create table detail (id bigint not null, data varchar(255), amount varchar(255), record bigint, primary key (id))
+2007-06-30 20:18:18,223 [main] ERROR org.hibernate.tool.hbm2ddl.SchemaExport - Unsuccessful: create table detail (id bigint not null, data varchar(255), amount varchar(255), record bigint, primary key (id))
+2007-06-30 20:18:18,223 [main] ERROR org.hibernate.tool.hbm2ddl.SchemaExport - ERROR: relation "detail" already exists
+2007-06-30 20:18:18,223 [main] DEBUG org.hibernate.tool.hbm2ddl.SchemaExport - create table header (id bigint not null, entered date, source varchar(255), fullname varchar(255), record bigint, primary key (id))
+2007-06-30 20:18:18,224 [main] ERROR org.hibernate.tool.hbm2ddl.SchemaExport - Unsuccessful: create table header (id bigint not null, entered date, source varchar(255), fullname varchar(255), record bigint, primary key (id))
+2007-06-30 20:18:18,224 [main] ERROR org.hibernate.tool.hbm2ddl.SchemaExport - ERROR: relation "header" already exists
+2007-06-30 20:18:18,225 [main] INFO  org.hibernate.tool.hbm2ddl.SchemaExport - schema export complete
+2007-06-30 20:18:18,226 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - returning connection to pool, pool size: 1
+2007-06-30 20:18:18,226 [main] DEBUG org.hibernate.impl.SessionFactoryImpl - Checking 0 named HQL queries
+2007-06-30 20:18:18,226 [main] DEBUG org.hibernate.impl.SessionFactoryImpl - Checking 0 named SQL queries
+2007-06-30 20:18:18,465 [main] DEBUG org.hibernate.impl.SessionImpl - opened session at timestamp: 11832490982
+2007-06-30 20:18:18,466 [main] DEBUG org.hibernate.impl.SessionImpl - opened session [dom4j]
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.transaction.JDBCTransaction - begin
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.jdbc.ConnectionManager - opening JDBC connection
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - total checked-out connections: 0
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.connection.DriverManagerConnectionProvider - using pooled JDBC connection, pool size: 0
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.transaction.JDBCTransaction - current autocommit status: false
+2007-06-30 20:18:18,468 [main] DEBUG org.hibernate.jdbc.JDBCContext - after transaction begin
+2007-06-30 20:18:18,473 [main] DEBUG org.hibernate.engine.query.QueryPlanCache - unable to locate HQL query plan in cache; generating (from Header)
+2007-06-30 20:18:18,551 [main] DEBUG org.hibernate.hql.ast.QueryTranslatorImpl - parse() - HQL: from Header
+2007-06-30 20:18:18,569 [main] DEBUG org.hibernate.hql.ast.AST - --- HQL AST ---
+ \-[QUERY] 'query'
+    \-[SELECT_FROM] 'SELECT_FROM'
+       \-[FROM] 'from'
+          \-[RANGE] 'RANGE'
+             \-[IDENT] 'Header'
+
+2007-06-30 20:18:18,569 [main] DEBUG org.hibernate.hql.ast.ErrorCounter - throwQueryException() : no errors
+2007-06-30 20:18:18,680 [main] DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker - select << begin [level=1, statement=select]
+2007-06-30 20:18:18,699 [main] DEBUG org.hibernate.hql.ast.tree.FromElement - FromClause{level=1} :  Header (no alias) -> header0_
+2007-06-30 20:18:18,699 [main] DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker - select : finishing up [level=1, statement=select]
+2007-06-30 20:18:18,699 [main] DEBUG org.hibernate.hql.ast.HqlSqlWalker - processQuery() :  ( SELECT ( FromClause{level=1} header header0_ ) )
+2007-06-30 20:18:18,710 [main] DEBUG org.hibernate.hql.ast.HqlSqlWalker - Derived SELECT clause created.
+2007-06-30 20:18:18,721 [main] DEBUG org.hibernate.hql.ast.util.JoinProcessor - Using FROM fragment [header header0_]
+2007-06-30 20:18:18,721 [main] DEBUG org.hibernate.hql.antlr.HqlSqlBaseWalker - select >> end [level=1, statement=select]
+2007-06-30 20:18:18,726 [main] DEBUG org.hibernate.hql.ast.AST - --- SQL AST ---
+ \-[SELECT] QueryNode: 'SELECT'  querySpaces (header)
+    +-[SELECT_CLAUSE] SelectClause: '{derived select clause}'
+    |  +-[SELECT_EXPR] SelectExpressionImpl: 'header0_.id as id0_' {FromElement{explicit,not a collection join,not a fetch join,fetch non-lazy properties,classAlias=null,role=null,tableName=header,tableAlias=header0_,origin=null,colums={,className=Header}}}
+    |  \-[SQL_TOKEN] SqlFragment: 'header0_.entered as entered0_, header0_.source as source0_, header0_.fullname as fullname0_, header0_.record as record0_'
+    \-[FROM] FromClause: 'from' FromClause{level=1, fromElementCounter=1, fromElements=1, fromElementByClassAlias=[], fromElementByTableAlias=[header0_], fromElementsByPath=[], collectionJoinFromElementsByPath=[], impliedElements=[]}
+       \-[FROM_FRAGMENT] FromElement: 'header header0_' FromElement{explicit,not a collection join,not a fetch join,fetch non-lazy properties,classAlias=null,role=null,tableName=header,tableAlias=header0_,origin=null,colums={,className=Header}}
+
+2007-06-30 20:18:18,726 [main] DEBUG org.hibernate.hql.ast.ErrorCounter - throwQueryException() : no errors
+2007-06-30 20:18:18,750 [main] DEBUG org.hibernate.hql.ast.QueryTranslatorImpl - HQL: from Header
+2007-06-30 20:18:18,750 [main] DEBUG org.hibernate.hql.ast.QueryTranslatorImpl - SQL: select header0_.id as id0_, header0_.entered as entered0_, header0_.source as source0_, header0_.fullname as fullname0_, header0_.record as record0_ from header header0_
+2007-06-30 20:18:18,750 [main] DEBUG org.hibernate.hql.ast.ErrorCounter - throwQueryException() : no errors
+2007-06-30 20:18:18,757 [main] DEBUG org.hibernate.engine.query.HQLQueryPlan - HQL param location recognition took 1 mills (from Header)
+2007-06-30 20:18:18,764 [main] DEBUG org.hibernate.engine.query.QueryPlanCache - located HQL query plan in cache (from Header)
+2007-06-30 20:18:18,765 [main] DEBUG org.hibernate.engine.query.HQLQueryPlan - find: from Header
+2007-06-30 20:18:18,766 [main] DEBUG org.hibernate.engine.QueryParameters - named parameters: {}
+2007-06-30 20:18:18,773 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - about to open PreparedStatement (open PreparedStatements: 0, globally: 0)
+2007-06-30 20:18:18,773 [main] DEBUG org.hibernate.SQL - select header0_.id as id0_, header0_.entered as entered0_, header0_.source as source0_, header0_.fullname as fullname0_, header0_.record as record0_ from header header0_
+Hibernate: select header0_.id as id0_, header0_.entered as entered0_, header0_.source as source0_, header0_.fullname as fullname0_, header0_.record as record0_ from header header0_
+2007-06-30 20:18:18,773 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - preparing statement
+2007-06-30 20:18:18,778 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - about to open ResultSet (open ResultSets: 0, globally: 0)
+2007-06-30 20:18:18,779 [main] DEBUG org.hibernate.loader.Loader - processing result set
+2007-06-30 20:18:18,779 [main] DEBUG org.hibernate.loader.Loader - result set row: 0
+2007-06-30 20:18:18,779 [main] DEBUG org.hibernate.type.LongType - returning '10001' as column: id0_
+2007-06-30 20:18:18,781 [main] DEBUG org.hibernate.loader.Loader - result row: EntityKey[Header#10001]
+2007-06-30 20:18:18,782 [main] DEBUG org.hibernate.loader.Loader - Initializing object from ResultSet: [Header#10001]
+2007-06-30 20:18:18,852 [main] DEBUG org.hibernate.persister.entity.AbstractEntityPersister - Hydrating entity: [Header#10001]
+2007-06-30 20:18:18,866 [main] DEBUG org.hibernate.type.DateType - returning '29 June 2007' as column: entered0_
+2007-06-30 20:18:18,866 [main] DEBUG org.hibernate.type.StringType - returning 'SYSTEM-2' as column: source0_
+2007-06-30 20:18:18,866 [main] DEBUG org.hibernate.type.StringType - returning 'Buford Beauregard' as column: fullname0_
+2007-06-30 20:18:18,866 [main] DEBUG org.hibernate.type.LongType - returning '1000' as column: record0_
+2007-06-30 20:18:18,867 [main] DEBUG org.hibernate.loader.Loader - done processing result set (1 rows)
+2007-06-30 20:18:18,867 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - about to close ResultSet (open ResultSets: 1, globally: 1)
+2007-06-30 20:18:18,868 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - about to close PreparedStatement (open PreparedStatements: 1, globally: 1)
+2007-06-30 20:18:18,868 [main] DEBUG org.hibernate.jdbc.AbstractBatcher - closing statement
+2007-06-30 20:18:18,869 [main] DEBUG org.hibernate.loader.Loader - total objects hydrated: 1
+2007-06-30 20:18:18,869 [main] DEBUG org.hibernate.engine.TwoPhaseLoad - resolving associations for [Header#10001]
+2007-06-30 20:18:18,873 [main] DEBUG org.hibernate.engine.loading.LoadContexts - creating collection wrapper:[Header.details#1000]
+2007-06-30 20:18:18,880 [main] ERROR org.hibernate.AssertionFailure - an assertion failure occured (this may indicate a bug in Hibernate, but is more likely due to unsafe use of the session)
+org.hibernate.AssertionFailure: null owner
+	at org.hibernate.collection.PersistentElementHolder.<init>(PersistentElementHolder.java:61)
+	at org.hibernate.type.SetType.instantiate(SetType.java:23)
+	at org.hibernate.type.CollectionType.getCollection(CollectionType.java:572)
+	at org.hibernate.type.CollectionType.resolveKey(CollectionType.java:375)
+	at org.hibernate.type.CollectionType.resolve(CollectionType.java:368)
+	at org.hibernate.engine.TwoPhaseLoad.initializeEntity(TwoPhaseLoad.java:116)
+	at org.hibernate.loader.Loader.initializeEntitiesAndCollections(Loader.java:854)
+	at org.hibernate.loader.Loader.doQuery(Loader.java:729)
+	at org.hibernate.loader.Loader.doQueryAndInitializeNonLazyCollections(Loader.java:236)
+	at org.hibernate.loader.Loader.doList(Loader.java:2220)
+	at org.hibernate.loader.Loader.listIgnoreQueryCache(Loader.java:2104)
+	at org.hibernate.loader.Loader.list(Loader.java:2099)
+	at org.hibernate.loader.hql.QueryLoader.list(QueryLoader.java:378)
+	at org.hibernate.hql.ast.QueryTranslatorImpl.list(QueryTranslatorImpl.java:338)
+	at org.hibernate.engine.query.HQLQueryPlan.performList(HQLQueryPlan.java:172)
+	at org.hibernate.impl.SessionImpl.list(SessionImpl.java:1121)
+	at org.hibernate.impl.QueryImpl.list(QueryImpl.java:79)
+	at com.briceg.foo.XMLTest.main(XMLTest.java:20)
+Exception in thread "main" org.hibernate.AssertionFailure: null owner
+	at org.hibernate.collection.PersistentElementHolder.<init>(PersistentElementHolder.java:61)
+	at org.hibernate.type.SetType.instantiate(SetType.java:23)
+	at org.hibernate.type.CollectionType.getCollection(CollectionType.java:572)
+	at org.hibernate.type.CollectionType.resolveKey(CollectionType.java:375)
+	at org.hibernate.type.CollectionType.resolve(CollectionType.java:368)
+	at org.hibernate.engine.TwoPhaseLoad.initializeEntity(TwoPhaseLoad.java:116)
+	at org.hibernate.loader.Loader.initializeEntitiesAndCollections(Loader.java:854)
+	at org.hibernate.loader.Loader.doQuery(Loader.java:729)
+	at org.hibernate.loader.Loader.doQueryAndInitializeNonLazyCollections(Loader.java:236)
+	at org.hibernate.loader.Loader.doList(Loader.java:2220)
+	at org.hibernate.loader.Loader.listIgnoreQueryCache(Loader.java:2104)
+	at org.hibernate.loader.Loader.list(Loader.java:2099)
+	at org.hibernate.loader.hql.QueryLoader.list(QueryLoader.java:378)
+	at org.hibernate.hql.ast.QueryTranslatorImpl.list(QueryTranslatorImpl.java:338)
+	at org.hibernate.engine.query.HQLQueryPlan.performList(HQLQueryPlan.java:172)
+	at org.hibernate.impl.SessionImpl.list(SessionImpl.java:1121)
+	at org.hibernate.impl.QueryImpl.list(QueryImpl.java:79)
+	at com.briceg.foo.XMLTest.main(XMLTest.java:20)

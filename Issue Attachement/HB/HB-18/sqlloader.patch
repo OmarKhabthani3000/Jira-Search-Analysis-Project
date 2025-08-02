@@ -1,0 +1,666 @@
+Index: net/sf/hibernate/Session.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Session.java,v
+retrieving revision 1.19.2.1
+diff -u -r1.19.2.1 Session.java
+--- net/sf/hibernate/Session.java	2 Aug 2003 16:45:50 -0000	1.19.2.1
++++ net/sf/hibernate/Session.java	6 Aug 2003 11:06:38 -0000
+@@ -533,6 +533,13 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public Query getNamedQuery(String queryName) throws HibernateException;
++
++	/**
++	 * @param string
++	 * @param returnAlias
++	 * @param returnClass
++	 */
++	public SQLQuery createSQLQuery(String string, String returnAlias, Class returnClass);
+ 	
+ }
+ 
+Index: net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.59.2.7
+diff -u -r1.59.2.7 SessionImpl.java
+--- net/sf/hibernate/impl/SessionImpl.java	4 Aug 2003 11:26:46 -0000	1.59.2.7
++++ net/sf/hibernate/impl/SessionImpl.java	6 Aug 2003 11:06:55 -0000
+@@ -40,6 +40,7 @@
+ import net.sf.hibernate.PersistentObjectException;
+ import net.sf.hibernate.Query;
+ import net.sf.hibernate.QueryException;
++import net.sf.hibernate.SQLQuery;
+ import net.sf.hibernate.ScrollableResults;
+ import net.sf.hibernate.Transaction;
+ import net.sf.hibernate.TransientObjectException;
+@@ -65,6 +66,7 @@
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.engine.Versioning;
+ import net.sf.hibernate.loader.CriteriaLoader;
++import net.sf.hibernate.loader.SQLLoader;
+ import net.sf.hibernate.persister.ClassPersister;
+ import net.sf.hibernate.persister.Loadable;
+ import net.sf.hibernate.proxy.CGLIBLazyInitializer;
+@@ -3397,6 +3399,39 @@
+ 		if ( persister.isBatchLoadable() ) {
+ 			batchLoadableEntityKeys.put( new Key(id, persister), MARKER );
+ 		}
++	}
++
++	public SQLQuery createSQLQuery(String sql, String returnAlias, Class returnClass) {
++        return new SQLQueryImpl(sql, returnAlias, returnClass, this);		
++	}
++
++    /** basically just an adapted copy of find(CriteriaImpl) */
++	public List find(SQLQueryImpl sql) throws HibernateException {
++		
++        Class persistentClass = sql.getReturnClass();
++        
++        if ( log.isTraceEnabled() ) {
++            log.trace( "search: " + persistentClass.getName() );
++            log.trace( "criteria: " + sql );
++        }
++        
++        Loadable persister = (Loadable) getPersister(persistentClass);
++        SQLLoader loader = new SQLLoader(persister, factory, sql);
++        Serializable[] spaces = persister.getPropertySpaces();
++        Set set = new HashSet();
++        for (int i=0; i<spaces.length; i++) set.add( spaces[i] );
++        autoFlushIfRequired(set);
++        
++        dontFlushFromFind++;
++        try {
++            return loader.list(this);
++        }
++        catch (SQLException sqle) {
++            throw new JDBCException(sqle);
++        }
++        finally {
++            dontFlushFromFind--;
++        }
+ 	}
+ 
+ }
+Index: net/sf/hibernate/jca/JCASessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/jca/JCASessionImpl.java,v
+retrieving revision 1.9
+diff -u -r1.9 JCASessionImpl.java
+--- net/sf/hibernate/jca/JCASessionImpl.java	15 Jun 2003 12:45:06 -0000	1.9
++++ net/sf/hibernate/jca/JCASessionImpl.java	6 Aug 2003 11:06:55 -0000
+@@ -12,6 +12,7 @@
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.Query;
++import net.sf.hibernate.SQLQuery;
+ import net.sf.hibernate.Session;
+ import net.sf.hibernate.Transaction;
+ import net.sf.hibernate.type.Type;
+@@ -278,6 +279,10 @@
+ 	
+ 	public void evict(Object object) throws HibernateException {
+ 		getSession().evict(object);
++	}
++
++	public SQLQuery createSQLQuery(String string, String returnAlias, Class returnClass) {
++		return getSession().createSQLQuery(string, returnAlias, returnClass);
+ 	}
+ 	
+ }
+Index: net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.33.2.8
+diff -u -r1.33.2.8 AbstractEntityPersister.java
+--- net/sf/hibernate/persister/AbstractEntityPersister.java	4 Aug 2003 11:26:47 -0000	1.33.2.8
++++ net/sf/hibernate/persister/AbstractEntityPersister.java	6 Aug 2003 11:07:04 -0000
+@@ -7,13 +7,10 @@
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
++import java.util.Map;
+ import java.util.Set;
+ 
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-
+ import net.sf.cglib.MetaClass;
+-
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.InstantiationException;
+@@ -24,12 +21,11 @@
+ import net.sf.hibernate.Validatable;
+ import net.sf.hibernate.cache.CacheConcurrencyStrategy;
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.Cascades;
+ import net.sf.hibernate.engine.Mapping;
+ import net.sf.hibernate.engine.SessionFactoryImplementor;
+ import net.sf.hibernate.engine.SessionImplementor;
+-import net.sf.hibernate.util.ReflectHelper;
+-import net.sf.hibernate.util.StringHelper;
+ import net.sf.hibernate.id.IdentifierGenerator;
+ import net.sf.hibernate.id.IdentityGenerator;
+ import net.sf.hibernate.loader.BatchingEntityLoader;
+@@ -43,7 +39,6 @@
+ import net.sf.hibernate.mapping.Value;
+ import net.sf.hibernate.metadata.ClassMetadata;
+ import net.sf.hibernate.proxy.HibernateProxy;
+-import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.sql.SelectFragment;
+ import net.sf.hibernate.sql.Template;
+ import net.sf.hibernate.type.AbstractComponentType;
+@@ -52,6 +47,11 @@
+ import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.type.TypeFactory;
+ import net.sf.hibernate.type.VersionType;
++import net.sf.hibernate.util.ReflectHelper;
++import net.sf.hibernate.util.StringHelper;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ 
+ /**
+  * Superclass for built-in mapping strategies. Implements functionality
+@@ -134,7 +134,9 @@
+ 	private final transient CacheConcurrencyStrategy cache;
+         
+ 	private final transient MetaClass optimizer;
+-	
++
++    private final Map subclassPropertyColumnAliasMap;
++    	
+ 	public final Class getMappedClass() {
+ 		return mappedClass;
+ 	}
+@@ -644,6 +646,38 @@
+ 		}
+ 		
+ 		proxyInterfaces = (Class[]) pis.toArray(NO_CLASSES);
++        
++        // ALIASES
++        iter = model.getSubclassPropertyClosureIterator();
++        subclassPropertyColumnAliasMap = new HashMap();
++        while ( iter.hasNext() ) {
++            Property prop = (Property) iter.next();
++            String propname = prop.getName();
++            String aliases[] = null;
++            
++            
++            if ( prop.isFormula() ) {
++                aliases = new String[1];
++                aliases[0] = prop.getFormula().getAlias();
++            } else {
++                aliases = new String[prop.getColumnSpan()];
++                 Iterator colIter = prop.getColumnIterator();
++                 int l=0;
++                 while ( colIter.hasNext() ) {
++                     Column col = (Column) colIter.next();
++                     aliases[l++] = col.getAlias();
++                     }
++                  }
++                  // TODO: How about collections et.al. ? They don't get alias names for some reason. Should they be put inhere as well, or ?
++                  subclassPropertyColumnAliasMap.put(propname, aliases);
++             }
++         
++         // ALIASES for id's
++         if(hasIdentifierProperty()) {
++            subclassPropertyColumnAliasMap.put(getIdentifierPropertyName(),getIdentifierColumnNames());
++         }
++         
++         
+ 	}
+ 	
+ 	private boolean initHasCollections() {
+@@ -775,6 +809,9 @@
+ 		return batchSize>1;
+ 	}
+ 
++    public String[] getSubclassPropertyColumnAliases(String propertyName) {
++             return (String[]) subclassPropertyColumnAliasMap.get(propertyName);
++        }
+ }
+ 
+ 
+Index: net/sf/hibernate/persister/EntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/EntityPersister.java,v
+retrieving revision 1.38.2.6
+diff -u -r1.38.2.6 EntityPersister.java
+--- net/sf/hibernate/persister/EntityPersister.java	4 Aug 2003 11:26:47 -0000	1.38.2.6
++++ net/sf/hibernate/persister/EntityPersister.java	6 Aug 2003 11:07:06 -0000
+@@ -78,8 +78,8 @@
+ 	private final String[] subclassFormulaTemplateClosure;
+ 	private final String[] subclassFormulaClosure;
+ 	private final String[] subclassColumnAliasClosure;
+-	private final String[] subclassFormulaAliasClosure;
+-	
++	private final String[] subclassFormulaAliasClosure;    
++    
+ 	// the closure of all properties in the entire hierarchy including
+ 	// subclasses and superclasses of this class
+ 	private final String[][] subclassPropertyColumnNameClosure;
+@@ -100,7 +100,7 @@
+ 	private static final String[] STRING_ARRAY = {};
+ 	private static final Type[] TYPE_ARRAY = {};
+ 	
+-	private static final Log log = LogFactory.getLog(EntityPersister.class);
++	private static final Log log = LogFactory.getLog(EntityPersister.class);	
+ 	
+ 	public void postInstantiate(SessionFactoryImplementor factory) throws MappingException {
+ 		
+@@ -904,6 +904,7 @@
+ 		return propertyColumnNames[i];
+ 	}
+ 
++        
+ }
+ 
+ 
+Index: net/sf/hibernate/persister/Loadable.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/Loadable.java,v
+retrieving revision 1.10
+diff -u -r1.10 Loadable.java
+--- net/sf/hibernate/persister/Loadable.java	24 May 2003 06:51:18 -0000	1.10
++++ net/sf/hibernate/persister/Loadable.java	6 Aug 2003 11:07:06 -0000
+@@ -128,6 +128,12 @@
+ 	 */
+ 	public String fromJoinFragment(String alias, boolean innerJoin, boolean includeSubclasses);
+ 
++    /**
++     * Return the column alias names used to persist/query the numbered property of 
++     * the class or a subclass
++     * (optional operation)
++     */
++    public String[] getSubclassPropertyColumnAliases(String propertyName);
+ }
+ 
+ 
+Index: net/sf/hibernate/test/Glarch.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/test/Glarch.java,v
+retrieving revision 1.11
+diff -u -r1.11 Glarch.java
+--- net/sf/hibernate/test/Glarch.java	15 Apr 2003 09:33:00 -0000	1.11
++++ net/sf/hibernate/test/Glarch.java	6 Aug 2003 11:07:06 -0000
+@@ -49,9 +49,9 @@
+ 		this.version = version;
+ 	}
+ 	
+-	public void setName(int name) {
++	/*public void setName(int name) {
+ 		this.name = Integer.toString(name);
+-	}
++	}*/
+ 	
+ 	public GlarchProxy getNext() {
+ 		return next;
+Index: src/net/sf/hibernate/SQLQuery.java
+===================================================================
+RCS file: src/net/sf/hibernate/SQLQuery.java
+diff -N src/net/sf/hibernate/SQLQuery.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/SQLQuery.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,48 @@
++/*
++ * Created on 06-08-2003
++ *
++ * To change the template for this generated file go to
++ * Window - Preferences - Java - Code Generation - Code and Comments
++ */
++package net.sf.hibernate;
++
++import java.util.List;
++
++/**
++ * @author MAX
++ *
++ * To change the template for this generated type comment go to
++ * Window - Preferences - Java - Code Generation - Code and Comments
++ */
++public interface SQLQuery {
++	/**
++	     * Set a limit upon the number of objects to be retrieved
++	     * 
++	     * @param maxResults
++	     * @return Criteria
++	     */
++	public SQLQuery setMaxResults(int maxResults);
++	/**
++	 * Set the first result to be retrieved
++	 * 
++	 * @param firstResult
++	 * @return Criteria
++	 */
++	public SQLQuery setFirstResult(int firstResult);
++	/**
++	 * Set a timeout for the underlying JDBC query
++	 * 
++	 * @param timeout
++	 * @return Criteria
++	 */
++	public SQLQuery setTimeout(int timeout);
++
++	/**
++	 * Get the results
++	 * 
++	 * @return List
++	 * @throws HibernateException
++	 */
++	public List list() throws HibernateException;
++
++}
+Index: src/net/sf/hibernate/impl/SQLQueryImpl.java
+===================================================================
+RCS file: src/net/sf/hibernate/impl/SQLQueryImpl.java
+diff -N src/net/sf/hibernate/impl/SQLQueryImpl.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/impl/SQLQueryImpl.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,108 @@
++/*
++ * Created on 06-08-2003
++ *
++ * To change the template for this generated file go to
++ * Window - Preferences - Java - Code Generation - Code and Comments
++ */
++package net.sf.hibernate.impl;
++
++import java.util.List;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.SQLQuery;
++
++/**
++ * <sql-query name="mySqlQuery">
++    <return alias="person" class="eg.Person"/>
++    SELECT {person}.NAME AS {person.name}, {person}.AGE AS {person.age}, {person}.SEX AS {person.sex}
++    FROM PERSON {person} WHERE {person}.NAME LIKE 'Hiber%'
++  </sql-query>
++ * @author MAX 
++ */
++public class SQLQueryImpl implements SQLQuery {
++
++	private String sql;
++	private Class returnClass;
++	private String returnAlias;
++	private Integer maxResults;
++	private Integer firstResult;
++	private Integer timeout;
++	private SessionImpl session;
++
++	SQLQueryImpl(String sql, String returnAlias, Class returnClass, SessionImpl session) {
++		this.sql = sql;
++		this.returnClass = returnClass;
++		this.returnAlias = returnAlias;
++        this.session = session;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getReturnAlias() {
++		return returnAlias;
++	}
++
++	/**
++	 * @param returnAlias
++	 */
++	public void setReturnAlias(String returnAlias) {
++		this.returnAlias = returnAlias;
++	}
++
++	/**
++	 * @return
++	 */
++	public Class getReturnClass() {
++		return returnClass;
++	}
++
++	/**
++	 * @param returnClass
++	 */
++	public void setReturnClass(Class returnClass) {
++		this.returnClass = returnClass;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getSql() {
++		return sql;
++	}
++
++	/**
++	 * @param sql
++	 */
++	public void setSql(String sql) {
++		this.sql = sql;
++	}
++	
++    public List list() throws HibernateException {
++		return session.find(this);
++	}
++
++	public SQLQuery setMaxResults(int maxResults) {
++		this.maxResults = new Integer(maxResults);
++		return this;
++	}
++	public SQLQuery setFirstResult(int firstResult) {
++		this.firstResult = new Integer(firstResult);
++		return this;
++	}
++	public SQLQuery setTimeout(int timeout) {
++		this.timeout = new Integer(timeout);
++		return this;
++	}
++
++	public Integer getMaxResults() {
++		return maxResults;
++	}
++	public Integer getFirstResult() {
++		return firstResult;
++	}
++	public Integer getTimeout() {
++		return timeout;
++	}
++
++}
+Index: src/net/sf/hibernate/loader/SQLLoader.java
+===================================================================
+RCS file: src/net/sf/hibernate/loader/SQLLoader.java
+diff -N src/net/sf/hibernate/loader/SQLLoader.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/loader/SQLLoader.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,136 @@
++/*
++ * Created on 06-08-2003
++ *
++ * To change the template for this generated file go to
++ * Window - Preferences - Java - Code Generation - Code and Comments
++ */
++package net.sf.hibernate.loader;
++
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.ArrayList;
++import java.util.List;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.LockMode;
++import net.sf.hibernate.QueryException;
++import net.sf.hibernate.engine.RowSelection;
++import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.SessionImplementor;
++import net.sf.hibernate.impl.SQLQueryImpl;
++import net.sf.hibernate.persister.Loadable;
++import net.sf.hibernate.type.Type;
++import net.sf.hibernate.util.StringHelper;
++
++/**
++ * @author MAX
++ *
++ */
++public class SQLLoader extends AbstractEntityLoader {
++
++	SQLQueryImpl sqlQuery;
++
++	public SQLLoader(Loadable persister, SessionFactoryImplementor factory, SQLQueryImpl sqi) throws HibernateException {
++		super(persister, factory);
++		this.sqlQuery = sqi;
++
++		renderStatement(persister, sqlQuery);
++
++		postInstantiate();
++	}
++
++	private void renderStatement(Loadable persister, SQLQueryImpl sqi2) throws QueryException {
++		sql = substituteBrackets(persister, sqi2);
++
++		int loadables = 1;
++
++		suffixes = new String[loadables];
++		suffixes[0] = StringHelper.EMPTY_STRING;
++
++		classPersisters = new Loadable[loadables];
++		lockModeArray = createLockModeArray(loadables, LockMode.NONE);
++		classPersisters[0] = persister;
++	}
++
++	public List list(SessionImplementor session) throws HibernateException, SQLException {
++		List values = new ArrayList();
++		List types = new ArrayList();
++
++		Object[] valueArray = values.toArray();
++		Type[] typeArray = (Type[]) types.toArray(NO_TYPES);
++
++		RowSelection selection = new RowSelection();
++		selection.setFirstRow(sqlQuery.getFirstResult());
++		selection.setMaxRows(sqlQuery.getMaxResults());
++		selection.setTimeout(sqlQuery.getTimeout());
++
++		return find(session, valueArray, typeArray, true, selection, null, null);
++	}
++
++	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session) throws SQLException, HibernateException {
++
++		return row[row.length - 1];
++	};
++
++	/**
++	 * Navigate associations, returning the aliased columns. Adds extra table 
++	 * table joins to this loader
++	 */
++	public String[] toColumns(String pathExpression) {
++		return null;
++	}
++
++	// Inspired by the parsing done in TJDO
++	public String substituteBrackets(Loadable persister, SQLQueryImpl sqi2) throws QueryException {
++		String sql = sqi2.getSql();
++
++		StringBuffer result = new StringBuffer();
++		int left, right;
++
++		// replace {....} with corresponding column aliases
++		for (int curr = 0; curr < sql.length(); curr = right + 1) {
++			if ((left = sql.indexOf('{', curr)) < 0) {
++				result.append(sql.substring(curr));
++				break;
++			}
++
++			result.append(sql.substring(curr, left));
++
++			if ((right = sql.indexOf('}', left + 1)) < 0)
++				throw new QueryException("Unmatched braces for alias path", sql);
++
++			String aliasPath = sql.substring(left + 1, right);
++
++			int lastDot = aliasPath.lastIndexOf('.');
++
++			if (lastDot < 0) { // No dot, so it is simple alias reference ;)
++                result.append(persister.getTableName()); // TODO: is this enough ? Aliasing, more than one table?
++			} else {
++				String aliasName = aliasPath.substring(0, lastDot);
++				if (!aliasName.equals(sqi2.getReturnAlias())) {
++					throw new QueryException("Alias [" + aliasName + "] does not correspond to return alias " + sqi2.getReturnAlias(), sqi2.getSql());
++				}
++
++				String propertyName = aliasPath.substring(lastDot + 1);
++				String[] aliases = persister.getSubclassPropertyColumnAliases(propertyName);
++
++				if (aliases == null || aliases.length == 0) {
++					throw new QueryException("No column name found for property [" + propertyName + "]", sqi2.getSql());
++				}
++				if (aliases.length != 1) {
++					throw new QueryException("SQL queries only support properties mapped to a single column. Property [" + propertyName + "] is mapped to " + aliases.length + " columns.", sqi2.getSql());
++				}
++				// here we need to find the field of the aliasName
++				// Find by alias first
++				// Find by class second ? 
++				//result.append("$" + aliasName + "/" + propertyName + "$");
++				result.append(aliases[0]);
++			}
++		}
++
++		// Possibly handle :something parameters for the query ?
++
++		return result.toString();
++	}
++
++}
+Index: src/net/sf/hibernate/test/SQLLoaderTest.java
+===================================================================
+RCS file: src/net/sf/hibernate/test/SQLLoaderTest.java
+diff -N src/net/sf/hibernate/test/SQLLoaderTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/test/SQLLoaderTest.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,46 @@
++//$Id: FooBarTest.java,v 1.83.2.9 2003/08/04 14:47:02 oneovthafew Exp $
++package net.sf.hibernate.test;
++
++import java.util.List;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import net.sf.hibernate.SQLQuery;
++import net.sf.hibernate.Session;
++
++public class SQLLoaderTest extends TestCase {
++
++	public SQLLoaderTest(String arg) {
++		super(arg);
++	}
++
++	public void testFindBySQL() throws Exception {
++		Session session = sessions.openSession();
++		Category s = new Category();
++        s.setName(String.valueOf(System.currentTimeMillis()));        
++        session.save(s);
++		session.flush();
++
++		SQLQuery query = session.createSQLQuery("select s.id as {simple.id}, s.name as {simple.name} from {simple} s", "simple", Category.class);
++		List list = query.list();
++        
++        assertNotNull(list);
++        assertTrue(list.size()>0);
++        assertTrue(list.get(0) instanceof Category);
++        
++        
++        // How do we handle version/timestamp/discriminator fields (such as Foo) ?
++        // How do we handle objects that does not have id property (such as Simple ?)
++        // How do we handle objects with composite id's ? (such as Single)
++	}
++	public static Test suite() throws Exception {
++		try {
++			TestCase.exportSchema(new String[] { "Category.hbm.xml"});
++			return new TestSuite(SQLLoaderTest.class);
++		} catch (Exception e) {
++			e.printStackTrace();
++			throw e;
++		}
++	}
++
++}

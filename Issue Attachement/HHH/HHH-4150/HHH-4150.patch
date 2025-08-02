@@ -1,0 +1,86 @@
+Index: core/src/main/antlr/hql.g
+===================================================================
+--- core/src/main/antlr/hql.g	(revision 17529)
++++ core/src/main/antlr/hql.g	(working copy)
+@@ -653,7 +653,7 @@
+ aggregate
+ 	: ( SUM^ | AVG^ | MAX^ | MIN^ ) OPEN! additiveExpression CLOSE! { #aggregate.setType(AGGREGATE); }
+ 	// Special case for count - It's 'parameters' can be keywords.
+-	|  COUNT^ OPEN! ( STAR { #STAR.setType(ROW_STAR); } | ( ( DISTINCT | ALL )? ( path | collectionExpr ) ) ) CLOSE!
++	|  COUNT^ OPEN! ( STAR { #STAR.setType(ROW_STAR); } | ( ( DISTINCT | ALL )? ( additiveExpression ) ) ) CLOSE!
+ 	|  collectionExpr
+ 	;
+ 
+Index: testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java	(revision 17529)
++++ testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java	(working copy)
+@@ -1222,6 +1222,68 @@
+ 		s.close();
+ 	}
+ 
++	public void testSelectClauseCaseWithSum() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++
++                Human h1 = new Human();
++		h1.setBodyWeight( (float) 74.0 );
++		h1.setDescription("Me");
++		s.persist(h1);
++
++		Human h2 = new Human();
++		h2.setBodyWeight( (float) 125.0 );
++		h2.setDescription("big persion #1");
++		s.persist(h2);
++
++		Human h3 = new Human();
++		h3.setBodyWeight( (float) 110.0 );
++		h3.setDescription("big persion #2");
++		s.persist(h3);
++
++		Number count = (Number) s.createQuery("select sum(case when bodyWeight > 100 then 1 else 0 end) from Human").uniqueResult();
++		assertEquals(count.intValue(), 2);
++                count = (Number) s.createQuery("select sum(case when bodyWeight > 100 then bodyWeight else 0 end) from Human").uniqueResult();
++                assertEquals(count.floatValue(), h2.getBodyWeight() + h3.getBodyWeight(), 0.001);
++		s.delete(h1);
++		s.delete(h2);
++                s.delete(h3);
++		t.commit();
++		s.close();
++	}
++
++	public void testSelectClauseCaseWithCountDistinct() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Human h1 = new Human();
++		h1.setBodyWeight( (float) 74.0 );
++		h1.setDescription("Me");
++                h1.setNickName("Oney");
++		s.persist(h1);
++
++		Human h2 = new Human();
++		h2.setBodyWeight( (float) 125.0 );
++		h2.setDescription("big persion");
++                h2.setNickName("big #1");
++		s.persist(h2);
++
++		Human h3 = new Human();
++		h3.setBodyWeight( (float) 110.0 );
++		h3.setDescription("big persion");
++                h3.setNickName("big #2");
++		s.persist(h3);
++
++		Number count = (Number) s.createQuery("select count(distinct case when bodyWeight > 100 then description else null end) from Human").uniqueResult();
++		assertEquals(count.intValue(), 1);
++                count = (Number) s.createQuery("select count(distinct case when bodyWeight > 100 then nickName else null end) from Human").uniqueResult();
++		assertEquals(count.intValue(), 2);
++		s.delete(h1);
++		s.delete(h2);
++                s.delete(h3);
++		t.commit();
++		s.close();
++	}
++
+ 	public void testImplicitPolymorphism() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();

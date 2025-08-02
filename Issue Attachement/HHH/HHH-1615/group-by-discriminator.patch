@@ -1,0 +1,67 @@
+Index: src/org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 2)
++++ src/org/hibernate/persister/entity/SingleTableEntityPersister.java	Mon Jul 21 15:13:12 PDT 2008
+@@ -32,6 +32,7 @@
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.MarkerObject;
++import org.hibernate.util.StringHelper;
+ 
+ /**
+  * The default implementation of the <tt>EntityPersister</tt> interface.
+@@ -553,8 +554,18 @@
+ 			select.addColumn( name, getDiscriminatorColumnName(),  getDiscriminatorAlias() );
+ 		}
+ 	}
+-	
++
++    protected String discriminatorFragmentForGroupBy(String tableAlias)
++    {
++        if (isDiscriminatorFormula()) {
++            return "";
++        }
++        else {
++            return StringHelper.qualify(tableAlias, getDiscriminatorColumnName());
++        }
++    }
++
+-	protected int[] getPropertyTableNumbersInSelect() {
++    protected int[] getPropertyTableNumbersInSelect() {
+ 		return propertyTableNumbers;
+ 	}
+ 
+Index: src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 7)
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	Mon Jul 21 15:12:18 PDT 2008
+@@ -1028,9 +1028,29 @@
+                 sb.append(subalias).append(".").append(columns[i]);
+             }
+         }
++
++        // Add in the discrimator column, if needed
++        if (entityMetamodel.hasSubclasses()) {
++            String discriminator = discriminatorFragmentForGroupBy(tableAlias);
++
++            if (discriminator != null && discriminator.length() > 0) {
++                if (!isFirst) {
++                    sb.append(", ");
++                }
++                isFirst = false;
++
++                sb.append(discriminator);
++            }
++        }
++
+         return sb.toString();
+     }
+ 
++    protected String discriminatorFragmentForGroupBy(String tableAlias)
++    {
++        return "";
++    }
++
+ 	public Object[] getDatabaseSnapshot(Serializable id, SessionImplementor session)
+ 			throws HibernateException {
+ 

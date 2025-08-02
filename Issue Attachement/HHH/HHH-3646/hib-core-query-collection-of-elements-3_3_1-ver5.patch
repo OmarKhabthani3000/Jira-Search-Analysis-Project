@@ -1,0 +1,520 @@
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java	2008-09-10 14:19:59.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java	2009-01-16 15:40:27.000000000 -0500
+@@ -235,7 +235,7 @@
+ 	 * @param role The collection role for whcih to retrieve the property mapping.
+ 	 * @return The property mapping.
+ 	 */
+-	private PropertyMapping getCollectionPropertyMapping(String role) {
++        public PropertyMapping getCollectionPropertyMapping(String role) {
+ 		return ( PropertyMapping ) collectionPropertyMappingByRole.get( role );
+ 	}
+ 
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: ComponentCollectionCriteriaInfoProvider.java
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: ComponentCriteriaInfoProvider.java
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: CriteriaInfoProvider.java
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java	2008-09-10 14:19:59.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java	2009-05-15 10:53:58.000000000 -0400
+@@ -40,11 +40,15 @@
+ import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ 
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * A <tt>JoinWalker</tt> for <tt>Criteria</tt> queries.
+  *
+@@ -52,6 +56,7 @@
+  * @author Gavin King
+  */
+ public class CriteriaJoinWalker extends AbstractEntityJoinWalker {
++        private static final Logger logger = LoggerFactory.getLogger(CriteriaJoinWalker.class);
+ 
+ 	//TODO: add a CriteriaImplementor interface
+ 	//      this class depends directly upon CriteriaImpl in the impl package...
+@@ -175,19 +180,56 @@
+ 			( (Queryable) getPersister() ).filterFragment( getAlias(), getEnabledFilters() );
+ 	}
+ 	
+-	protected String generateTableAlias(int n, String path, Joinable joinable) {
+-		if ( joinable.consumesEntityAlias() ) {
+-			final Criteria subcriteria = translator.getCriteria(path);
+-			String sqlAlias = subcriteria==null ? null : translator.getSQLAlias(subcriteria);
+-			if (sqlAlias!=null) {
+-				userAliasList.add( subcriteria.getAlias() ); //alias may be null
+-				return sqlAlias; //EARLY EXIT
++    	protected String generateTableAlias(int n, String path, Joinable joinable) {
++		logger.debug("generateTableAlias n="+n+" path="+path+" joinable="+joinable);
++
++
++		// it's complicated as to when to return the sqlAlias designated by the 'path'.
++		// the issue is that for a collection-of-entity, the walker navigates the same
++		// path twice, once for the collection, once for the entity.  the Joinable will
++		// be different for each, and the collection Joinable (probably a BasicCollectionPersister)
++		// will _NOT_ consume the alias, and also should _NOT_ assign an SQL alias.
++		// the second call for the same 'path' will be with the entit persister, and it should
++		// provide the sqlAlias.
++		//
++		// however, for collection-of-component or collection-of-value, the path will not
++		// be navigated twice, and the collection persister must supply the sqlAlias.
++		// note: the logic of whether to add to the userAliasList is still based SOLELY
++		// on the consumesEntityAlias logic.
++
++		boolean checkForSqlAlias = joinable.consumesEntityAlias();
++
++		if ( !checkForSqlAlias && joinable.isCollection() ) {
++			CollectionPersister collectionPersister = (CollectionPersister)joinable;
++			Type elementType = collectionPersister.getElementType();
++			if ( elementType.isComponentType() || !elementType.isEntityType() ) {
++				checkForSqlAlias = true;
+ 			}
+-			else {
+-				userAliasList.add(null);
++		}
++
++		String sqlAlias = null;
++
++		if ( checkForSqlAlias ) {
++			// if there's a composite primary key in the path, properties accessed through
++			// parts of the key will go through an "invisible" property named "_identifierMapper"
++			// (see org.hibernate.cfg.HbmBinder).  this path element will NOT be 
++			// part of the criteria path, however, so criteria which restrict these properties
++			// will not be found via lookup unless we "cleanup" the path.
++			String criteriaPath = path.replace("_identifierMapper.", "");
++
++			final Criteria subcriteria = translator.getCriteria(criteriaPath);
++			sqlAlias = subcriteria==null ? null : translator.getSQLAlias(subcriteria);
++
++			if ( joinable.consumesEntityAlias() ) {
++				userAliasList.add( sqlAlias==null ? null : subcriteria.getAlias() );
+ 			}
+ 		}
+-		return super.generateTableAlias( n + translator.getSQLAliasCount(), path, joinable );
++
++		if (sqlAlias == null) {
++			sqlAlias = super.generateTableAlias( n + translator.getSQLAliasCount(), path, joinable );
++		}
++
++		return sqlAlias;
+ 	}
+ 
+ 	protected String generateRootAlias(String tableName) {
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	2008-09-10 14:19:59.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	2009-05-15 11:08:18.000000000 -0400
+@@ -34,6 +34,7 @@
+ import java.util.Set;
+ import java.util.StringTokenizer;
+ import java.util.LinkedHashMap;
++import java.io.Serializable;
+ 
+ import org.hibernate.Criteria;
+ import org.hibernate.EntityMode;
+@@ -41,27 +42,33 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
+-import org.hibernate.hql.ast.util.SessionFactoryHelper;
+ import org.hibernate.criterion.CriteriaQuery;
+ import org.hibernate.criterion.Projection;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.RowSelection;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.TypedValue;
++import org.hibernate.hql.ast.util.SessionFactoryHelper;
+ import org.hibernate.impl.CriteriaImpl;
+ import org.hibernate.persister.entity.Loadable;
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.CollectionType;
++import org.hibernate.type.ComponentType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.NullableType;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.StringHelper;
+ 
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * @author Gavin King
+  */
+ public class CriteriaQueryTranslator implements CriteriaQuery {
++	private static final Logger logger = LoggerFactory.getLogger(CriteriaQueryTranslator.class);
+ 
+ 	public static final String ROOT_SQL_ALIAS = Criteria.ROOT_ALIAS + '_';
+ 
+@@ -72,13 +79,15 @@
+ 	private final String rootSQLAlias;
+ 	private int aliasCount = 0;
+ 
+-	private final Map criteriaEntityNames = new LinkedHashMap();
++	private final Map /* <Criteria, CriteriaInfoProvider> */ criteriaInfoMap = new LinkedHashMap();
++	private final Map /* <String, CriteriaInfoProvider> */ nameCriteriaInfoMap = new LinkedHashMap();
+ 	private final Map criteriaSQLAliasMap = new HashMap();
+ 	private final Map aliasCriteriaMap = new HashMap();
+ 	private final Map associationPathCriteriaMap = new LinkedHashMap();
+ 	private final Map associationPathJoinTypesMap = new LinkedHashMap();
+ 
+ 	private final SessionFactoryImplementor sessionFactory;
++	private final SessionFactoryHelper helper;
+ 
+ 	public CriteriaQueryTranslator(
+ 			final SessionFactoryImplementor factory,
+@@ -99,6 +108,7 @@
+ 		this.rootEntityName = rootEntityName;
+ 		this.sessionFactory = factory;
+ 		this.rootSQLAlias = rootSQLAlias;
++		this.helper = new SessionFactoryHelper(factory);
+ 		createAliasCriteriaMap();
+ 		createAssociationPathCriteriaMap();
+ 		createCriteriaEntityNameMap();
+@@ -127,15 +137,17 @@
+ 	}
+ 
+ 	public Criteria getCriteria(String path) {
+-		return ( Criteria ) associationPathCriteriaMap.get( path );
++		Criteria crit = ( Criteria ) associationPathCriteriaMap.get( path );
++		logger.debug("getCriteria for path="+path+" crit="+crit);
++		return crit;
+ 	}
+ 
+ 	public Set getQuerySpaces() {
+ 		Set result = new HashSet();
+-		Iterator iter = criteriaEntityNames.values().iterator();
++		Iterator iter = criteriaInfoMap.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			String entityName = ( String ) iter.next();
+-			result.addAll( Arrays.asList( getFactory().getEntityPersister( entityName ).getQuerySpaces() ) );
++			CriteriaInfoProvider info = ( CriteriaInfoProvider )iter.next();
++			result.addAll( Arrays.asList( info.getSpaces() ) );
+ 		}
+ 		return result;
+ 	}
+@@ -207,39 +219,72 @@
+ 	}
+ 
+ 	private void createCriteriaEntityNameMap() {
+-		criteriaEntityNames.put( rootCriteria, rootEntityName );
++		// initialize the rootProvider first
++		CriteriaInfoProvider rootProvider = new EntityCriteriaInfoProvider(( Queryable ) sessionFactory.getEntityPersister( rootEntityName ) );
++		criteriaInfoMap.put( rootCriteria, rootProvider);
++		nameCriteriaInfoMap.put ( rootProvider.getName(), rootProvider );
++
+ 		Iterator iter = associationPathCriteriaMap.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) iter.next();
+-			criteriaEntityNames.put(
++			CriteriaInfoProvider info = getPathInfo((String)me.getKey());
++
++			criteriaInfoMap.put(
+ 					me.getValue(), //the criteria instance
+-			        getPathEntityName( ( String ) me.getKey() )
++					info
+ 			);
++
++			nameCriteriaInfoMap.put( info.getName(), info );
+ 		}
+ 	}
+ 
+-	private String getPathEntityName(String path) {
+-		Queryable persister = ( Queryable ) sessionFactory.getEntityPersister( rootEntityName );
++	private CriteriaInfoProvider getPathInfo(String path) {
+ 		StringTokenizer tokens = new StringTokenizer( path, "." );
+ 		String componentPath = "";
++
++		// start with the 'rootProvider'
++		CriteriaInfoProvider provider = ( CriteriaInfoProvider )nameCriteriaInfoMap.get( rootEntityName );
++
+ 		while ( tokens.hasMoreTokens() ) {
+ 			componentPath += tokens.nextToken();
+-			Type type = persister.toType( componentPath );
++			logger.debug("searching for "+componentPath);
++			Type type = provider.getType( componentPath );
+ 			if ( type.isAssociationType() ) {
++				// CollectionTypes are always also AssociationTypes - but there's not always an associated entity...
+ 				AssociationType atype = ( AssociationType ) type;
+-				persister = ( Queryable ) sessionFactory.getEntityPersister(
+-						atype.getAssociatedEntityName( sessionFactory )
+-				);
++				CollectionType ctype = type.isCollectionType() ? (CollectionType)type : null;
++				Type elementType = (ctype != null) ? ctype.getElementType( sessionFactory ) : null;
++				// is the association a collection of components or value-types? (i.e a colloction of valued types?)
++				if ( ctype != null  && elementType.isComponentType() ) {
++					provider = new ComponentCollectionCriteriaInfoProvider( helper.getCollectionPersister(ctype.getRole()) );
++				}
++				else if ( ctype != null && !elementType.isEntityType() ) {
++					provider = new ScalarCollectionCriteriaInfoProvider( helper, ctype.getRole() );
++				}
++				else {
++					provider = new EntityCriteriaInfoProvider(( Queryable ) sessionFactory.getEntityPersister(
++											  atype.getAssociatedEntityName( sessionFactory )
++											  ));
++				}
++				
+ 				componentPath = "";
+ 			}
+ 			else if ( type.isComponentType() ) {
+-				componentPath += '.';
++				if (!tokens.hasMoreTokens()) {
++					//provider = new ComponentCriteriaInfoProvider(provider, componentPath);
++					throw new QueryException("Criteria objects cannot be created directly on components.  Create a criteria on owning entity and use a dotted property to access component property");
++				} else {
++					componentPath += '.';
++				}
+ 			}
+ 			else {
+ 				throw new QueryException( "not an association: " + componentPath );
+ 			}
+ 		}
+-		return persister.getEntityName();
++		
++		logger.debug("returning entity name="+provider.getName()+" for path="+path+" class="+provider.getClass().getSimpleName());
++
++		return provider;
+ 	}
+ 
+ 	public int getSQLAliasCount() {
+@@ -248,15 +293,16 @@
+ 
+ 	private void createCriteriaSQLAliasMap() {
+ 		int i = 0;
+-		Iterator criteriaIterator = criteriaEntityNames.entrySet().iterator();
++		Iterator criteriaIterator = criteriaInfoMap.entrySet().iterator();
+ 		while ( criteriaIterator.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) criteriaIterator.next();
+ 			Criteria crit = ( Criteria ) me.getKey();
+ 			String alias = crit.getAlias();
+ 			if ( alias == null ) {
+-				alias = ( String ) me.getValue(); // the entity name
++				alias = (( CriteriaInfoProvider ) me.getValue()).getName(); // the entity name
+ 			}
+ 			criteriaSQLAliasMap.put( crit, StringHelper.generateAlias( alias, i++ ) );
++			logger.debug("put criteria="+crit+" alias="+((String)criteriaSQLAliasMap.get(crit)));
+ 		}
+ 		criteriaSQLAliasMap.put( rootCriteria, rootSQLAlias );
+ 	}
+@@ -381,11 +427,13 @@
+ 	}
+ 
+ 	public String getSQLAlias(Criteria criteria) {
+-		return ( String ) criteriaSQLAliasMap.get( criteria );
++		String alias = ( String )criteriaSQLAliasMap.get( criteria );
++		logger.debug("returning alias="+alias+" for criteria="+criteria);
++		return alias;
+ 	}
+ 
+ 	public String getEntityName(Criteria criteria) {
+-		return ( String ) criteriaEntityNames.get( criteria );
++		return (( CriteriaInfoProvider ) criteriaInfoMap.get( criteria )).getName();
+ 	}
+ 
+ 	public String getColumn(Criteria criteria, String propertyName) {
+@@ -454,11 +502,14 @@
+ 	private String[] getColumns(
+ 			String propertyName,
+ 	        Criteria subcriteria) throws HibernateException {
+-		return getPropertyMapping( getEntityName( subcriteria, propertyName ) )
++		String[] cols = 
++			getPropertyMapping( getEntityName( subcriteria, propertyName ) )
+ 				.toColumns(
+ 						getSQLAlias( subcriteria, propertyName ),
+ 				        getPropertyName( propertyName )
+ 				);
++		logger.debug("getColumns("+propertyName+","+subcriteria+")="+StringHelper.join(",", cols));
++		return cols;
+ 	}
+ 
+ 	public Type getTypeUsingProjection(Criteria subcriteria, String propertyName)
+@@ -538,7 +589,9 @@
+ 
+ 	private PropertyMapping getPropertyMapping(String entityName)
+ 			throws MappingException {
+-		return ( PropertyMapping ) sessionFactory.getEntityPersister( entityName );
++		logger.debug("getPropertyMapping for "+entityName);
++		CriteriaInfoProvider info = ( CriteriaInfoProvider )nameCriteriaInfoMap.get(entityName);
++		return info.getPropertyMapping();
+ 	}
+ 
+ 	//TODO: use these in methods above
+@@ -555,6 +608,7 @@
+ 	}
+ 
+ 	public String getSQLAlias(Criteria criteria, String propertyName) {
++		logger.debug("getSQLAlias for criteria="+criteria+" propertyName="+propertyName);
+ 		if ( propertyName.indexOf( '.' ) > 0 ) {
+ 			String root = StringHelper.root( propertyName );
+ 			Criteria subcriteria = getAliasedCriteria( root );
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: CriteriaQueryTranslator.java.rej
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: EntityCriteriaInfoProvider.java
+Only in hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/criteria: ScalarCollectionCriteriaInfoProvider.java
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/JoinWalker.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/JoinWalker.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/loader/JoinWalker.java	2008-09-10 14:20:00.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/loader/JoinWalker.java	2009-01-16 16:14:12.000000000 -0500
+@@ -57,6 +57,9 @@
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.StringHelper;
+ 
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * Walks the metamodel, searching for joins, and collecting
+  * together information needed by <tt>OuterJoinLoader</tt>.
+@@ -65,7 +68,8 @@
+  * @author Gavin King, Jon Lipsky
+  */
+ public class JoinWalker {
+-	
++	private static final Logger logger = LoggerFactory.getLogger(JoinWalker.class);
++    
+ 	private final SessionFactoryImplementor factory;
+ 	protected final List associations = new ArrayList();
+ 	private final Set visitedAssociationKeys = new HashSet();
+@@ -949,8 +953,7 @@
+ 			return "";
+ 		}
+ 		else {
+-			StringBuffer buf = new StringBuffer( associations.size() * 100 )
+-				.append(", ");
++			StringBuffer buf = new StringBuffer( associations.size() * 100 );
+ 			int entityAliasCount=0;
+ 			int collectionAliasCount=0;
+ 			for ( int i=0; i<associations.size(); i++ ) {
+@@ -973,15 +976,12 @@
+ 				        collectionSuffix,
+ 						join.getJoinType()==JoinFragment.LEFT_OUTER_JOIN
+ 				);
+-				buf.append(selectFragment);
++				if (selectFragment.trim().length() > 0) {
++					buf.append(", ").append(selectFragment);
++				}
++				logger.debug("buf="+buf+" selectFragment='"+selectFragment+"' joinable="+joinable);
+ 				if ( joinable.consumesEntityAlias() ) entityAliasCount++;
+ 				if ( joinable.consumesCollectionAlias() && join.getJoinType()==JoinFragment.LEFT_OUTER_JOIN ) collectionAliasCount++;
+-				if (
+-					i<associations.size()-1 &&
+-					selectFragment.trim().length()>0
+-				) {
+-					buf.append(", ");
+-				}
+ 			}
+ 			return buf.toString();
+ 		}
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	2008-09-10 14:19:56.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	2009-01-20 09:48:25.000000000 -0500
+@@ -54,12 +54,16 @@
+ import org.hibernate.sql.SelectFragment;
+ import org.hibernate.util.ArrayHelper;
+ 
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * Collection persister for collections of values and many-to-many associations.
+  *
+  * @author Gavin King
+  */
+ public class BasicCollectionPersister extends AbstractCollectionPersister {
++	private static final Logger logger = LoggerFactory.getLogger(BasicCollectionPersister.class);
+ 
+ 	public boolean isCascadeDeleteEnabled() {
+ 		return false;
+@@ -291,7 +295,9 @@
+ 				return manyToManySelectFragment( rhs, rhsAlias, lhsAlias, collectionSuffix );
+ 			}
+ 		}
+-		return includeCollectionColumns ? selectFragment( lhsAlias, collectionSuffix ) : "";
++		String ret = includeCollectionColumns ? selectFragment( lhsAlias, collectionSuffix ) : "";
++		logger.debug("selectFragment="+ret);
++		return ret;
+ 	}
+ 
+ 	private String manyToManySelectFragment(
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/persister/collection/CollectionPropertyMapping.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/persister/collection/CollectionPropertyMapping.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/persister/collection/CollectionPropertyMapping.java	2008-09-10 14:19:56.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/persister/collection/CollectionPropertyMapping.java	2009-01-16 16:15:10.000000000 -0500
+@@ -29,10 +29,14 @@
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.type.Type;
+ 
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * @author Gavin King
+  */
+ public class CollectionPropertyMapping implements PropertyMapping {
++	private static final Logger logger = LoggerFactory.getLogger(CollectionPropertyMapping.class);
+ 
+ 	private final QueryableCollection memberPersister;
+ 
+@@ -71,7 +75,9 @@
+ 
+ 	public String[] toColumns(String alias, String propertyName) throws QueryException {
+ 		if ( propertyName.equals(CollectionPropertyNames.COLLECTION_ELEMENTS) ) {
+-			return memberPersister.getElementColumnNames(alias);
++			String[] cols = memberPersister.getElementColumnNames(alias);
++			logger.debug("toColumns(elements)="+cols);
++			return cols;
+ 		}
+ 		else if ( propertyName.equals(CollectionPropertyNames.COLLECTION_INDICES) ) {
+ 			if ( !memberPersister.hasIndex() ) throw new QueryException("unindexed collection in indices()");
+diff -ur --exclude='*~' --exclude='*.orig' hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/pretty/MessageHelper.java hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/pretty/MessageHelper.java
+--- hibernate-distribution-3.3.1.GA.orig/project/core/src/main/java/org/hibernate/pretty/MessageHelper.java	2008-09-10 14:19:48.000000000 -0400
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/pretty/MessageHelper.java	2009-01-16 16:25:23.000000000 -0500
+@@ -109,7 +109,7 @@
+ 				s.append( id );
+ 			}
+ 			else {
+-				s.append( idType.toLoggableString( id, factory ) );
++			    s.append( id.toString() );
+ 			}
+ 		}
+ 		s.append( ']' );
+@@ -146,7 +146,7 @@
+ 			s.append( "<null>" );
+ 		}
+ 		else {
+-			s.append( identifierType.toLoggableString( id, factory ) );
++		    s.append( id.toString() );
+ 		}
+ 		s.append( ']' );
+ 
+@@ -174,7 +174,7 @@
+ 			s.append( persister.getEntityName() );
+ 			s.append( "#<" );
+ 			for ( int i=0; i<ids.length; i++ ) {
+-				s.append( persister.getIdentifierType().toLoggableString( ids[i], factory ) );
++			    s.append( ids[i].toString() );
+ 				if ( i < ids.length-1 ) {
+ 					s.append( ", " );
+ 				}
+@@ -263,7 +263,7 @@
+ 				// since the incoming is value is actually the owner's id.
+ 				// Using the collection's key type causes problems with
+ 				// property-ref keys...
+-				s.append( persister.getOwnerEntityPersister().getIdentifierType().toLoggableString( ids[i], factory ) );
++			    s.append( ids[i].toString() );
+ 				if ( i < ids.length-1 ) {
+ 					s.append( ", " );
+ 				}
+@@ -304,7 +304,7 @@
+ 				// since the incoming is value is actually the owner's id.
+ 				// Using the collection's key type causes problems with
+ 				// property-ref keys...
+-				s.append( persister.getOwnerEntityPersister().getIdentifierType().toLoggableString( id, factory ) );
++			    s.append( id.toString() );
+ 			}
+ 		}
+ 		s.append( ']' );

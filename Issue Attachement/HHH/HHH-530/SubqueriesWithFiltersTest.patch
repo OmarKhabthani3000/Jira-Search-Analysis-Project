@@ -1,0 +1,95 @@
+Index: org/hibernate/test/filter/DynamicFilterTest.java
+===================================================================
+--- org/hibernate/test/filter/DynamicFilterTest.java	(revision 14032)
++++ org/hibernate/test/filter/DynamicFilterTest.java	(working copy)
+@@ -25,7 +25,10 @@
+ import org.hibernate.cache.entry.CollectionCacheEntry;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
++import org.hibernate.criterion.DetachedCriteria;
+ import org.hibernate.criterion.Expression;
++import org.hibernate.criterion.Property;
++import org.hibernate.criterion.Subqueries;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.impl.SessionFactoryImpl;
+ import org.hibernate.persister.collection.CollectionPersister;
+@@ -203,6 +206,79 @@
+ 		testData.release();
+ 	}
+ 
++	public void testCriteriaSubqueryWithFilters() {
++	    //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++		// Criteria-subquery test
++		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++		log.info( "Starting Criteria-subquery filter tests" );
++		TestData testData = new TestData();
++		testData.prepare();
++
++		Session session = openSession();
++		session.enableFilter("region").setParameter("region", "APAC");
++
++		log.info("Criteria query against Department with a subquery on Salesperson in the APAC reqion...");
++		DetachedCriteria salespersonSubquery = DetachedCriteria.forClass(Salesperson.class)
++		    .add( Expression.eq("name", "steve"))
++			.setProjection(Property.forName("department"));
++
++		List departments = session.createCriteria(Department.class)
++			.add(Subqueries.propertyIn("id", salespersonSubquery))
++			.list();
++
++		assertEquals("Incorrect department count", 1, departments.size());
++
++		log.info("Criteria query against Department with a subquery on Salesperson in the FooBar reqion...");
++
++		session.enableFilter("region").setParameter("region", "Foobar");
++		departments = session.createCriteria(Department.class)
++			.add(Subqueries.propertyIn("id", salespersonSubquery))
++			.list();
++
++		assertEquals("Incorrect department count", 0, departments.size());
++
++        log.info("Criteria query against Order with a subquery for line items with a subquery on product and sold by a given sales person...");
++		session.enableFilter("region").setParameter("region", "APAC");
++
++        DetachedCriteria lineItemSubquery = DetachedCriteria.forClass(LineItem.class)
++            .add(Expression.ge("quantity", Long.valueOf(1)))
++            .createCriteria("product")
++            .add(Expression.eq("name", "Acme Hair Gel"))
++            .setProjection(Property.forName("id"));
++
++        List orders = session.createCriteria(Order.class)
++            .add(Subqueries.exists(lineItemSubquery))
++            .add(Expression.eq("buyer", "gavin"))
++			.list();
++
++        assertEquals("Incorrect orders count", 1, orders.size());
++
++        log.info("Criteria query against Order with a subquery for line items with a subquery on product and sold by a given sales person...");
++		session.enableFilter("region").setParameter("region", "APAC");
++        session.enableFilter("effectiveDate").setParameter("asOfDate", testData.lastMonth.getTime());
++
++        DetachedCriteria productSubquery = DetachedCriteria.forClass(Product.class)
++            .add(Expression.eq("name", "Acme Hair Gel"))
++            .setProjection(Property.forName("id"));
++
++        lineItemSubquery = DetachedCriteria.forClass(LineItem.class)
++            .add(Expression.ge("quantity", Long.valueOf(1)))
++            .createCriteria("product")
++            //todo the subquery within the subquery fails due to the cast to get the enabled filters in the SubqueryExpression since the criteria is actually org.hibernate.impl.CriteriaImpl$Subcriteria
++            //.add(Subqueries.propertyIn("id", productSubquery))
++            .setProjection(Property.forName("id"));
++
++        orders = session.createCriteria(Order.class)
++            .add(Subqueries.exists(lineItemSubquery))
++            .add(Expression.eq("buyer", "gavin"))
++			.list();
++
++        assertEquals("Incorrect orders count", 1, orders.size());
++
++		session.close();
++		testData.release();
++    }
++
+ 	public void testGetFilters() {
+ 		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 		// Get() test

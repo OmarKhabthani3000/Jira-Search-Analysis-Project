@@ -1,0 +1,111 @@
+Index: src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdate.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdate.java,v
+retrieving revision 1.9
+diff -u -p -B -r1.9 SchemaUpdate.java
+--- src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdate.java	16 Jun 2003 03:25:00 -0000	1.9
++++ src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdate.java	23 Sep 2003 16:23:03 -0000
+@@ -46,6 +46,8 @@ public class SchemaUpdate {
+ 			Configuration cfg = new Configuration();
+ 
+ 			boolean script = true;
++            // If true then execute db updates, otherwise just generate and display updates
++            boolean actuallyDoIt = true;
+ 			String propFile = null;
+ 
+ 			for ( int i=0; i<args.length; i++ )  {
+@@ -59,6 +61,9 @@ public class SchemaUpdate {
+ 					else if ( args[i].startsWith("--config=") ) {
+ 						cfg.configure( args[i].substring(9) );
+ 					}
++                    else if ( args[i].startsWith("--text")) {
++                        actuallyDoIt = false;
++                    }
+ 				}
+ 				else {
+ 					cfg.addFile(args[i]);
+@@ -68,10 +73,10 @@ public class SchemaUpdate {
+ 			if(propFile!=null) {
+ 				Properties props = new Properties();
+ 				props.load( new FileInputStream(propFile) );
+-				new SchemaUpdate(cfg, props).execute(script);
++				new SchemaUpdate(cfg, props).execute(script, actuallyDoIt);
+ 			}
+ 			else {
+-				new SchemaUpdate(cfg).execute(script);
++				new SchemaUpdate(cfg).execute(script, actuallyDoIt);
+ 			}
+ 		}
+ 		catch(Exception e) {
+@@ -84,7 +89,7 @@ public class SchemaUpdate {
+ 	 * Execute the schema updates
+ 	 * @param script print all DDL to the console
+ 	 */
+-	public void execute(boolean script) throws HibernateException {
++	public void execute(boolean script, boolean actuallyDoIt) throws HibernateException {
+ 		
+ 		Connection connection;
+ 		DatabaseMetadata meta;
+@@ -109,12 +114,14 @@ public class SchemaUpdate {
+ 			try {
+ 				if (script) System.out.println( createSQL[j] );
+ 
+-				if (jdbc2) {
+-					stmt.addBatch( sql );
+-				}
+-				else {
+-					stmt.executeUpdate( sql );
+-				}
++                if (actuallyDoIt) {
++                    if (jdbc2) {
++                        stmt.addBatch( sql );
++                    }
++                    else {
++                        stmt.executeUpdate( sql );
++                    }
++                }
+ 
+ 			}
+ 			catch (SQLException e) {
+Index: src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdateTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdateTask.java,v
+retrieving revision 1.2
+diff -u -p -B -r1.2 SchemaUpdateTask.java
+--- src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdateTask.java	16 Jun 2003 03:48:45 -0000	1.2
++++ src/net/sf/hibernate/tool/hbm2ddl/SchemaUpdateTask.java	23 Sep 2003 16:23:03 -0000
+@@ -43,6 +43,7 @@ public class SchemaUpdateTask extends Ma
+     private File propertiesFile = null;
+     private String configurationFile = null;
+     private boolean quiet = false;
++    private boolean performUpdate = true;
+ 
+     public void addFileset(FileSet set) {
+         fileSets.add(set);
+@@ -77,14 +78,24 @@ public class SchemaUpdateTask extends Ma
+     public void setQuiet(boolean quiet) {
+         this.quiet = quiet;
+     }
+-    
++
++
++    /**
++     * If true then execute database updates, otherwise just show what we would have done
++     * Defaults to true to remain backwards compatible
++     * @param performUpdate
++     */
++    public void setPerformUpdate(boolean performUpdate) {
++        this.performUpdate = performUpdate;
++    }
++
+ 	/**
+ 	 * Execute the task
+ 	 */
+     public void execute() throws BuildException {
+         try {
+             Configuration cfg = getConfiguration();
+-            getSchemaUpdate(cfg).execute(!quiet);
++            getSchemaUpdate(cfg).execute(!quiet, performUpdate);
+         } 
+         catch (HibernateException e) {
+             throw new BuildException("Schema text failed: " + e.getMessage(), e);

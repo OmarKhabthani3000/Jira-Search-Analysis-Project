@@ -1,0 +1,124 @@
+diff -rwu src.orig\net\sf\hibernate\engine\SessionImplementor.java src\net\sf\hibernate\engine\SessionImplementor.java
+--- src.orig\net\sf\hibernate\engine\SessionImplementor.java	Sun Jan 30 18:48:30 2005
++++ src\net\sf\hibernate\engine\SessionImplementor.java	Mon May 30 16:48:51 2005
+@@ -246,8 +246,6 @@
+ 	 */
+ 	public List findBySQL(String sqlQuery, String[] aliases, Class[] classes, QueryParameters queryParameters, Collection querySpaces) throws HibernateException;
+ 	
+-	public void addNonExist(Key key);
+-	
+ 	public Object copy(Object object, Map copiedAlready) throws HibernateException;
+ 	
+ 	public Object getCollectionOwner(Serializable key, CollectionPersister collectionPersister) throws MappingException;
+diff -rwu src.orig\net\sf\hibernate\impl\SessionImpl.java src\net\sf\hibernate\impl\SessionImpl.java
+--- src.orig\net\sf\hibernate\impl\SessionImpl.java	Sun Jan 30 18:48:42 2005
++++ src\net\sf\hibernate\impl\SessionImpl.java	Mon May 30 16:49:37 2005
+@@ -128,8 +128,6 @@
+ 
+ 	private HashSet nullifiables = new HashSet(); //set of Keys of deleted objects
+ 
+-	private final HashSet nonExists;
+-
+ 	private Interceptor interceptor;
+ 
+ 	private transient Connection connection;
+@@ -542,7 +540,6 @@
+ 
+ 		entitiesByKey = new HashMap(50);
+ 		proxiesByKey = new HashMap(10);
+-		nonExists = new HashSet(10);
+ 		entityEntries = IdentityMap.instantiateSequenced(50);
+ 		collectionEntries = IdentityMap.instantiateSequenced(30);
+ 		collectionsByKey = new HashMap(30);
+@@ -649,7 +646,6 @@
+ 		nullifiables.clear();
+ 		batchLoadableEntityKeys.clear();
+ 		collectionsByKey.clear();
+-		nonExists.clear();
+ 
+ 		/*insertions.clear();
+ 		deletions.clear();
+@@ -950,7 +946,6 @@
+ 		Object version = Versioning.getVersion(values, persister);
+ 		addEntity(key, object);
+ 		addEntry(object, LOADED, values, id, version, LockMode.WRITE, useIdentityColumn, persister, replicate);
+-		nonExists.remove(key);
+ 
+ 		if (!useIdentityColumn) {
+ 			insertions.add( new ScheduledInsertion(id, values, object, version, persister, this) );
+@@ -2112,12 +2107,6 @@
+ 		}
+ 
+ 		else {
+-			// check to see if we know already that it does not exist:
+-			if ( nonExists.contains(key) ) {
+-				log.trace("entity does not exist");
+-				return null;
+-			}
+-
+ 			// LOOK IN CACHE
+ 			CacheEntry entry = persister.hasCache() && lockMode.lessThan(LockMode.READ) ?
+ 				(CacheEntry) persister.getCache().get( id, getTimestamp() ) :
+@@ -2129,7 +2118,6 @@
+ 				// GO TO DATABASE
+ 				if ( log.isTraceEnabled() ) log.trace( "object not resolved in any cache " + MessageHelper.infoString(persister, id) );
+ 				final Object result = persister.load(id, optionalObject, lockMode, this);
+-				if (result==null) addNonExist(key); //remember it doesn't exist, in case of next time
+ 				return result;
+ 			}
+ 
+@@ -3891,7 +3879,6 @@
+ 		collectionEntries.clear();
+ 		proxiesByKey.clear();
+ 		batchLoadableEntityKeys.clear();
+-        nonExists.clear();
+ 
+ 		updates.clear();
+ 		insertions.clear();
+@@ -4031,10 +4018,6 @@
+ 
+ 	public void cancelQuery() throws HibernateException {
+ 		getBatcher().cancelLastQuery();
+-	}
+-
+-	public void addNonExist(Key key) {
+-		nonExists.add(key);
+ 	}
+ 
+ 	public Object saveOrUpdateCopy(Object object) throws HibernateException {
+diff -rwu src.orig\net\sf\hibernate\loader\Loader.java src\net\sf\hibernate\loader\Loader.java
+--- src.orig\net\sf\hibernate\loader\Loader.java	Sun Jan 30 18:48:32 2005
++++ src\net\sf\hibernate\loader\Loader.java	Mon May 30 16:50:21 2005
+@@ -212,8 +212,6 @@
+ 			//TODO: the i==cols-1 bit depends upon subclass implementation (very bad)
+ 		}
+ 
+-		if (owners!=null) registerNonExists(keys, owners, persisters, session);
+-
+ 		// this call is side-effecty
+ 		Object[] row = getRow(
+ 				resultSet,
+@@ -337,23 +335,6 @@
+ 	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session)
+ 	throws SQLException, HibernateException {
+ 		return row;
+-	}
+-	
+-	private void registerNonExists(
+-		final Key[] keys, 
+-		final int[] owners,
+-		final Loadable[] persisters,
+-		final SessionImplementor session) {
+-		
+-		for (int i=0; i<keys.length; i++) {
+-			int owner = owners[i];
+-			if (owner>-1) {
+-				Key ownerKey = keys[owner];
+-				if ( keys[i]==null && ownerKey!=null ) {
+-					session.addNonExist( new Key( ownerKey.getIdentifier(), persisters[i] ) );
+-				}
+-			}
+-		}
+ 	}
+ 	
+ 	/**

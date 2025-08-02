@@ -1,0 +1,48 @@
+--- Hibernate3/src/org/hibernate/criterion/InExpression.java	2005-07-20 01:25:35.000000000 +0200
++++ hibernate-3.1-patched/src/org/hibernate/criterion/InExpression.java	2005-11-03 15:24:11.153518400 +0100
+@@ -24,6 +24,7 @@
+ 
+ 	private final String propertyName;
+ 	private final Object[] values;
++	private static final int MAX_PARAMS_PER_INEXPR = 500;
+ 
+ 	protected InExpression(String propertyName, Object[] values) {
+ 		this.propertyName = propertyName;
+@@ -35,12 +36,32 @@
+ 		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
+ 		String singleValueParam = StringHelper.repeat( "?, ", columns.length-1 )  + "?";
+ 		if ( columns.length>1 ) singleValueParam = '(' + singleValueParam + ')';
+-		String params = values.length>0 ?
+-			StringHelper.repeat( singleValueParam + ", ", values.length-1 ) + singleValueParam :
+-			"";
+ 		String cols = StringHelper.join(", ", columns);
+-		if ( columns.length>1 ) cols = '(' + cols + ')';
+-		return cols + " in (" + params + ')';
++
++		boolean firstExpr = true;
++		String res = "";
++		int exprCount = ((values.length - 1) / MAX_PARAMS_PER_INEXPR) + 1;
++		for (int i = 0; i < exprCount; i++) {
++			if ( firstExpr == false )
++				res += " or ";
++
++			int paramsCount;
++			if ( i == exprCount - 1 )
++				paramsCount = values.length % MAX_PARAMS_PER_INEXPR;
++			else
++				paramsCount = MAX_PARAMS_PER_INEXPR;
++
++			String params = paramsCount>0 ?
++				StringHelper.repeat( singleValueParam + ", ", paramsCount-1 ) + singleValueParam :
++				"";
++			if ( columns.length>1 ) cols = '(' + cols + ')';
++			res += cols + " in (" + params + ')';
++
++			firstExpr = false;
++		}
++
++		if ( values.length > MAX_PARAMS_PER_INEXPR ) res = "(" + res + ")";
++		return res;
+ 	}
+ 
+ 	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery) 

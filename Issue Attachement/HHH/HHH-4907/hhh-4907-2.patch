@@ -1,0 +1,363 @@
+Index: core/src/main/java/org/hibernate/dialect/Oracle9iDialect.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/Oracle9iDialect.java	(revision 18947)
++++ core/src/main/java/org/hibernate/dialect/Oracle9iDialect.java	(working copy)
+@@ -127,5 +127,12 @@
+ 	public String getReadLockString(int timeout) {
+ 		return getWriteLockString( timeout );
+ 	}
++	/**
++	 * HHH-4907, I don't know if oracle 8 supports this syntax, so I'd think it is better add this 
++	 * method here. Reopen this issue if you found/know 8 supports it.
++	 */
++    public boolean supportsRowValueConstructorSyntaxInInList() {
++        return true;
++    }
+ 	
+ }
+Index: core/src/main/java/org/hibernate/criterion/InExpression.java
+===================================================================
+--- core/src/main/java/org/hibernate/criterion/InExpression.java	(revision 18947)
++++ core/src/main/java/org/hibernate/criterion/InExpression.java	(working copy)
+@@ -50,19 +50,35 @@
+ 		this.values = values;
+ 	}
+ 
+-	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+-	throws HibernateException {
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
+-		String singleValueParam = StringHelper.repeat( "?, ", columns.length-1 )  + "?";
+-		if ( columns.length>1 ) singleValueParam = '(' + singleValueParam + ')';
+-		String params = values.length>0 ?
+-			StringHelper.repeat( singleValueParam + ", ", values.length-1 ) + singleValueParam :
+-			"";
+-		String cols = StringHelper.join(", ", columns);
+-		if ( columns.length>1 ) cols = '(' + cols + ')';
+-		return cols + " in (" + params + ')';
+-	}
++    public String toSqlString( Criteria criteria, CriteriaQuery criteriaQuery )
++            throws HibernateException {
++        String[] columns = criteriaQuery.getColumnsUsingProjection(
++                criteria, propertyName );
++        if ( criteriaQuery.getFactory().getDialect()
++                .supportsRowValueConstructorSyntaxInInList() || columns.length<=1) {
+ 
++            String singleValueParam = StringHelper.repeat( "?, ",
++                    columns.length - 1 )
++                    + "?";
++            if ( columns.length > 1 )
++                singleValueParam = '(' + singleValueParam + ')';
++            String params = values.length > 0 ? StringHelper.repeat(
++                    singleValueParam + ", ", values.length - 1 )
++                    + singleValueParam : "";
++            String cols = StringHelper.join( ", ", columns );
++            if ( columns.length > 1 )
++                cols = '(' + cols + ')';
++            return cols + " in (" + params + ')';
++        } else {
++           String cols = " ( " + StringHelper.join( " = ? and ", columns ) + "= ? ) ";
++             cols = values.length > 0 ? StringHelper.repeat( cols
++                    + "or ", values.length - 1 )
++                    + cols : "";
++            cols = " ( " + cols + " ) ";
++            return cols;
++        }
++    }
++
+ 	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery) 
+ 	throws HibernateException {
+ 		ArrayList list = new ArrayList();
+Index: core/src/main/java/org/hibernate/hql/ast/tree/InLogicOperatorNode.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/InLogicOperatorNode.java	(revision 18947)
++++ core/src/main/java/org/hibernate/hql/ast/tree/InLogicOperatorNode.java	(working copy)
+@@ -24,8 +24,15 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ import antlr.SemanticException;
+ import antlr.collections.AST;
++
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.hql.antlr.HqlSqlTokenTypes;
++import org.hibernate.param.ParameterSpecification;
+ import org.hibernate.type.Type;
+ 
+ /**
+@@ -60,5 +67,93 @@
+ 				inListChild = inListChild.getNextSibling();
+ 			}
+ 		}
++
++        SessionFactoryImplementor sessionFactory = getSessionFactoryHelper()
++                .getFactory();
++        Type lhsType = extractDataType( lhs );
++        if ( lhsType == null )
++            return; 
++        Type rhsType = extractDataType( (Node) inList.getFirstChild() );
++        if(rhsType==null)
++            return;
++        int lhsColumnSpan = lhsType.getColumnSpan( sessionFactory );
++        int rhsColumnSpan = rhsType.getColumnSpan( sessionFactory );
++        if ( lhsColumnSpan > 1
++                && !sessionFactory.getDialect()
++                        .supportsRowValueConstructorSyntaxInInList() ) {
++            mutateRowValueConstructorSyntaxInInListSyntax( lhsColumnSpan,
++                    rhsColumnSpan );
++        }
+ 	}
++    /**
++     * Mutate the subtree relating to a row-value-constructor in "in" list to instead use
++     * a series of ORen and ANDed predicates.  This allows multi-column type comparisons
++     * and explicit row-value-constructor in "in" list syntax even on databases which do
++     * not support row-value-constructor in "in" list.
++     * <p/>
++     * For example, here we'd mutate "... where (col1, col2) in ( ('val1', 'val2'), ('val3', 'val4') ) ..." to
++     * "... where (col1 = 'val1' and col2 = 'val2') or (col1 = 'val3' and val2 = 'val4') ..."
++     *
++     * @param lhsColumnSpan The number of elements in the row value constructor list.
++     */
++    private void mutateRowValueConstructorSyntaxInInListSyntax(
++            int lhsColumnSpan, int rhsColumnSpan ) {
++        String[] lhsElementTexts = extractMutationTexts( getLeftHandOperand(),
++                lhsColumnSpan );
++        Node rhsNode = (Node) getInList().getFirstChild();
++        ParameterSpecification lhsEmbeddedCompositeParameterSpecification = getLeftHandOperand() == null
++                || ( !ParameterNode.class.isInstance( getLeftHandOperand() ) ) ? null
++                : ( (ParameterNode) getLeftHandOperand() )
++                        .getHqlParameterSpecification();
++        /**
++         * only one element in "in" cluster, e.g.
++         * <code> where (a,b) in ( (1,2) ) </code> this will be mutated to
++         * <code>where a=1 and b=2 </code>
++         */
++        if ( rhsNode != null && rhsNode.getNextSibling() == null ) {
++            String[] rhsElementTexts = extractMutationTexts( rhsNode,
++                    rhsColumnSpan );
++            setType( HqlSqlTokenTypes.AND );
++            setText( "AND" );
++            ParameterSpecification rhsEmbeddedCompositeParameterSpecification = rhsNode == null
++                    || ( !ParameterNode.class.isInstance( rhsNode ) ) ? null
++                    : ( (ParameterNode) rhsNode )
++                            .getHqlParameterSpecification();
++            translate( lhsColumnSpan, HqlSqlTokenTypes.EQ, "=", lhsElementTexts,
++                    rhsElementTexts,
++                    lhsEmbeddedCompositeParameterSpecification,
++                    rhsEmbeddedCompositeParameterSpecification, this );
++        } else {
++            List andElementsNodeList = new ArrayList();
++            while ( rhsNode != null ) {
++                String[] rhsElementTexts = extractMutationTexts( rhsNode,
++                        rhsColumnSpan );
++                AST and = getASTFactory().create( HqlSqlTokenTypes.AND, "AND" );
++                ParameterSpecification rhsEmbeddedCompositeParameterSpecification = rhsNode == null
++                        || ( !ParameterNode.class.isInstance( rhsNode ) ) ? null
++                        : ( (ParameterNode) rhsNode )
++                                .getHqlParameterSpecification();
++                translate( lhsColumnSpan, HqlSqlTokenTypes.EQ, "=",
++                        lhsElementTexts, rhsElementTexts,
++                        lhsEmbeddedCompositeParameterSpecification,
++                        rhsEmbeddedCompositeParameterSpecification, and );
++                andElementsNodeList.add( and );
++                rhsNode = (Node) rhsNode.getNextSibling();
++            }
++            setType( HqlSqlTokenTypes.OR );
++            setText( "OR" );
++            AST curNode = this;
++            for ( int i = andElementsNodeList.size() - 1; i > 1; i-- ) {
++                AST or = getASTFactory().create( HqlSqlTokenTypes.OR, "OR" );
++                curNode.setFirstChild( or );
++                curNode = or;
++                AST and = (AST) andElementsNodeList.get( i );
++                or.setNextSibling( and );
++            }
++            AST node0 = (AST) andElementsNodeList.get( 0 );
++            AST node1 = (AST) andElementsNodeList.get( 1 );
++            node0.setNextSibling( node1 );
++            curNode.setFirstChild( node0 );
++        }
++    }
+ }
+Index: core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java	(revision 18991)
++++ core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java	(working copy)
+@@ -75,7 +75,7 @@
+ 	}
+ 
+ 	protected final void mutateRowValueConstructorSyntaxesIfNecessary(Type lhsType, Type rhsType) {
+-		// TODO : this really needs to be delayed unitl after we definitively know all node types
++		// TODO : this really needs to be delayed until after we definitively know all node types
+ 		// where this is currently a problem is parameters for which where we cannot unequivocally
+ 		// resolve an expected type
+ 		SessionFactoryImplementor sessionFactory = getSessionFactoryHelper().getFactory();
+@@ -109,7 +109,7 @@
+ 	 * @param valueElements The number of elements in the row value constructor list.
+ 	 */
+ 	private void mutateRowValueConstructorSyntax(int valueElements) {
+-		// mutation depends on the types of nodes invloved...
++		// mutation depends on the types of nodes involved...
+ 		int comparisonType = getType();
+ 		String comparisonText = getText();
+ 		setType( HqlSqlTokenTypes.AND );
+@@ -127,8 +127,21 @@
+ 						? null
+ 						: ( ( ParameterNode ) getRightHandOperand() ).getHqlParameterSpecification();
+ 
+-		AST container = this;
+-		for ( int i = valueElements - 1; i > 0; i-- ) {
++		translate( valueElements, comparisonType, comparisonText,
++                lhsElementTexts, rhsElementTexts,
++                lhsEmbeddedCompositeParameterSpecification,
++                rhsEmbeddedCompositeParameterSpecification, this );
++	}
++	/**
++	 * 
++	 */
++    protected void translate( int valueElements, int comparisonType,
++            String comparisonText, String[] lhsElementTexts,
++            String[] rhsElementTexts,
++            ParameterSpecification lhsEmbeddedCompositeParameterSpecification,
++            ParameterSpecification rhsEmbeddedCompositeParameterSpecification,
++            AST container ) {
++        for ( int i = valueElements - 1; i > 0; i-- ) {
+ 			if ( i == 1 ) {
+ 				AST op1 = getASTFactory().create( comparisonType, comparisonText );
+ 				AST lhs1 = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, lhsElementTexts[0] );
+@@ -165,9 +178,9 @@
+ 				container = newContainer;
+ 			}
+ 		}
+-	}
++    }
+ 
+-	private static String[] extractMutationTexts(Node operand, int count) {
++	protected static String[] extractMutationTexts(Node operand, int count) {
+ 		if ( operand instanceof ParameterNode ) {
+ 			String[] rtn = new String[count];
+ 			for ( int i = 0; i < count; i++ ) {
+Index: annotations/src/test/java/org/hibernate/test/annotations/cid/CompositeIdTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/cid/CompositeIdTest.java	(revision 18947)
++++ annotations/src/test/java/org/hibernate/test/annotations/cid/CompositeIdTest.java	(working copy)
+@@ -11,6 +11,7 @@
+ import org.hibernate.Criteria;
+ import org.hibernate.criterion.Disjunction;
+ import org.hibernate.criterion.Restrictions;
++import org.hibernate.junit.FailureExpected;
+ import org.hibernate.junit.SkipForDialect;
+ import org.hibernate.test.annotations.TestCase;
+ 
+@@ -253,46 +254,12 @@
+ 		s.close();
+ 	}
+ 
+-	@SkipForDialect(value=org.hibernate.dialect.HSQLDialect.class,
+-			comment = "HSQLDB does not support ((..., ...),(..., ...))")
+ 	public void testQueryInAndComposite() {
+ 
+ 		Session s = openSession(  );
+ 		Transaction transaction = s.beginTransaction();
+-
+-		SomeEntity someEntity = new SomeEntity();
+-		someEntity.setId( new SomeEntityId( ) );
+-		someEntity.getId().setId( 1 );
+-		someEntity.getId().setVersion( 11 );
+-		someEntity.setProp( "aa" );
+-		s.persist( someEntity );
+-		someEntity = new SomeEntity();
+-		someEntity.setId( new SomeEntityId( ) );
+-		someEntity.getId().setId( 1 );
+-		someEntity.getId().setVersion( 12 );
+-		someEntity.setProp( "bb" );
+-		s.persist( someEntity );
+-		someEntity = new SomeEntity();
+-		someEntity.setId( new SomeEntityId( ) );
+-		someEntity.getId().setId( 10 );
+-		someEntity.getId().setVersion( 21 );
+-		someEntity.setProp( "cc1" );
+-		s.persist( someEntity );
+-		someEntity = new SomeEntity();
+-		someEntity.setId( new SomeEntityId( ) );
+-		someEntity.getId().setId( 10 );
+-		someEntity.getId().setVersion( 22 );
+-		someEntity.setProp( "cc2" );
+-		s.persist( someEntity );
+-		someEntity = new SomeEntity();
+-		someEntity.setId( new SomeEntityId( ) );
+-		someEntity.getId().setId( 10 );
+-		someEntity.getId().setVersion( 23 );
+-		someEntity.setProp( "cc3" );
+-		s.persist( someEntity );
+-
+-		s.flush();
+-
++		createData( s );
++        s.flush();
+         List ids = new ArrayList<SomeEntityId>(2);
+         ids.add( new SomeEntityId(1,12) );
+         ids.add( new SomeEntityId(10,23) );
+@@ -308,7 +275,60 @@
+ 		transaction.rollback();
+ 		s.close();
+ 	}
++    public void testQueryInAndCompositeWithHQL() {
++        Session s = openSession(  );
++        Transaction transaction = s.beginTransaction();
++        createData( s );
++        s.flush();
++        List ids = new ArrayList<SomeEntityId>(2);
++        ids.add( new SomeEntityId(1,12) );
++        ids.add( new SomeEntityId(10,23) );
++        ids.add( new SomeEntityId(10,22) );
++        Query query=s.createQuery( "from SomeEntity e where e.id in (:idList)" );
++        query.setParameterList( "idList", ids );
++        List list=query.list();
++        assertEquals( 3, list.size() );
++        transaction.rollback();
++        s.close();
++    }
+ 
++
++	private void createData(Session s){
++        SomeEntity someEntity = new SomeEntity();
++        someEntity.setId( new SomeEntityId( ) );
++        someEntity.getId().setId( 1 );
++        someEntity.getId().setVersion( 11 );
++        someEntity.setProp( "aa" );
++        s.persist( someEntity );
++        
++        someEntity = new SomeEntity();
++        someEntity.setId( new SomeEntityId( ) );
++        someEntity.getId().setId( 1 );
++        someEntity.getId().setVersion( 12 );
++        someEntity.setProp( "bb" );
++        s.persist( someEntity );
++        
++        someEntity = new SomeEntity();
++        someEntity.setId( new SomeEntityId( ) );
++        someEntity.getId().setId( 10 );
++        someEntity.getId().setVersion( 21 );
++        someEntity.setProp( "cc1" );
++        s.persist( someEntity );
++        
++        someEntity = new SomeEntity();
++        someEntity.setId( new SomeEntityId( ) );
++        someEntity.getId().setId( 10 );
++        someEntity.getId().setVersion( 22 );
++        someEntity.setProp( "cc2" );
++        s.persist( someEntity );
++        
++        someEntity = new SomeEntity();
++        someEntity.setId( new SomeEntityId( ) );
++        someEntity.getId().setId( 10 );
++        someEntity.getId().setVersion( 23 );
++        someEntity.setProp( "cc3" );
++        s.persist( someEntity );
++	}
+ 	protected Class[] getAnnotatedClasses() {
+ 		return new Class[] {
+ 				Parent.class,

@@ -1,0 +1,160 @@
+? .classpath
+? .project
+? eclipse
+Index: src/net/sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.27.2.30
+diff -u -r1.27.2.30 Configuration.java
+--- src/net/sf/hibernate/cfg/Configuration.java	4 Feb 2004 18:56:44 -0000	1.27.2.30
++++ src/net/sf/hibernate/cfg/Configuration.java	10 Feb 2004 01:09:54 -0000
+@@ -24,6 +24,7 @@
+ import org.dom4j.Attribute;
+ import org.dom4j.Element;
+ import org.w3c.dom.Document;
++import org.xml.sax.EntityResolver;
+ import org.xml.sax.InputSource;
+ 
+ import net.sf.hibernate.util.ArrayHelper;
+@@ -85,6 +86,7 @@
+ 	private Interceptor interceptor = EMPTY_INTERCEPTOR;
+ 	private Properties properties = Environment.getProperties();
+ 	private Map caches = new HashMap();
++	private EntityResolver entityResolver = XMLHelper.DEFAULT_DTD_RESOLVER;
+ 	
+ 	private NamingStrategy namingStrategy = DefaultNamingStrategy.INSTANCE; 
+ 
+@@ -99,6 +101,7 @@
+ 		secondPasses = new ArrayList();
+ 		interceptor = EMPTY_INTERCEPTOR;
+ 		properties = Environment.getProperties();
++		entityResolver = XMLHelper.DEFAULT_DTD_RESOLVER;
+ 	}
+ 
+ 	private Mapping mapping = new Mapping() {
+@@ -157,6 +160,17 @@
+ 	public Collection getCollectionMapping(String role) {
+ 		return (Collection) collections.get(role);
+ 	}
++	
++	/**
++	 * Set a custom entity resolver. This entity resolver must be
++	 * set before addXXX(misc) call.
++	 * Default value is {@link DTDEntityResolver}
++	 * 
++	 * @param entityResolver entity resolver to use
++	 */
++	public void setEntityResolver(EntityResolver entityResolver) {
++		this.entityResolver = entityResolver;
++	}
+ 
+ 	/**
+ 	 * Read mappings from a particular XML file
+@@ -166,7 +180,7 @@
+ 		log.info("Mapping file: " + xmlFile);
+ 		try {
+ 			List errors = new ArrayList();
+-			org.dom4j.Document doc= XMLHelper.createSAXReader(xmlFile, errors).read( new File(xmlFile) );
++			org.dom4j.Document doc= XMLHelper.createSAXReader(xmlFile, errors, entityResolver).read( new File(xmlFile) );
+ 			if ( errors.size()!=0 ) throw new MappingException( "invalid mapping", (Throwable) errors.get(0) );
+ 			add(doc);
+ 			return this;
+@@ -201,7 +215,7 @@
+ 		if ( log.isDebugEnabled() ) log.debug("Mapping XML:\n" + xml);
+ 		try {
+ 			List errors = new ArrayList();
+-			org.dom4j.Document doc = XMLHelper.createSAXReader("XML String", errors).read( new StringReader(xml) );
++			org.dom4j.Document doc = XMLHelper.createSAXReader("XML String", errors, entityResolver).read( new StringReader(xml) );
+ 			if ( errors.size()!=0 ) throw new MappingException( "invalid mapping", (Throwable) errors.get(0) );
+ 			add(doc);
+ 		}
+@@ -280,7 +294,7 @@
+ 	public Configuration addInputStream(InputStream xmlInputStream) throws MappingException {
+ 		try {
+ 			List errors = new ArrayList();
+-			org.dom4j.Document doc = XMLHelper.createSAXReader("XML InputStream", errors).read( new InputSource(xmlInputStream) );
++			org.dom4j.Document doc = XMLHelper.createSAXReader("XML InputStream", errors, entityResolver).read( new InputSource(xmlInputStream) );
+ 			if ( errors.size()!=0 ) throw new MappingException( "invalid mapping", (Throwable) errors.get(0) );
+ 			add(doc);
+ 			return this;
+@@ -909,7 +923,7 @@
+ 		org.dom4j.Document doc;
+ 		try {
+ 			List errors = new ArrayList();
+-			doc = XMLHelper.createSAXReader(resourceName, errors).read( new InputSource(stream) );
++			doc = XMLHelper.createSAXReader(resourceName, errors, entityResolver).read( new InputSource(stream) );
+ 			if ( errors.size()!=0 ) throw new MappingException( "invalid configuration", (Throwable) errors.get(0) );
+ 		}
+ 		catch (Exception e) {
+Index: src/net/sf/hibernate/util/DTDEntityResolver.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/util/DTDEntityResolver.java,v
+retrieving revision 1.4
+diff -u -r1.4 DTDEntityResolver.java
+--- src/net/sf/hibernate/util/DTDEntityResolver.java	23 Feb 2003 13:47:18 -0000	1.4
++++ src/net/sf/hibernate/util/DTDEntityResolver.java	10 Feb 2004 01:09:55 -0000
+@@ -14,15 +14,33 @@
+ 	Log log = LogFactory.getLog(DTDEntityResolver.class);
+ 	
+ 	private static final String URL = "http://hibernate.sourceforge.net/";
++	private final ClassLoader resourceLoader;
++	
++	/**
++	 * Default constructor using DTDEntityResolver classloader for
++	 * resource loading.
++	 */
++	public DTDEntityResolver() {
++		//backward compatibility
++		resourceLoader = this.getClass().getClassLoader();
++	}
++	
++	/**
++	 * Set the class loader used to load resouces
++	 * 
++	 * @param resourceLoader class loader to use
++	 */
++	public DTDEntityResolver(ClassLoader resourceLoader) {
++		this.resourceLoader = resourceLoader;
++	}
+ 	
+ 	public InputSource resolveEntity (String publicId, String systemId) {
+ 		if ( systemId!=null && systemId.startsWith(URL) ) {
+ 			log.debug("trying to locate " + systemId + " in classpath under net/sf/hibernate/");
+ 			// Search for DTD
+-			ClassLoader classLoader = this.getClass().getClassLoader();
+-			InputStream dtdStream = classLoader.getResourceAsStream( "net/sf/hibernate/" + systemId.substring( URL.length() ) );
++			InputStream dtdStream = resourceLoader.getResourceAsStream( "net/sf/hibernate/" + systemId.substring( URL.length() ) );
+ 			if (dtdStream==null) {
+-				log.debug(systemId + "not found in classpath");
++				log.debug(systemId + " not found in classpath");
+ 				return null;
+ 			}
+ 			else {
+Index: src/net/sf/hibernate/util/XMLHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/util/XMLHelper.java,v
+retrieving revision 1.6.2.2
+diff -u -r1.6.2.2 XMLHelper.java
+--- src/net/sf/hibernate/util/XMLHelper.java	2 Nov 2003 04:26:44 -0000	1.6.2.2
++++ src/net/sf/hibernate/util/XMLHelper.java	10 Feb 2004 01:09:55 -0000
+@@ -17,9 +17,9 @@
+ 	 * Create a dom4j SAXReader which will append all validation errors
+ 	 * to errorList
+ 	 */
+-	public static SAXReader createSAXReader(String file, List errorsList) {
++	public static SAXReader createSAXReader(String file, List errorsList, EntityResolver entityResolver) {
+ 		SAXReader reader = new SAXReader();
+-		reader.setEntityResolver(DTD_RESOLVER);
++		reader.setEntityResolver(entityResolver);
+ 		reader.setErrorHandler( new ErrorLogger(file, errorsList) );
+ 		reader.setMergeAdjacentText(true);
+ 		reader.setValidation(true);
+@@ -35,7 +35,7 @@
+ 	}
+ 	
+ 	private static final Log log = LogFactory.getLog(XMLHelper.class);
+-	private static final EntityResolver DTD_RESOLVER = new DTDEntityResolver();
++	public static final EntityResolver DEFAULT_DTD_RESOLVER = new DTDEntityResolver();
+ 	
+ 	public static class ErrorLogger implements ErrorHandler {
+ 		private String file;

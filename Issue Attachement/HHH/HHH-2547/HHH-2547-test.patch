@@ -1,0 +1,115 @@
+Index: test/org/hibernate/test/rowid/RowIdTest.java
+===================================================================
+--- test/org/hibernate/test/rowid/RowIdTest.java	(revision 11393)
++++ test/org/hibernate/test/rowid/RowIdTest.java	(working copy)
+@@ -52,11 +52,13 @@
+ 			Statement st = session.connection().createStatement();
+ 			try {
+ 				st.execute( "drop table Point");
++   			   	st.execute( "drop table NamedPoint");
+ 			}
+ 			catch( Throwable ignore ) {
+ 				// ignore
+ 			}
+ 			st.execute("create table Point (\"x\" number(19,2) not null, \"y\" number(19,2) not null, description varchar2(255) )");
++			st.execute("create table NamedPoint (\"x\" number(19,2) not null, \"y\" number(19,2) not null, name varchar2(255) )");
+ 		}
+ 		catch ( SQLException e ) {
+ 			throw new RuntimeException( "Unable to build actual schema : " + e.getMessage() );
+@@ -80,26 +82,76 @@
+ 		s.persist(p);
+ 		t.commit();
+ 		s.clear();
+-		
++
+ 		t = s.beginTransaction();
+ 		p = (Point) s.createCriteria(Point.class).uniqueResult();
++		//String rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
+ 		p.setDescription("new desc");
+ 		t.commit();
+ 		s.clear();
+-		
++
+ 		t = s.beginTransaction();
+ 		p = (Point) s.createQuery("from Point").uniqueResult();
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
+ 		p.setDescription("new new desc");
+ 		t.commit();
+ 		s.clear();
+ 		
+ 		t = s.beginTransaction();
+ 		p = (Point) s.get(Point.class, p);
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
+ 		p.setDescription("new new new desc");
+ 		t.commit();
++
++		t = s.beginTransaction();
++		p = (Point) s.get(Point.class, p);
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
++		s.delete(p);
++		t.commit();
++
+ 		s.close();
+ 		
+ 	}
+ 
++	public void testJoinedSubclassRowId() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		NamedPoint p = new NamedPoint( new BigDecimal(1.0), new BigDecimal(1.0), "a name" );
++		s.persist(p);
++		t.commit();
++		s.clear();
++
++		t = s.beginTransaction();
++		p = (NamedPoint) s.createCriteria(NamedPoint.class).uniqueResult();
++		//String rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
++		p.setDescription("new desc");
++		p.setName("new name");
++		t.commit();
++		s.clear();
++
++		t = s.beginTransaction();
++		p = (NamedPoint) s.createQuery("from NamedPoint").uniqueResult();
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
++		p.setDescription("new new name");
++		t.commit();
++		s.clear();
++
++		t = s.beginTransaction();
++		p = (NamedPoint) s.get(NamedPoint.class, p);
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
++		p.setDescription("new new new name");
++		t.commit();
++
++		t = s.beginTransaction();
++		p = (NamedPoint) s.get(Point.class, p);
++		//rowIdStr = ((oracle.sql.ROWID)p.getRow()).stringValue();
++		s.delete(p);
++		t.commit();
++
++		s.close();
++
++	}
++
++
+ }
+ 
+Index: test/org/hibernate/test/rowid/Point.hbm.xml
+===================================================================
+--- test/org/hibernate/test/rowid/Point.hbm.xml	(revision 11393)
++++ test/org/hibernate/test/rowid/Point.hbm.xml	(working copy)
+@@ -18,6 +18,13 @@
+ 		</composite-id>
+ 		<property name="description"/>
+ 		<property name="row" type="rowid" column="rowid" insert="false" update="false"/>
++		<joined-subclass name="NamedPoint" extends="Point">
++			<key>
++				<column name="`x`"/>
++				<column name="`y`"/>
++			</key>
++			<property name="name" type="string"/>
++		</joined-subclass>
+ 	</class>
+ 	
+ </hibernate-mapping>

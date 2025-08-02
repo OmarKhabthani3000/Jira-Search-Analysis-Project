@@ -1,0 +1,68 @@
+Index: org/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/cfg/Configuration.java,v
+retrieving revision 1.108
+diff -u -r1.108 Configuration.java
+--- org/hibernate/cfg/Configuration.java	10 Nov 2005 23:58:54 -0000	1.108
++++ org/hibernate/cfg/Configuration.java	21 Nov 2005 03:12:36 -0000
+@@ -460,10 +460,23 @@
+ 
+ 	/**
+ 	 * Read mappings from an application resource trying different classloaders.
++	 */
++	public Configuration addResource(String path) throws MappingException {
++		InputStream rsrc = getResourceInputStream(path);
++		try {
++			return addInputStream( rsrc );
++		}
++		catch (MappingException me) {
++			throw new MappingException( "Could not read mappings from resource: " + path, me );
++		}
++	}
++
++	/**
+ 	 * This method will try to load the resource first from the thread context
+ 	 * classloader and then from the classloader that loaded Hibernate.
+ 	 */
+-	public Configuration addResource(String path) throws MappingException {
++	
++	private InputStream getResourceInputStream(String path){
+ 		log.info( "Reading mappings from resource: " + path );
+ 		ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
+ 		InputStream rsrc = null;
+@@ -476,14 +489,29 @@
+ 		if ( rsrc == null ) {
+ 			throw new MappingException( "Resource: " + path + " not found" );
+ 		}
+-		try {
+-			return addInputStream( rsrc );
+-		}
+-		catch (MappingException me) {
+-			throw new MappingException( "Could not read mappings from resource: " + path, me );
++		return rsrc;
++	}
++	
++	/**
++	 * Loads a cached mapping document from a jar file trying different classloaders.
++	 * 
++	 * @param resourcePath a resource path to a cached <tt>".bin"</tt> file
++	 */
++	
++	public void addCachedResource(String resourcePath){
++		InputStream rsrc = getResourceInputStream(resourcePath);
++		org.dom4j.Document doc;
++		try{
++			 doc = (org.dom4j.Document) SerializationHelper.deserialize(rsrc);
++		}catch(SerializationException e){
++			String msg = "Could not deserialize " + resourcePath;
++			if(! resourcePath.endsWith("bin"))
++				msg += " You are probably going to want to try something with a .bin file extension. ";  
++			throw new MappingException(msg, e);
+ 		}
++		add(doc);
+ 	}
+-
++	
+ 	/**
+ 	 * Read a mapping from an application resource, using a convention.
+ 	 * The class <tt>foo.bar.Foo</tt> is mapped by the file <tt>foo/bar/Foo.hbm.xml</tt>.

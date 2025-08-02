@@ -1,0 +1,48 @@
+Index: src/org/hibernate/engine/PersistenceContext.java
+===================================================================
+--- src/org/hibernate/engine/PersistenceContext.java	(revision 11094)
++++ src/org/hibernate/engine/PersistenceContext.java	(working copy)
+@@ -78,6 +78,11 @@
+ 
+ 	public Object[] getCachedDatabaseSnapshot(EntityKey key);
+ 
++	/**
++	 * Get the values of the natural id fields as known to the underlying 
++	 * database, or null if the entity has no natural id or there is no 
++	 * corresponding row.
++	 */
+ 	public Object[] getNaturalIdSnapshot(Serializable id, EntityPersister persister)
+ 	throws HibernateException;
+ 
+Index: src/org/hibernate/event/def/DefaultFlushEntityEventListener.java
+===================================================================
+--- src/org/hibernate/event/def/DefaultFlushEntityEventListener.java	(revision 11094)
++++ src/org/hibernate/event/def/DefaultFlushEntityEventListener.java	(working copy)
+@@ -74,16 +74,23 @@
+ 	        EntityMode entityMode,
+ 	        SessionImplementor session) {
+ 		if ( persister.hasNaturalIdentifier() ) {
+-			if ( loaded == null ) {
+-				loaded = session.getPersistenceContext().getNaturalIdSnapshot( identifier, persister );
+-			}
++ 			Object[] snapshot = null;			
+ 			Type[] types = persister.getPropertyTypes();
+ 			int[] props = persister.getNaturalIdentifierProperties();
+ 			boolean[] updateable = persister.getPropertyUpdateability();
+ 			for ( int i=0; i<props.length; i++ ) {
+ 				int prop = props[i];
+ 				if ( !updateable[prop] ) {
+-					if ( !types[prop].isEqual( current[prop], loaded[prop], entityMode ) ) {
++ 					Object loadedVal;
++ 					if ( loaded == null ) {
++ 						if ( snapshot == null) {
++ 							snapshot = session.getPersistenceContext().getNaturalIdSnapshot( identifier, persister );
++ 						}
++ 						loadedVal = snapshot[i];
++ 					} else {
++ 						loadedVal = loaded[prop];
++ 					}
++ 					if ( !types[prop].isEqual( current[prop], loadedVal, entityMode ) ) {						
+ 						throw new HibernateException(
+ 								"immutable natural identifier of an instance of " +
+ 								persister.getEntityName() +

@@ -1,0 +1,522 @@
+Index: tools/src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java,v
+retrieving revision 1.61
+diff -u -r1.61 JDBCBinder.java
+--- tools/src/java/org/hibernate/cfg/JDBCBinder.java	8 Jan 2006 15:08:00 -0000	1.61
++++ tools/src/java/org/hibernate/cfg/JDBCBinder.java	20 Jan 2006 18:42:27 -0000
+@@ -18,6 +18,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.FetchMode;
+ import org.hibernate.MappingException;
++import org.hibernate.cfg.HbmBinder.ManyToOneSecondPass;
+ import org.hibernate.cfg.reveng.DatabaseCollector;
+ import org.hibernate.cfg.reveng.JDBCReader;
+ import org.hibernate.cfg.reveng.JDBCToHibernateTypeHelper;
+@@ -153,7 +154,7 @@
+             
+ 			bindPrimaryKeyToProperties(table, rc, processed, mapping);
+ 			bindColumnsToVersioning(table, rc, processed, mapping);
+-			bindOutgoingForeignKeys(table, rc, processed);
++			bindOutgoingForeignKeys(table, rc, processed, mapping);
+ 			bindColumnsToProperties(table, rc, processed, mapping);
+ 			List incomingForeignKeys = (List) manyToOneCandidates.get( rc.getEntityName() );
+ 			bindIncomingForeignKeys(rc, processed, incomingForeignKeys, mapping);
+@@ -177,12 +178,14 @@
+      * @param fk
+      * @param columnsToBind 
+      * @param processedColumns
++     * @param mapping 
+      * @param rc
+      * @param propName 
+      */
+-    private Property bindManyToOne(String propertyName, Table table, ForeignKey fk, Set processedColumns) {
++    private Property bindManyToOne(String propertyName, Table table, ForeignKey fk, Set processedColumns, Mapping mapping) {
+         ManyToOne value = new ManyToOne(table);
+         value.setReferencedEntityName( fk.getReferencedEntityName() );
++        value.setForeignKeyName( fk.getName() );
+ 		Iterator columns = fk.getColumnIterator();
+         while ( columns.hasNext() ) {       
+ 			Column fkcolumn = (Column) columns.next();
+@@ -192,9 +195,36 @@
+ 		}
+         value.setFetchMode(FetchMode.SELECT);
+         
++        //TODO: second pass is not necessary if referenced column(s) = pk
++        mappings.addSecondPass( new JDBCManyToOneSecondPass( table, value, fk, mapping ) );
++        
+         return makeProperty(propertyName, value, true, true, value.getFetchMode()!=FetchMode.JOIN, null, null);
+      }
+ 
++     /**
++      * @param value
++      * @param mappings
++      * @param fk
++      */
++     private void bindManyToOneSecondPass(Table table, Mapping mapping, ManyToOne value, ForeignKey fk) {
++         PersistentClass clazz = mappings.getClass(value.getReferencedEntityName());
++         Property prop = createManyToOnePropertyRefs(clazz, fk, mapping);
++         value.setReferencedPropertyName(prop.getName()); 
++         //set the key property-ref
++         // search  in the collections the associated collection
++         Iterator propIt = clazz.getPropertyClosureIterator();
++         while (propIt.hasNext()) {
++           Property cprop = (Property) propIt.next();
++           if (cprop.getValue() instanceof Collection) {
++             Collection coll = (Collection) cprop.getValue();
++               if (coll.getCollectionTable().getName().equals(table.getName())) {
++                 //TODO: check the columns
++                 coll.setReferencedPropertyName(prop.getName());
++               }
++             }
++         }         
++     }
++
+ 	/**
+ 	 * @param rc
+ 	 * @param processed
+@@ -264,6 +294,88 @@
+ 		return makeProperty(collectionRole, collection, true, true, true, "all", null);
+ 		
+ 	}
++    
++  private Property findPropertyForColumn(PersistentClass rc, Column col) {
++    Iterator propIt = rc.getPropertyClosureIterator();
++    while (propIt.hasNext()) {
++      Property cprop = (Property) propIt.next();
++      if ((cprop.getColumnSpan() == 1) && 
++          cprop.getColumnIterator().next().equals(col))
++        return cprop;
++    }  
++    return null;
++  }
++  
++  private Property findSimilarComponent(PersistentClass rc, Component comp) {
++    Iterator propIt = rc.getPropertyClosureIterator();
++    while (propIt.hasNext()) {
++      Property cprop = (Property) propIt.next();
++      boolean found = false;
++      if (cprop.getValue() instanceof Component) {
++        Component ccomp = (Component) cprop.getValue();
++        found = (comp.isEmbedded() == ccomp.isEmbedded()) &&
++                (comp.getColumnSpan() == ccomp.getColumnSpan());
++        if (found) {       
++          Iterator colIt = ccomp.getColumnIterator();
++          Iterator colIt2 = comp.getColumnIterator();
++          while (found && colIt.hasNext()) {
++            Column col1 = (Column) colIt.next();
++            Column col2 = (Column) colIt2.next();
++            found = col1.getName().equals(col2.getName());
++          }
++          if (found)
++            return cprop;
++        }
++      }
++    }  
++    
++    return null;
++  }
++
++  /**
++   * @param rc
++   * @param foreignKey
++   * @param mapping
++   */
++  private Property createManyToOnePropertyRefs(PersistentClass rc, ForeignKey foreignKey, Mapping mapping) {
++    Iterator fkColumnIterator = foreignKey.getReferencedColumns().iterator();
++    Property prop;
++    if (foreignKey.getReferencedColumns().size() > 1) {
++      Component comp = new Component(rc);
++      comp.setMetaAttributes(Collections.EMPTY_MAP);          
++      comp.setNodeName(foreignKey.getName());
++      comp.setEmbedded(true);
++      comp.setComponentClassName(comp.getOwner().getClassName());
++      while (fkColumnIterator.hasNext()) {
++        Column col = (Column) fkColumnIterator.next();    
++        Property colprop = findPropertyForColumn(rc, col);
++        if (colprop != null) {
++          colprop.setUpdateable(false);
++          colprop.setInsertable(false);
++        }
++        String propName = revengStrategy.columnToPropertyName(TableIdentifier.create(foreignKey.getTable()), col.getName());
++        Property fkprop = bindBasicProperty(makeUnique(rc,"FK_" + propName), foreignKey.getTable(),col,null,mapping);
++        comp.addProperty(fkprop);
++      }
++      prop = findSimilarComponent(rc,comp);
++      if (prop != null)
++          return prop;
++      prop = makeProperty(makeUnique(rc,foreignKey.getName()), comp, true, true, false, null, null);
++      prop.setUpdateable(false);
++    }else {
++      Column col = (Column) fkColumnIterator.next();
++      //try to find the existing  column first
++      prop = findPropertyForColumn(rc, col);
++      if (prop != null)
++        return prop;
++      col.setUnique(false);
++      String propName = revengStrategy.columnToPropertyName(TableIdentifier.create(foreignKey.getTable()), col.getName());
++      prop = bindBasicProperty(makeUnique(rc,"FK_" + propName), foreignKey.getTable(),col,null,mapping);
++      prop.setUpdateable(false);     
++    }
++    rc.addProperty(prop);
++    return prop;
++  }
+ 
+ 	/** return true if this foreignkey is the only reference from this table to the same foreign table */
+     private boolean isUniqueReference(ForeignKey foreignKey) {
+@@ -325,9 +437,10 @@
+ 	/**
+ 	 * @param table
+ 	 * @param rc
++	 * @param mapping 
+ 	 * @param primaryKey
+ 	 */
+-	private void bindOutgoingForeignKeys(Table table, RootClass rc, Set processedColumns) {
++	private void bindOutgoingForeignKeys(Table table, RootClass rc, Set processedColumns, Mapping mapping) {
+ 		
+ 		// Iterate the outgoing foreign keys and create many-to-one's 
+ 		for(Iterator iterator = table.getForeignKeyIterator(); iterator.hasNext();) {
+@@ -353,7 +466,8 @@
+ 					makeUnique(rc, propertyName), 
+ 					table, 
+ 					foreignKey,
+-					processedColumns
++					processedColumns,
++                    mapping
+ 				);
+             property.setUpdateable(mutable);
+             property.setInsertable(mutable);
+@@ -559,7 +673,7 @@
+ 						TableIdentifier.create(foreignKey.getTable() ),
+ 						foreignKey.getColumns(), TableIdentifier.create(foreignKey.getReferencedTable() ), foreignKey.getReferencedColumns(), true
+ 					);
+-                property = bindManyToOne( makeUnique(pkc, propertyName), table, foreignKey, processedColumns);
++                property = bindManyToOne( makeUnique(pkc, propertyName), table, foreignKey, processedColumns, mapping);
+                 processedColumns.addAll(fkfc.columns);
+             }
+ 			else {
+@@ -691,7 +805,23 @@
+             list.add( clazz.getVersion() );
+         }
+         
+-        JoinedIterator iterator = new JoinedIterator( list.iterator(),clazz.getPropertyClosureIterator() );
++        List iterators = new ArrayList();
++        iterators.add( list.iterator() );
++        iterators.add( clazz.getPropertyClosureIterator() );
++        //include all properties from embedded components except the identifier        
++        Iterator propIterator = clazz.getPropertyClosureIterator();
++        while (propIterator.hasNext()) {
++            Property property = (Property) propIterator.next();
++            if (property.getValue() instanceof Component) {
++                Component comp = (Component) property.getValue();
++                if (comp.isEmbedded()) {
++                  iterators.add( comp.getPropertyIterator() );
++                }    
++            }
++        }     
++               
++        Iterator[] it = (Iterator[]) iterators.toArray( new Iterator[iterators.size()] );     
++        JoinedIterator iterator = new JoinedIterator( it );
+         return makeUnique(iterator, propertyName);
+     }
+     /**
+@@ -753,4 +883,27 @@
+             JDBCBinder.bindCollectionSecondPass(collection, persistentClasses, mappings, inheritedMetas);            
+         }        
+     }
++    
++    class JDBCManyToOneSecondPass implements SecondPass {
++
++      private ForeignKey foreignKey;
++
++      private ManyToOne value;
++
++      private Mapping mapping;
++
++      private Table table;
++
++      JDBCManyToOneSecondPass(Table table, ManyToOne manyToOne, ForeignKey fk, Mapping mapping) {
++        this.value = manyToOne;
++        this.foreignKey = fk;
++        this.mapping = mapping;
++        this.table = table;
++      }
++
++      public void doSecondPass(Map persistentClasses, Map inheritedMetas) throws MappingException {
++        bindManyToOneSecondPass(table, mapping, value,foreignKey);
++      }        
++      
++    }
+ }
+Index: tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java,v
+retrieving revision 1.29
+diff -u -r1.29 JDBCReader.java
+--- tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java	8 Jan 2006 15:08:01 -0000	1.29
++++ tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java	20 Jan 2006 18:42:28 -0000
+@@ -121,6 +121,9 @@
+ 				String fkSchema = getSchemaForModel((String) exportedKeyRs.get("FKTABLE_SCHEM"));
+ 				String fkTableName = (String) exportedKeyRs.get("FKTABLE_NAME");
+ 				String fkColumnName = (String) exportedKeyRs.get("FKCOLUMN_NAME");
++                String pkCatalog = getCatalogForModel((String) exportedKeyRs.get("PKTABLE_CAT"));
++                String pkSchema = getSchemaForModel((String) exportedKeyRs.get("PKTABLE_SCHEM"));
++                String pkTableName = (String) exportedKeyRs.get("PKTABLE_NAME");
+ 				String pkColumnName = (String) exportedKeyRs.get("PKCOLUMN_NAME");
+ 				String fkName = (String) exportedKeyRs.get("FK_NAME");
+ 				short keySeq = ((Short)exportedKeyRs.get("KEY_SEQ")).shortValue();
+@@ -134,8 +137,12 @@
+ 					continue;
+ 				}
+ 				
+-				// TODO: if there is a relation to a column which is not a pk
+-				//       then handle it as a property-ref
++                Table pkTable = dbs.getTable(pkSchema, pkCatalog, pkTableName);
++                if(pkTable==null) {
++                    //  filter out stuff we don't have tables for!
++                    log.debug("Foreign key " + fkName + " references unknown or filtered table " + Table.qualify(pkCatalog, pkSchema, pkTableName) );
++                    continue;
++                }
+ 				
+ 				if (keySeq == 0) {
+ 					bogusFkName++;
+@@ -166,6 +173,18 @@
+ 				column = existingColumn==null ? column : existingColumn;
+ 				
+ 				depColumns.add(column);
++                
++                List refColumns =  (List) referencedColumns.get(fkName);
++                if (refColumns == null) {
++                    refColumns = new ArrayList();
++                    referencedColumns.put(fkName,refColumns);
++                 }
++                
++                column = new Column(pkColumnName);
++                existingColumn = pkTable.getColumn(column);
++                column = existingColumn==null ? column : existingColumn;
++                
++                refColumns.add(column);                
+ 			}
+ 		} 
+         finally {
+Index: tools/src/java/org/hibernate/cfg/reveng/JDBCToHibernateTypeHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCToHibernateTypeHelper.java,v
+retrieving revision 1.8
+diff -u -r1.8 JDBCToHibernateTypeHelper.java
+--- tools/src/java/org/hibernate/cfg/reveng/JDBCToHibernateTypeHelper.java	8 Jan 2006 15:08:01 -0000	1.8
++++ tools/src/java/org/hibernate/cfg/reveng/JDBCToHibernateTypeHelper.java	20 Jan 2006 18:42:28 -0000
+@@ -33,8 +33,8 @@
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.REAL), new String[] { "float", Float.class.getName()} );
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.FLOAT), new String[] { "double", Double.class.getName()} );
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.DOUBLE), new String[] { "double", Double.class.getName()});
+-      PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.DECIMAL), "big_decimal");
+-      PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.NUMERIC), "big_decimal");
++      PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.DECIMAL), new String[] { "big_decimal", "big_decimal"});
++      PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.NUMERIC), new String[] { "big_decimal", "big_decimal"});
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.BIT), new String[] { "boolean", Boolean.class.getName()});
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.BOOLEAN), new String[] { "boolean", Boolean.class.getName()});
+       PREFERRED_HIBERNATETYPE_FOR_SQLTYPE.put(new Integer(Types.CHAR), new String[] { "char", Character.class.getName()});
+Index: tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java,v
+retrieving revision 1.7
+diff -u -r1.7 GenericExporter.java
+--- tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java	14 Dec 2005 12:21:33 -0000	1.7
++++ tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java	20 Jan 2006 18:42:28 -0000
+@@ -86,8 +86,10 @@
+ 		iterator = components.values().iterator();
+ 		while ( iterator.hasNext() ) {					
+ 			Component component = (Component) iterator.next();
+-			ComponentPOJOClass element = new ComponentPOJOClass(component,getCfg2JavaTool());
+-			exportComponent( additionalContext, element );
++            if (!component.isEmbedded()) {
++    			ComponentPOJOClass element = new ComponentPOJOClass(component,getCfg2JavaTool());
++    			exportComponent( additionalContext, element );
++            }
+ 		}
+ 				        
+ 	}
+Index: tools/src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java,v
+retrieving revision 1.27
+diff -u -r1.27 HibernateMappingExporter.java
+--- tools/src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java	23 Dec 2005 14:38:56 -0000	1.27
++++ tools/src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java	20 Jan 2006 18:42:28 -0000
+@@ -11,6 +11,7 @@
+ 
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.mapping.Component;
++import org.hibernate.mapping.Join;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ 
+@@ -36,7 +37,6 @@
+     public boolean startMapping(Configuration cfg) {return true; }
+     
+ 	public boolean startPersistentClass(PersistentClass clazz) {
+-        
+         try {
+             getTemplateHelper().putInContext("clazz", clazz);
+             
+@@ -54,7 +54,6 @@
+ 	}
+ 
+     public void endPersistentClass(PersistentClass clazz) throws ExporterException {
+-
+         try {
+             writer.write("</" + getCfg2HbmTool().getTag(clazz) +">\n");
+             getTemplateHelper().removeFromContext("clazz", clazz);
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java,v
+retrieving revision 1.19
+diff -u -r1.19 EntityPOJOClass.java
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	18 Jan 2006 05:30:50 -0000	1.19
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	20 Jan 2006 18:42:29 -0000
+@@ -3,8 +3,10 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.Enumeration;
++import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ import java.util.StringTokenizer;
+ import java.util.Set;
+@@ -28,6 +30,7 @@
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.tool.hbm2x.Cfg2JavaTool;
++import org.hibernate.tool.hbm2x.ConfigurationNavigator;
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.StringHelper;
+ import org.hibernate.cfg.Configuration;
+@@ -118,8 +121,8 @@
+ 	public Iterator getAllPropertiesIterator() {
+ 		return getAllPropertiesIterator(clazz);
+ 	}
+-
+-	public Iterator getAllPropertiesIterator(PersistentClass pc) {
++    
++    public Iterator getAllPropertiesIterator(PersistentClass pc) {
+ 		List properties = new ArrayList();
+ 		List iterators = new ArrayList();
+ 		if ( pc.getSuperclass() == null ) {
+@@ -131,13 +134,28 @@
+ 				Component embeddedComponent = (Component) pc.getIdentifier();
+ 				iterators.add( embeddedComponent.getPropertyIterator() );
+ 			}
++
++            
+ 			/*if(clazz.isVersioned() ) { // version is already in property set
+ 				properties.add(clazz.getVersion() );
+ 			}*/
+ 		}
+-
++        
++        
+ 		iterators.add( properties.iterator() );
+ 		iterators.add( pc.getPropertyIterator() );
++        
++        //include all properties from embedded components except the identifier        
++        Iterator propIterator = pc.getPropertyIterator();
++        while (propIterator.hasNext()) {
++            Property property = (Property) propIterator.next();
++            if (property.getValue() instanceof Component) {
++                Component comp = (Component) property.getValue();
++                if (comp.isEmbedded()) {
++                  iterators.add( comp.getPropertyIterator() );
++                }    
++            }
++        }
+ 		Iterator[] it = (Iterator[]) iterators.toArray( new Iterator[iterators.size()] );
+ 		return new SkipBackRefPropertyIterator( new JoinedIterator( it ) );
+ 	}
+Index: tools/src/java/org/hibernate/tool/hbm2x/visitor/HBMTagForValueVisitor.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/visitor/HBMTagForValueVisitor.java,v
+retrieving revision 1.4
+diff -u -r1.4 HBMTagForValueVisitor.java
+--- tools/src/java/org/hibernate/tool/hbm2x/visitor/HBMTagForValueVisitor.java	21 Dec 2005 11:02:30 -0000	1.4
++++ tools/src/java/org/hibernate/tool/hbm2x/visitor/HBMTagForValueVisitor.java	20 Jan 2006 18:42:29 -0000
+@@ -68,7 +68,11 @@
+ 	}
+ 
+ 	public Object accept(Component component) {
+-		return component.isDynamic()?"dynamic-component":"component";
++      if (component.isDynamic())
++          return "dynamic-component";
++      if (component.isEmbedded())
++          return "properties";
++      return "component";
+ 	}
+ 
+ 	public Object accept(ManyToOne mto) {
+Index: tools/src/velocity/hbm/many-to-one.hbm.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/hbm/many-to-one.hbm.vm,v
+retrieving revision 1.4
+diff -u -r1.4 many-to-one.hbm.vm
+--- tools/src/velocity/hbm/many-to-one.hbm.vm	18 Nov 2005 19:34:30 -0000	1.4
++++ tools/src/velocity/hbm/many-to-one.hbm.vm	20 Jan 2006 18:42:29 -0000
+@@ -20,6 +20,10 @@
+ #if(! $property.optimisticLocked)
+         optimistic-lock="false"
+ #end
++#if ($property.value.referencedPropertyName)
++        property-ref="$property.value.referencedPropertyName"      
++#end        
++
+ #if($property.value.hasFormula())
+ #set ($formula = $c2h.getFormulaForProperty($property))
+ #if($formula)
+Index: tools/src/velocity/hbm/set.hbm.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/hbm/set.hbm.vm,v
+retrieving revision 1.2
+diff -u -r1.2 set.hbm.vm
+--- tools/src/velocity/hbm/set.hbm.vm	5 Jun 2005 13:19:17 -0000	1.2
++++ tools/src/velocity/hbm/set.hbm.vm	20 Jan 2006 18:42:29 -0000
+@@ -2,7 +2,11 @@
+ 		name="$property.name"
+ 		inverse="$property.value.inverse"
+ 		>
+-		<key> 
++		<key
++#if ($property.value.referencedPropertyName)
++		property-ref="$property.value.referencedPropertyName"
++#end		
++		> 
+            #foreach($column in $property.value.key.columnIterator)
+              #parse("hbm/column.hbm.vm")
+ 		   #end
+@@ -15,4 +19,5 @@
+ #end			 
+ 			/>
+ 		#end
+-	</set>
++	</set>     
++	
+Index: tools/src/velocity/hbm/properties.hbm.vm
+===================================================================
+RCS file: tools/src/velocity/hbm/properties.hbm.vm
+diff -N tools/src/velocity/hbm/properties.hbm.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/hbm/properties.hbm.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,13 @@
++<properties 
++        name="$property.name"
++#if(! $property.updateable)
++        update="false"
++#end    
++    >
++#foreach($pproperty in $property.value.propertyIterator)
++    <property 
++        name="$pproperty.name"
++    	column="$pproperty.columnIterator.next().name"
++	/>
++#end
++</properties>

@@ -1,0 +1,284 @@
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/OneToOneNotOwningMapper.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/OneToOneNotOwningMapper.java	(revision 20923)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/OneToOneNotOwningMapper.java	(working copy)
+@@ -35,6 +35,8 @@
+ import org.hibernate.envers.entities.PropertyData;
+ import org.hibernate.envers.exception.AuditException;
+ import org.hibernate.envers.query.AuditEntity;
++import org.hibernate.envers.query.criteria.AuditCriterion;
++import org.hibernate.envers.query.criteria.AuditRelatedId;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+ import org.hibernate.envers.tools.reflection.ReflectionTools;
+ 
+@@ -79,8 +81,14 @@
+         Object value;
+ 
+         try {
++            AuditCriterion criterion = null;
++            if (owningReferencePropertyName == null) {
++                criterion = AuditEntity.id().eq(primaryKey);
++            } else {
++                criterion = AuditEntity.relatedId(owningReferencePropertyName).eq(primaryKey);
++            }
+             value = versionsReader.createQuery().forEntitiesAtRevision(entityClass, owningEntityName, revision)
+-                    .add(AuditEntity.relatedId(owningReferencePropertyName).eq(primaryKey)).getSingleResult();
++                    .add(criterion).getSingleResult();
+         } catch (NoResultException e) {
+             value = null;
+         } catch (NonUniqueResultException e) {
+Index: src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/Pkjc.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/Pkjc.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/Pkjc.java	(revision 0)
+@@ -0,0 +1,85 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.onetoone.pkjc;
++
++import java.util.Arrays;
++import javax.persistence.EntityManager;
++
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++import org.hibernate.ejb.Ejb3Configuration;
++
++/**
++ * 
++ */
++public class Pkjc extends AbstractEntityTest {
++    private Integer ed1_id;
++
++    private Integer ing1_id;
++
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(PkjcRefEntity.class);
++        cfg.addAnnotatedClass(PkjcRefIngEntity.class);
++    }
++
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        PkjcRefIngEntity ing1 = new PkjcRefIngEntity("data_ing_1");
++        PkjcRefEntity ed1 = new PkjcRefEntity(1, "data_ed_1", ing1);
++        ing1.setReferencing(ed1);
++
++
++        // Revision 1
++        EntityManager em = getEntityManager();
++        em.getTransaction().begin();
++
++        em.persist(ed1);
++
++        em.getTransaction().commit();
++
++        ed1_id = ed1.getId();
++        ing1_id = ing1.getId();
++
++        //
++
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++        assert Arrays.asList(1).equals(getAuditReader().getRevisions(PkjcRefEntity.class, ed1_id));
++
++        assert Arrays.asList(1).equals(getAuditReader().getRevisions(PkjcRefIngEntity.class, ing1_id));
++    }
++
++    @Test
++    public void testHistoryOfEdId1() {
++        PkjcRefIngEntity ing1 = getAuditReader().find(PkjcRefIngEntity.class, ing1_id, 1);
++
++        PkjcRefEntity rev1 = getAuditReader().find(PkjcRefEntity.class, ed1_id, 1);
++
++        assert rev1.getReference().equals(ing1);
++    }
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefEntity.java	(revision 0)
+@@ -0,0 +1,77 @@
++package org.hibernate.envers.test.integration.onetoone.pkjc;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.Id;
++import javax.persistence.OneToOne;
++import javax.persistence.PrimaryKeyJoinColumn;
++
++import org.hibernate.envers.Audited;
++
++@Entity
++public class PkjcRefEntity {
++
++    @Id
++    private Integer id;
++
++
++    @Audited
++    private String data;
++
++    @Audited
++    @OneToOne(cascade = CascadeType.ALL)
++    @PrimaryKeyJoinColumn
++    private PkjcRefIngEntity reference;
++
++    public PkjcRefEntity() {
++    }
++
++    public PkjcRefEntity(Integer id, String data, PkjcRefIngEntity reference) {
++        this.id = id;
++        this.data = data;
++        this.reference = reference;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public PkjcRefIngEntity getReference() {
++        return reference;
++    }
++
++    public void setReference(PkjcRefIngEntity reference) {
++        this.reference = reference;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof PkjcRefEntity)) return false;
++
++        PkjcRefEntity that = (PkjcRefEntity) o;
++
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (data != null ? data.hashCode() : 0);
++        return result;
++    }
++}
+Index: src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefIngEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefIngEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/onetoone/pkjc/PkjcRefIngEntity.java	(revision 0)
+@@ -0,0 +1,77 @@
++package org.hibernate.envers.test.integration.onetoone.pkjc;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.OneToOne;
++
++import org.hibernate.annotations.GenericGenerator;
++import org.hibernate.annotations.Parameter;
++import org.hibernate.envers.Audited;
++
++@Entity
++public class PkjcRefIngEntity {
++
++    @Id
++    @GeneratedValue(generator = "fk")
++    @GenericGenerator(strategy = "foreign", name = "fk", parameters = @Parameter(name="property", value="referencing"))
++    private Integer id;
++    
++
++    @Audited
++    private String data;
++
++    @Audited
++    @OneToOne(mappedBy="reference")
++    private PkjcRefEntity referencing;
++
++    public PkjcRefIngEntity() {
++    }
++
++    public PkjcRefIngEntity(String data) {
++        this.data = data;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public PkjcRefEntity getReferencing() {
++        return referencing;
++    }
++
++    public void setReferencing(PkjcRefEntity referencing) {
++        this.referencing = referencing;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof PkjcRefIngEntity)) return false;
++
++        PkjcRefIngEntity that = (PkjcRefIngEntity) o;
++
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (data != null ? data.hashCode() : 0);
++        return result;
++    }
++}

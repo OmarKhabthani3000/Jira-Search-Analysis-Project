@@ -1,0 +1,370 @@
+Index: core/src/test/java/org/hibernate/cache/QueryKeyTest.java
+===================================================================
+--- core/src/test/java/org/hibernate/cache/QueryKeyTest.java	(revision 16651)
++++ core/src/test/java/org/hibernate/cache/QueryKeyTest.java	Mon Jun 01 11:38:06 CDT 2009
+@@ -29,7 +29,6 @@
+ 
+ import junit.framework.TestCase;
+ 
+-import org.hibernate.engine.QueryParameters;
+ import org.hibernate.EntityMode;
+ import org.hibernate.transform.RootEntityResultTransformer;
+ import org.hibernate.transform.ResultTransformer;
+@@ -49,35 +48,31 @@
+ 	private static final String QUERY_STRING = "the query string";
+ 
+ 	public void testSerializedEquality() {
+-		doTest( buildBasicKey( new QueryParameters() ) );
++		doTest( buildBasicKey( null ) );
+ 	}
+ 
+ 	public void testSerializedEqualityWithResultTransformer() {
+-		doTest( buildBasicKey( buildQueryParameters( RootEntityResultTransformer.INSTANCE ) ) );
+-		doTest( buildBasicKey( buildQueryParameters( DistinctRootEntityResultTransformer.INSTANCE ) ) );
+-		doTest( buildBasicKey( buildQueryParameters( DistinctResultTransformer.INSTANCE ) ) );
+-		doTest( buildBasicKey( buildQueryParameters( AliasToEntityMapResultTransformer.INSTANCE ) ) );
+-		doTest( buildBasicKey( buildQueryParameters( PassThroughResultTransformer.INSTANCE ) ) );
++		doTest( buildBasicKey( RootEntityResultTransformer.INSTANCE ) );
++		doTest( buildBasicKey( DistinctRootEntityResultTransformer.INSTANCE ) );
++		doTest( buildBasicKey( DistinctResultTransformer.INSTANCE ) );
++		doTest( buildBasicKey( AliasToEntityMapResultTransformer.INSTANCE ) );
++		doTest( buildBasicKey( PassThroughResultTransformer.INSTANCE ) );
+ 	}
+ 
+-	private QueryParameters buildQueryParameters(ResultTransformer resultTransformer) {
+-		return new QueryParameters(
+-				ArrayHelper.EMPTY_TYPE_ARRAY, 		// param types
+-				ArrayHelper.EMPTY_OBJECT_ARRAY,		// param values
+-				Collections.EMPTY_MAP,				// lock modes
+-				null,								// row selection
+-				false,								// cacheable?
+-				"",									// cache region
+-				"", 								// SQL comment
+-				false,								// is natural key lookup?
+-				resultTransformer					// the result transformer, duh! ;)
++	private QueryKey buildBasicKey(ResultTransformer resultTransformer) {
++		return new QueryKey(
++				QUERY_STRING,
++				ArrayHelper.EMPTY_TYPE_ARRAY, 		// positional param types
++				ArrayHelper.EMPTY_OBJECT_ARRAY,		// positional param values
++				Collections.EMPTY_MAP,				// named params
++				null,								// firstRow selection
++				null,								// maxRows selection
++				Collections.EMPTY_SET, 				// filter keys
++				EntityMode.POJO,					// entity mode
++				resultTransformer					// the result transformer
+ 		);
+ 	}
+ 
+-	private QueryKey buildBasicKey(QueryParameters queryParameters) {
+-		return new QueryKey( QUERY_STRING, queryParameters, Collections.EMPTY_SET, EntityMode.POJO );
+-	}
+-
+ 	private void doTest(QueryKey key) {
+ 		HashMap map = new HashMap();
+ 
+Index: core/src/main/java/org/hibernate/util/CollectionHelper.java
+===================================================================
+--- core/src/main/java/org/hibernate/util/CollectionHelper.java	(revision 16651)
++++ core/src/main/java/org/hibernate/util/CollectionHelper.java	Mon Jun 01 11:38:03 CDT 2009
+@@ -42,4 +42,8 @@
+ 	
+ 	private CollectionHelper() {}
+ 
++	public static Map mapOfSize(int size) {
++		final int currentSize = (int) (size / 0.75f);
++		return new HashMap( Math.max( currentSize+ 1, 16), 0.75f );
+-}
++	}
++}
+Index: core/src/main/java/org/hibernate/loader/Loader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/Loader.java	(revision 16651)
++++ core/src/main/java/org/hibernate/loader/Loader.java	Mon Jun 01 11:38:02 CDT 2009
+@@ -2138,15 +2138,15 @@
+ 		QueryCache queryCache = factory.getQueryCache( queryParameters.getCacheRegion() );
+ 		
+ 		Set filterKeys = FilterKey.createFilterKeys( 
+-				session.getEnabledFilters(), 
++				session.getLoadQueryInfluencers().getEnabledFilters(),
+ 				session.getEntityMode() 
+-			);
++		);
+-		QueryKey key = new QueryKey( 
++		QueryKey key = QueryKey.generateQueryKey(
+ 				getSQLString(), 
+ 				queryParameters, 
+ 				filterKeys, 
+-				session.getEntityMode() 
++				session
+-			);
++		);
+ 		
+ 		List result = getResultFromQueryCache( 
+ 				session, 
+@@ -2155,7 +2155,7 @@
+ 				resultTypes, 
+ 				queryCache, 
+ 				key 
+-			);
++		);
+ 
+ 		if ( result == null ) {
+ 			result = doList( session, queryParameters );
+@@ -2167,7 +2167,7 @@
+ 					queryCache, 
+ 					key, 
+ 					result 
+-				);
++			);
+ 		}
+ 
+ 		return getResultList( result, queryParameters.getResultTransformer() );
+Index: core/src/main/java/org/hibernate/cache/QueryKey.java
+===================================================================
+--- core/src/main/java/org/hibernate/cache/QueryKey.java	(revision 16651)
++++ core/src/main/java/org/hibernate/cache/QueryKey.java	Mon Jun 01 11:38:02 CDT 2009
+@@ -28,13 +28,17 @@
+ import java.io.IOException;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.Iterator;
+ 
+ import org.hibernate.EntityMode;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.RowSelection;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.TypedValue;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.EqualsHelper;
++import org.hibernate.util.CollectionHelper;
+ 
+ /**
+  * A key that identifies a particular query with bound parameter values
+@@ -59,12 +63,41 @@
+ 	 */
+ 	private transient int hashCode;
+ 
+-	public QueryKey(String queryString, QueryParameters queryParameters, Set filters, EntityMode entityMode) {
+-		this.sqlQueryString = queryString;
+-		this.types = queryParameters.getPositionalParameterTypes();
+-		this.values = queryParameters.getPositionalParameterValues();
+-		RowSelection selection = queryParameters.getRowSelection();
++	public static QueryKey generateQueryKey(
++			String queryString,
++			QueryParameters queryParameters,
++			Set filters,
++			SessionImplementor session) {
++		// disassemble positional parameters
++		final int positionalParameterCount = queryParameters.getPositionalParameterTypes().length;
++		final Type[] types = new Type[positionalParameterCount];
++		final Object[] values = new Object[positionalParameterCount];
++		for ( int i = 0; i < positionalParameterCount; i++ ) {
++			types[i] = queryParameters.getPositionalParameterTypes()[i];
++			values[i] = types[i].disassemble( queryParameters.getPositionalParameterValues()[i], session, null );
++		}
++
++		// disassemble named parameters
++		Map namedParameters = CollectionHelper.mapOfSize( queryParameters.getNamedParameters().size() );
++		Iterator itr = queryParameters.getNamedParameters().entrySet().iterator();
++		while ( itr.hasNext() ) {
++			final Map.Entry namedParameterEntry = ( Map.Entry ) itr.next();
++			final TypedValue original = ( TypedValue ) namedParameterEntry.getValue();
++			namedParameters.put(
++					namedParameterEntry.getKey(),
++					new TypedValue(
++							original.getType(),
++							original.getType().disassemble( original.getValue(), session, null ),
++							session.getEntityMode()
++					)
++			);
++		}
++
++		// decode row selection...
++		final RowSelection selection = queryParameters.getRowSelection();
++		final Integer firstRow;
++		final Integer maxRows;
+-		if (selection!=null) {
++		if ( selection != null ) {
+ 			firstRow = selection.getFirstRow();
+ 			maxRows = selection.getMaxRows();
+ 		}
+@@ -72,13 +105,62 @@
+ 			firstRow = null;
+ 			maxRows = null;
+ 		}
+-		this.namedParameters = queryParameters.getNamedParameters();
++
++		return new QueryKey(
++				queryString,
++				types,
++				values,
++				namedParameters,
++				firstRow,
++				maxRows,
++				filters,
++				session.getEntityMode(),
++				queryParameters.getResultTransformer()
++		);
++	}
++
++	/*package*/ QueryKey(
++			String sqlQueryString,
++			Type[] types,
++			Object[] values,
++			Map namedParameters,
++			Integer firstRow,
++			Integer maxRows, 
++			Set filters,
++			EntityMode entityMode,
++			ResultTransformer customTransformer) {
++		this.sqlQueryString = sqlQueryString;
++		this.types = types;
++		this.values = values;
++		this.namedParameters = namedParameters;
++		this.firstRow = firstRow;
++		this.maxRows = maxRows;
+ 		this.entityMode = entityMode;
+ 		this.filters = filters;
+-		this.customTransformer = queryParameters.getResultTransformer();
++		this.customTransformer = customTransformer;
+ 		this.hashCode = generateHashCode();
+ 	}
+ 
++//	public QueryKey(String queryString, QueryParameters queryParameters, Set filters, EntityMode entityMode) {
++//		this.sqlQueryString = queryString;
++//		this.types = queryParameters.getPositionalParameterTypes();
++//		this.values = queryParameters.getPositionalParameterValues();
++//		RowSelection selection = queryParameters.getRowSelection();
++//		if (selection!=null) {
++//			firstRow = selection.getFirstRow();
++//			maxRows = selection.getMaxRows();
++//		}
++//		else {
++//			firstRow = null;
++//			maxRows = null;
++//		}
++//		this.namedParameters = queryParameters.getNamedParameters();
++//		this.entityMode = entityMode;
++//		this.filters = filters;
++//		this.customTransformer = queryParameters.getResultTransformer();
++//		this.hashCode = generateHashCode();
++//	}
++
+ 	private void readObject(java.io.ObjectInputStream in) throws IOException, ClassNotFoundException {
+ 		in.defaultReadObject();
+ 		this.hashCode = generateHashCode();
+@@ -99,53 +181,77 @@
+ 	}
+ 	
+ 	public boolean equals(Object other) {
+-		if (!(other instanceof QueryKey)) return false;
++		if ( !( other instanceof QueryKey ) ) {
++			return false;
++		}
+-		QueryKey that = (QueryKey) other;
++		QueryKey that = ( QueryKey ) other;
+-		if ( !sqlQueryString.equals(that.sqlQueryString) ) return false;
+-		if ( !EqualsHelper.equals(firstRow, that.firstRow) || !EqualsHelper.equals(maxRows, that.maxRows) ) return false;
+-		if ( !EqualsHelper.equals(customTransformer, that.customTransformer) ) return false;
++		if ( !sqlQueryString.equals( that.sqlQueryString ) ) {
++			return false;
++		}
++		if ( !EqualsHelper.equals( firstRow, that.firstRow ) || !EqualsHelper.equals( maxRows, that.maxRows ) ) {
++			return false;
++		}
++		if ( !EqualsHelper.equals( customTransformer, that.customTransformer ) ) {
++			return false;
++		}
+-		if (types==null) {
++		if ( types == null ) {
+-			if (that.types!=null) return false;
++			if ( that.types != null ) {
++				return false;
+-		}
++			}
++		}
+ 		else {
+-			if (that.types==null) return false;
+-			if ( types.length!=that.types.length ) return false;
++			if ( that.types == null ) {
++				return false;
++			}
++			if ( types.length != that.types.length ) {
++				return false;
++			}
+-			for ( int i=0; i<types.length; i++ ) {
++			for ( int i = 0; i < types.length; i++ ) {
+-				if ( types[i].getReturnedClass() != that.types[i].getReturnedClass() ) return false;
+-				if ( !types[i].isEqual( values[i], that.values[i], entityMode ) ) return false;
++				if ( types[i].getReturnedClass() != that.types[i].getReturnedClass() ) {
++					return false;
+-			}
++				}
++				if ( !types[i].isEqual( values[i], that.values[i], entityMode ) ) {
++					return false;
+-		}
++				}
+-		if ( !EqualsHelper.equals(filters, that.filters) ) return false;
+-		if ( !EqualsHelper.equals(namedParameters, that.namedParameters) ) return false;
+-		return true;
+-	}
++			}
++		}
+-	
++
++		return EqualsHelper.equals( filters, that.filters )
++				&& EqualsHelper.equals( namedParameters, that.namedParameters );
++	}
++	
+ 	public int hashCode() {
+ 		return hashCode;
+ 	}
+ 
+ 	public String toString() {
+ 		StringBuffer buf = new StringBuffer()
+-			.append("sql: ")
++				.append( "sql: " )
+-			.append(sqlQueryString);
++				.append( sqlQueryString );
+-		if (values!=null) {
++		if ( values != null ) {
+-			buf.append("; parameters: ");
++			buf.append( "; parameters: " );
+-			for (int i=0; i<values.length; i++) {
++			for ( int i = 0; i < values.length; i++ ) {
+ 				buf.append( values[i] )
+-					.append(", ");
++						.append( ", " );
+ 			}
+ 		}
+-		if (namedParameters!=null) {
++		if ( namedParameters != null ) {
+-			buf.append("; named parameters: ")
++			buf.append( "; named parameters: " )
+-				.append(namedParameters);
++					.append( namedParameters );
+ 		}
+-		if (filters!=null) {
++		if ( filters != null ) {
+-			buf.append("; filters: ")
++			buf.append( "; filters: " )
+-				.append(filters);
++					.append( filters );
+ 		}
+-		if (firstRow!=null) buf.append("; first row: ").append(firstRow);
+-		if (maxRows!=null) buf.append("; max rows: ").append(maxRows);
+-		if (customTransformer!=null) buf.append("; transformer: ").append(customTransformer);
++		if ( firstRow != null ) {
++			buf.append( "; first row: " ).append( firstRow );
++		}
++		if ( maxRows != null ) {
++			buf.append( "; max rows: " ).append( maxRows );
++		}
++		if ( customTransformer != null ) {
++			buf.append( "; transformer: " ).append( customTransformer );
++		}
+ 		return buf.toString();
+ 	}
+ 	

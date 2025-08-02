@@ -1,0 +1,283 @@
+diff -wbru -x '*gradle*' -x '*target*' -x '*build*' -x '*.log' hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/BootstrapServiceRegistryBuilder.java hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/BootstrapServiceRegistryBuilder.java
+--- hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/BootstrapServiceRegistryBuilder.java	2016-10-26 15:41:28.000000000 +0200
++++ hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/BootstrapServiceRegistryBuilder.java	2016-11-13 21:21:12.160717523 +0100
+@@ -14,6 +14,7 @@
+ 
+ import org.hibernate.boot.registry.classloading.internal.ClassLoaderServiceImpl;
+ import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
++import org.hibernate.boot.registry.classloading.spi.ClassLoaderService.TCCLLookupBehavior;
+ import org.hibernate.boot.registry.internal.BootstrapServiceRegistryImpl;
+ import org.hibernate.boot.registry.selector.StrategyRegistration;
+ import org.hibernate.boot.registry.selector.StrategyRegistrationProvider;
+@@ -39,6 +40,7 @@
+ 	private List<ClassLoader> providedClassLoaders;
+ 	private ClassLoaderService providedClassLoaderService;
+ 	private StrategySelectorBuilder strategySelectorBuilder = new StrategySelectorBuilder();
++	private TCCLLookupBehavior tcclLookupBehaviour = TCCLLookupBehavior.AFTER;
+ 
+ 	private boolean autoCloseRegistry = true;
+ 
+@@ -86,6 +88,15 @@
+ 	}
+ 
+ 	/**
++	 * Defines when the lookup in the thread context {@code ClassLoader} is done.
++	 * 
++	 * @param behavior The behavior.
++	 */
++	public void applyTCCLBehavior(TCCLLookupBehavior behavior) {
++		tcclLookupBehaviour = behavior;
++	}
++
++	/**
+ 	 * @deprecated Use {@link #applyClassLoaderService} instead
+ 	 */
+ 	@Deprecated
+@@ -205,6 +216,7 @@
+ 			}
+ 			
+ 			classLoaderService = new ClassLoaderServiceImpl( classLoaders );
++			classLoaderService.setTCCLLookupBehavior( tcclLookupBehaviour );
+ 		}
+ 		else {
+ 			classLoaderService = providedClassLoaderService;
+@@ -215,7 +227,6 @@
+ 				classLoaderService
+ 		);
+ 
+-
+ 		return new BootstrapServiceRegistryImpl(
+ 				autoCloseRegistry,
+ 				classLoaderService,
+diff -wbru -x '*gradle*' -x '*target*' -x '*build*' -x '*.log' hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/internal/ClassLoaderServiceImpl.java hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/internal/ClassLoaderServiceImpl.java
+--- hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/internal/ClassLoaderServiceImpl.java	2016-10-26 15:41:28.000000000 +0200
++++ hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/internal/ClassLoaderServiceImpl.java	2016-11-13 21:11:48.952704924 +0100
+@@ -41,6 +41,7 @@
+ 
+ 	private final ConcurrentMap<Class, ServiceLoader> serviceLoaders = new ConcurrentHashMap<Class, ServiceLoader>();
+ 	private volatile AggregatedClassLoader aggregatedClassLoader;
++	private volatile TCCLLookupBehavior lookupBehavior = TCCLLookupBehavior.AFTER;
+ 
+ 	/**
+ 	 * Constructs a ClassLoaderServiceImpl with standard set-up
+@@ -80,15 +81,16 @@
+ 		orderedClassLoaderSet.add( ClassLoaderServiceImpl.class.getClassLoader() );
+ 
+ 		// then the TCCL, if one...
+-		final ClassLoader tccl = locateTCCL();
++		/*final ClassLoader tccl = locateTCCL();
+ 		if ( tccl != null ) {
+ 			orderedClassLoaderSet.add( tccl );
+-		}
++		}*/
++                
+ 		// finally the system classloader
+-		final ClassLoader sysClassLoader = locateSystemClassLoader();
++		/*final ClassLoader sysClassLoader = locateSystemClassLoader();
+ 		if ( sysClassLoader != null ) {
+ 			orderedClassLoaderSet.add( sysClassLoader );
+-		}
++		}*/
+ 
+ 		// now build the aggregated class loader...
+ 		this.aggregatedClassLoader = new AggregatedClassLoader( orderedClassLoaderSet );
+@@ -120,14 +122,14 @@
+ 		addIfSet( providedClassLoaders, AvailableSettings.HIBERNATE_CLASSLOADER, configValues );
+ 		addIfSet( providedClassLoaders, AvailableSettings.ENVIRONMENT_CLASSLOADER, configValues );
+ 
+-		if ( providedClassLoaders.isEmpty() ) {
++		/*if ( providedClassLoaders.isEmpty() ) {
+ 			log.debugf( "Incoming config yielded no classloaders; adding standard SE ones" );
+ 			final ClassLoader tccl = locateTCCL();
+ 			if ( tccl != null ) {
+ 				providedClassLoaders.add( tccl );
+ 			}
+ 			providedClassLoaders.add( ClassLoaderServiceImpl.class.getClassLoader() );
+-		}
++		}*/
+ 
+ 		return new ClassLoaderServiceImpl( providedClassLoaders );
+ 	}
+@@ -157,7 +159,17 @@
+ 		}
+ 	}
+ 
+-	private static class AggregatedClassLoader extends ClassLoader {
++	@Override
++	public TCCLLookupBehavior getTTCLLookupBehavior() {
++		return lookupBehavior;
++	}
++
++	@Override
++	public void setTCCLLookupBehavior(TCCLLookupBehavior behavior) {
++		this.lookupBehavior = behavior;
++	}
++
++	private class AggregatedClassLoader extends ClassLoader {
+ 		private final ClassLoader[] individualClassLoaders;
+ 
+ 		private AggregatedClassLoader(final LinkedHashSet<ClassLoader> orderedClassLoaderSet) {
+@@ -165,11 +177,46 @@
+ 			individualClassLoaders = orderedClassLoaderSet.toArray( new ClassLoader[orderedClassLoaderSet.size()] );
+ 		}
+ 
++		private ClassLoader[] getClassLoadersLookup() {
++			final ClassLoader tcclClassLoader = locateTCCL();
++			final ClassLoader sysClassLoader = locateSystemClassLoader();
++                        
++			TCCLLookupBehavior behavior = lookupBehavior;
++			if( tcclClassLoader == null ) { 
++				behavior = TCCLLookupBehavior.NEVER;
++			}
++                        
++			final int placeForTcclCL = behavior!=TCCLLookupBehavior.NEVER ? 1 : 0;
++			final int placeForSysCL = sysClassLoader!=null ? 1 : 0;
++			ClassLoader[] classloaders = new ClassLoader[individualClassLoaders.length + placeForTcclCL + placeForSysCL];
++                        
++			int arrayIndex = 0;
++			if( behavior == TCCLLookupBehavior.BEFORE ) {
++				classloaders[arrayIndex] = Thread.currentThread().getContextClassLoader();
++				++arrayIndex;
++			}
++                        
++			System.arraycopy( individualClassLoaders, 0, classloaders, arrayIndex, individualClassLoaders.length );
++			arrayIndex += individualClassLoaders.length;
++                        
++			if( behavior == TCCLLookupBehavior.AFTER ) {
++				classloaders[arrayIndex] = Thread.currentThread().getContextClassLoader();
++				++arrayIndex;
++			}
++                        
++			//system classloader always searched last
++			if ( sysClassLoader != null ) {
++				classloaders[arrayIndex] = sysClassLoader;
++			}
++
++			return classloaders;
++		}
++                
+ 		@Override
+ 		public Enumeration<URL> getResources(String name) throws IOException {
+ 			final LinkedHashSet<URL> resourceUrls = new LinkedHashSet<URL>();
+ 
+-			for ( ClassLoader classLoader : individualClassLoaders ) {
++			for ( ClassLoader classLoader : getClassLoadersLookup() ) {
+ 				final Enumeration<URL> urls = classLoader.getResources( name );
+ 				while ( urls.hasMoreElements() ) {
+ 					resourceUrls.add( urls.nextElement() );
+@@ -193,7 +240,7 @@
+ 
+ 		@Override
+ 		protected URL findResource(String name) {
+-			for ( ClassLoader classLoader : individualClassLoaders ) {
++			for ( ClassLoader classLoader : getClassLoadersLookup() ) {
+ 				final URL resource = classLoader.getResource( name );
+ 				if ( resource != null ) {
+ 					return resource;
+@@ -204,7 +251,7 @@
+ 
+ 		@Override
+ 		protected Class<?> findClass(String name) throws ClassNotFoundException {
+-			for ( ClassLoader classLoader : individualClassLoaders ) {
++			for ( ClassLoader classLoader : getClassLoadersLookup() ) {
+ 				try {
+ 					return classLoader.loadClass( name );
+ 				}
+diff -wbru -x '*gradle*' -x '*target*' -x '*build*' -x '*.log' hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/spi/ClassLoaderService.java hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/spi/ClassLoaderService.java
+--- hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/spi/ClassLoaderService.java	2016-10-26 15:41:28.000000000 +0200
++++ hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/boot/registry/classloading/spi/ClassLoaderService.java	2016-11-13 21:10:56.256703746 +0100
+@@ -80,4 +80,33 @@
+ 	}
+ 
+ 	<T> T workWithClassLoader(Work<T> work);
++        
++	/**
++	 * Defines of the lookup in the current thread context {@link ClassLoader} should be
++	 * used.
++	 */
++	enum TCCLLookupBehavior {
++    
++		/**
++		 * The current thread context {@link ClassLoader} will never be used during
++		 * the class lookup.
++		 */
++		NEVER,
++
++		/**
++		 * The class lookup will be done in the thread context {@link ClassLoader} prior
++		 * to the other {@code ClassLoader}s.
++		 */
++		BEFORE,
++            
++		/**
++		 * The class lookup will be done in the thread context {@link ClassLoader} if
++		 * the former hasn't been found in the other {@code ClassLoader}s.
++		 * This is the default value.
++		 */
++		AFTER
++	}
++        
++	TCCLLookupBehavior getTTCLLookupBehavior();
++	void setTCCLLookupBehavior(TCCLLookupBehavior behavior);
+ }
+diff -wbru -x '*gradle*' -x '*target*' -x '*build*' -x '*.log' hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/cfg/AvailableSettings.java hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/cfg/AvailableSettings.java
+--- hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/cfg/AvailableSettings.java	2016-10-26 15:41:28.000000000 +0200
++++ hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/cfg/AvailableSettings.java	2016-11-13 21:13:46.224707548 +0100
+@@ -7,6 +7,7 @@
+ package org.hibernate.cfg;
+ 
+ import org.hibernate.boot.MetadataBuilder;
++import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
+ import org.hibernate.query.internal.ParameterMetadataImpl;
+ import org.hibernate.resource.transaction.spi.TransactionCoordinator;
+ import org.hibernate.resource.transaction.spi.TransactionCoordinatorBuilder;
+@@ -191,6 +192,14 @@
+ 	String CLASSLOADERS = "hibernate.classLoaders";
+ 
+ 	/**
++	 * Used to define how the current thread context {@link ClassLoader} must be used
++	 * for class lookup.
++	 * 
++	 * @see ClassLoaderService#TCCLLookupBehavior
++	 */
++	String TC_CLASSLOADER = "hibernate.classloader.tccl_lookup";
++        
++	/**
+ 	 * Names the {@link ClassLoader} used to load user application classes.
+ 	 * @since 4.0
+ 	 *
+diff -wbru -x '*gradle*' -x '*target*' -x '*build*' -x '*.log' hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/jpa/boot/internal/EntityManagerFactoryBuilderImpl.java hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/jpa/boot/internal/EntityManagerFactoryBuilderImpl.java
+--- hibernate-orm-5.2.4/hibernate-core/src/main/java/org/hibernate/jpa/boot/internal/EntityManagerFactoryBuilderImpl.java	2016-10-26 15:41:28.000000000 +0200
++++ hibernate-orm-5.2.4-modified/hibernate-core/src/main/java/org/hibernate/jpa/boot/internal/EntityManagerFactoryBuilderImpl.java	2016-11-13 21:32:37.840732862 +0100
+@@ -13,6 +13,7 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Properties;
+ import java.util.StringTokenizer;
+ import java.util.concurrent.ConcurrentHashMap;
+ import javax.persistence.AttributeConverter;
+@@ -44,6 +45,7 @@
+ import org.hibernate.boot.registry.StandardServiceRegistry;
+ import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
+ import org.hibernate.boot.registry.classloading.spi.ClassLoaderService;
++import org.hibernate.boot.registry.classloading.spi.ClassLoaderService.TCCLLookupBehavior;
+ import org.hibernate.boot.registry.selector.StrategyRegistrationProvider;
+ import org.hibernate.boot.registry.selector.spi.StrategySelector;
+ import org.hibernate.boot.spi.MetadataBuilderImplementor;
+@@ -388,6 +390,15 @@
+ 					bsrBuilder.applyClassLoader( (ClassLoader) classLoadersSetting );
+ 				}
+ 			}
++                        
++			//configurationValues not assigned yet, using directly the properties of the PU
++			Properties puProperties = persistenceUnit.getProperties();
++			if( puProperties != null ) {
++				final String tcclBehavior = puProperties.getProperty( org.hibernate.cfg.AvailableSettings.TC_CLASSLOADER );
++				if( tcclBehavior != null ) {
++					bsrBuilder.applyTCCLBehavior( TCCLLookupBehavior.valueOf( tcclBehavior.toUpperCase() ) );
++				}
++			}
+ 		}
+ 
+ 		return bsrBuilder.build();

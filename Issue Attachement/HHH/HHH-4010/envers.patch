@@ -1,0 +1,761 @@
+Index: src/main/java/org/hibernate/envers/Audited.java
+===================================================================
+--- src/main/java/org/hibernate/envers/Audited.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/Audited.java	(working copy)
+@@ -37,4 +37,5 @@
+ @Target({ElementType.TYPE, ElementType.METHOD, ElementType.FIELD})
+ public @interface Audited {
+     ModificationStore modStore()    default ModificationStore.FULL;
++    TargetAuditMode targetAuditMode() default TargetAuditMode.Audited;
+ }
+Index: src/main/java/org/hibernate/envers/TargetAuditMode.java
+===================================================================
+--- src/main/java/org/hibernate/envers/TargetAuditMode.java	(revision 0)
++++ src/main/java/org/hibernate/envers/TargetAuditMode.java	(revision 0)
+@@ -0,0 +1,32 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers;
++
++/**
++ * @author Adam Warski (adam at warski dot org)
++ */
++public enum TargetAuditMode {
++    Audited,
++    NotAudited
++}
+Index: src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(working copy)
+@@ -84,8 +84,12 @@
+                 }
+ 
+                 EntityXmlMappingData xmlMappingData = new EntityXmlMappingData();
+-                auditMetaGen.generateFirstPass(pc, auditData, xmlMappingData);
++                auditMetaGen.generateFirstPass(pc, auditData, xmlMappingData, true);
+                 xmlMappings.put(pc, xmlMappingData);
++            } else {
++              EntityXmlMappingData xmlMappingData = new EntityXmlMappingData();
++              auditMetaGen.generateFirstPass(pc, auditData, xmlMappingData, false);
++              xmlMappings.put(pc, xmlMappingData);
+             }
+         }
+ 
+@@ -123,7 +127,8 @@
+             }
+         }
+ 
+-        return new EntitiesConfigurations(auditMetaGen.getEntitiesConfigurations());
++        return new EntitiesConfigurations(auditMetaGen.getEntitiesConfigurations(),
++        		auditMetaGen.getNotAuditedEntitiesConfigurations());
+     }
+ 
+     // todo
+Index: src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(working copy)
+@@ -67,6 +67,8 @@
+ 
+     private final Map<String, EntityConfiguration> entitiesConfigurations;
+ 
++    private final Map<String, EntityConfiguration> notAuditedEntitiesConfigurations;
++
+     // Map entity name -> (join descriptor -> element describing the "versioned" join)
+     private final Map<String, Map<Join, Element>> entitiesJoins;
+ 
+@@ -84,6 +86,7 @@
+         this.toOneRelationMetadataGenerator = new ToOneRelationMetadataGenerator(this);
+ 
+         entitiesConfigurations = new HashMap<String, EntityConfiguration>();
++        notAuditedEntitiesConfigurations = new HashMap<String, EntityConfiguration>();
+         entitiesJoins = new HashMap<String, Map<Join, Element>>();
+     }
+ 
+@@ -310,7 +313,7 @@
+ 
+     @SuppressWarnings({"unchecked"})
+     public void generateFirstPass(PersistentClass pc, ClassAuditingData auditingData,
+-                                  EntityXmlMappingData xmlMappingData) {
++                                  EntityXmlMappingData xmlMappingData, boolean isAudited) {
+         String schema = auditingData.getAuditTable().schema();
+         if (StringTools.isEmpty(schema)) {
+             schema = pc.getTable().getSchema();
+@@ -320,6 +323,16 @@
+         if (StringTools.isEmpty(catalog)) {
+             catalog = pc.getTable().getCatalog();
+         }
++        if (!isAudited) {
++          String entityName = pc.getEntityName();
++          IdMappingData idMapper = idMetadataGenerator.addId(pc);
++					ExtendedPropertyMapper propertyMapper = null;
++					String parentEntityName = null;
++					EntityConfiguration entityCfg = new EntityConfiguration(entityName, idMapper,
++                  propertyMapper, parentEntityName);
++          notAuditedEntitiesConfigurations.put(pc.getEntityName(), entityCfg);
++          return;
++        }
+ 
+         String entityName = pc.getEntityName();
+         String auditEntityName = verEntCfg.getAuditEntityName(entityName);
+@@ -437,4 +450,13 @@
+ 
+         throw new MappingException(message);
+     }
++
++		/**
++		 * Get the notAuditedEntitiesConfigurations property.
++		 *
++		 * @return the notAuditedEntitiesConfigurations property value
++		 */
++		public Map<String, EntityConfiguration> getNotAuditedEntitiesConfigurations() {
++			return notAuditedEntitiesConfigurations;
++		}
+ }
+Index: src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(working copy)
+@@ -36,6 +36,7 @@
+ 
+ import org.dom4j.Element;
+ import org.hibernate.envers.ModificationStore;
++import org.hibernate.envers.TargetAuditMode;
+ import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+ import org.hibernate.envers.entities.EntityConfiguration;
+ import org.hibernate.envers.entities.IdMappingData;
+@@ -108,7 +109,7 @@
+      * be created using this object.
+      * @param propertyAuditingData Property auditing (meta-)data. Among other things, holds the name of the
+      * property that references the collection in the referencing entity, the user data for middle (join)
+-     * table and the value of the <code>@MapKey</code> annotation, if there was one. 
++     * table and the value of the <code>@MapKey</code> annotation, if there was one.
+      */
+     public CollectionMetadataGenerator(AuditMetadataGenerator mainGenerator,
+                                        Collection propertyValue, CompositeMapperBuilder currentMapper,
+@@ -231,7 +232,7 @@
+             // middle table for mapping this relation.
+             return StringTools.getLastComponent(entityName) + "_" + StringTools.getLastComponent(getReferencedEntityName(value.getElement()));
+         } else {
+-            // Hibernate uses a middle table for mapping this relation, so we get it's name directly. 
++            // Hibernate uses a middle table for mapping this relation, so we get it's name directly.
+             return value.getCollectionTable().getName();
+         }
+     }
+@@ -413,7 +414,7 @@
+         } else {
+             // Last but one parameter: collection components are always insertable
+             boolean mapped = mainGenerator.getBasicMetadataGenerator().addBasic(xmlMapping,
+-                    new PropertyAuditingData(prefix, "field", ModificationStore.FULL), value, null,
++                    new PropertyAuditingData(prefix, "field", ModificationStore.FULL, TargetAuditMode.Audited), value, null,
+                     true, true);
+ 
+             if (mapped) {
+Index: src/main/java/org/hibernate/envers/configuration/metadata/IdMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/IdMetadataGenerator.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/IdMetadataGenerator.java	(working copy)
+@@ -28,6 +28,7 @@
+ import org.dom4j.Element;
+ import org.dom4j.tree.DefaultElement;
+ import org.hibernate.envers.ModificationStore;
++import org.hibernate.envers.TargetAuditMode;
+ import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+ import org.hibernate.envers.entities.IdMappingData;
+ import org.hibernate.envers.entities.PropertyData;
+@@ -104,7 +105,7 @@
+             addIdProperties(orig_id_mapping, (Iterator<Property>) id_component.getPropertyIterator(), null, true);
+         } else {
+             // Single id
+-            
++
+             mapper = new SingleIdMapper();
+ 
+             // Last but one parameter: ids are always insertable
+@@ -133,6 +134,6 @@
+ 
+     private PropertyAuditingData getIdPersistentPropertyAuditingData(Property property) {
+         return new PropertyAuditingData(property.getName(), property.getPropertyAccessorName(),
+-                ModificationStore.FULL);
++                ModificationStore.FULL, TargetAuditMode.Audited);
+     }
+ }
+Index: src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java	(working copy)
+@@ -24,6 +24,7 @@
+ package org.hibernate.envers.configuration.metadata;
+ 
+ import org.dom4j.Element;
++import org.hibernate.envers.TargetAuditMode;
+ import org.hibernate.envers.entities.EntityConfiguration;
+ import org.hibernate.envers.entities.IdMappingData;
+ import org.hibernate.envers.entities.PropertyData;
+@@ -56,8 +57,20 @@
+ 
+         EntityConfiguration configuration = mainGenerator.getEntitiesConfigurations().get(referencedEntityName);
+         if (configuration == null) {
+-            throw new MappingException("An audited relation to a non-audited entity " + referencedEntityName + "!");
++          	configuration = mainGenerator.getNotAuditedEntitiesConfigurations().get(referencedEntityName);
++          	if (configuration != null) {
++          		TargetAuditMode targetAuditMode = propertyAuditingData.getTargetAuditMode();
++          		if (!TargetAuditMode.NotAudited.equals(targetAuditMode)) {
++                throw new MappingException("An audited relation from " + entityName + "."
++                		+ propertyAuditingData.getName() + " to a not audited entity " + referencedEntityName + "!"
++                		+ ". Such mapping is possible, but has to be strictly defined using TargetAuditMode.NotAudited in @Audited.");
++          		}
++          	}
+         }
++        if (configuration == null) {
++          throw new MappingException("An audited relation from " + entityName + "."
++          		+ propertyAuditingData.getName() + " to a not audited entity " + referencedEntityName + "!");
++      }
+ 
+         IdMappingData idMapping = configuration.getIdMappingData();
+ 
+Index: src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(working copy)
+@@ -160,6 +160,7 @@
+ 		Versioned ver = property.getAnnotation(Versioned.class);
+ 		if (aud != null) {
+ 			propertyData.setStore(aud.modStore());
++			propertyData.setTargetAuditMode(aud.targetAuditMode());
+ 		} else if (ver != null) {
+ 			propertyData.setStore(ModificationStore.FULL);
+ 		} else {
+@@ -203,7 +204,7 @@
+ 
+ 	/***
+ 	 * Add the {@link org.hibernate.envers.AuditOverride} annotations.
+-	 * 
++	 *
+ 	 * @param property the property being processed
+ 	 * @param propertyData the Envers auditing data for this property
+ 	 */
+@@ -220,13 +221,13 @@
+ 
+ 	/**
+ 	 * Process the {@link org.hibernate.envers.AuditOverride} annotations for this property.
+-	 * 
++	 *
+ 	 * @param property
+ 	 *            the property for which the {@link org.hibernate.envers.AuditOverride}
+ 	 *            annotations are being processed
+ 	 * @param propertyData
+ 	 *            the Envers auditing data for this property
+-	 * @return {@code false} if isAudited() of the override annotation was set to 
++	 * @return {@code false} if isAudited() of the override annotation was set to
+ 	 */
+ 	private boolean processPropertyAuditingOverrides(XProperty property, PropertyAuditingData propertyData) {
+ 		// if this property is part of a component, process all override annotations
+@@ -236,7 +237,7 @@
+ 				if (property.getName().equals(override.name())) {
+ 					// the override applies to this property
+ 					if (!override.isAudited()) {
+-						return false; 
++						return false;
+ 					} else {
+ 						if (override.auditJoinTable() != null) {
+ 							propertyData.setJoinTable(override.auditJoinTable());
+@@ -244,7 +245,7 @@
+ 					}
+ 				}
+ 			}
+-			
++
+ 		}
+ 		return true;
+ 	}
+@@ -267,7 +268,7 @@
+ 			} catch (ClassNotFoundException e) {
+ 				throw new MappingException(e);
+ 			}
+-			
++
+ 			this.component = component;
+ 		}
+ 
+Index: src/main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java	(working copy)
+@@ -31,6 +31,7 @@
+ import org.hibernate.envers.AuditOverrides;
+ import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.AuditJoinTable;
++import org.hibernate.envers.TargetAuditMode;
+ import org.hibernate.envers.entities.PropertyData;
+ 
+ /**
+@@ -44,15 +45,18 @@
+     private AuditJoinTable joinTable;
+     private String accessType;
+     private final List<AuditOverride> auditJoinTableOverrides = new ArrayList<AuditOverride>(0);
++		private TargetAuditMode targetAuditMode;
+ 
+     public PropertyAuditingData() {
+     }
+ 
+-    public PropertyAuditingData(String name, String accessType, ModificationStore store) {
++    public PropertyAuditingData(String name, String accessType, ModificationStore store,
++    		TargetAuditMode targetAuditMode) {
+         this.name = name;
+ 		this.beanName = name;
+         this.accessType = accessType;
+         this.store = store;
++        this.targetAuditMode = targetAuditMode;
+     }
+ 
+ 	public String getName() {
+@@ -108,7 +112,7 @@
+     }
+ 
+ 	public List<AuditOverride> getAuditingOverrides() {
+-		return auditJoinTableOverrides; 
++		return auditJoinTableOverrides;
+ 	}
+ 
+ 	public void addAuditingOverride(AuditOverride annotation) {
+@@ -135,4 +139,22 @@
+ 		}
+ 	}
+ 
++	/**
++	 * Get the targetAuditMode property.
++	 *
++	 * @return the targetAuditMode property value
++	 */
++	public TargetAuditMode getTargetAuditMode() {
++		return targetAuditMode;
++	}
++
++	/**
++	 * Set the targetAuditMode property value.
++	 *
++	 * @param targetAuditMode the targetAuditMode to set
++	 */
++	public void setTargetAuditMode(TargetAuditMode targetAuditMode) {
++		this.targetAuditMode = targetAuditMode;
++	}
++
+ }
+Index: src/main/java/org/hibernate/envers/entities/EntitiesConfigurations.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/EntitiesConfigurations.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/entities/EntitiesConfigurations.java	(working copy)
+@@ -32,12 +32,15 @@
+  */
+ public class EntitiesConfigurations {
+     private Map<String, EntityConfiguration> entitiesConfigurations;
++    private Map<String, EntityConfiguration> notAuditedEntitiesConfigurations;
+ 
+     // Map versions entity name -> entity name
+     private Map<String, String> entityNamesForVersionsEntityNames = new HashMap<String, String>();
+ 
+-    public EntitiesConfigurations(Map<String, EntityConfiguration> entitiesConfigurations) {
++    public EntitiesConfigurations(Map<String, EntityConfiguration> entitiesConfigurations,
++    		Map<String, EntityConfiguration> notAuditedEntitiesConfigurations) {
+         this.entitiesConfigurations = entitiesConfigurations;
++        this.notAuditedEntitiesConfigurations = notAuditedEntitiesConfigurations;
+ 
+         generateBidirectionRelationInfo();
+         generateVersionsEntityToEntityNames();
+@@ -62,13 +65,16 @@
+                 // a mapped-by attribute to the currently checked. If so, this is a bidirectional relation.
+                 if (relDesc.getRelationType() == RelationType.TO_ONE ||
+                         relDesc.getRelationType() == RelationType.TO_MANY_MIDDLE) {
+-                    for (RelationDescription other : entitiesConfigurations.get(relDesc.getToEntityName()).getRelationsIterator()) {
+-                        if (relDesc.getFromPropertyName().equals(other.getMappedByPropertyName()) &&
+-                                (entityName.equals(other.getToEntityName()))) {
+-                            relDesc.setBidirectional(true);
+-                            other.setBidirectional(true);
+-                        }
+-                    }
++                		EntityConfiguration entityConfiguration = entitiesConfigurations.get(relDesc.getToEntityName());
++                		if (entityConfiguration != null) {
++	                    for (RelationDescription other : entityConfiguration.getRelationsIterator()) {
++	                        if (relDesc.getFromPropertyName().equals(other.getMappedByPropertyName()) &&
++	                                (entityName.equals(other.getToEntityName()))) {
++	                            relDesc.setBidirectional(true);
++	                            other.setBidirectional(true);
++	                        }
++	                    }
++                		}
+                 }
+             }
+         }
+@@ -78,6 +84,10 @@
+         return entitiesConfigurations.get(entityName);
+     }
+ 
++    public EntityConfiguration getNotVersionEntityConfiguration(String entityName) {
++      return notAuditedEntitiesConfigurations.get(entityName);
++  }
++
+     public String getEntityNameForVersionsEntityName(String versionsEntityName) {
+         return entityNamesForVersionsEntityNames.get(versionsEntityName);
+     }
+@@ -98,4 +108,5 @@
+             return null;
+         }
+     }
++
+ }
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneIdMapper.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneIdMapper.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneIdMapper.java	(working copy)
+@@ -82,7 +82,7 @@
+                 Class<?> entityClass = ReflectionTools.loadClass(referencedEntityName);
+ 
+                 value = versionsReader.getSessionImplementor().getFactory().getEntityPersister(referencedEntityName).
+-                        createProxy(null, new ToOneDelegateSessionImplementor(versionsReader, entityClass, entityId, revision));
++                        createProxy(null, new ToOneDelegateSessionImplementor(versionsReader, entityClass, entityId, revision, verCfg));
+             }
+         }
+ 
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/ToOneDelegateSessionImplementor.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/ToOneDelegateSessionImplementor.java	(revision 16990)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/ToOneDelegateSessionImplementor.java	(working copy)
+@@ -23,9 +23,16 @@
+  */
+ package org.hibernate.envers.entities.mapper.relation.lazy;
+ 
++import java.io.Serializable;
++
++import org.hibernate.envers.configuration.AuditConfiguration;
++import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.envers.entities.EntitiesConfigurations;
++import org.hibernate.envers.entities.EntityConfiguration;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+ 
+ import org.hibernate.HibernateException;
++import org.hibernate.Session;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -35,17 +42,26 @@
+     private final Class<?> entityClass;
+     private final Object entityId;
+     private final Number revision;
++		private EntityConfiguration notVersionedEntityConfiguration;
+ 
+     public ToOneDelegateSessionImplementor(AuditReaderImplementor versionsReader,
+-                                           Class<?> entityClass, Object entityId, Number revision) {
++                                           Class<?> entityClass, Object entityId, Number revision,
++                                           AuditConfiguration verCfg) {
+         super(versionsReader.getSessionImplementor());
+         this.versionsReader = versionsReader;
+         this.entityClass = entityClass;
+         this.entityId = entityId;
+         this.revision = revision;
++        EntitiesConfigurations entCfg = verCfg.getEntCfg();
++        notVersionedEntityConfiguration = entCfg.getNotVersionEntityConfiguration(entityClass.getName());
+     }
+ 
+     public Object doImmediateLoad(String entityName) throws HibernateException {
++    	if (notVersionedEntityConfiguration == null) {
+         return versionsReader.find(entityClass, entityId, revision);
++    	} else {
++    		Session session = versionsReader.getSession();
++    		return session.get(entityClass, (Serializable) entityId);
++    	}
+     }
+ }
+Index: src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java	(revision 0)
+@@ -0,0 +1,115 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.entities.manytoone.unidirectional;
++
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++
++import org.hibernate.envers.Audited;
++import org.hibernate.envers.TargetAuditMode;
++import org.hibernate.envers.test.entities.UnversionedStrTestEntity;
++
++/**
++ * Audited entity with a reference to not audited entity.
++ * @author Toamsz Bech
++ */
++@Entity
++public class TargetNotAuditedEntity {
++    @Id
++    private Integer id;
++
++    @Audited
++    private String data;
++
++    @Audited(targetAuditMode = TargetAuditMode.NotAudited)
++    @ManyToOne(fetch = FetchType.EAGER)
++    private UnversionedStrTestEntity reference;
++
++    public TargetNotAuditedEntity() { }
++
++    public TargetNotAuditedEntity(Integer id, String data, UnversionedStrTestEntity reference) {
++        this.id = id;
++        this.data = data;
++        this.reference = reference;
++    }
++
++    public TargetNotAuditedEntity(String data, UnversionedStrTestEntity reference) {
++        this.data = data;
++        this.reference = reference;
++    }
++
++    public TargetNotAuditedEntity(Integer id, String data) {
++        this.id = id;
++        this.data = data;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public UnversionedStrTestEntity getReference() {
++        return reference;
++    }
++
++    public void setReference(UnversionedStrTestEntity reference) {
++        this.reference = reference;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof TargetNotAuditedEntity)) return false;
++
++        TargetNotAuditedEntity that = (TargetNotAuditedEntity) o;
++
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (data != null ? data.hashCode() : 0);
++        return result;
++    }
++
++    public String toString() {
++        return "SetRefIngTargetNotAuditedEntity(id = " + id + ", data = " + data + ")";
++    }
++}
+Index: src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java	(revision 0)
+@@ -0,0 +1,146 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.manytoone.unidirectional;
++
++import java.util.Arrays;
++import java.util.List;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.entities.UnversionedStrTestEntity;
++import org.hibernate.envers.test.entities.manytoone.unidirectional.TargetNotAuditedEntity;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * @author Tomasz Bech
++ */
++public class RelationNotAuditedTarget extends AbstractEntityTest {
++    private Integer tnae1_id;
++    private Integer tnae2_id;
++
++    private Integer uste1_id;
++    private Integer uste2_id;
++
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(TargetNotAuditedEntity.class);
++        cfg.addAnnotatedClass(UnversionedStrTestEntity.class);
++    }
++
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        EntityManager em = getEntityManager();
++
++        UnversionedStrTestEntity uste1 = new UnversionedStrTestEntity("str1");
++        UnversionedStrTestEntity uste2 = new UnversionedStrTestEntity("str2");
++
++
++
++        // Revision 1
++        em.getTransaction().begin();
++
++        em.persist(uste1);
++        em.persist(uste2);
++
++        em.getTransaction().commit();
++
++        em.getTransaction().begin();
++
++        uste1 = em.find(UnversionedStrTestEntity.class, uste1.getId());
++        uste2 = em.find(UnversionedStrTestEntity.class, uste2.getId());
++
++        TargetNotAuditedEntity tnae1 = new TargetNotAuditedEntity(1, "tnae1", uste1);
++        TargetNotAuditedEntity tnae2 = new TargetNotAuditedEntity(2, "tnae2", uste2);
++        em.persist(tnae1);
++        em.persist(tnae2);
++
++        em.getTransaction().commit();
++
++        // Revision 2
++        em.getTransaction().begin();
++
++        tnae1 = em.find(TargetNotAuditedEntity.class, tnae1.getId());
++        tnae2 = em.find(TargetNotAuditedEntity.class, tnae2.getId());
++
++        tnae1.setReference(uste2);
++        tnae2.setReference(uste1);
++
++        em.getTransaction().commit();
++
++        // Revision 3
++        em.getTransaction().begin();
++
++        tnae1 = em.find(TargetNotAuditedEntity.class, tnae1.getId());
++        tnae2 = em.find(TargetNotAuditedEntity.class, tnae2.getId());
++
++        //field not changed!!!
++        tnae1.setReference(uste2);
++        tnae2.setReference(uste2);
++
++        em.getTransaction().commit();
++
++        // Revision 4
++        em.getTransaction().begin();
++
++        tnae1 = em.find(TargetNotAuditedEntity.class, tnae1.getId());
++        tnae2 = em.find(TargetNotAuditedEntity.class, tnae2.getId());
++
++        tnae1.setReference(uste1);
++        tnae2.setReference(uste1);
++
++        em.getTransaction().commit();
++
++        //
++        tnae1_id = tnae1.getId();
++        tnae2_id = tnae2.getId();
++        uste1_id = uste1.getId();
++        uste2_id = uste2.getId();
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++    	List<Number> revisions = getAuditReader().getRevisions(TargetNotAuditedEntity.class, tnae1_id);
++    	assert Arrays.asList(1, 2, 4).equals(revisions);
++    	revisions = getAuditReader().getRevisions(TargetNotAuditedEntity.class, tnae2_id);
++    	assert Arrays.asList(1, 2, 3, 4).equals(revisions);
++    }
++
++    @Test
++    public void testHistoryOfTnae1_id() {
++    	UnversionedStrTestEntity uste1 = getEntityManager().find(UnversionedStrTestEntity.class, tnae1_id);
++    	UnversionedStrTestEntity uste2 = getEntityManager().find(UnversionedStrTestEntity.class, tnae2_id);
++
++    	TargetNotAuditedEntity rev1 = getAuditReader().find(TargetNotAuditedEntity.class, tnae1_id, 1);
++    	TargetNotAuditedEntity rev2 = getAuditReader().find(TargetNotAuditedEntity.class, tnae1_id, 2);
++    	TargetNotAuditedEntity rev3 = getAuditReader().find(TargetNotAuditedEntity.class, tnae1_id, 3);
++    	TargetNotAuditedEntity rev4 = getAuditReader().find(TargetNotAuditedEntity.class, tnae1_id, 4);
++
++      assert rev1.getReference().equals(uste1);
++      assert rev2.getReference().equals(uste2);
++      assert rev3.getReference().equals(uste2);
++      assert rev4.getReference().equals(uste1);
++    }
++}

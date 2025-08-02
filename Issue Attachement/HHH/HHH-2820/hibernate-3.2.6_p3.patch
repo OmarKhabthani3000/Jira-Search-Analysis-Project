@@ -1,0 +1,102 @@
+diff -Nur hibernate-3.2.ori/src/org/hibernate/ScrollMode.java hibernate-3.2/src/org/hibernate/ScrollMode.java
+--- hibernate-3.2.ori/src/org/hibernate/ScrollMode.java	2004-08-18 02:28:43.000000000 +0200
++++ hibernate-3.2/src/org/hibernate/ScrollMode.java	2008-10-18 20:09:04.436061100 +0200
+@@ -15,13 +15,15 @@
+  * @author Gavin King
+  */
+ public final class ScrollMode implements Serializable {
++	private final int holdCursorType;
+ 	private final int resultSetType;
+ 	private final String name;
+ 	private static final Map INSTANCES = new HashMap();
+ 
+-	private ScrollMode(int level, String name) {
++	private ScrollMode(int level, String name, int holdCursorType) {
+ 		this.resultSetType=level;
+ 		this.name=name;
++		this.holdCursorType = holdCursorType;
+ 	}
+ 	
+ 	public String toString() {
+@@ -36,20 +38,51 @@
+ 	}
+ 	
+ 	/**
++	 * @return the JDBC result set hold cursor type
++	 */
++	public int toHoldCursorType() {
++		return holdCursorType;
++	}
++
++	
++	/**
++	 * @see java.sql.ResultSet.TYPE_FORWARD_ONLY
++	 * @see java.sql.ResultSet.CLOSE_CURSORS_AT_COMMIT
++	 */
++	public static final ScrollMode FORWARD_ONLY = new ScrollMode(ResultSet.TYPE_FORWARD_ONLY, "FORWARD_ONLY", ResultSet.CLOSE_CURSORS_AT_COMMIT);
++	/**
++	 * @see java.sql.ResultSet.TYPE_SCROLL_SENSITIVE
++	 * @see java.sql.ResultSet.CLOSE_CURSORS_AT_COMMIT
++	 */
++	public static final ScrollMode SCROLL_SENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_SENSITIVE, "SCROLL_SENSITIVE", ResultSet.CLOSE_CURSORS_AT_COMMIT);
++	/**
++	 * Note that since the Hibernate session acts as a cache, you
++	 * might need to expicitly evict objects, if you need to see
++	 * changes made by other transactions. 
++	 * @see java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE
++	 * @see java.sql.ResultSetResultSet.CLOSE_CURSORS_AT_COMMIT
++	 */
++	public static final ScrollMode SCROLL_INSENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_INSENSITIVE, "SCROLL_INSENSITIVE", ResultSet.CLOSE_CURSORS_AT_COMMIT);
++	
++	/**
+ 	 * @see java.sql.ResultSet.TYPE_FORWARD_ONLY
++	 * @see java.sql.ResultSet.HOLD_CURSORS_OVER_COMMIT
+ 	 */
+-	public static final ScrollMode FORWARD_ONLY = new ScrollMode(ResultSet.TYPE_FORWARD_ONLY, "FORWARD_ONLY");
++	public static final ScrollMode FORWARD_ONLY_WITH_HOLD = new ScrollMode(ResultSet.TYPE_FORWARD_ONLY, "FORWARD_ONLY_WITH_HOLD", ResultSet.HOLD_CURSORS_OVER_COMMIT);
+ 	/**
+ 	 * @see java.sql.ResultSet.TYPE_SCROLL_SENSITIVE
++	 * @see java.sql.ResultSet.HOLD_CURSORS_OVER_COMMIT
+ 	 */
+-	public static final ScrollMode SCROLL_SENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_SENSITIVE, "SCROLL_SENSITIVE");
++	public static final ScrollMode SCROLL_SENSITIVE_WITH_HOLD = new ScrollMode(ResultSet.TYPE_SCROLL_SENSITIVE, "SCROLL_SENSITIVE_WITH_HOLD", ResultSet.HOLD_CURSORS_OVER_COMMIT);
+ 	/**
+ 	 * Note that since the Hibernate session acts as a cache, you
+ 	 * might need to expicitly evict objects, if you need to see
+ 	 * changes made by other transactions. 
+ 	 * @see java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE
++	 * @see java.sql.ResultSetResultSet.HOLD_CURSORS_OVER_COMMIT
+ 	 */
+-	public static final ScrollMode SCROLL_INSENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_INSENSITIVE, "SCROLL_INSENSITIVE");
++	public static final ScrollMode SCROLL_INSENSITIVE_WITH_HOLD = new ScrollMode(ResultSet.TYPE_SCROLL_INSENSITIVE, "SCROLL_INSENSITIVE_WITH_HOLD", ResultSet.HOLD_CURSORS_OVER_COMMIT);
++
+ 	
+ 	public boolean lessThan(ScrollMode other) {
+ 		return this.resultSetType<other.resultSetType;
+@@ -59,6 +92,10 @@
+ 		INSTANCES.put( FORWARD_ONLY.name, FORWARD_ONLY );
+ 		INSTANCES.put( SCROLL_INSENSITIVE.name, SCROLL_INSENSITIVE );
+ 		INSTANCES.put( SCROLL_SENSITIVE.name, SCROLL_SENSITIVE );
++		INSTANCES.put( FORWARD_ONLY_WITH_HOLD.name, FORWARD_ONLY_WITH_HOLD );
++		INSTANCES.put( SCROLL_INSENSITIVE_WITH_HOLD.name, SCROLL_INSENSITIVE_WITH_HOLD );
++		INSTANCES.put( SCROLL_SENSITIVE_WITH_HOLD.name, SCROLL_SENSITIVE_WITH_HOLD );
++
+ 	}
+ 
+ 	private Object readResolve() {
+diff -Nur hibernate-3.2.ori/src/org/hibernate/jdbc/AbstractBatcher.java hibernate-3.2/src/org/hibernate/jdbc/AbstractBatcher.java
+--- hibernate-3.2.ori/src/org/hibernate/jdbc/AbstractBatcher.java	2007-03-22 18:35:22.000000000 +0100
++++ hibernate-3.2/src/org/hibernate/jdbc/AbstractBatcher.java	2008-10-18 20:10:11.610085600 +0200
+@@ -485,10 +485,10 @@
+ 		PreparedStatement result;
+ 		if ( scrollable ) {
+ 			if ( callable ) {
+-				result = conn.prepareCall( sql, scrollMode.toResultSetType(), ResultSet.CONCUR_READ_ONLY );
++				result = conn.prepareCall( sql, scrollMode.toResultSetType(), ResultSet.CONCUR_READ_ONLY, scrollMode.toHoldCursorType() );
+ 			}
+ 			else {
+-				result = conn.prepareStatement( sql, scrollMode.toResultSetType(), ResultSet.CONCUR_READ_ONLY );
++				result = conn.prepareStatement( sql, scrollMode.toResultSetType(), ResultSet.CONCUR_READ_ONLY, scrollMode.toHoldCursorType() );
+ 			}
+ 		}
+ 		else if ( useGetGeneratedKeys ) {

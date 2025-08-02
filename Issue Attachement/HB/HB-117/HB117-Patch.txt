@@ -1,0 +1,650 @@
+
+Index: Simple.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/test/Simple.hbm.xml,v
+retrieving revision 1.4
+diff -u -r1.4 Simple.hbm.xml
+--- Simple.hbm.xml	29 Mar 2003 07:36:22 -0000	1.4
++++ Simple.hbm.xml	4 Aug 2003 08:22:20 -0000
+@@ -10,8 +10,9 @@
+         <property name="address"/>
+         <property name="count" column="count_" not-null="true" unique="true"/> 
+         <property name="date" column="date_"/>
++        <property name="pay"/>
+         <many-to-one name="other"/>
+     </class>
+     
+ 
+-</hibernate-mapping>
+\ No newline at end of file
++</hibernate-mapping>
+
+
+
+
+Index: Simple.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/test/Simple.java,v
+retrieving revision 1.4
+diff -u -r1.4 Simple.java
+--- Simple.java	22 Jan 2003 13:09:20 -0000	1.4
++++ Simple.java	4 Aug 2003 08:23:43 -0000
+@@ -6,6 +6,7 @@
+ 	private String address;
+ 	private int count;
+ 	private java.util.Date date;
++	private Float number;
+ 	private Simple other;
+ 	
+ 	public Simple(int c) {
+@@ -18,6 +19,7 @@
+ 		address="1234 Some Street, Some City, Victoria, 3000, Austraya";
+ 		count=69;
+ 		date=new java.sql.Date(666);
++		number=new Float(55.8);
+ 	}
+ 	/**
+ 	 * Gets the name
+@@ -77,6 +79,22 @@
+ 	 */
+ 	public void setDate(java.util.Date date) {
+ 		this.date = date;
++	}
++
++	/**
++	 * Gets the pay number
++	 * @return Returns a Float
++	 */
++	public Float getPay() {
++		return number;
++	}
++	
++	/**
++	 * Sets the pay number
++	 * @param number The Pay to set
++	 */
++	public void setPay(Float number) {
++		this.number = number;
+ 	}
+ 	
+ 	/**
+
+
+
+
+Index: Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.17
+diff -u -r1.17 Dialect.java
+--- Dialect.java	25 May 2003 01:45:06 -0000	1.17
++++ Dialect.java	4 Aug 2003 08:25:32 -0000
+@@ -2,6 +2,9 @@
+ package net.sf.hibernate.dialect;
+ 
+ import java.util.Properties;
++import java.util.Map;
++import java.util.HashMap;
++import java.sql.Types;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -15,6 +18,11 @@
+ import net.sf.hibernate.util.StringHelper;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.hql.QueryFunctionInfo;
++import net.sf.hibernate.type.Type;
++import net.sf.hibernate.Hibernate;
++import net.sf.hibernate.hql.QueryTranslator;
++import net.sf.hibernate.QueryException;
+ 
+ /**
+  * Represents a dialect of SQL implemented by a particular RDBMS.
+@@ -30,6 +38,41 @@
+ 	
+ 	static final String DEFAULT_BATCH_SIZE = "15";
+ 	static final String NO_BATCH = "0";
++
++	private static final Map aggregateFunctions = new HashMap();
++	static {
++		aggregateFunctions.put("count", new QueryFunctionInfo() {
++			public Type queryFunctionType(Type columnType, QueryTranslator q) throws QueryException {
++				return Hibernate.INTEGER;		
++			}
++			public boolean isFunctionArgs() { return true; }
++			public boolean isFunctionNoArgsUseParenthesis() { return true; }
++		});
++		aggregateFunctions.put("avg", new QueryFunctionInfo() {
++			public Type queryFunctionType(Type columnType, QueryTranslator q) throws QueryException {
++				int[] sqlTypes;
++				try {
++					sqlTypes = columnType.sqlTypes(q.factory);
++				}
++				catch (MappingException me) {
++					throw new QueryException(me);
++				}
++				if (sqlTypes.length!=1) throw new QueryException("multi-column type in avg()");
++				int sqlType = sqlTypes[0];
++				if (sqlType==Types.INTEGER || sqlType==Types.BIGINT || sqlType==Types.TINYINT) {
++					return Hibernate.FLOAT;
++				}
++				else {
++					return columnType;
++				}	
++			}
++			public boolean isFunctionArgs() { return true; }
++			public boolean isFunctionNoArgsUseParenthesis() { return true; }
++		});
++		aggregateFunctions.put("max", new QueryFunctionStandard());
++		aggregateFunctions.put("min", new QueryFunctionStandard());
++		aggregateFunctions.put("sum", new QueryFunctionStandard());
++	}
+ 	
+ 	private static final Log log = LogFactory.getLog(Dialect.class);
+ 	
+@@ -162,7 +205,7 @@
+ 	 * The syntax used to add a column to a table (optional).
+ 	 */
+ 	public String getAddColumnString() {
+-		throw new UnsupportedOperationException("No add column syntax suppoerted by Dialect");
++		throw new UnsupportedOperationException("No add column syntax supported by Dialect");
+ 	}
+ 	
+ 	/**
+@@ -393,6 +436,14 @@
+ 		return '"';
+ 	}
+ 
++	/**
++	 * Aggregate SQL functions as defined in general. This results of this
++	 * method should be integrated with the specialisation's data.
++	 */
++	public Map getAggregateFunctions() {
++		return aggregateFunctions;
++	}
++	
+ }
+ 
+ 
+
+
+
+Index: Oracle9Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/dialect/Oracle9Dialect.java,v
+retrieving revision 1.9
+diff -u -r1.9 Oracle9Dialect.java
+--- Oracle9Dialect.java	7 Jun 2003 12:20:09 -0000	1.9
++++ Oracle9Dialect.java	4 Aug 2003 08:27:28 -0000
+@@ -2,15 +2,24 @@
+ package net.sf.hibernate.dialect;
+ 
+ import java.sql.Types;
++import java.util.Map;
++import java.util.HashMap;
+ 
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.hql.QueryFunctionInfo;
++import net.sf.hibernate.type.Type;
++import net.sf.hibernate.Hibernate;
++import net.sf.hibernate.hql.QueryTranslator;
++import net.sf.hibernate.QueryException;
+ 
+ /**
+  * An SQL dialect for Oracle 9 (uses ANSI-style syntax where possible).
+  * @author Gavin King (?)
+  */
+ public class Oracle9Dialect extends Dialect {
+-	
++
++	private final Map aggregateFunctions = new HashMap();
++
+ 	public Oracle9Dialect() {
+ 		super();
+ 		register( Types.BIT, "NUMBER(1,0)" );
+@@ -33,6 +42,33 @@
+ 		getDefaultProperties().setProperty(Environment.USE_STREAMS_FOR_BINARY, "true");
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, DEFAULT_BATCH_SIZE);
+ 		getDefaultProperties().setProperty(Environment.USE_OUTER_JOIN, "true");
++
++		aggregateFunctions.putAll(super.getAggregateFunctions());
++		aggregateFunctions.put("trunc", new QueryFunctionStandard());
++		aggregateFunctions.put("round", new QueryFunctionStandard());
++		aggregateFunctions.put("abs", new QueryFunctionStandard(Hibernate.INTEGER));
++		aggregateFunctions.put("sign", new QueryFunctionStandard(Hibernate.INTEGER));
++		aggregateFunctions.put("ceil", new QueryFunctionStandard(Hibernate.INTEGER));
++		aggregateFunctions.put("floor", new QueryFunctionStandard(Hibernate.INTEGER));
++		aggregateFunctions.put("sqrt", new QueryFunctionStandard());
++		aggregateFunctions.put("exp", new QueryFunctionStandard());
++		aggregateFunctions.put("ln", new QueryFunctionStandard());
++		aggregateFunctions.put("sin", new QueryFunctionStandard());
++		aggregateFunctions.put("sinh", new QueryFunctionStandard());
++		aggregateFunctions.put("cos", new QueryFunctionStandard());
++		aggregateFunctions.put("cosh", new QueryFunctionStandard());
++		aggregateFunctions.put("tan", new QueryFunctionStandard());
++		aggregateFunctions.put("tanh", new QueryFunctionStandard());
++		aggregateFunctions.put("stddev", new QueryFunctionStandard());
++		aggregateFunctions.put("variance", new QueryFunctionStandard());
++		aggregateFunctions.put("sysdate", new QueryFunctionInfo() {
++			public Type queryFunctionType(Type columnType, QueryTranslator q) throws QueryException {
++				return Hibernate.DATE;
++			}
++			public boolean isFunctionArgs() { return false; }
++			public boolean isFunctionNoArgsUseParenthesis() { return false; }
++		});
++		aggregateFunctions.put("lastday", new QueryFunctionStandard(Hibernate.DATE));
+ 	}
+ 	
+ 	public String getAddColumnString() {
+@@ -79,6 +115,10 @@
+ 
+ 	public boolean supportsForUpdateOf() {
+ 		return true;
++	}
++	
++	public Map getAggregateFunctions() {
++		return aggregateFunctions;
+ 	}
+ 
+ }
+
+
+
+Index: QueryTranslator.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/hql/QueryTranslator.java,v
+retrieving revision 1.38
+diff -u -r1.38 QueryTranslator.java
+--- QueryTranslator.java	8 Jun 2003 04:43:50 -0000	1.38
++++ QueryTranslator.java	4 Aug 2003 08:28:56 -0000
+@@ -78,7 +78,7 @@
+ 	private int selectLength;
+ 	private Type[] types;
+ 	private String[][] scalarColumnNames;
+-	protected SessionFactoryImplementor factory;
++	public  SessionFactoryImplementor factory;
+ 	private Map replacements;
+ 	private int count=0;
+ 	private int parameterCount=0;
+@@ -1018,6 +1018,9 @@
+ 		return collectionOwnerColumn;
+ 	}
+ 
++	public Map getAggregateFunctions() {
++		return factory.getDialect().getAggregateFunctions();
++	}
+ }
+ 
+ 
+
+
+Index: SelectParser.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/hql/SelectParser.java,v
+retrieving revision 1.12
+diff -u -r1.12 SelectParser.java
+--- SelectParser.java	7 May 2003 15:09:05 -0000	1.12
++++ SelectParser.java	4 Aug 2003 08:30:30 -0000
+@@ -1,13 +1,12 @@
+ //$Id: SelectParser.java,v 1.12 2003/05/07 15:09:05 oneovthafew Exp $
+ package net.sf.hibernate.hql;
+ 
+-import java.sql.Types;
+ import java.util.HashSet;
++import java.util.ArrayList;
++import java.util.Map;
+ import java.util.Set;
++import java.util.List;
+ 
+-import net.sf.hibernate.AssertionFailure;
+-import net.sf.hibernate.Hibernate;
+-import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.QueryException;
+ import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.util.StringHelper;
+@@ -18,15 +17,8 @@
+  */
+ public class SelectParser implements Parser {
+ 	
+-	private static final Set aggregateFunctions = new HashSet();
+ 	private static final Set countArguments = new HashSet();
+-	static {
+-		aggregateFunctions.add("count");
+-		aggregateFunctions.add("avg");
+-		aggregateFunctions.add("max");
+-		aggregateFunctions.add("min");
+-		aggregateFunctions.add("sum");
+-		
++	static {		
+ 		countArguments.add("distinct");
+ 		countArguments.add("all");
+ 		countArguments.add("*");
+@@ -34,12 +26,12 @@
+ 	
+ 	private boolean ready;
+ 	private boolean aggregate;
+-	private boolean count;
+-	private boolean avg;
++	private List aggregateFuncTokenList;
+ 	private boolean first;
+ 	private boolean afterNew;
+ 	private Class holderClass;
+-	
++	private Map aggregateFunctions = null;
++
+ 	private SelectPathExpressionParser pathExpressionParser = new SelectPathExpressionParser();
+ 	private PathExpressionParser aggregatePathExpressionParser = new PathExpressionParser();
+ 	
+@@ -49,11 +41,11 @@
+ 		
+ 		if (first) {
+ 			first = false;
+-			if ( lctoken.equals("distinct") ) {
++			if ( "distinct".equals(lctoken) ) {
+ 				q.setDistinct(true);
+ 				return;
+ 			}
+-			else if ( lctoken.equals("all") ) {
++			else if ( "all".equals(lctoken) ) {
+ 				q.setDistinct(false);
+ 				return;
+ 			}
+@@ -97,26 +89,35 @@
+ 			else {
+ 				throw new QueryException("( expected before ) in select");
+ 			}
+-			count=false;
+-			aggregate = false;
+-			ready = false;
++			aggregateFuncTokenList.remove(0);
++			if (aggregateFuncTokenList.size() < 1) {
++				aggregate = false;
++				ready = false;
++			}
+ 		}
+ 		else if ( countArguments.contains(lctoken) ) {
+ 			if ( !ready || !aggregate ) throw new QueryException( token + " only allowed inside aggregate function in SELECT");
+ 			q.appendScalarSelectToken(token);
+ 		}
+-		else if ( aggregateFunctions.contains(lctoken) ) {
++		else if ( aggregateFunctions.containsKey(lctoken) ) {
+ 			if (!ready) throw new QueryException(", expected before aggregate function in SELECT: " + token);
+-			if ( lctoken.equals("count") ) {
+-				q.addSelectScalar(Hibernate.INTEGER); //must be handled differently 'cos of count(*)
+-				count = true;
+-			}
+-			else if ( lctoken.equals("avg") ) {
+-				avg = true;
+-			}
+ 			aggregate = true;
++			aggregateFuncTokenList.add(0, lctoken);
+ 			ready = false;
+ 			q.appendScalarSelectToken(token);
++			if(!aggregateHasArgs(lctoken, q)) {
++				q.addSelectScalar( aggregateType(aggregateFuncTokenList, null, q ) );
++				if (!aggregateFuncNoArgsHasParenthesis(lctoken, q)) {
++					aggregateFuncTokenList.remove(0);
++					if (aggregateFuncTokenList.size() < 1) {
++						aggregate = false;
++						ready = false;
++					}
++					else {
++						ready = true;
++					}
++				}
++			}
+ 		}
+ 		else if (aggregate) {
+ 			if (!ready) throw new QueryException("( expected after aggregate function in SELECT");
+@@ -129,7 +130,7 @@
+ 				);
+ 			}
+ 			q.appendScalarSelectToken( aggregatePathExpressionParser.getWhereColumn() );
+-			if (!count) q.addSelectScalar( aggregateType( aggregatePathExpressionParser.getWhereColumnType(), q ) );
++			q.addSelectScalar( aggregateType(aggregateFuncTokenList, aggregatePathExpressionParser.getWhereColumnType(), q ) );
+ 			aggregatePathExpressionParser.addAssociation(q);
+ 		}
+ 		else {
+@@ -151,42 +152,40 @@
+ 			ready = false;
+ 		}
+ 	}
++
++	public boolean aggregateHasArgs(String funcToken, QueryTranslator q) {
++		Map funcMap = q.getAggregateFunctions();
++		QueryFunctionInfo funcInfo = (QueryFunctionInfo)funcMap.get(funcToken);
++		return funcInfo.isFunctionArgs();
++	}
++
++	public boolean aggregateFuncNoArgsHasParenthesis(String funcToken, QueryTranslator q) {
++		Map funcMap = q.getAggregateFunctions();
++		QueryFunctionInfo funcInfo = (QueryFunctionInfo)funcMap.get(funcToken);
++		return funcInfo.isFunctionNoArgsUseParenthesis();
++	}
+ 	
+-	public Type aggregateType(Type type, QueryTranslator q) throws QueryException {
+-		if (count) {
+-			throw new AssertionFailure("count(*) must be handled differently");
+-		}
+-		else if (avg) {
+-			int[] sqlTypes;
+-			try {
+-				sqlTypes = type.sqlTypes(q.factory);
+-			}
+-			catch (MappingException me) {
+-				throw new QueryException(me);
+-			}
+-			if (sqlTypes.length!=1) throw new QueryException("multi-column type in avg()");
+-			int sqlType = sqlTypes[0];
+-			if ( sqlType==Types.INTEGER || sqlType==Types.BIGINT || sqlType==Types.TINYINT ) {
+-				return Hibernate.FLOAT;
+-			}
+-			else {
+-				return type;
+-			}
+-				
+-		}
+-		else {
+-			return type;
++	public Type aggregateType(List funcTokenList, Type type, QueryTranslator q) throws QueryException {
++		Map funcMap = q.getAggregateFunctions();
++		Type argType = type;
++		Type retType = type;
++		for (int i=0; i<funcTokenList.size(); i++) {
++			argType = retType;
++			String funcToken = (String) funcTokenList.get(i);
++			QueryFunctionInfo funcInfo = (QueryFunctionInfo)funcMap.get(funcToken);
++			retType = funcInfo.queryFunctionType(argType, q);
+ 		}
++		return retType;
+ 	}
+ 	
+ 	public void start(QueryTranslator q) {
+ 		ready=true;
+ 		first=true;
+ 		aggregate=false;
+-		count = false;
+-		avg = false;
++		aggregateFuncTokenList = new ArrayList();
+ 		afterNew = false;
+ 		holderClass = null;
++		aggregateFunctions = q.getAggregateFunctions();
+ 	}
+ 	
+ 	public void end(QueryTranslator q) {
+
+
+
+
+Index: SQLFunctionsTest.java
+===================================================================
+RCS file: /cvsroot/hibernate//Hibernate2/src/net/sf/hibernate/test/SQLFunctionsTest.java,v
+retrieving revision 1.9
+diff -u -r1.9 SQLFunctionsTest.java
+--- SQLFunctionsTest.java	22 May 2003 03:30:01 -0000	1.9
++++ SQLFunctionsTest.java	4 Aug 2003 08:34:38 -0000
+@@ -14,14 +14,60 @@
+ import net.sf.hibernate.dialect.InterbaseDialect;
+ import net.sf.hibernate.dialect.MckoiDialect;
+ import net.sf.hibernate.dialect.MySQLDialect;
++import net.sf.hibernate.dialect.OracleDialect;
+ import net.sf.hibernate.dialect.SybaseDialect;
+ 
++
+ public class SQLFunctionsTest extends TestCase {
+ 	
+ 	public SQLFunctionsTest(String arg0) {
+ 		super(arg0);
+ 	}
+-	
++
++	public void testDialectSQLFunctions() throws Exception {
++
++		Session s = sessions.openSession();
++		Transaction t = s.beginTransaction();
++
++		Simple simple = new Simple();
++		simple.setName("Simple Dialect Function Test");
++		simple.setPay(new Float(45.8));
++		s.save(simple, new Long(10) );
++
++		// Quick check the base dialect functions operater correcty (This tested further later)
++		assertTrue(
++			s.find("select max(s.count) from s in class Simple").size() == 1
++		);
++		assertTrue(
++			s.find("select count(*) from s in class Simple").size() == 1
++		);
++		
++		if ( dialect instanceof OracleDialect) {
++			// Check Oracle Dialect mix of dialect functions - no args (no parenthesis and single arg functions
++			java.util.List rset = s.find("select s.name, sysdate, trunc(s.pay), round(s.pay) from s in class Simple");
++			assertNotNull("Name string should have been returned",(((Object[])rset.get(0))[0]));
++			assertNotNull("Todays Date should have been returned",(((Object[])rset.get(0))[1]));
++			assertEquals("trunc(45.8) result was incorrect ", new Float(45), (Float)((Object[])rset.get(0))[2]);
++			assertEquals("round(45.8) result was incorrect ", new Float(46), (Float)((Object[])rset.get(0))[3]);
++
++			simple.setPay(new Float(-45.8));
++			s.update(simple);
++
++			// Test type conversions while using nested functions (Float to Int).
++			rset = s.find("select abs(round(s.pay)) from s in class Simple");
++			assertEquals("abs(round(-45.8)) result was incorrect ", new Integer(46), (Integer)rset.get(0));
++
++			// Test a larger depth 3 function example - Not a useful combo other than for testing
++			assertTrue(
++				s.find("select trunc(round(sysdate)) from s in class Simple").size() == 1
++			);
++		}
++
++		s.delete(simple);		
++		t.commit();
++		s.close();
++	}
++
+ 	public void testSetProperties() throws Exception {
+ 		Session s = sessions.openSession();
+ 		Transaction t = s.beginTransaction();
+@@ -42,13 +88,12 @@
+ 		Simple simple = new Simple();
+ 		simple.setName("Simple 1");
+ 		s.save(simple, new Long(10) );
+-		
++
+ 		if ( dialect instanceof DB2Dialect) {
+ 			s.find("from s in class Simple where repeat('foo', 3) = 'foofoofoo'");
+ 			s.find("from s in class Simple where repeat(s.name, 3) = 'foofoofoo'");
+ 			s.find("from s in class Simple where repeat( lower(s.name), 3 + (1-1) / 2) = 'foofoofoo'");
+ 		}
+-		
+ 		assertTrue(
+ 			s.find("from s in class Simple where upper( s.name ) ='SIMPLE 1'").size()==1
+ 		);
+
+
+
+Index: QueryFunctionInfo.java
+===================================================================
+RCS file: QueryFunctionInfo.java
+diff -N QueryFunctionInfo.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ QueryFunctionInfo.java	4 Aug 2003 08:36:49 -0000
+@@ -0,0 +1,23 @@
++//$Id: $
++
++/*
++ * QueryFunctionInfo - Provides support routines for the HQL functions as used
++ * in the various SQL Dialects
++ * 
++ * Author: David Channon
++ */
++package net.sf.hibernate.hql;
++
++import net.sf.hibernate.QueryException;
++import net.sf.hibernate.type.Type;
++
++/**
++ * Provides an interface for supporting various HQL functions that are
++ * translated to SQL. The Dialet and its sub-classes use this interface to
++ * provide details required for processing of the function.
++ */
++public interface QueryFunctionInfo {
++	public Type queryFunctionType(Type columnType, QueryTranslator q) throws QueryException;
++	public boolean isFunctionArgs();
++	public boolean isFunctionNoArgsUseParenthesis();
++}
+
+
+
+
+
+Index: QueryFunctionStandard.java
+===================================================================
+RCS file: QueryFunctionStandard.java
+diff -N QueryFunctionStandard.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ QueryFunctionStandard.java	4 Aug 2003 08:40:17 -0000
+@@ -0,0 +1,41 @@
++//$Id: $
++
++/*
++ * QueryFunctionStandard - Provides support routines for some of the HQL 
++ * functions as used in the various SQL Dialects. 
++ * 
++ * Author: David Channon
++ */
++package net.sf.hibernate.dialect;
++
++import net.sf.hibernate.hql.QueryFunctionInfo;
++import net.sf.hibernate.QueryException;
++import net.sf.hibernate.type.Type;
++import net.sf.hibernate.hql.QueryTranslator;
++
++/**
++ * Provides a standard implementation that supports the majority of the HQL 
++ * functions that are translated to SQL. The Dialect and its sub-classes use 
++ * this class to provide details required for processing of the associated 
++ * function.
++ */
++public class QueryFunctionStandard implements QueryFunctionInfo {
++	private Type _returnType = null;
++	public QueryFunctionStandard() {
++	}
++	public QueryFunctionStandard(Type typeValue) {
++		_returnType = typeValue;
++	}	
++	public Type queryFunctionType(Type columnType, QueryTranslator q) throws QueryException {
++		if (_returnType == null)
++			return columnType;
++		return _returnType;		
++	}
++	public boolean isFunctionArgs() {
++		return true;
++	}
++	public boolean isFunctionNoArgsUseParenthesis() {
++		return true;
++	}
++}
++	
+

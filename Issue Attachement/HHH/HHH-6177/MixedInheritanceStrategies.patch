@@ -1,0 +1,420 @@
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/NormalActivity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/NormalActivity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/NormalActivity.java	(revision )
+@@ -0,0 +1,24 @@
++package org.hibernate.envers.test.integration.inheritance.mixed.entities;
++
++import org.hibernate.envers.Audited;
++
++@Audited
++public class NormalActivity extends AbstractActivity {
++
++    @Override
++    public boolean equals(Object obj) {
++        if (obj == this) {
++            return true;
++        }
++        if (!(obj instanceof NormalActivity)) {
++            return false;
++        }
++        NormalActivity normalActivity = (NormalActivity) obj;
++        return getId().equals(normalActivity.getId());
++    }
++
++    @Override
++    public int hashCode() {
++        return getId().hashCode();
++    }
++}
+Index: hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsFailing.hbm.xml
+===================================================================
+--- hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsFailing.hbm.xml	(revision )
++++ hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsFailing.hbm.xml	(revision )
+@@ -0,0 +1,38 @@
++<?xml version="1.0" encoding="UTF-8"?>
++
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping>
++    <class abstract="true" name="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractActivity"
++           table="ACTIVITY">
++        <id name="id" type="integer">
++            <generator class="assigned"/>
++        </id>
++
++        <discriminator column="ACTIVITY_TYPE" type="string" length="20"/>
++
++        <property name="sequenceNumber" type="int" not-null="true"/>
++
++        <subclass abstract="true"
++                  name="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractCheckActivity">
++            <join table="ACTIVITY_CHECK">
++                <key foreign-key="FK_CHKACT_ACT" not-null="true" column="ACTIVITY_ID"/>
++                <property name="durationInMinutes" type="int" not-null="true" column="DURATION_IN_MINUTES"/>
++                <many-to-one name="relatedActivity"
++                             cascade="merge"
++                             foreign-key="FK_CHKACT_RELACT"
++                             class="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractActivity"
++                             lazy="proxy">
++                    <column name="RELATED_ACTIVITY_ID" not-null="false"/>
++                </many-to-one>
++            </join>
++            <subclass name="org.hibernate.envers.test.integration.inheritance.mixed.entities.CheckInActivity"
++                      discriminator-value="CHECK_IN"/>
++        </subclass>
++
++        <subclass name="org.hibernate.envers.test.integration.inheritance.mixed.entities.NormalActivity"
++                  discriminator-value="NORMAL"/>
++    </class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractCheckActivity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractCheckActivity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractCheckActivity.java	(revision )
+@@ -0,0 +1,25 @@
++package org.hibernate.envers.test.integration.inheritance.mixed.entities;
++
++import org.hibernate.envers.Audited;
++
++@Audited
++public abstract class AbstractCheckActivity extends AbstractActivity {
++    private Integer durationInMinutes;
++    private Activity relatedActivity;
++
++    public Integer getDurationInMinutes() {
++        return durationInMinutes;
++    }
++
++    public void setDurationInMinutes(Integer durationInMinutes) {
++        this.durationInMinutes = durationInMinutes;
++    }
++
++    public Activity getRelatedActivity() {
++        return relatedActivity;
++    }
++
++    public void setRelatedActivity(Activity relatedActivity) {
++        this.relatedActivity = relatedActivity;
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/PassingJoinedSubclassInheritanceSessionTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/PassingJoinedSubclassInheritanceSessionTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/PassingJoinedSubclassInheritanceSessionTest.java	(revision )
+@@ -0,0 +1,29 @@
++package org.hibernate.envers.test.integration.inheritance.mixed;
++
++import org.hibernate.MappingException;
++import org.junit.Test;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++public class PassingJoinedSubclassInheritanceSessionTest extends AbstractInheritanceStrategiesSessionTest {
++
++    protected void initMappings() throws MappingException, URISyntaxException {
++        URL url = Thread.currentThread().getContextClassLoader().getResource("mappings/mixedInheritanceStrategies/mappingsPassing.hbm.xml");
++        config.addFile(new File(url.toURI()));
++    }
++
++    @Test
++    public void testFirstRevisionOfCheckInActivity() throws Exception {
++        doTestFirstRevisionOfCheckInActivity();
++    }
++
++    @Test
++    public void testSecondRevisionOfCheckInActivity() throws Exception {
++        doTestSecondRevisionOfCheckInActivity();
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/CheckInActivity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/CheckInActivity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/CheckInActivity.java	(revision )
+@@ -0,0 +1,25 @@
++package org.hibernate.envers.test.integration.inheritance.mixed.entities;
++
++import org.hibernate.envers.Audited;
++
++@Audited
++public class CheckInActivity extends AbstractCheckActivity {
++
++    @Override
++    public boolean equals(Object obj) {
++        if (obj == this) {
++            return true;
++        }
++        if (!(obj instanceof CheckInActivity)) {
++            return false;
++        }
++        CheckInActivity checkInActivity = (CheckInActivity) obj;
++        return getId().equals(checkInActivity.getId());
++    }
++
++    @Override
++    public int hashCode() {
++        return getId().hashCode();
++    }
++
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/FailingMixedInheritanceStrategiesSessionTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/FailingMixedInheritanceStrategiesSessionTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/FailingMixedInheritanceStrategiesSessionTest.java	(revision )
+@@ -0,0 +1,32 @@
++package org.hibernate.envers.test.integration.inheritance.mixed;
++
++import org.hibernate.MappingException;
++import org.hibernate.testing.FailureExpected;
++import org.junit.Test;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++public class FailingMixedInheritanceStrategiesSessionTest extends AbstractInheritanceStrategiesSessionTest {
++
++    protected void initMappings() throws MappingException, URISyntaxException {
++        URL url = Thread.currentThread().getContextClassLoader().getResource("mappings/mixedInheritanceStrategies/mappingsFailing.hbm.xml");
++        config.addFile(new File(url.toURI()));
++    }
++
++    @Test
++    @FailureExpected(message = "Problem with mixed inheritance strategies", jiraKey = "UPDATE_THAT")
++    public void testFirstRevisionOfCheckInActivity() throws Exception {
++        doTestFirstRevisionOfCheckInActivity();
++    }
++
++    @Test
++    @FailureExpected(message = "Problem with mixed inheritance strategies", jiraKey = "UPDATE_THAT")
++    public void testSecondRevisionOfCheckInActivity() throws Exception {
++        doTestSecondRevisionOfCheckInActivity();
++    }
++}
+Index: hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsPassing.hbm.xml
+===================================================================
+--- hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsPassing.hbm.xml	(revision )
++++ hibernate-envers/src/test/resources/mappings/mixedInheritanceStrategies/mappingsPassing.hbm.xml	(revision )
+@@ -0,0 +1,38 @@
++<?xml version="1.0" encoding="UTF-8"?>
++
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping>
++    <class abstract="true" name="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractActivity"
++           table="ACTIVITY">
++        <id name="id" type="integer">
++            <generator class="assigned"/>
++        </id>
++
++        <property name="sequenceNumber" type="int" not-null="true"/>
++
++        <joined-subclass abstract="true"
++                         name="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractCheckActivity">
++            <key foreign-key="FK_CHKACT_ACT" not-null="true" column="ACTIVITY_ID"/>
++            <property name="durationInMinutes" type="int" not-null="true" column="DURATION_IN_MINUTES"/>
++            <many-to-one name="relatedActivity"
++                         cascade="merge"
++                         foreign-key="FK_CHKACT_RELACT"
++                         class="org.hibernate.envers.test.integration.inheritance.mixed.entities.AbstractActivity"
++                         lazy="proxy">
++                <column name="RELATED_ACTIVITY_ID" not-null="false"/>
++            </many-to-one>
++            <joined-subclass name="org.hibernate.envers.test.integration.inheritance.mixed.entities.CheckInActivity">
++                <key foreign-key="FK_CHKINACT_ACT" not-null="true" column="CHECK_ACTIVITY_ID"/>
++            </joined-subclass>
++        </joined-subclass>
++
++        <joined-subclass name="org.hibernate.envers.test.integration.inheritance.mixed.entities.NormalActivity">
++            <key foreign-key="FK_NORMALACT_ACT" not-null="true" column="ACTIVITY_ID"/>
++        </joined-subclass>
++    </class>
++
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/AbstractInheritanceStrategiesSessionTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/AbstractInheritanceStrategiesSessionTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/AbstractInheritanceStrategiesSessionTest.java	(revision )
+@@ -0,0 +1,125 @@
++package org.hibernate.envers.test.integration.inheritance.mixed;
++
++import org.hibernate.envers.test.AbstractSessionTest;
++import org.hibernate.envers.test.Priority;
++import org.hibernate.envers.test.integration.inheritance.mixed.entities.Activity;
++import org.hibernate.envers.test.integration.inheritance.mixed.entities.CheckInActivity;
++import org.hibernate.envers.test.integration.inheritance.mixed.entities.NormalActivity;
++import org.junit.Test;
++
++import java.util.Arrays;
++
++import static org.junit.Assert.assertEquals;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 pl)
++ */
++public abstract class AbstractInheritanceStrategiesSessionTest extends AbstractSessionTest {
++    @Test
++    @Priority(10)
++    public void initData() {
++        NormalActivity normalActivity = new NormalActivity();
++        normalActivity.setId(1);
++        normalActivity.setSequenceNumber(1);
++
++        // Revision 1
++        getSession().getTransaction().begin();
++
++        getSession().persist(normalActivity);
++
++        getSession().getTransaction().commit();
++        // Revision 2
++        getSession().getTransaction().begin();
++
++        normalActivity = (NormalActivity) getSession().get(NormalActivity.class, 1);
++        CheckInActivity checkInActivity = new CheckInActivity();
++        checkInActivity.setId(2);
++        checkInActivity.setSequenceNumber(0);
++        checkInActivity.setDurationInMinutes(30);
++        checkInActivity.setRelatedActivity(normalActivity);
++
++        getSession().persist(checkInActivity);
++
++        getSession().getTransaction().commit();
++
++        // Revision 3
++        normalActivity = new NormalActivity();
++        normalActivity.setId(3);
++        normalActivity.setSequenceNumber(2);
++
++        getSession().getTransaction().begin();
++
++        getSession().persist(normalActivity);
++
++        getSession().getTransaction().commit();
++
++        // Revision 4
++        getSession().getTransaction().begin();
++
++        normalActivity = (NormalActivity) getSession().get(NormalActivity.class, 3);
++        checkInActivity = (CheckInActivity) getSession().get(CheckInActivity.class, 2);
++        checkInActivity.setRelatedActivity(normalActivity);
++
++        getSession().merge(checkInActivity);
++
++        getSession().getTransaction().commit();
++
++        getSession().close();
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++        assertEquals(Arrays.asList(1), getAuditReader().getRevisions(NormalActivity.class, 1));
++        assertEquals(Arrays.asList(3), getAuditReader().getRevisions(NormalActivity.class, 3));
++        assertEquals(Arrays.asList(2, 4), getAuditReader().getRevisions(CheckInActivity.class, 2));
++    }
++
++    @Test
++    public void testCurrentStateOfCheckInActivity() {
++
++        final CheckInActivity checkInActivity = (CheckInActivity) getSession().get(CheckInActivity.class, 2);
++        final NormalActivity normalActivity = (NormalActivity) getSession().get(NormalActivity.class, 3);
++
++        assertEquals(2, checkInActivity.getId().intValue());
++        assertEquals(0, checkInActivity.getSequenceNumber().intValue());
++        assertEquals(30, checkInActivity.getDurationInMinutes().intValue());
++        final Activity relatedActivity = checkInActivity.getRelatedActivity();
++        assertEquals(normalActivity.getId(), relatedActivity.getId());
++        assertEquals(normalActivity.getSequenceNumber(), relatedActivity.getSequenceNumber());
++    }
++
++    @Test
++    public void testCheckCurrentStateOfNormalActivities() throws Exception {
++        final NormalActivity normalActivity1 = (NormalActivity) getSession().get(NormalActivity.class, 1);
++        final NormalActivity normalActivity2 = (NormalActivity) getSession().get(NormalActivity.class, 3);
++
++        assertEquals(1, normalActivity1.getId().intValue());
++        assertEquals(1, normalActivity1.getSequenceNumber().intValue());
++        assertEquals(3, normalActivity2.getId().intValue());
++        assertEquals(2, normalActivity2.getSequenceNumber().intValue());
++    }
++
++    public void doTestFirstRevisionOfCheckInActivity() throws Exception {
++        CheckInActivity checkInActivity = getAuditReader().find(CheckInActivity.class, 2, 2);
++        NormalActivity normalActivity = getAuditReader().find(NormalActivity.class, 1, 2);
++
++        assertEquals(2, checkInActivity.getId().intValue());
++        assertEquals(0, checkInActivity.getSequenceNumber().intValue());
++        assertEquals(30, checkInActivity.getDurationInMinutes().intValue());
++        Activity relatedActivity = checkInActivity.getRelatedActivity();
++        assertEquals(normalActivity.getId(), relatedActivity.getId());
++        assertEquals(normalActivity.getSequenceNumber(), relatedActivity.getSequenceNumber());
++    }
++
++    public void doTestSecondRevisionOfCheckInActivity() throws Exception {
++        CheckInActivity checkInActivity = getAuditReader().find(CheckInActivity.class, 2, 4);
++        NormalActivity normalActivity = getAuditReader().find(NormalActivity.class, 3, 4);
++
++        assertEquals(2, checkInActivity.getId().intValue());
++        assertEquals(0, checkInActivity.getSequenceNumber().intValue());
++        assertEquals(30, checkInActivity.getDurationInMinutes().intValue());
++        Activity relatedActivity = checkInActivity.getRelatedActivity();
++        assertEquals(normalActivity.getId(), relatedActivity.getId());
++        assertEquals(normalActivity.getSequenceNumber(), relatedActivity.getSequenceNumber());
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/Activity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/Activity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/Activity.java	(revision )
+@@ -0,0 +1,7 @@
++package org.hibernate.envers.test.integration.inheritance.mixed.entities;
++
++public interface Activity {
++    Integer getId();
++
++    Integer getSequenceNumber();
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractActivity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractActivity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/mixed/entities/AbstractActivity.java	(revision )
+@@ -0,0 +1,25 @@
++package org.hibernate.envers.test.integration.inheritance.mixed.entities;
++
++import org.hibernate.envers.Audited;
++
++@Audited
++public abstract class AbstractActivity implements Activity {
++    private Integer id;
++    private Integer sequenceNumber;
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public Integer getSequenceNumber() {
++        return sequenceNumber;
++    }
++
++    public void setSequenceNumber(Integer sequenceNumber) {
++        this.sequenceNumber = sequenceNumber;
++    }
++}

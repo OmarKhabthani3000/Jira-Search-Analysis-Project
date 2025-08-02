@@ -1,0 +1,284 @@
+Index: core/src/main/java/org/hibernate/engine/EntityEntry.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/EntityEntry.java	(revision 15151)
++++ core/src/main/java/org/hibernate/engine/EntityEntry.java	(working copy)
+@@ -41,7 +41,7 @@
+ /**
+  * We need an entry to tell us all about the current state
+  * of an object with respect to its persistent state
+- * 
++ *
+  * @author Gavin King
+  */
+ public final class EntityEntry implements Serializable {
+@@ -176,30 +176,30 @@
+ 	public boolean isBeingReplicated() {
+ 		return isBeingReplicated;
+ 	}
+-	
++
+ 	public Object getRowId() {
+ 		return rowId;
+ 	}
+-	
++
+ 	/**
+ 	 * After actually updating the database, update the snapshot information,
+ 	 * and escalate the lock mode
+ 	 */
+ 	public void postUpdate(Object entity, Object[] updatedState, Object nextVersion) {
+ 		this.loadedState = updatedState;
+-		
++
+ 		setLockMode(LockMode.WRITE);
+-		
++
+ 		if ( getPersister().isVersioned() ) {
+ 			this.version = nextVersion;
+-			getPersister().setPropertyValue( 
+-					entity, 
+-					getPersister().getVersionProperty(), 
+-					nextVersion, 
+-					entityMode 
++			getPersister().setPropertyValue(
++					entity,
++					getPersister().getVersionProperty(),
++					nextVersion,
++					entityMode
+ 				);
+ 		}
+-		
++
+ 		FieldInterceptionHelper.clearDirty( entity );
+ 	}
+ 
+@@ -211,15 +211,15 @@
+ 		status = Status.GONE;
+ 		existsInDatabase = false;
+ 	}
+-	
++
+ 	/**
+-	 * After actually inserting a row, record the fact that the instance exists on the 
++	 * After actually inserting a row, record the fact that the instance exists on the
+ 	 * database (needed for identity-column key generation)
+ 	 */
+ 	public void postInsert() {
+ 		existsInDatabase = true;
+ 	}
+-	
++
+ 	public boolean isNullifiable(boolean earlyInsert, SessionImplementor session) {
+ 		return getStatus() == Status.SAVING || (
+ 				earlyInsert ?
+@@ -228,25 +228,25 @@
+ 							.contains( new EntityKey( getId(), getPersister(), entityMode ) )
+ 				);
+ 	}
+-	
++
+ 	public Object getLoadedValue(String propertyName) {
+ 		int propertyIndex = ( (UniqueKeyLoadable) persister ).getPropertyIndex(propertyName);
+ 		return loadedState[propertyIndex];
+ 	}
+-	
+-	
++
++
+ 	public boolean requiresDirtyCheck(Object entity) {
+-		
+-		boolean isMutableInstance = 
+-				status != Status.READ_ONLY && 
++
++		boolean isMutableInstance =
++				status != Status.READ_ONLY &&
+ 				persister.isMutable();
+-		
++
+ 		return isMutableInstance && (
+-				getPersister().hasMutableProperties() ||
++				getPersister().hasMutableProperties() && getPersister().isDirtyCheckRequired(entity)||
+ 				!FieldInterceptionHelper.isInstrumented( entity ) ||
+ 				FieldInterceptionHelper.extractFieldInterceptor( entity).isDirty()
+ 			);
+-		
++
+ 	}
+ 
+ 	public void forceLocked(Object entity, Object nextVersion) {
+@@ -274,10 +274,10 @@
+ 			loadedState = getPersister().getPropertyValues(entity, entityMode);
+ 		}
+ 	}
+-	
++
+ 	public String toString() {
+-		return "EntityEntry" + 
+-				MessageHelper.infoString(entityName, id) + 
++		return "EntityEntry" +
++				MessageHelper.infoString(entityName, id) +
+ 				'(' + status + ')';
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 15151)
++++ core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -368,7 +368,7 @@
+ 
+ 	/**
+ 	 * The query that inserts a row, letting the database generate an id
+-	 * 
++	 *
+ 	 * @return The IDENTITY-based insertion query.
+ 	 */
+ 	protected String getSQLIdentityInsertString() {
+@@ -3379,6 +3379,11 @@
+ 		return null;
+ 	}
+ 
++	public boolean isDirtyCheckRequired(Object entity) {
++		//return true by default, this will force the engine to do the standard dirty checks against property values
++		return true;
++	}
++
+ 	public boolean hasCollections() {
+ 		return entityMetamodel.hasCollections();
+ 	}
+Index: core/src/main/java/org/hibernate/persister/entity/EntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/EntityPersister.java	(revision 15151)
++++ core/src/main/java/org/hibernate/persister/entity/EntityPersister.java	(working copy)
+@@ -550,6 +550,11 @@
+ 	public Boolean isTransient(Object object, SessionImplementor session) throws HibernateException;
+ 
+ 	/**
++	 * Check to see if the instance might have been modified
++	 */
++	public boolean isDirtyCheckRequired(Object entity);
++
++	/**
+ 	 * Return the values of the insertable properties of the object (including backrefs)
+ 	 */
+ 	public Object[] getPropertyValuesToInsert(Object object, Map mergeMap, SessionImplementor session) throws HibernateException;
+Index: testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java	(revision 15151)
++++ testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java	(working copy)
+@@ -41,13 +41,13 @@
+ 
+ 	private static final Hashtable INSTANCES = new Hashtable();
+ 	private static final IdentifierGenerator GENERATOR = new UUIDHexGenerator();
+-	
++
+ 	private SessionFactoryImplementor factory;
+ 
+ 	public CustomPersister(
+-			PersistentClass model, 
++			PersistentClass model,
+ 			EntityRegionAccessStrategy cacheAccessStrategy,
+-			SessionFactoryImplementor factory, 
++			SessionFactoryImplementor factory,
+ 			Mapping mapping) {
+ 		this.factory = factory;
+ 	}
+@@ -65,7 +65,7 @@
+ 	public boolean isInherited() {
+ 		return false;
+ 	}
+-	
++
+ 	public SessionFactoryImplementor getFactory() {
+ 		return factory;
+ 	}
+@@ -99,7 +99,7 @@
+ 	public boolean isMutable() {
+ 		return true;
+ 	}
+-	
++
+ 	public boolean isSelectBeforeUpdateRequired() {
+ 		return false;
+ 	}
+@@ -112,6 +112,10 @@
+ 		return new Boolean( ( (Custom) object ).id==null );
+ 	}
+ 
++	public boolean isDirtyCheckRequired(Object object) {
++		return true;
++	}
++
+ 	public Object[] getPropertyValuesToInsert(Object object, Map mergeMap, SessionImplementor session)
+ 	throws HibernateException {
+ 		return getPropertyValues( object, session.getEntityMode() );
+@@ -295,29 +299,29 @@
+ 		Custom obj = (Custom) INSTANCES.get(id);
+ 		if (obj!=null) {
+ 			clone = (Custom) obj.clone();
+-			TwoPhaseLoad.addUninitializedEntity( 
+-					new EntityKey( id, this, session.getEntityMode() ), 
+-					clone, 
+-					this, 
+-					LockMode.NONE, 
++			TwoPhaseLoad.addUninitializedEntity(
++					new EntityKey( id, this, session.getEntityMode() ),
++					clone,
++					this,
++					LockMode.NONE,
+ 					false,
+ 					session
+ 				);
+ 			TwoPhaseLoad.postHydrate(
+-					this, id, 
+-					new String[] { obj.getName() }, 
+-					null, 
+-					clone, 
+-					LockMode.NONE, 
+-					false, 
++					this, id,
++					new String[] { obj.getName() },
++					null,
++					clone,
++					LockMode.NONE,
++					false,
+ 					session
+ 				);
+-			TwoPhaseLoad.initializeEntity( 
+-					clone, 
+-					false, 
+-					session, 
+-					new PreLoadEvent( (EventSource) session ), 
+-					new PostLoadEvent( (EventSource) session ) 
++			TwoPhaseLoad.initializeEntity(
++					clone,
++					false,
++					session,
++					new PreLoadEvent( (EventSource) session ),
++					new PostLoadEvent( (EventSource) session )
+ 				);
+ 		}
+ 		return clone;
+@@ -534,19 +538,19 @@
+ 
+ 	public void applyFilters(Select select, String alias, Map filters) {
+ 	}
+-	
+-	
++
++
+ 	public void afterInitialize(Object entity, boolean fetched, SessionImplementor session) {
+ 	}
+ 
+ 	public void afterReassociate(Object entity, SessionImplementor session) {
+ 	}
+ 
+-	public Object[] getDatabaseSnapshot(Serializable id, SessionImplementor session) 
++	public Object[] getDatabaseSnapshot(Serializable id, SessionImplementor session)
+ 	throws HibernateException {
+ 		return null;
+ 	}
+-	
++
+ 	public boolean[] getPropertyVersionability() {
+ 		return MUTABILITY;
+ 	}

@@ -1,0 +1,191 @@
+Index: /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/cfg/Configuration.java
+===================================================================
+--- /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/cfg/Configuration.java	(revision 9730)
++++ /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -839,11 +839,8 @@
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+ 
+-				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+-						table.getName(),
+-						table.getSchema(),
+-						table.getCatalog()
+-					);
++				TableMetadata tableInfo = databaseMetadata.getTableMetadata(table);
++
+ 				if ( tableInfo == null ) {
+ 					script.add(
+ 							table.sqlCreateString(
+@@ -878,11 +875,7 @@
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+ 
+-				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+-						table.getName(),
+-						table.getSchema(),
+-						table.getCatalog()
+-					);
++				TableMetadata tableInfo = databaseMetadata.getTableMetadata(table);
+ 
+ 				if ( dialect.hasAlterTable() ) {
+ 					Iterator subIter = table.getForeignKeyIterator();
+@@ -956,11 +949,7 @@
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+ 
+-				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+-						table.getName(),
+-						table.getSchema(),
+-						table.getCatalog()
+-					);
++				TableMetadata tableInfo = databaseMetadata.getTableMetadata(table);
+ 
+ 				if ( tableInfo == null ) {
+ 					throw new HibernateException( "Missing table: " + table.getName() );
+Index: /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java
+===================================================================
+--- /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java	(revision 9730)
++++ /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java	(working copy)
+@@ -16,6 +16,7 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.exception.SQLExceptionConverter;
++import org.hibernate.mapping.Table;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -47,8 +48,13 @@
+ 
+ 	private static final String[] TYPES = {"TABLE"};
+ 
+-	public TableMetadata getTableMetadata(String name, String schema, String catalog) throws HibernateException {
++	public TableMetadata getTableMetadata(Table tbl) throws HibernateException {
+ 
++		String name = tbl.getName();
++		String catalog = tbl.getCatalog();
++		String schema = tbl.getSchema();
++		boolean isQuoted = tbl.isQuoted();
++		
+ 		TableMetadata table = (TableMetadata) tables.get(name);
+ 		if (table!=null) {
+ 			return table;
+@@ -58,8 +64,8 @@
+ 			try {
+ 				ResultSet rs = null;
+ 				try {
+-					
+-					if ( meta.storesUpperCaseIdentifiers() ) {
++					if ( (isQuoted && meta.storesUpperCaseQuotedIdentifiers()) ||
++							(!isQuoted && meta.storesUpperCaseIdentifiers()) ) {
+ 						rs = meta.getTables( 
+ 								StringHelper.toUpperCase(catalog), 
+ 								StringHelper.toUpperCase(schema), 
+@@ -67,7 +73,8 @@
+ 								TYPES 
+ 							);
+ 					}
+-					else if ( meta.storesLowerCaseIdentifiers() ) {
++					else if ( (isQuoted && meta.storesLowerCaseQuotedIdentifiers()) ||
++							(!isQuoted && meta.storesLowerCaseIdentifiers()) ) {
+ 						rs = meta.getTables( 
+ 								StringHelper.toLowerCase(catalog), 
+ 								StringHelper.toLowerCase(schema), 
+@@ -137,7 +144,8 @@
+ 
+ 	public boolean isTable(Object key) throws HibernateException {
+ 		if(key instanceof String) {
+-			if ( getTableMetadata( (String) key, null, null ) != null ) {
++			Table tbl = new Table((String)key);
++			if ( getTableMetadata( tbl ) != null ) {
+ 				return true;
+ 			} else {
+ 				String[] strings = StringHelper.split(".", (String) key);
+@@ -142,9 +150,14 @@
+ 			} else {
+ 				String[] strings = StringHelper.split(".", (String) key);
+ 				if(strings.length==3) {
+-					return getTableMetadata(strings[2], strings[1], strings[0]) != null;
++					tbl = new Table(strings[2]);
++					tbl.setCatalog(strings[0]);
++					tbl.setSchema(strings[1]);
++					return getTableMetadata(tbl) != null;
+ 				} else if (strings.length==2) {
+-					return getTableMetadata(strings[1], strings[0], null) != null;
++					tbl = new Table(strings[1]);
++					tbl.setSchema(strings[0]);
++					return getTableMetadata(tbl) != null;
+ 				}
+ 			}
+ 		}
+Index: /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/TableMetadata.java
+===================================================================
+--- /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/TableMetadata.java	(revision 9730)
++++ /home/auster/nicklas/projects/hibernate/Hibernate3/src/org/hibernate/tool/hbm2ddl/TableMetadata.java	(working copy)
+@@ -9,6 +9,7 @@
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
++import org.hibernate.mapping.Table;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -108,6 +109,8 @@
+ 		ResultSet rs = null;
+ 
+ 		try {
++			/*
++			No need to convert since strings are already in correct case.
+ 			if ( meta.storesUpperCaseIdentifiers() ) {
+ 				rs = meta.getImportedKeys( 
+ 						StringHelper.toUpperCase(catalog), 
+@@ -123,8 +126,9 @@
+ 					);
+ 			}
+ 			else {
++			*/
+ 				rs = meta.getImportedKeys(catalog, schema, name);
+-			}
++			//}
+ 			
+ 			while ( rs.next() ) addForeignKey(rs);
+ 		}
+@@ -137,6 +141,8 @@
+ 		ResultSet rs = null;
+ 
+ 		try {
++			/*
++			No need to convert since strings are already in correct case
+ 			if ( meta.storesUpperCaseIdentifiers() ) {
+ 				rs = meta.getIndexInfo( 
+ 						StringHelper.toUpperCase(catalog), 
+@@ -156,8 +162,9 @@
+ 					);
+ 			}
+ 			else {
++			*/
+ 				rs = meta.getIndexInfo(catalog, schema, name, false, true);
+-			}
++			//}
+ 
+ 			while ( rs.next() ) {
+ 				if ( rs.getShort("TYPE") == DatabaseMetaData.tableIndexStatistic ) continue;
+@@ -173,6 +180,8 @@
+ 		ResultSet rs = null;
+ 		
+ 		try {
++			/*
++			No need to convert since strings are already in correct case
+ 			if ( meta.storesUpperCaseIdentifiers() ) {
+ 				rs = meta.getColumns( 
+ 						StringHelper.toUpperCase(catalog), 
+@@ -190,8 +199,9 @@
+ 					);
+ 			}
+ 			else {
++			*/
+ 				rs = meta.getColumns(catalog, schema, name, "%");
+-			}
++			//}
+ 
+ 			while ( rs.next() ) addColumn(rs);
+ 		}

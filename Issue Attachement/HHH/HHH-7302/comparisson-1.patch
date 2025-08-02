@@ -1,0 +1,1085 @@
+diff -urN original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/BinaryLogicOperatorNode.java patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/BinaryLogicOperatorNode.java
+--- original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/BinaryLogicOperatorNode.java	2012-09-11 17:48:08.475061070 -0400
++++ patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/BinaryLogicOperatorNode.java	2012-09-12 14:50:03.958471041 -0400
+@@ -23,6 +23,9 @@
+  */
+ package org.hibernate.hql.internal.ast.tree;
+ 
++import java.util.Map;
++import java.util.TreeMap;
++
+ import antlr.SemanticException;
+ import antlr.collections.AST;
+ 
+@@ -149,7 +152,23 @@
+             ParameterSpecification lhsEmbeddedCompositeParameterSpecification,
+             ParameterSpecification rhsEmbeddedCompositeParameterSpecification,
+             AST container ) {
+-        for ( int i = valueElements - 1; i > 0; i-- ) {
++
++    	switch (comparisonType) {
++    	case HqlSqlTokenTypes.GE:
++    	case HqlSqlTokenTypes.GT:
++    	case HqlSqlTokenTypes.LE:
++    	case HqlSqlTokenTypes.LT:
++    		this.translateComparison(valueElements, 
++    				comparisonType, comparisonText,
++    				lhsElementTexts, rhsElementTexts, 
++    				lhsEmbeddedCompositeParameterSpecification, 
++    				rhsEmbeddedCompositeParameterSpecification, container);
++    		return;
++    	default:
++    		// Continue to normal operation
++    	}
++
++    	for ( int i = valueElements - 1; i > 0; i-- ) {
+ 			if ( i == 1 ) {
+ 				AST op1 = getASTFactory().create( comparisonType, comparisonText );
+ 				AST lhs1 = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, lhsElementTexts[0] );
+@@ -187,6 +206,121 @@
+ 			}
+ 		}
+     }
++    
++    protected void translateComparison( int valueElements, int comparisonType,
++            String comparisonText, String[] lhsElementTexts,
++            String[] rhsElementTexts,
++            ParameterSpecification lhsEmbeddedCompositeParameterSpecification,
++            ParameterSpecification rhsEmbeddedCompositeParameterSpecification,
++            AST container ) {
++    	
++    	int shortcircutType;
++    	String shortcircutText;
++    	
++    	if (getLeftHandOperand() instanceof ParameterNode) {
++    		ParameterNode pNode = (ParameterNode) getLeftHandOperand();
++    		ParameterSpecification spec;// = pNode.getHqlParameterSpecification();
++    		Map<Integer, int[]> map = new TreeMap<Integer, int[]>();
++    		int i = 0, p = 0;
++    		for (; i < valueElements-1; i++) {
++    			int[] params = new int[2];
++    			params[0] = p++;
++    			params[1] = p++;
++    			map.put(i, params);
++    		}
++    		map.put(valueElements-1, new int[] { p });
++    		spec = new MappedParameterSpecificationWrapper(lhsEmbeddedCompositeParameterSpecification, map);
++    		lhsEmbeddedCompositeParameterSpecification = spec;
++    		
++    		pNode.setHqlParameterSpecification(spec);
++    	} 
++    	if (getRightHandOperand() instanceof ParameterNode) {
++    		ParameterNode pNode = (ParameterNode) getRightHandOperand();
++    		ParameterSpecification spec;// = pNode.getHqlParameterSpecification();
++    		Map<Integer, int[]> map = new TreeMap<Integer, int[]>();
++    		int i = 0, p = 0;
++    		for (; i < valueElements-1; i++) {
++    			int[] params = new int[2];
++    			params[0] = p++;
++    			params[1] = p++;
++    			map.put(i, params);
++    		}
++    		map.put(valueElements-1, new int[] { p });
++    		spec = new MappedParameterSpecificationWrapper(rhsEmbeddedCompositeParameterSpecification, map);
++    		rhsEmbeddedCompositeParameterSpecification = spec;
++    		
++    		pNode.setHqlParameterSpecification(spec);
++    	}
++    	
++    	switch (comparisonType) {
++    	case HqlSqlTokenTypes.GE:
++    	case HqlSqlTokenTypes.GT:
++    		shortcircutType = HqlSqlTokenTypes.GT;
++    		shortcircutText = ">";
++    		break;
++    	case HqlSqlTokenTypes.LE:
++    	case HqlSqlTokenTypes.LT:
++    		shortcircutType = HqlSqlTokenTypes.LT;
++    		shortcircutText = "<";
++    		break;
++		default:
++    		throw new IllegalArgumentException("Unsupported comparisonType, try (<, >, <=, >=).");
++    	}
++
++    	container.setType(HqlSqlTokenTypes.OR);
++    	container.setText("OR");
++    	for (int i = 0; i < valueElements-1; i++) {
++    		AST newContainer;
++			AST op;
++			AST lhs;
++			AST rhs;
++			
++			op = getASTFactory().create( shortcircutType, shortcircutText );
++			lhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, lhsElementTexts[i] );
++			rhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, rhsElementTexts[i] );
++			op.setFirstChild( lhs );
++			lhs.setNextSibling( rhs );
++			container.setFirstChild(op);
++			
++			if (i == 0) {
++				SqlFragment fragment = ( SqlFragment ) lhs;
++				if ( lhsEmbeddedCompositeParameterSpecification != null ) {
++					fragment.addEmbeddedParameter( lhsEmbeddedCompositeParameterSpecification );
++				}
++				if ( rhsEmbeddedCompositeParameterSpecification != null ) {
++					fragment.addEmbeddedParameter( rhsEmbeddedCompositeParameterSpecification );
++				}
++			}
++
++			newContainer = getASTFactory().create( HqlSqlTokenTypes.AND, "AND" );
++			op.setNextSibling(newContainer);
++//			container.setNextSibling(newContainer);
++			container = newContainer;
++			
++			op = getASTFactory().create( HqlSqlTokenTypes.EQ, "=" );
++			lhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, lhsElementTexts[i] );
++			rhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, rhsElementTexts[i] );
++			op.setFirstChild( lhs );
++			lhs.setNextSibling( rhs );
++			container.setFirstChild(op);
++			
++			if (i != valueElements - 2) {
++				newContainer = getASTFactory().create( HqlSqlTokenTypes.OR, "OR" );
++				op.setNextSibling(newContainer);
++//				container.setNextSibling(newContainer);
++				container = newContainer;
++			} else {
++				op.setNextSibling(op = getASTFactory().create( comparisonType, comparisonText ));
++				lhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, lhsElementTexts[i+1] );
++				rhs = getASTFactory().create( HqlSqlTokenTypes.SQL_TOKEN, rhsElementTexts[i+1] );
++				op.setFirstChild(lhs);
++				lhs.setNextSibling(rhs);
++//				container.setNextSibling(op);
++			}
++    	}
++    	
++    }
++
+ 
+ 	protected static String[] extractMutationTexts(Node operand, int count) {
+ 		if ( operand instanceof ParameterNode ) {
+diff -urN original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedParameterSpecificationWrapper.java patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedParameterSpecificationWrapper.java
+--- original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedParameterSpecificationWrapper.java	1969-12-31 19:00:00.000000000 -0500
++++ patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedParameterSpecificationWrapper.java	2012-05-08 17:24:01.293000000 -0400
+@@ -0,0 +1,46 @@
++package org.hibernate.hql.internal.ast.tree;
++
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++import java.util.Map;
++
++import org.hibernate.engine.spi.QueryParameters;
++import org.hibernate.engine.spi.SessionImplementor;
++import org.hibernate.param.ParameterSpecification;
++import org.hibernate.type.Type;
++
++public class MappedParameterSpecificationWrapper implements ParameterSpecification {
++	protected Map<Integer, int[]> map;
++	protected ParameterSpecification spec;
++	
++	public MappedParameterSpecificationWrapper(ParameterSpecification spec,
++			Map<Integer, int[]> map) {
++		this.map = map;
++		this.spec = spec;
++	}
++	
++	@Override
++	public int bind(PreparedStatement statement, QueryParameters qp,
++			SessionImplementor session, int position) throws SQLException {
++		MappedPreparedStatementWrapper st = 
++				new MappedPreparedStatementWrapper(statement, position, 
++						map);
++		spec.bind(st, qp, session, position);
++		return st.getNumberOfParametersSet();
++	}
++
++	@Override
++	public Type getExpectedType() {
++		return spec.getExpectedType();
++	}
++
++	@Override
++	public void setExpectedType(Type expectedType) {
++		spec.setExpectedType(expectedType);
++	}
++
++	@Override
++	public String renderDisplayInfo() {
++		return spec.renderDisplayInfo();
++	}
++}
+diff -urN original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedPreparedStatementWrapper.java patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedPreparedStatementWrapper.java
+--- original/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedPreparedStatementWrapper.java	1969-12-31 19:00:00.000000000 -0500
++++ patched/hibernate-core/src/main/java/org/hibernate/hql/internal/ast/tree/MappedPreparedStatementWrapper.java	2012-05-09 13:10:55.885000000 -0400
+@@ -0,0 +1,871 @@
++package org.hibernate.hql.internal.ast.tree;
++
++import java.io.InputStream;
++import java.io.Reader;
++import java.math.BigDecimal;
++import java.net.URL;
++import java.sql.Array;
++import java.sql.Blob;
++import java.sql.Clob;
++import java.sql.Connection;
++import java.sql.Date;
++import java.sql.NClob;
++import java.sql.ParameterMetaData;
++import java.sql.PreparedStatement;
++import java.sql.Ref;
++import java.sql.ResultSet;
++import java.sql.ResultSetMetaData;
++import java.sql.RowId;
++import java.sql.SQLException;
++import java.sql.SQLWarning;
++import java.sql.SQLXML;
++import java.sql.Time;
++import java.sql.Timestamp;
++import java.util.Calendar;
++import java.util.Map;
++import java.util.TreeMap;
++
++public class MappedPreparedStatementWrapper implements PreparedStatement {
++	protected PreparedStatement st;
++	protected Map<Integer, int[]> map;
++	protected int parametersSet = 0;
++	
++	public MappedPreparedStatementWrapper(PreparedStatement st, int base, Map<Integer, int[]> map) {
++		this.st = st;
++		
++		this.map = new TreeMap<Integer, int[]>();
++		for (Map.Entry<Integer, int[]> e : map.entrySet()) {
++			int[] actual = new int[e.getValue().length];
++			for (int i = 0; i < actual.length; i++)
++				actual[i] = e.getValue()[i]+base;
++			this.map.put(e.getKey()+base, actual);
++		}
++	}
++	
++	public int getNumberOfParametersSet() {
++		return parametersSet;
++	}
++
++	public <T> T unwrap(Class<T> iface) throws SQLException {
++		return st.unwrap(iface);
++	}
++
++	public ResultSet executeQuery(String sql) throws SQLException {
++		return st.executeQuery(sql);
++	}
++
++	public ResultSet executeQuery() throws SQLException {
++		return st.executeQuery();
++	}
++
++	public boolean isWrapperFor(Class<?> iface) throws SQLException {
++		return st.isWrapperFor(iface);
++	}
++
++	public int executeUpdate(String sql) throws SQLException {
++		return st.executeUpdate(sql);
++	}
++
++	public int executeUpdate() throws SQLException {
++		return st.executeUpdate();
++	}
++
++	public void close() throws SQLException {
++		st.close();
++	}
++
++	public int getMaxFieldSize() throws SQLException {
++		return st.getMaxFieldSize();
++	}
++
++
++	public void setMaxFieldSize(int max) throws SQLException {
++		st.setMaxFieldSize(max);
++	}
++
++	public int getMaxRows() throws SQLException {
++		return st.getMaxRows();
++	}
++
++	public void setMaxRows(int max) throws SQLException {
++		st.setMaxRows(max);
++	}
++
++	public void setEscapeProcessing(boolean enable) throws SQLException {
++		st.setEscapeProcessing(enable);
++	}
++
++	public int getQueryTimeout() throws SQLException {
++		return st.getQueryTimeout();
++	}
++
++	public void setQueryTimeout(int seconds) throws SQLException {
++		st.setQueryTimeout(seconds);
++	}
++
++	public void cancel() throws SQLException {
++		st.cancel();
++	}
++
++	public SQLWarning getWarnings() throws SQLException {
++		return st.getWarnings();
++	}
++
++	public void clearWarnings() throws SQLException {
++		st.clearWarnings();
++	}
++
++	public void setCursorName(String name) throws SQLException {
++		st.setCursorName(name);
++	}
++
++	public boolean execute(String sql) throws SQLException {
++		return st.execute(sql);
++	}
++
++	public void setUnicodeStream(int parameterIndex, InputStream x, int length)
++			throws SQLException {
++		st.setUnicodeStream(parameterIndex, x, length);
++	}
++
++	public ResultSet getResultSet() throws SQLException {
++		return st.getResultSet();
++	}
++
++	public int getUpdateCount() throws SQLException {
++		return st.getUpdateCount();
++	}
++
++	public boolean getMoreResults() throws SQLException {
++		return st.getMoreResults();
++	}
++
++	public void clearParameters() throws SQLException {
++		st.clearParameters();
++	}
++
++	public void setFetchDirection(int direction) throws SQLException {
++		st.setFetchDirection(direction);
++	}
++
++	public int getFetchDirection() throws SQLException {
++		return st.getFetchDirection();
++	}
++
++	public void setFetchSize(int rows) throws SQLException {
++		st.setFetchSize(rows);
++	}
++
++	public int getFetchSize() throws SQLException {
++		return st.getFetchSize();
++	}
++
++	public int getResultSetConcurrency() throws SQLException {
++		return st.getResultSetConcurrency();
++	}
++
++	public boolean execute() throws SQLException {
++		return st.execute();
++	}
++
++	public int getResultSetType() throws SQLException {
++		return st.getResultSetType();
++	}
++
++	public void addBatch(String sql) throws SQLException {
++		st.addBatch(sql);
++	}
++
++	public void clearBatch() throws SQLException {
++		st.clearBatch();
++	}
++
++	public void addBatch() throws SQLException {
++		st.addBatch();
++	}
++
++	public int[] executeBatch() throws SQLException {
++		return st.executeBatch();
++	}
++
++	public void setRef(int parameterIndex, Ref x) throws SQLException {
++		st.setRef(parameterIndex, x);
++	}
++
++	public Connection getConnection() throws SQLException {
++		return st.getConnection();
++	}
++
++	public ResultSetMetaData getMetaData() throws SQLException {
++		return st.getMetaData();
++	}
++
++	public boolean getMoreResults(int current) throws SQLException {
++		return st.getMoreResults(current);
++	}
++
++	public ResultSet getGeneratedKeys() throws SQLException {
++		return st.getGeneratedKeys();
++	}
++
++	public int executeUpdate(String sql, int autoGeneratedKeys)
++			throws SQLException {
++		return st.executeUpdate(sql, autoGeneratedKeys);
++	}
++
++	public int executeUpdate(String sql, int[] columnIndexes)
++			throws SQLException {
++		return st.executeUpdate(sql, columnIndexes);
++	}
++
++	public int executeUpdate(String sql, String[] columnNames)
++			throws SQLException {
++		return st.executeUpdate(sql, columnNames);
++	}
++
++	public ParameterMetaData getParameterMetaData() throws SQLException {
++		return st.getParameterMetaData();
++	}
++
++	public void setRowId(int parameterIndex, RowId x) throws SQLException {
++		st.setRowId(parameterIndex, x);
++	}
++
++	public boolean execute(String sql, int autoGeneratedKeys)
++			throws SQLException {
++		return st.execute(sql, autoGeneratedKeys);
++	}
++
++	public boolean execute(String sql, int[] columnIndexes) throws SQLException {
++		return st.execute(sql, columnIndexes);
++	}
++
++	public boolean execute(String sql, String[] columnNames)
++			throws SQLException {
++		return st.execute(sql, columnNames);
++	}
++
++	public void setSQLXML(int parameterIndex, SQLXML xmlObject)
++			throws SQLException {
++		st.setSQLXML(parameterIndex, xmlObject);
++	}
++
++	public int getResultSetHoldability() throws SQLException {
++		return st.getResultSetHoldability();
++	}
++
++	public boolean isClosed() throws SQLException {
++		return st.isClosed();
++	}
++
++	public void setPoolable(boolean poolable) throws SQLException {
++		st.setPoolable(poolable);
++	}
++
++	public boolean isPoolable() throws SQLException {
++		return st.isPoolable();
++	}
++
++	public void closeOnCompletion() throws SQLException {
++		st.closeOnCompletion();
++	}
++
++	public boolean isCloseOnCompletion() throws SQLException {
++		return st.isCloseOnCompletion();
++	}
++	
++	@Override
++	public void setObject(int parameterIndex, Object x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setObject(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setObject(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setNull(int parameterIndex, int sqlType) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setNull(idx, sqlType);
++				parametersSet++;
++			}
++		} else {
++			st.setNull(parameterIndex, sqlType);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setBoolean(int parameterIndex, boolean x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setBoolean(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setBoolean(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setByte(int parameterIndex, byte x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setByte(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setByte(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setShort(int parameterIndex, short x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setShort(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setShort(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setInt(int parameterIndex, int x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setInt(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setInt(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setLong(int parameterIndex, long x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setLong(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setLong(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setFloat(int parameterIndex, float x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setFloat(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setFloat(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setDouble(int parameterIndex, double x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setDouble(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setDouble(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setBigDecimal(int parameterIndex, BigDecimal x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setBigDecimal(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setBigDecimal(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setString(int parameterIndex, String x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setString(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setString(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setBytes(int parameterIndex, byte[] x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setBytes(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setBytes(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setDate(int parameterIndex, Date x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setDate(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setDate(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setTime(int parameterIndex, Time x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setTime(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setTime(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setTimestamp(int parameterIndex, Timestamp x)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setTimestamp(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setTimestamp(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setAsciiStream(int parameterIndex, InputStream x, int length) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setAsciiStream(map.get(parameterIndex)[0], x, length);
++			}
++		} else {
++			st.setAsciiStream(parameterIndex, x, length);
++		}
++	}
++
++	@Override
++	public void setBinaryStream(int parameterIndex, InputStream x, int length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setBinaryStream(map.get(parameterIndex)[0], x, length);
++			}
++		} else {
++			st.setBinaryStream(parameterIndex, x, length);
++		}
++	}
++
++	@Override
++	public void setObject(int parameterIndex, Object x, int targetSqlType)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setObject(idx, x, targetSqlType);
++				parametersSet++;
++			}
++		} else {
++			st.setObject(parameterIndex, x, targetSqlType);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setCharacterStream(int parameterIndex, Reader reader, int length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setCharacterStream(map.get(parameterIndex)[0], reader, length);
++			}
++		} else {
++			st.setCharacterStream(parameterIndex, reader, length);
++		}
++	}
++
++	@Override
++	public void setBlob(int parameterIndex, Blob x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setBlob(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setBlob(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setClob(int parameterIndex, Clob x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setClob(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setClob(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setArray(int parameterIndex, Array x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setArray(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setArray(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setDate(int parameterIndex, Date x, Calendar cal)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setDate(idx, x, cal);
++				parametersSet++;
++			}
++		} else {
++			st.setDate(parameterIndex, x, cal);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setTime(int parameterIndex, Time x, Calendar cal)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setTime(idx, x, cal);
++				parametersSet++;
++			}
++		} else {
++			st.setTime(parameterIndex, x, cal);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setTimestamp(int parameterIndex, Timestamp x, Calendar cal)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setTimestamp(idx, x, cal);
++				parametersSet++;
++			}
++		} else {
++			st.setTimestamp(parameterIndex, x, cal);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setNull(int parameterIndex, int sqlType, String typeName)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setNull(idx, sqlType, typeName);
++				parametersSet++;
++			}
++		} else {
++			st.setNull(parameterIndex, sqlType, typeName);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setURL(int parameterIndex, URL x) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setURL(idx, x);
++				parametersSet++;
++			}
++		} else {
++			st.setURL(parameterIndex, x);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setNString(int parameterIndex, String value)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setNString(idx, value);
++				parametersSet++;
++			}
++		} else {
++			st.setNString(parameterIndex, value);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setNCharacterStream(int parameterIndex, Reader value,
++			long length) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setNCharacterStream(map.get(parameterIndex)[0], value, length);
++			}
++		} else {
++			st.setNCharacterStream(parameterIndex, value, length);
++		}
++	}
++
++	@Override
++	public void setNClob(int parameterIndex, NClob value) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setNClob(idx, value);
++				parametersSet++;
++			}
++		} else {
++			st.setNClob(parameterIndex, value);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setClob(int parameterIndex, Reader reader, long length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setClob(map.get(parameterIndex)[0], reader, length);
++			}
++		} else {
++			st.setClob(parameterIndex, reader, length);
++		}
++	}
++
++	@Override
++	public void setBlob(int parameterIndex, InputStream inputStream, long length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setBlob(map.get(parameterIndex)[0], inputStream, length);
++			}
++		} else {
++			st.setBlob(parameterIndex, inputStream, length);
++		}
++	}
++
++	@Override
++	public void setNClob(int parameterIndex, Reader reader, long length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setNClob(map.get(parameterIndex)[0], reader, length);
++			}
++		} else {
++			st.setNClob(parameterIndex, reader, length);
++		}
++	}
++
++	@Override
++	public void setObject(int parameterIndex, Object x, int targetSqlType,
++			int scaleOrLength) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			for (int idx : map.get(parameterIndex)) {
++				st.setObject(idx, x, targetSqlType, scaleOrLength);
++				parametersSet++;
++			}
++		} else {
++			st.setObject(parameterIndex, x, targetSqlType, scaleOrLength);
++			parametersSet++;
++		}
++	}
++
++	@Override
++	public void setAsciiStream(int parameterIndex, InputStream x, long length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setAsciiStream(map.get(parameterIndex)[0], x, length);
++			}
++		} else {
++			st.setAsciiStream(parameterIndex, x, length);
++		}
++	}
++
++	@Override
++	public void setBinaryStream(int parameterIndex, InputStream x, long length)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setBinaryStream(map.get(parameterIndex)[0], x, length);
++			}
++		} else {
++			st.setBinaryStream(parameterIndex, x, length);
++		}
++	}
++
++	@Override
++	public void setCharacterStream(int parameterIndex, Reader reader,
++			long length) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setCharacterStream(map.get(parameterIndex)[0], reader, length);
++			}
++		} else {
++			st.setCharacterStream(parameterIndex, reader, length);
++		}
++	}
++
++	@Override
++	public void setAsciiStream(int parameterIndex, InputStream x)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setAsciiStream(map.get(parameterIndex)[0], x);
++			}
++		} else {
++			st.setAsciiStream(parameterIndex, x);
++		}
++	}
++
++	@Override
++	public void setBinaryStream(int parameterIndex, InputStream x)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setBinaryStream(map.get(parameterIndex)[0], x);
++			}
++		} else {
++			st.setBinaryStream(parameterIndex, x);
++		}
++	}
++
++	@Override
++	public void setCharacterStream(int parameterIndex, Reader reader)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setCharacterStream(map.get(parameterIndex)[0], reader);
++			}
++		} else {
++			st.setCharacterStream(parameterIndex, reader);
++		}
++	}
++
++	@Override
++	public void setNCharacterStream(int parameterIndex, Reader value)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setNCharacterStream(map.get(parameterIndex)[0], value);
++			}
++		} else {
++			st.setNCharacterStream(parameterIndex, value);
++		}
++	}
++
++	@Override
++	public void setClob(int parameterIndex, Reader reader) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setClob(map.get(parameterIndex)[0], reader);
++			}
++		} else {
++			st.setClob(parameterIndex, reader);
++		}
++	}
++
++	@Override
++	public void setBlob(int parameterIndex, InputStream inputStream)
++			throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setBlob(map.get(parameterIndex)[0], inputStream);
++			}
++		} else {
++			st.setBlob(parameterIndex, inputStream);
++		}
++	}
++
++	@Override
++	public void setNClob(int parameterIndex, Reader reader) throws SQLException {
++		if (map.containsKey(parameterIndex)) {
++			if (map.get(parameterIndex).length != 1)
++				throw new SQLException("InputStreams can only be used once, please use a different method.");
++			else {
++				st.setNClob(map.get(parameterIndex)[0], reader);
++			}
++		} else {
++			st.setNClob(parameterIndex, reader);
++		}
++	}
++
++}

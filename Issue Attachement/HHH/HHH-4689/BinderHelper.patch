@@ -1,0 +1,70 @@
+Index: annotations/src/main/java/org/hibernate/cfg/BinderHelper.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/BinderHelper.java	(revision 18432)
++++ annotations/src/main/java/org/hibernate/cfg/BinderHelper.java	(working copy)
+@@ -368,6 +368,65 @@
+ 		return property;
+ 	}
+ 
++	/**
++	 * Retrieve the property by path in a recursive way, including IndetifierProperty in the loop
++	 * If propertyName is null or empty, the IdentifierProperty is returned
++	 */
++	public static Property findPropertyByName(Component component, String propertyName) {
++		Property property = null;
++		Property idProperty = null;
++		//Property idProperty = associatedClass.getIdentifierProperty();
++		String idName = idProperty != null ? idProperty.getName() : null;
++		try {
++			if ( propertyName == null
++					|| propertyName.length() == 0
++					|| propertyName.equals( idName ) ) {
++				//default to id
++				property = idProperty;
++			}
++			else {
++				if ( propertyName.indexOf( idName + "." ) == 0 ) {
++					property = idProperty;
++					propertyName = propertyName.substring( idName.length() + 1 );
++				}
++				StringTokenizer st = new StringTokenizer( propertyName, ".", false );
++				while ( st.hasMoreElements() ) {
++					String element = (String) st.nextElement();
++					if ( property == null ) {
++						property = component.getProperty( element );
++					}
++					else {
++						if ( !property.isComposite() ) return null;
++						property = ( (Component) property.getValue() ).getProperty( element );
++					}
++				}
++			}
++		}
++		catch (MappingException e) {
++			try {
++				//if we do not find it try to check the identifier mapper
++//				if ( associatedClass.getIdentifierMapper() == null ) return null;
++				if ( component.getOwner().getIdentifierMapper() == null ) return null;
++				StringTokenizer st = new StringTokenizer( propertyName, ".", false );
++				while ( st.hasMoreElements() ) {
++					String element = (String) st.nextElement();
++					if ( property == null ) {
++//						property = associatedClass.getIdentifierMapper().getProperty( element );
++						property = component.getOwner().getIdentifierMapper().getProperty( element );
++					}
++					else {
++						if ( !property.isComposite() ) return null;
++						property = ( (Component) property.getValue() ).getProperty( element );
++					}
++				}
++			}
++			catch (MappingException ee) {
++				return null;
++			}
++		}
++		return property;
++	}
++
+ 	public static String getRelativePath(PropertyHolder propertyHolder, String propertyName) {
+ 		if ( propertyHolder == null ) return propertyName;
+ 		String path = propertyHolder.getPath();

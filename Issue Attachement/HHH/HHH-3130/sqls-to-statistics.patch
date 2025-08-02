@@ -1,0 +1,179 @@
+Index: core/src/main/java/org/hibernate/jdbc/AbstractBatcher.java
+===================================================================
+--- core/src/main/java/org/hibernate/jdbc/AbstractBatcher.java	(revision 14355)
++++ core/src/main/java/org/hibernate/jdbc/AbstractBatcher.java	(working copy)
+@@ -492,7 +492,7 @@
+ 		setTimeout( result );
+ 
+ 		if ( factory.getStatistics().isStatisticsEnabled() ) {
+-			factory.getStatisticsImplementor().prepareStatement();
++			factory.getStatisticsImplementor().prepareStatement(sql);
+ 		}
+ 
+ 		return result;
+Index: core/src/main/java/org/hibernate/stat/StatisticsImplementor.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/StatisticsImplementor.java	(revision 14355)
++++ core/src/main/java/org/hibernate/stat/StatisticsImplementor.java	(working copy)
+@@ -30,6 +30,6 @@
+ 	public void queryCachePut(String hql, String regionName);
+ 	public void endTransaction(boolean success);
+ 	public void closeStatement();
+-	public void prepareStatement();
++	public void prepareStatement(String sql);
+ 	public void optimisticFailure(String entityName);
+ }
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/stat/Statistics.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/Statistics.java	(revision 14355)
++++ core/src/main/java/org/hibernate/stat/Statistics.java	(working copy)
+@@ -199,6 +199,10 @@
+ 	 * The number of prepared statements that were acquired
+ 	 */
+ 	public long getPrepareStatementCount();
++    /**
++     * The SQL statements of prepared statements that were acquired
++     */
++    public String[] getPrepareStatements();
+ 	/**
+ 	 * The number of prepared statements that were released
+ 	 */
+Index: core/src/main/java/org/hibernate/stat/StatisticsImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/StatisticsImpl.java	(revision 14355)
++++ core/src/main/java/org/hibernate/stat/StatisticsImpl.java	(working copy)
+@@ -1,14 +1,16 @@
+ //$Id: StatisticsImpl.java 11398 2007-04-10 14:54:07Z steve.ebersole@jboss.com $
+ package org.hibernate.stat;
++
++import java.util.Collection;
+ import java.util.HashMap;
++import java.util.LinkedList;
+ import java.util.Map;
+ 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+-import org.hibernate.cache.Cache;
+ import org.hibernate.cache.Region;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.util.ArrayHelper;
+ 
+ /**
+  * @see org.hibernate.stat.Statistics 
+@@ -30,7 +32,6 @@
+ 	private long flushCount;
+ 	private long connectCount;
+ 	
+-	private long prepareStatementCount;
+ 	private long closeStatementCount;
+ 	
+ 	private long entityLoadCount;
+@@ -68,8 +69,9 @@
+ 	private final Map collectionStatistics = new HashMap();
+ 	/** entity statistics per query string (HQL or SQL) */
+ 	private final Map queryStatistics = new HashMap();
++    private Collection preparedStatements = new LinkedList();
+ 
+-	public StatisticsImpl() {
++    public StatisticsImpl() {
+ 		clear();
+ 	}
+ 
+@@ -77,8 +79,8 @@
+ 		clear();
+ 		this.sessionFactory = sessionFactory;
+ 	}
+-	
+-	/**
++
++    /**
+ 	 * reset all statistics
+ 	 */
+ 	public synchronized void clear() {
+@@ -91,7 +93,6 @@
+ 		flushCount = 0;
+ 		connectCount = 0;
+ 		
+-		prepareStatementCount = 0;
+ 		closeStatementCount = 0;
+ 		
+ 		entityDeleteCount = 0;
+@@ -122,7 +123,8 @@
+ 		entityStatistics.clear();
+ 		collectionStatistics.clear();
+ 		queryStatistics.clear();
+-		
++        preparedStatements.clear();
++
+ 		startTime = System.currentTimeMillis();
+ 	}
+ 	
+@@ -474,7 +476,7 @@
+ 		log.info("optimistic lock failures: " + optimisticFailureCount);
+ 		log.info("flushes: " + flushCount);
+ 		log.info("connections obtained: " + connectCount);
+-		log.info("statements prepared: " + prepareStatementCount);
++		log.info("statements prepared: " + getPrepareStatementCount());
+ 		log.info("statements closed: " + closeStatementCount);
+ 		log.info("second level cache puts: " + secondLevelCachePutCount);
+ 		log.info("second level cache hits: " + secondLevelCacheHitCount);
+@@ -578,8 +580,8 @@
+ 		closeStatementCount++;
+ 	}
+ 
+-	public void prepareStatement() {
+-		prepareStatementCount++;
++	public void prepareStatement(String sql) {
++		preparedStatements.add(sql);
+ 	}
+ 
+ 	public long getCloseStatementCount() {
+@@ -587,10 +589,14 @@
+ 	}
+ 
+ 	public long getPrepareStatementCount() {
+-		return prepareStatementCount;
++		return preparedStatements.size();
+ 	}
+ 
+-	public void optimisticFailure(String entityName) {
++    public String[] getPrepareStatements() {
++        return (String[]) preparedStatements.toArray(new String[preparedStatements.size()]);
++    }
++
++    public void optimisticFailure(String entityName) {
+ 		optimisticFailureCount++;
+ 		getEntityStatistics(entityName).optimisticFailureCount++;
+ 	}
+@@ -609,7 +615,7 @@
+ 			.append(",optimistic lock failures=").append(optimisticFailureCount)
+ 			.append(",flushes=").append(flushCount)
+ 			.append(",connections obtained=").append(connectCount)
+-			.append(",statements prepared=").append(prepareStatementCount)
++			.append(",statements prepared=").append(getPrepareStatementCount())
+ 			.append(",statements closed=").append(closeStatementCount)
+ 			.append(",second level cache puts=").append(secondLevelCachePutCount)
+ 			.append(",second level cache hits=").append(secondLevelCacheHitCount)
+Index: testsuite/src/test/java/org/hibernate/test/legacy/StatisticsTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/legacy/StatisticsTest.java	(revision 14355)
++++ testsuite/src/test/java/org/hibernate/test/legacy/StatisticsTest.java	(working copy)
+@@ -56,8 +56,15 @@
+ 		s.close();
+ 		assertEquals(1, stats.getQueryExecutionCount() );
+ 		assertEquals(1, stats.getQueryStatistics(hql).getExecutionCount() );
+-		
+-		stats.setStatisticsEnabled(isStats);
++        assertEquals(4, stats.getPrepareStatementCount());
++        int index = 0;
++        assertEquals("select max(identifier_column) from TA", stats.getPrepareStatements()[index++]);
++        assertEquals("insert into TA (name, clazz_discriminata, identifier_column) values (?, 0, ?)", stats.getPrepareStatements()[index++]);
++        assertEquals("update TA set name=? where identifier_column=?", stats.getPrepareStatements()[index++]);
++        assertTrue(stats.getPrepareStatements()[index].startsWith("select a0_.identifier_column as "));
++        assertTrue(stats.getPrepareStatements()[index].contains(".clazz_discriminata as "));
++
++        stats.setStatisticsEnabled(isStats);
+ 	}
+ 
+ }

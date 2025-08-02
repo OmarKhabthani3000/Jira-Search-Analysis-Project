@@ -1,0 +1,131 @@
+Index: src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(revision 14969)
++++ src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(working copy)
+@@ -27,6 +27,8 @@
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ import org.hibernate.test.hql.Animal;
+ import org.hibernate.test.hql.Reptile;
++import org.hibernate.transform.ResultToMap;
++import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.transform.Transformers;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.SerializationHelper;
+
+@@ -502,7 +504,99 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++
++	/**
++	 * Test for fix for HHH2893. Tests an api change so that we can use a group
++	 * by on a column, and have that column not appear in the result set (i.e.
++	 * not included in the select statement). Used for sub queries.
++	 * 
++	 * @author Antony Stubbs
++	 */
++	public void testGroupByExcludeFromSelect() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
+ 		
++		Student as1 = new Student();
++		as1.setName("Antony Stubbs");
++		as1.setStudentNumber(100);
++		s.save(as1);
++		
++		Student as2 = new Student();
++		as2.setName("Antony Stubbs");
++		as2.setStudentNumber(101);
++		s.save(as2);
++		
++		Student as3 = new Student();
++		as3.setName("Antony Stubbs");
++		as3.setStudentNumber(102);
++		s.save(as3);
++		
++		Student ks1 = new Student();
++		ks1.setName("Karyn Stark");
++		ks1.setStudentNumber(200);
++		s.save(ks1);
++		
++		Student ks2 = new Student();
++		ks2.setName("Karyn Stark");
++		ks2.setStudentNumber(205);
++		s.save(ks2);
++		
++		s.flush();
++		
++		// demonstrate simple aggregate functionality
++		Criteria simpleCriteria = s.createCriteria(Student.class).setProjection(Projections.projectionList().add(
++				Projections.max("studentNumber"))
++			);
++		
++		// the point is that we can use a group by on a column, and not have
++		// that column appear in the resultset. Used for sub queries.
++		List simpleResult = simpleCriteria.list();
++
++		assertTrue("result size", simpleResult.size()==1);
++		assertEquals(new Long(205), simpleResult.get(0));
++		
++		// test for HHH-2893 - Criteria api does not allow a groupProperty to
++		// _NOT_ be included in the selected columns
++		Criteria excludeCriteria = s.createCriteria(Student.class).setProjection(Projections.projectionList().add(
++				Projections.max("studentNumber")).add(
++				Projections.groupProperty("name", true)) // new api for project for HHH2893 - not the 'true'
++			);
++		
++		// the point is that we can use a group by on a column, and not have
++		// that column appear in the resultset. Used for sub queries.
++		List excludeResult = excludeCriteria.list();
++		assertTrue("result size", excludeResult.size()==2);
++		assertEquals(new Long(102), excludeResult.get(0));
++		assertEquals(new Long(205), excludeResult.get(1));
++		
++		// now test old behaviour
++		Criteria includeCriteria = s.createCriteria(Student.class).setProjection(Projections.projectionList().add(
++				Projections.max("studentNumber")).add(
++				Projections.groupProperty("name", false)) // new api for project for HHH2893 - not the 'false'
++			);
++		List includeResult = includeCriteria.list();
++		assertTrue("result size", excludeResult.size()==2);
++		assertEquals(new Long(102), ((Object[])includeResult.get(0))[0]);
++		assertEquals("Antony Stubbs", ((Object[])includeResult.get(0))[1]);
++		assertEquals(new Long(205), ((Object[])includeResult.get(1))[0]);
++		assertEquals("Karyn Stark", ((Object[])includeResult.get(1))[1]);
++		
++		// now test default behaviour which should be old behaviour
++		Criteria defaultCriteria = s.createCriteria(Student.class).setProjection(Projections.projectionList().add(
++				Projections.max("studentNumber")).add(
++				Projections.groupProperty("name")) // if no option given for HHH2893 - it reverts to the old include behavior
++			);
++		List defaultResult = defaultCriteria.list();
++		assertTrue("result size", defaultResult.size()==2);
++		assertEquals(new Long(102), ((Object[])defaultResult.get(0))[0]);
++		assertEquals("Antony Stubbs", ((Object[])defaultResult.get(0))[1]);
++		assertEquals(new Long(205), ((Object[])defaultResult.get(1))[0]);
++		assertEquals("Karyn Stark", ((Object[])defaultResult.get(1))[1]);
++		
++		t.rollback();
++		s.close();
++	}
++	
+ 	public void testProjectionsUsingProperty() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+Index: src/test/java/org/hibernate/test/criteria/Student.java
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/Student.java	(revision 14969)
++++ src/test/java/org/hibernate/test/criteria/Student.java	(working copy)
+@@ -5,6 +5,12 @@
+ import java.util.Set;
+ 
+ /**
++ * A Student has a:<br/>
++ * studentNumber,<br/>
++ * name,<br/>
++ * preferredCourse,<br/>
++ * and enrolements.<br/>
++ * 
+  * @author Gavin King
+  */
+ public class Student {

@@ -1,0 +1,800 @@
+Index: src/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- src/org/hibernate/cfg/HbmBinder.java	(revision 9933)
++++ src/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -293,7 +293,7 @@
+ 		        entity.isAbstract() != null && entity.isAbstract().booleanValue()
+ 			);
+ 		entity.setTable( table );
+-		bindComment(table, node);
++		bindTable(table, node, inheritedMetas);
+ 
+ 		log.info(
+ 				"Mapping class: " + entity.getEntityName() +
+@@ -406,6 +406,7 @@
+ 			entity.setIdentifierProperty( prop );
+ 		}
+ 
++		bindPrimaryKey(idNode, id);
+ 		// TODO:
+ 		/*
+ 		 * if ( id.getHibernateType().getReturnedClass().isArray() ) throw new MappingException(
+@@ -414,12 +415,20 @@
+ 		makeIdentifier( idNode, id, mappings );
+ 	}
+ 
++	private static void bindPrimaryKey(Element idNode, SimpleValue id) {
++		Attribute primaryKey = idNode.attribute("primary-key");
++		if(primaryKey!=null){
++			id.setPrimaryKeyName(primaryKey.getValue());
++		}
++	}
++
+ 	private static void bindCompositeId(Element idNode, RootClass entity, Mappings mappings,
+ 			java.util.Map inheritedMetas) throws MappingException {
+ 		String propertyName = idNode.attributeValue( "name" );
+ 		Component id = new Component( entity );
+ 		entity.setIdentifier( id );
+ 		bindCompositeId( idNode, id, entity, propertyName, mappings, inheritedMetas );
++		bindPrimaryKey(idNode, id);
+ 		if ( propertyName == null ) {
+ 			entity.setEmbeddedIdentifier( id.isEmbedded() );
+ 			if ( id.isEmbedded() ) {
+@@ -869,7 +878,7 @@
+ 				false
+ 			);
+ 		joinedSubclass.setTable( mytable );
+-		bindComment(mytable, node);
++		bindTable(mytable, node, inheritedMetas);
+ 
+ 		log.info(
+ 				"Mapping joined-subclass: " + joinedSubclass.getEntityName() +
+@@ -919,7 +928,7 @@
+ 				false
+ 			);
+ 		join.setTable( table );
+-		bindComment(table, node);
++		bindTable(table, node, inheritedMetas);
+ 
+ 		Attribute fetchNode = node.attribute( "fetch" );
+ 		if ( fetchNode != null ) {
+@@ -1389,7 +1398,7 @@
+ 					false
+ 				);
+ 			collection.setCollectionTable( table );
+-			bindComment(table, node);
++			bindTable(table, node, new HashMap());
+ 
+ 			log.info(
+ 					"Mapping collection: " + collection.getRole() +
+@@ -1500,9 +1509,10 @@
+ 		}
+ 	}
+ 
+-	private static void bindComment(Table table, Element node) {
++	private static void bindTable(Table table, Element node, java.util.Map inheritedMeta) {
+ 		Element comment = node.element("comment");
+ 		if (comment!=null) table.setComment( comment.getTextTrim() );
++		table.setMetaAttributes( getMetas( node, inheritedMeta ) );
+ 	}
+ 
+ 	public static void bindManyToOne(Element node, ManyToOne manyToOne, String path,
+Index: src/org/hibernate/dialect/DB2Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/DB2Dialect.java	(revision 9933)
++++ src/org/hibernate/dialect/DB2Dialect.java	(working copy)
+@@ -7,6 +7,9 @@
+ import java.sql.Types;
+ 
+ import org.hibernate.Hibernate;
++import org.hibernate.mapping.MetaAttributable;
++import org.hibernate.mapping.Table;
++import org.hibernate.mapping.MetaAttribute;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.dialect.function.NoArgSQLFunction;
+ import org.hibernate.dialect.function.SQLFunctionTemplate;
+@@ -350,6 +353,21 @@
+ 		return false;
+ 	}
+ 
++	public String getStorageClause(MetaAttributable entityMetaAttributes, boolean isIndex) {
++		StringBuffer buf = new StringBuffer();
++		if (isIndex) {
++			return "";
++		} else {
++			MetaAttribute metaAttribute = entityMetaAttributes.getMetaAttribute(Table.META_ATTR_TABLESPACE);
++			if (metaAttribute != null) {
++				if (metaAttribute.getValue() != null) {
++					buf.append("IN ").append(metaAttribute.getValue());
++				}
++			}
++		}
++		return buf.toString();
++	}
++
+ 	public boolean supportsParametersInInsertSelect() {
+ 		// DB2 known to not support parameters within the select
+ 		// clause of an SQL INSERT ... SELECT ... statement
+Index: src/org/hibernate/dialect/Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/Dialect.java	(revision 9933)
++++ src/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -33,6 +33,7 @@
+ import org.hibernate.id.SequenceGenerator;
+ import org.hibernate.id.TableHiLoGenerator;
+ import org.hibernate.mapping.Column;
++import org.hibernate.mapping.MetaAttributable;
+ import org.hibernate.persister.entity.Lockable;
+ import org.hibernate.sql.ANSICaseFragment;
+ import org.hibernate.sql.ANSIJoinFragment;
+@@ -426,11 +427,9 @@
+ 	}
+ 
+ 	/**
+-	 * The syntax used to add a foreign key constraint to a table.
+-	 * 
+-	 * @param referencesPrimaryKey if false, constraint should be 
++	 * The syntax used to add a foreign key constraint to a table using alter table.
++	 * @param referencesPrimaryKey if false, constraint should be
+ 	 * explicit about which column names the constraint refers to
+-	 *
+ 	 * @return String
+ 	 */
+ 	public String getAddForeignKeyConstraintString(
+@@ -459,15 +458,30 @@
+ 	}
+ 
+ 	/**
+-	 * The syntax used to add a primary key constraint to a table.
++	 * The syntax used to add a primary key constraint to a table in an alter table statement
+ 	 *
+ 	 * @return String
+ 	 */
+ 	public String getAddPrimaryKeyConstraintString(String constraintName) {
+-		return " add constraint " + constraintName + " primary key ";
++		StringBuffer buf = new StringBuffer().append(" add ").append(getPrimaryKeyConstraintString(constraintName));
++		return buf.toString();
+ 	}
+ 
+ 	/**
++	 * The syntax used to add a primary key constraint to a table in create table statement
++	 *
++	 * @return String
++	 */
++	public String getPrimaryKeyConstraintString(String constraintName) {
++		StringBuffer buf = new StringBuffer();
++		if (constraintName != null) {
++			buf.append(" constraint ").append(constraintName);
++		}
++		String result = buf.append(" primary key ").toString();
++		return result;
++	}
++
++	/**
+ 	 * The keyword used to specify a nullable column.
+ 	 *
+ 	 * @return String
+@@ -757,6 +771,30 @@
+ 	}
+ 
+ 	/**
++	 * Does this dialect supports storage clauses in DDL. Used to determine
++	 * whether the dialect is passed the meta attributes for an entity  when
++	 * generating DDL for tables and indexes.
++	 *
++	 * @return true if RDBMS supports storage clauses, false otherwise.
++	 */
++	public boolean supportsStorageClause() {
++		return false;
++	}
++
++	/**
++	 * Return storage clause for create table/create index. E.g. TABLESPACE "USERS" for Oracle,
++	 * IN USERS for DB2. Default implementation returns empty string (i.e. tablespace specification
++	 * not supported).
++	 *
++	 * @param entityMetaAttributes
++	 * @param isIndex
++	 * @return Tablespace specification clause for create table/create index
++	 */
++	public String getStorageClause(MetaAttributable entityMetaAttributes, boolean isIndex) {
++		return "";
++	}
++
++	/**
+ 	 * Does the <tt>LIMIT</tt> clause specify arguments in the "reverse" order
+ 	 * limit, offset instead of offset, limit?
+ 	 *
+Index: src/org/hibernate/dialect/Oracle9Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/Oracle9Dialect.java	(revision 9933)
++++ src/org/hibernate/dialect/Oracle9Dialect.java	(working copy)
+@@ -8,6 +8,9 @@
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.HibernateException;
++import org.hibernate.mapping.MetaAttributable;
++import org.hibernate.mapping.MetaAttribute;
++import org.hibernate.mapping.Table;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.dialect.function.NoArgSQLFunction;
+ import org.hibernate.dialect.function.NvlFunction;
+@@ -32,8 +35,8 @@
+ 		registerColumnType( Types.SMALLINT, "number(5,0)" );
+ 		registerColumnType( Types.TINYINT, "number(3,0)" );
+ 		registerColumnType( Types.INTEGER, "number(10,0)" );
+-		registerColumnType( Types.CHAR, "char(1 char)" );
+-		registerColumnType( Types.VARCHAR, 4000, "varchar2($l char)" );
++		registerColumnType( Types.CHAR, "char(1)" );
++		registerColumnType( Types.VARCHAR, 4000, "varchar2($l)" );
+ 		registerColumnType( Types.VARCHAR, "long" );
+ 		registerColumnType( Types.FLOAT, "float" );
+ 		registerColumnType( Types.DOUBLE, "double precision" );
+@@ -297,6 +300,35 @@
+ 		return true;
+ 	}
+ 
++	public boolean supportsStorageClause() {
++		return true;
++	}
++
++	public String getStorageClause(MetaAttributable entityMetaAttributes, boolean indexCreation) {
++		StringBuffer buf = new StringBuffer();
++		MetaAttribute tablespaceAttrib;
++		MetaAttribute storageAttrib;
++		if (indexCreation) {
++			tablespaceAttrib = entityMetaAttributes.getMetaAttribute(Table.META_ATTR_INDEX_TABLESPACE);
++			storageAttrib = entityMetaAttributes.getMetaAttribute(Table.META_ATTR_INDEX_STORAGE);
++		} else {
++			tablespaceAttrib = entityMetaAttributes.getMetaAttribute(Table.META_ATTR_TABLESPACE);
++			storageAttrib = entityMetaAttributes.getMetaAttribute(Table.META_ATTR_STORAGE);
++		}
++
++		if (tablespaceAttrib != null) {
++			if (tablespaceAttrib.getValue() != null) {
++				buf.append(" TABLESPACE \"").append(tablespaceAttrib.getValue()).append("\"");
++			}
++		}
++		if (storageAttrib != null) {
++			if (storageAttrib.getValue() != null) {
++				buf.append(" ").append(storageAttrib.getValue());
++			}
++		}
++		return buf.toString();
++	}
++
+ 	public String generateTemporaryTableName(String baseTableName) {
+ 		String name = super.generateTemporaryTableName(baseTableName);
+ 		return name.length() > 30 ? name.substring( 1, 30 ) : name;
+Index: src/org/hibernate/hibernate-mapping-3.0.dtd
+===================================================================
+--- src/org/hibernate/hibernate-mapping-3.0.dtd	(revision 9933)
++++ src/org/hibernate/hibernate-mapping-3.0.dtd	(working copy)
+@@ -159,7 +159,8 @@
+ <!-- Declares the id type, column and generation algorithm for an entity class.
+ If a name attribut is given, the id is exposed to the application through the 
+ named property of the class. If not, the id is only exposed to the application 
+-via Session.getIdentifier() -->
++via Session.getIdentifier(). Primary-key declares the name of the table's primary key
++in the database. -->
+ 
+ <!ELEMENT id (meta*,column*,type?,generator?)>
+ 	<!ATTLIST id name CDATA #IMPLIED>
+@@ -168,6 +169,7 @@
+ 	<!ATTLIST id column CDATA #IMPLIED>
+ 	<!ATTLIST id type CDATA #IMPLIED>
+ 	<!ATTLIST id length CDATA #IMPLIED>
++	<!ATTLIST id primary-key CDATA #IMPLIED>
+ 	<!ATTLIST id unsaved-value CDATA #IMPLIED>					<!-- any|none|null|undefined|0|-1|... -->
+ 
+ <!-- A composite key may be modelled by a java class with a property for each 
+@@ -180,6 +182,7 @@
+ 	<!ATTLIST composite-id name CDATA #IMPLIED>
+ 	<!ATTLIST composite-id node CDATA #IMPLIED>
+ 	<!ATTLIST composite-id access CDATA #IMPLIED>
++	<!ATTLIST composite-id primary-key CDATA #IMPLIED>
+ 	<!ATTLIST composite-id unsaved-value (undefined|any|none) "undefined"> 
+ 
+ <!-- Polymorphic data requires a column holding a class discriminator value. This
+Index: src/org/hibernate/mapping/Constraint.java
+===================================================================
+--- src/org/hibernate/mapping/Constraint.java	(revision 9933)
++++ src/org/hibernate/mapping/Constraint.java	(working copy)
+@@ -82,4 +82,12 @@
+ 	public String toString() {
+ 		return getClass().getName() + '(' + getTable().getName() + getColumns() + ") as " + name;
+ 	}
++
++	protected void addColumnList(StringBuffer buf, Dialect dialect) {
++		Iterator iter = getColumnIterator();
++		while (iter.hasNext()) {
++			buf.append(((Column) iter.next()).getQuotedName(dialect));
++			if (iter.hasNext()) buf.append(", ");
++		}
++	}
+ }
+Index: src/org/hibernate/mapping/ForeignKey.java
+===================================================================
+--- src/org/hibernate/mapping/ForeignKey.java	(revision 9933)
++++ src/org/hibernate/mapping/ForeignKey.java	(working copy)
+@@ -45,6 +45,10 @@
+ 			result;
+ 	}
+ 
++	public String sqlCreateTableConstraintString(Dialect dialect) {
++		throw new UnsupportedOperationException("Foreign key creation within create table statement not supported");
++	}
++
+ 	public Table getReferencedTable() {
+ 		return referencedTable;
+ 	}
+@@ -65,9 +69,7 @@
+ 
+ 	/**
+ 	 * Validates that columnspan of the foreignkey and the primarykey is the same.
+-	 * 
+ 	 * Furthermore it aligns the length of the underlying tables columns.
+-	 * @param referencedTable
+ 	 */
+ 	public void alignColumns() {
+ 		if ( isReferenceToPrimaryKey() ) alignColumns(referencedTable);
+Index: src/org/hibernate/mapping/Index.java
+===================================================================
+--- src/org/hibernate/mapping/Index.java	(revision 9933)
++++ src/org/hibernate/mapping/Index.java	(working copy)
+@@ -33,17 +33,17 @@
+ 				defaultSchema
+ 			);
+ 	}
+-    
++
+     public static String buildSqlDropIndexString(
+-    		Dialect dialect, 
+-    		Table table, 
+-    		String name, 
+-    		String defaultCatalog, 
++    		Dialect dialect,
++    		Table table,
++    		String name,
++    		String defaultCatalog,
+     		String defaultSchema
+     ) {
+-        return "drop index " + 
+-        		StringHelper.qualify( 
+-        				table.getQualifiedName(dialect, defaultCatalog, defaultSchema), 
++        return "drop index " +
++        		StringHelper.qualify(
++        				table.getQualifiedName(dialect, defaultCatalog, defaultSchema),
+         				name
+         			);
+     }
+@@ -57,7 +57,7 @@
+     		String defaultSchema
+     ) {
+         StringBuffer buf = new StringBuffer("create")
+-		        .append( unique ? " unique" : "")
++		        .append( unique ? " unique " : "")
+ 		        .append(" index ")
+ 		        .append( dialect.qualifyIndexName() ? name : StringHelper.unqualify(name) )
+ 		        .append(" on ")
+@@ -69,6 +69,9 @@
+             if ( iter.hasNext() ) buf.append(", ");
+         }
+         buf.append(")");
++	if(table.getMetaAttributes()!=null && dialect.supportsStorageClause()){
++		buf.append(" ").append(dialect.getStorageClause(table, true));
++	}
+         return buf.toString();
+     }
+ 	
+Index: src/org/hibernate/mapping/Join.java
+===================================================================
+--- src/org/hibernate/mapping/Join.java	(revision 9933)
++++ src/org/hibernate/mapping/Join.java	(working copy)
+@@ -5,15 +5,11 @@
+ import java.util.ArrayList;
+ import java.util.Iterator;
+ 
+-import org.hibernate.sql.Alias;
+-
+ /**
+  * @author Gavin King
+  */
+ public class Join implements Serializable {
+ 
+-	private static final Alias PK_ALIAS = new Alias(15, "PK");
+-
+ 	private ArrayList properties = new ArrayList();
+ 	private Table table;
+ 	private KeyValue key;
+@@ -68,13 +64,8 @@
+ 	}
+ 
+ 	public void createPrimaryKey() {
+-		//Primary key constraint
+-		PrimaryKey pk = new PrimaryKey();
+-		pk.setTable(table);
+-		pk.setName( PK_ALIAS.toAliasString( table.getName() ) );
+-		table.setPrimaryKey(pk);
+-
+-		pk.addColumns( getKey().getColumnIterator() );
++		// null pointer risk...
++		getKey().createPrimaryKey();
+ 	}
+ 
+ 	public int getPropertySpan() {
+Index: src/org/hibernate/mapping/KeyValue.java
+===================================================================
+--- src/org/hibernate/mapping/KeyValue.java	(revision 9933)
++++ src/org/hibernate/mapping/KeyValue.java	(working copy)
+@@ -14,7 +14,9 @@
+ public interface KeyValue extends Value {
+ 	
+ 	public void createForeignKeyOfEntity(String entityName);
+-	
++
++	public void createPrimaryKey();
++
+ 	public boolean isCascadeDeleteEnabled();
+ 	
+ 	public boolean isIdentityColumn(Dialect dialect);
+Index: src/org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- src/org/hibernate/mapping/PersistentClass.java	(revision 9933)
++++ src/org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -27,8 +27,6 @@
+  */
+ public abstract class PersistentClass implements Serializable, Filterable, MetaAttributable {
+ 
+-	private static final Alias PK_ALIAS = new Alias(15, "PK");
+-
+ 	public static final String NULL_DISCRIMINATOR_MAPPING = "null";
+ 	public static final String NOT_NULL_DISCRIMINATOR_MAPPING = "not null";
+ 
+@@ -284,13 +282,7 @@
+ 
+ 	public void createPrimaryKey() {
+ 		//Primary key constraint
+-		PrimaryKey pk = new PrimaryKey();
+-		Table table = getTable();
+-		pk.setTable(table);
+-		pk.setName( PK_ALIAS.toAliasString( table.getName() ) );
+-		table.setPrimaryKey(pk);
+-
+-		pk.addColumns( getKey().getColumnIterator() );
++		getIdentifier().createPrimaryKey();
+ 	}
+ 
+ 	public abstract String getWhere();
+Index: src/org/hibernate/mapping/PrimaryKey.java
+===================================================================
+--- src/org/hibernate/mapping/PrimaryKey.java	(revision 9933)
++++ src/org/hibernate/mapping/PrimaryKey.java	(working copy)
+@@ -1,23 +1,18 @@
+ //$Id$
+ package org.hibernate.mapping;
+ 
+-import java.util.Iterator;
+-
+ import org.hibernate.dialect.Dialect;
+ 
+ /**
+  * A primary key constraint
++ *
+  * @author Gavin King
+  */
+ public class PrimaryKey extends Constraint {
+ 
+ 	public String sqlConstraintString(Dialect dialect) {
+ 		StringBuffer buf = new StringBuffer("primary key (");
+-		Iterator iter = getColumnIterator();
+-		while ( iter.hasNext() ) {
+-			buf.append( ( (Column) iter.next() ).getQuotedName(dialect) );
+-			if ( iter.hasNext() ) buf.append(", ");
+-		}
++		addColumnList(buf, dialect);
+ 		return buf.append(')').toString();
+ 	}
+ 
+@@ -25,11 +20,16 @@
+ 		StringBuffer buf = new StringBuffer(
+ 			dialect.getAddPrimaryKeyConstraintString(constraintName)
+ 		).append('(');
+-		Iterator iter = getColumnIterator();
+-		while ( iter.hasNext() ) {
+-			buf.append( ( (Column) iter.next() ).getQuotedName(dialect) );
+-			if ( iter.hasNext() ) buf.append(", ");
+-		}
++		addColumnList(buf, dialect);
+ 		return buf.append(')').toString();
+ 	}
++
++	public String sqlCreateTableConstraintString(Dialect dialect) {
++		StringBuffer buf = new StringBuffer(
++			dialect.getPrimaryKeyConstraintString(getName())
++		).append('(');
++		addColumnList(buf, dialect);
++		return buf.append(')').toString();
++	}
++
+ }
+Index: src/org/hibernate/mapping/SimpleValue.java
+===================================================================
+--- src/org/hibernate/mapping/SimpleValue.java	(revision 9933)
++++ src/org/hibernate/mapping/SimpleValue.java	(working copy)
+@@ -31,6 +31,7 @@
+ 	private String nullValue;
+ 	private Table table;
+ 	private String foreignKeyName;
++	private String primaryKeyName;
+ 	private boolean alternateUniqueKey;
+ 	private Properties typeParameters;
+ 	private boolean cascadeDeleteEnabled;
+@@ -96,6 +97,10 @@
+ 		}
+ 	}
+ 
++	public void createPrimaryKey() {
++		table.createPrimaryKey(getPrimaryKeyName(), getColumnIterator());
++	}
++
+ 	public IdentifierGenerator createIdentifierGenerator(
+ 			Dialect dialect, 
+ 			String defaultCatalog, 
+@@ -311,4 +316,12 @@
+ 	public boolean[] getColumnUpdateability() {
+ 		return getColumnInsertability();
+ 	}
++
++	public void setPrimaryKeyName(String value) {
++		primaryKeyName = value;
++	}
++
++	public String getPrimaryKeyName() {
++		return primaryKeyName;
++	}
+ }
+Index: src/org/hibernate/mapping/Table.java
+===================================================================
+--- src/org/hibernate/mapping/Table.java	(revision 9933)
++++ src/org/hibernate/mapping/Table.java	(working copy)
+@@ -9,8 +9,11 @@
+ import java.util.Map;
+ 
+ import org.apache.commons.collections.SequencedHashMap;
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
++import org.hibernate.sql.Alias;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.tool.hbm2ddl.ColumnMetadata;
+@@ -22,7 +25,8 @@
+  *
+  * @author Gavin King
+  */
+-public class Table implements RelationalModel, Serializable {
++public class Table implements RelationalModel, Serializable, MetaAttributable {
++	private static final Log log = LogFactory.getLog(Table.class);
+ 
+ 	private String name;
+ 	private String schema;
+@@ -34,6 +38,7 @@
+ 	private KeyValue idValue;
+ 	private PrimaryKey primaryKey;
+ 	private Map indexes = new HashMap();
++	private Map indexesByColumns = null;
+ 	private Map foreignKeys = new HashMap();
+ 	private Map uniqueKeys = new HashMap();
+ 	private final int uniqueInteger;
+@@ -46,7 +51,14 @@
+ 	private boolean isAbstract;
+ 	private boolean hasDenormalizedTables = false;
+ 	private String comment;
++	private Map metaAttributes = null;
+ 
++	public static final String META_ATTR_TABLESPACE = "tablespace";
++	public static final String META_ATTR_INDEX_TABLESPACE = "index tablespace";
++	public static final String META_ATTR_STORAGE = "storage";
++	public static final String META_ATTR_INDEX_STORAGE = "index storage";
++
++	private static final Alias PK_ALIAS_GENERATOR = new Alias(15, "PK");
+ 	static class ForeignKeyKey implements Serializable {
+ 		String referencedClassName;
+ 		List columns;
+@@ -195,6 +207,29 @@
+ 		return indexes.values().iterator();
+ 	}
+ 
++	public Index getIndexByColumnName(String columnName) {
++		if (indexesByColumns == null) {
++			populateIndexesByColumnMap();
++		}
++		return (Index) indexesByColumns.get(columnName);
++	}
++
++	private void populateIndexesByColumnMap() {
++		indexesByColumns = new HashMap();
++		Iterator idxit = getIndexIterator();
++		while (idxit.hasNext()) {
++			Index index = (Index) idxit.next();
++			Iterator idxcolit = index.getColumnIterator();
++			while (idxcolit.hasNext()) {
++				Column column = (Column) idxcolit.next();
++				if (indexesByColumns.containsKey(column)) {
++					log.warn("Column " + getName() + "." + column.getName() + " is indexed twice, in " + index.getName() + " and " + ((Index) indexesByColumns.get(column)).getName());
++				}
++				indexesByColumns.put(column.getName(), index);
++			}
++		}
++	}
++
+ 	public Iterator getForeignKeyIterator() {
+ 		return foreignKeys.values().iterator();
+ 	}
+@@ -367,7 +402,7 @@
+ 		while ( iter.hasNext() ) {
+ 			Column col = ( Column ) iter.next();
+ 
+-			buf.append( col.getQuotedName( dialect ) )
++			buf.append("  ").append( col.getQuotedName( dialect ) )
+ 					.append( ' ' );
+ 
+ 			if ( identityColumn && col.getQuotedName( dialect ).equals( pkname ) ) {
+@@ -426,7 +461,8 @@
+ 		}
+ 		if ( hasPrimaryKey() ) {
+ 			buf.append( ", " )
+-				.append( getPrimaryKey().sqlConstraintString( dialect ) );
++                    .append(getPrimaryKey().sqlCreateTableConstraintString(dialect));
++//	Check backwards compatibility here....gse      .append( getPrimaryKey().sqlConstraintString( dialect ) );
+ 		}
+ 
+ 		if ( dialect.supportsUniqueConstraintInCreateAlterTable() ) {
+@@ -454,6 +490,9 @@
+ 		
+ 		buf.append( ')' );
+ 
++		if (metaAttributes.size() > 0) {
++			appendMetaAttributes(dialect, buf);
++		}
+ 		if ( comment != null ) {
+ 			buf.append( dialect.getTableComment( comment ) );
+ 		}
+@@ -461,6 +500,12 @@
+ 		return buf.append( dialect.getTableTypeString() ).toString();
+ 	}
+ 
++	private void appendMetaAttributes(Dialect dialect, StringBuffer buf) {
++		if (metaAttributes.size() > 0 && dialect.supportsStorageClause()) {
++			buf.append(dialect.getStorageClause(this, false));
++		}
++	}
++
+ 	public String sqlDropString(Dialect dialect, String defaultCatalog, String defaultSchema) {
+ 		StringBuffer buf = new StringBuffer( "drop table " );
+ 		if ( dialect.supportsIfExistsBeforeTableName() ) {
+@@ -491,6 +536,7 @@
+ 			index.setName( indexName );
+ 			index.setTable( this );
+ 			indexes.put( indexName, index );
++			indexesByColumns = null;
+ 		}
+ 
+ 		return index;
+@@ -506,6 +552,7 @@
+ 			throw new MappingException( "Index " + index.getName() + " already exists!" );
+ 		}
+ 		indexes.put( index.getName(), index );
++		indexesByColumns = null;
+ 		return index;
+ 	}
+ 
+@@ -577,7 +624,21 @@
+ 
+ 		return fk;	}
+ 
+-	
++	public PrimaryKey createPrimaryKey(PersistentClass persistentClass) {
++		String name = PK_ALIAS_GENERATOR.toAliasString(getName());
++		Iterator columnIterator = persistentClass.getKey().getColumnIterator();
++		return createPrimaryKey(name, columnIterator);
++	}
++
++	public PrimaryKey createPrimaryKey(String name, Iterator columnIterator) {
++		PrimaryKey pk = new PrimaryKey();
++		pk.setTable(this);
++		pk.setName(name);
++		setPrimaryKey(pk);
++		pk.addColumns(columnIterator);
++		return pk;
++	}
++
+ 	public String uniqueColumnString(Iterator iterator) {
+ 		return uniqueColumnString(iterator, null);
+ 	}
+@@ -750,4 +811,16 @@
+ 		return comments.iterator();
+ 	}
+ 
++	public Map getMetaAttributes() {
++		return metaAttributes;
++	}
++
++	public void setMetaAttributes(Map metas) {
++		this.metaAttributes = metas;
++	}
++
++	public MetaAttribute getMetaAttribute(String name) {
++		return metaAttributes == null ? null : (MetaAttribute) metaAttributes.get(name);
++	}
++
+ }
+Index: src/org/hibernate/mapping/UniqueKey.java
+===================================================================
+--- src/org/hibernate/mapping/UniqueKey.java	(revision 9933)
++++ src/org/hibernate/mapping/UniqueKey.java	(working copy)
+@@ -15,11 +15,7 @@
+ 
+ 	public String sqlConstraintString(Dialect dialect) {
+ 		StringBuffer buf = new StringBuffer("unique (");
+-		Iterator iter = getColumnIterator();
+-		while ( iter.hasNext() ) {
+-			buf.append( ( (Column) iter.next() ).getQuotedName(dialect) );
+-			if ( iter.hasNext() ) buf.append(", ");
+-		}
++        	addColumnList(buf, dialect);
+ 		return buf.append(')').toString();
+ 	}
+ 
+@@ -27,30 +23,26 @@
+ 		StringBuffer buf = new StringBuffer(
+ 			dialect.getAddPrimaryKeyConstraintString(constraintName)
+ 		).append('(');
+-		Iterator iter = getColumnIterator();
+-		while ( iter.hasNext() ) {
+-			buf.append( ( (Column) iter.next() ).getQuotedName(dialect) );
+-			if ( iter.hasNext() ) buf.append(", ");
+-		}
++        	addColumnList(buf, dialect);
+ 		return StringHelper.replace( buf.append(')').toString(), "primary key", "unique" ); //TODO: improve this hack!
+ 	}
+-	
++
+ 	public String sqlCreateString(Dialect dialect, Mapping p, String defaultCatalog, String defaultSchema) {
+-        if ( dialect.supportsUniqueConstraintInCreateAlterTable() ) {
+-            return super.sqlCreateString(dialect, p, defaultCatalog, defaultSchema);
+-        } 
+-        else {
+-            return Index.buildSqlCreateIndexString(dialect, getName(), getTable(), getColumnIterator(), true, defaultCatalog, defaultSchema);
+-        }
+-    }
+-    
+-    public String sqlDropString(Dialect dialect, String defaultCatalog, String defaultSchema) {
+-        if( dialect.supportsUniqueConstraintInCreateAlterTable() ) {
+-            return super.sqlDropString(dialect, defaultCatalog, defaultSchema);
+-        } 
+-        else {
+-            return Index.buildSqlDropIndexString(dialect, getTable(), getName(), defaultCatalog, defaultSchema);
+-        }
+-    }
+-	
++		if (dialect.supportsUniqueConstraintInCreateAlterTable()) {
++			return super.sqlCreateString(dialect, p, defaultCatalog, defaultSchema);
++		}
++		else {
++			return Index.buildSqlCreateIndexString(dialect, getName(), getTable(), getColumnIterator(), true, defaultCatalog, defaultSchema);
++		}
++	}
++
++	public String sqlDropString(Dialect dialect, String defaultCatalog, String defaultSchema) {
++		if (dialect.supportsUniqueConstraintInCreateAlterTable()) {
++			return super.sqlDropString(dialect, defaultCatalog, defaultSchema);
++		}
++		else {
++			return Index.buildSqlDropIndexString(dialect, getTable(), getName(), defaultCatalog, defaultSchema);
++		}
++	}
++
+ }

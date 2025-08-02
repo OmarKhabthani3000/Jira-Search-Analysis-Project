@@ -1,0 +1,178 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/engine/spi/SubselectFetch.java b/hibernate-core/src/main/java/org/hibernate/engine/spi/SubselectFetch.java
+index b1a7556..7e96450 100755
+--- a/hibernate-core/src/main/java/org/hibernate/engine/spi/SubselectFetch.java
++++ b/hibernate-core/src/main/java/org/hibernate/engine/spi/SubselectFetch.java
+@@ -42,7 +42,7 @@ public class SubselectFetch {
+ 	private final Map namedParameterLocMap;
+ 
+ 	public SubselectFetch(
+-			//final String queryString,
++			final String queryString,
+ 			final String alias,
+ 			final Loadable loadable,
+ 			final QueryParameters queryParameters,
+@@ -53,16 +53,27 @@ public class SubselectFetch {
+ 		this.namedParameterLocMap = namedParameterLocMap;
+ 		this.loadable = loadable;
+ 		this.alias = alias;
+-
+-		//TODO: ugly here:
+-		final String queryString = queryParameters.getFilteredSQL();
+-		int fromIndex = queryString.indexOf( " from " );
+-		int orderByIndex = queryString.lastIndexOf( "order by" );
+-		this.queryString = orderByIndex > 0
+-				? queryString.substring( fromIndex, orderByIndex )
+-				: queryString.substring( fromIndex );
++		this.queryString = queryString;
+ 	}
+ 
++    /**
++     * Get the part of the filtered SQL starting at "from" and terminating before "order by" if exists.
++     * 
++     * @param queryParameters
++     *            the queryParameters of the executed Query
++     * @return a SQL-Statement without select clause.
++     */
++    public static String getQueryString(QueryParameters queryParameters) {
++        // TODO: ugly here:
++        final String queryString = queryParameters.getFilteredSQL();
++        int fromIndex = queryString.indexOf(" from ");
++        int orderByIndex = queryString.lastIndexOf("order by");
++
++        return orderByIndex > 0
++				? queryString.substring(fromIndex, orderByIndex)
++				: queryString.substring(fromIndex);
++    }
++
+ 	public QueryParameters getQueryParameters() {
+ 		return queryParameters;
+ 	}
+diff --git a/hibernate-core/src/main/java/org/hibernate/loader/Loader.java b/hibernate-core/src/main/java/org/hibernate/loader/Loader.java
+index 5a2642f..7ee3d4c 100644
+--- a/hibernate-core/src/main/java/org/hibernate/loader/Loader.java
++++ b/hibernate-core/src/main/java/org/hibernate/loader/Loader.java
+@@ -34,7 +34,6 @@ import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.HashSet;
+-import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+@@ -937,9 +935,9 @@ public abstract class Loader {
+ 		final EntityKey optionalObjectKey = getOptionalObjectKey( queryParameters, session );
+ 		final LockMode[] lockModesArray = getLockModes( queryParameters.getLockOptions() );
+ 		final boolean createSubselects = isSubselectLoadingEnabled();
+-		final List subselectResultKeys = createSubselects ? new ArrayList() : null;
++		final List<EntityKey[]> subselectResultKeys = createSubselects ? new ArrayList<EntityKey[]>() : null;
+ 		final ArrayList hydratedObjects = entitySpan == 0 ? null : new ArrayList( entitySpan * 10 );
+-		final List results = new ArrayList();
++		final List<Object> results = new ArrayList<Object>();
+ 
+ 		handleEmptyCollections( queryParameters.getCollectionKeys(), rs, session );
+ 		EntityKey[] keys = new EntityKey[entitySpan]; //we can reuse it for each row
+@@ -996,50 +994,45 @@ public abstract class Loader {
+ 		return false;
+ 	}
+ 
+-	private static Set[] transpose( List keys ) {
+-		Set[] result = new Set[ ( ( EntityKey[] ) keys.get(0) ).length ];
+-		for ( int j=0; j<result.length; j++ ) {
+-			result[j] = new HashSet( keys.size() );
+-			for ( Object key : keys ) {
+-				result[j].add( ( (EntityKey[]) key )[j] );
+-			}
++	private void createSubselects(List<EntityKey[]> keys, QueryParameters queryParameters, SessionImplementor session) {
++		if (keys.size() <= 1) {
++			//if we only returned one entity, query by key is more efficient
++			return;
+ 		}
+-		return result;
+-	}
+-
+-	private void createSubselects(List keys, QueryParameters queryParameters, SessionImplementor session) {
+-		if ( keys.size() > 1 ) { //if we only returned one entity, query by key is more efficient
+-
+-			Set[] keySets = transpose(keys);
+-
+-			Map namedParameterLocMap = buildNamedParameterLocMap( queryParameters );
+ 
+-			final Loadable[] loadables = getEntityPersisters();
+-			final String[] aliases = getAliases();
+-			final Iterator iter = keys.iterator();
+-			while ( iter.hasNext() ) {
++		final Map namedParameterLocMap = buildNamedParameterLocMap( queryParameters );
++		final Loadable[] loadables = getEntityPersisters();
++		final String[] aliases = getAliases();
+ 
+-				final EntityKey[] rowKeys = (EntityKey[]) iter.next();
+-				for ( int i=0; i<rowKeys.length; i++ ) {
++		// build query string only once, reduce memory usage
++		// since jdk7 substring copies the char[]
++		// @see java.lang.String(char value[], int offset, int count)
++		final String queryString = SubselectFetch.getQueryString( queryParameters );
+ 
+-					if ( rowKeys[i]!=null && loadables[i].hasSubselectLoadableCollections() ) {
++		for (EntityKey[] rowKeys : keys) {
++			final Set<EntityKey> keySet = new HashSet<EntityKey>( Arrays.asList( rowKeys ));
+ 
+-						SubselectFetch subselectFetch = new SubselectFetch(
+-								//getSQLString(),
+-								aliases[i],
+-								loadables[i],
+-								queryParameters,
+-								keySets[i],
+-								namedParameterLocMap
+-							);
++			for (int i = 0; i < rowKeys.length; i++) {
+ 
+-						session.getPersistenceContext()
+-								.getBatchFetchQueue()
+-								.addSubselect( rowKeys[i], subselectFetch );
+-					}
++				final EntityKey rowKey = rowKeys[i];
++				final Loadable loadable = loadables[i];
+ 
++				if (rowKey == null || !loadable.hasSubselectLoadableCollections()) {
++					continue;
+ 				}
+ 
++				SubselectFetch subselectFetch = new SubselectFetch(
++						queryString,
++						aliases[i],
++						loadable,
++						queryParameters,
++						keySet,
++						namedParameterLocMap
++				);
++
++				session.getPersistenceContext()
++						.getBatchFetchQueue()
++						.addSubselect(rowKey, subselectFetch);
+ 			}
+ 		}
+ 	}
+diff --git a/hibernate-core/src/main/java/org/hibernate/loader/plan/exec/process/internal/ResultSetProcessingContextImpl.java b/hibernate-core/src/main/java/org/hibernate/loader/plan/exec/process/internal/ResultSetProcessingContextImpl.java
+index b400f47..83abe34 100644
+--- a/hibernate-core/src/main/java/org/hibernate/loader/plan/exec/process/internal/ResultSetProcessingContextImpl.java
++++ b/hibernate-core/src/main/java/org/hibernate/loader/plan/exec/process/internal/ResultSetProcessingContextImpl.java
+@@ -351,13 +351,18 @@ public class ResultSetProcessingContextImpl implements ResultSetProcessingContex
+ 		final Map<String, int[]> namedParameterLocMap =
+ 				ResultSetProcessorHelper.buildNamedParameterLocMap( queryParameters, namedParameterContext );
+ 
++		// build query string only once, reduce memory usage
++		// since jdk7 substring copies the char[]
++		// @see java.lang.String(char value[], int offset, int count)
++		final String queryString = SubselectFetch.getQueryString(queryParameters);
++
+ 		for ( Map.Entry<EntityPersister, Set<EntityKey>> entry : subselectLoadableEntityKeyMap.entrySet() ) {
+ 			if ( ! entry.getKey().hasSubselectLoadableCollections() ) {
+ 				continue;
+ 			}
+ 
+ 			SubselectFetch subselectFetch = new SubselectFetch(
+-					//getSQLString(),
++					queryString,
+ 					null, // aliases[i],
+ 					(Loadable) entry.getKey(),
+ 					queryParameters,

@@ -1,0 +1,876 @@
+Index: org/hibernate/hql/ast/AbstractSelectExpression.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/ast/AbstractSelectExpression.java,v
+retrieving revision 1.2
+diff -u -r1.2 AbstractSelectExpression.java
+--- org/hibernate/hql/ast/AbstractSelectExpression.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/ast/AbstractSelectExpression.java	19 Apr 2005 23:41:43 -0000
+@@ -17,7 +17,7 @@
+ 		this.alias = alias;
+ 	}
+ 	
+-	public final String getAlias() {
++	public String getAlias() {
+ 		return alias;
+ 	}
+ 
+Index: org/hibernate/hql/ast/ConstructorNode.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/ast/ConstructorNode.java,v
+retrieving revision 1.2
+diff -u -r1.2 ConstructorNode.java
+--- org/hibernate/hql/ast/ConstructorNode.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/ast/ConstructorNode.java	19 Apr 2005 23:41:43 -0000
+@@ -5,12 +5,10 @@
+ import antlr.collections.AST;
+ import org.hibernate.PropertyNotFoundException;
+ import org.hibernate.type.Type;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+ 
+-import java.lang.reflect.Constructor;
+-import java.util.Arrays;
+-import java.util.List;
+ 
+ /**
+  * Represents a constructor (new) in a SELECT.
+@@ -18,11 +16,14 @@
+  * @author josh Sep 24, 2004 6:46:08 PM
+  */
+ public class ConstructorNode extends SelectExpressionList implements SelectExpression {
++	
++	// index used for alias name in sql
++	private static int scalarColumnIndex;
+ 
+-	private Constructor constructor;
+-	private Type[] constructorArgumentTypes;
++	private NestedHolderClass nestedHolderClass;
+ 	private boolean isMap;
+ 	private boolean isList;
++	private String alias;
+ 	
+ 	public boolean isMap() {
+ 		return isMap;
+@@ -43,12 +44,18 @@
+ 	}
+ 
+ 	public void setScalarColumnText(int i) throws SemanticException {
++		boolean resetScalarColumnindex = (scalarColumnIndex == 0);
++		
+ 		SelectExpression[] selectExpressions = collectSelectExpressions();
+ 		// Invoke setScalarColumnText on each constructor argument.
+-		for ( int j = 0; j < selectExpressions.length; j++ ) {
+-			SelectExpression selectExpression = selectExpressions[j];
+-			selectExpression.setScalarColumnText( j );
+-		}
++		for (int j = 0; j <  selectExpressions.length; j++ ) {
++			SelectExpression selectExpression = selectExpressions[ j ];
++			selectExpression.setScalarColumnText( 
++					selectExpression instanceof ConstructorNode ? i : scalarColumnIndex++ );
++		}
++		
++		if (resetScalarColumnindex)
++			scalarColumnIndex = 0;
+ 	}
+ 
+ 	protected AST getFirstSelectExpression() {
+@@ -74,7 +81,6 @@
+ 	}
+ 
+ 	public void prepare() throws SemanticException {
+-		constructorArgumentTypes = resolveConstructorArgumentTypes();
+ 		String path = ( ( PathNode ) getFirstChild() ).getPath();
+ 		if ( "map".equals( path.toLowerCase() ) ) {
+ 			isMap = true;
+@@ -83,33 +89,45 @@
+ 			isList = true;
+ 		}
+ 		else {
+-			constructor = resolveConstructor(path);
+-		}
+-	}
+-
+-	private Type[] resolveConstructorArgumentTypes() throws SemanticException {
+-		SelectExpression[] argumentExpressions = collectSelectExpressions();
+-		if ( argumentExpressions == null ) {
+-			// return an empty Type array
+-			return new Type[]{};
++			this.nestedHolderClass = new NestedHolderClass(this.resolveHolderClass());
++			SelectExpression[] argumentExpressions = collectSelectExpressions();
++			if ( argumentExpressions == null ) {
++				// return an empty Type array
++				return;
++			}
++			
++			Type[] types = new Type[argumentExpressions.length];
++			for ( int x = 0; x < argumentExpressions.length; x++ ) {
++				if (argumentExpressions[x] instanceof ConstructorNode) {
++					ConstructorNode nestedConstructor = 
++						((ConstructorNode)argumentExpressions[x]);
++					this.nestedHolderClass.addUsedProperty(nestedConstructor.getNestedHolderClass());
++					nestedConstructor.getNestedHolderClass().setPropertyName(nestedConstructor.getAlias());
++				} else if (argumentExpressions[x].getAlias() != null) 
++					this.nestedHolderClass.addUsedProperty(argumentExpressions[x].getAlias(), 
++							argumentExpressions[x].getDataType());
++				else  
++					this.nestedHolderClass.addType(argumentExpressions[x].getDataType());
++				
++				// Try to determinate alias (if it is null) in propertyRef expressions
++				if (this.alias == null && argumentExpressions[x] instanceof DotNode) {
++					AST propertyRef = ((DotNode)argumentExpressions[x]).getFirstChild();
++					if (propertyRef.getFirstChild() != null)
++						this.alias = ((IdentNode)propertyRef.getFirstChild().getNextSibling()).getOriginalText();
++				}
++			}
+ 		}
+-
+-		Type[] types = new Type[argumentExpressions.length];
+-		for ( int x = 0; x < argumentExpressions.length; x++ ) {
+-			types[x] = argumentExpressions[x].getDataType();
+-		}
+-		return types;
+ 	}
+ 
+-	private Constructor resolveConstructor(String path) throws SemanticException {
++	private Class resolveHolderClass() throws SemanticException {
++		String path = ( ( PathNode ) getFirstChild() ).getPath();
+ 		String importedClassName = getSessionFactoryHelper().getImportedClassName( path );
+ 		String className = StringHelper.isEmpty( importedClassName ) ? path : importedClassName;
+ 		if ( className == null ) {
+ 			throw new SemanticException( "Unable to locate class [" + path + "]" );
+ 		}
+ 		try {
+-			Class holderClass = ReflectHelper.classForName( className );
+-			return ReflectHelper.getConstructor( holderClass, constructorArgumentTypes );
++			return ReflectHelper.classForName( className );
+ 		}
+ 		catch ( ClassNotFoundException e ) {
+ 			throw new DetailedSemanticException( "Unable to locate class [" + className + "]", e );
+@@ -121,12 +139,8 @@
+ 		}
+ 	}
+ 	
+-	public Constructor getConstructor() {
+-		return constructor;
+-	}
+-
+-	public List getConstructorArgumentTypeList() {
+-		return Arrays.asList( constructorArgumentTypes );
++	public NestedHolderClass getNestedHolderClass() {
++		return nestedHolderClass;
+ 	}
+ 
+ 	public FromElement getFromElement() {
+@@ -147,10 +161,10 @@
+ 	}
+ 	
+ 	public void setAlias(String alias) {
+-		throw new UnsupportedOperationException("constructor may not be aliased");
++		this.alias = alias;
+ 	}
+ 	
+ 	public String getAlias() {
+-		throw new UnsupportedOperationException("constructor may not be aliased");
++		return alias;
+ 	}
+ }
+Index: org/hibernate/hql/ast/DotNode.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/ast/DotNode.java,v
+retrieving revision 1.2
+diff -u -r1.2 DotNode.java
+--- org/hibernate/hql/ast/DotNode.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/ast/DotNode.java	19 Apr 2005 23:41:43 -0000
+@@ -553,4 +553,8 @@
+ 		dereferenceType = DEREF_JAVA_CONSTANT;
+ 		setResolved(); // Don't resolve the node again.
+ 	}
++	
++	public String getAlias() {
++		return super.getAlias() != null ? super.getAlias() : this.propertyName; 
++	}
+ }
+Index: org/hibernate/hql/ast/SelectClause.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/ast/SelectClause.java,v
+retrieving revision 1.2
+diff -u -r1.2 SelectClause.java
+--- org/hibernate/hql/ast/SelectClause.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/ast/SelectClause.java	19 Apr 2005 23:41:43 -0000
+@@ -7,6 +7,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.hql.antlr.SqlTokenTypes;
+ import org.hibernate.type.Type;
++import org.hibernate.util.NestedHolderClass;
+ 
+ import java.lang.reflect.Constructor;
+ import java.util.ArrayList;
+@@ -90,8 +91,8 @@
+ 	 * @return The appropriate Constructor reference, or null if not a
+ 	 *         dynamic instantiation query.
+ 	 */
+-	public Constructor getConstructor() {
+-		return constructorNode == null ? null : constructorNode.getConstructor();
++	public NestedHolderClass getNestedHolderClass() {
++		return constructorNode == null ? null : constructorNode.getNestedHolderClass();
+ 	}
+ 	
+ 	public boolean isMap() {
+@@ -127,9 +128,8 @@
+ 
+ 			if ( expr.isConstructor() ) {
+ 				constructorNode = ( ConstructorNode ) expr;
+-				List constructorArgumentTypeList = constructorNode.getConstructorArgumentTypeList();
+ 				//sqlResultTypeList.addAll( constructorArgumentTypeList );
+-				queryReturnTypeList.addAll( constructorArgumentTypeList );
++				queryReturnTypeList.addAll( constructorNode.getNestedHolderClass().getScalarTypes() );
+ 				scalarSelect = true;
+ 			}
+ 			else {
+Index: org/hibernate/hql/classic/QueryTranslatorImpl.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/classic/QueryTranslatorImpl.java,v
+retrieving revision 1.2
+diff -u -r1.2 QueryTranslatorImpl.java
+--- org/hibernate/hql/classic/QueryTranslatorImpl.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/classic/QueryTranslatorImpl.java	19 Apr 2005 23:41:43 -0000
+@@ -34,6 +34,7 @@
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -97,8 +98,7 @@
+ 	private boolean distinct = false;
+ 	private boolean compiled;
+ 	private String sqlString;
+-	private Class holderClass;
+-	private Constructor holderConstructor;
++	private NestedHolderClass nestedHolderClass;
+ 	private boolean hasScalars;
+ 	private boolean shallowQuery;
+ 	private QueryTranslatorImpl superQuery;
+@@ -582,8 +582,6 @@
+ 
+ 		sqlString = sql.toQueryString();
+ 
+-		if ( holderClass != null ) holderConstructor = ReflectHelper.getConstructor( holderClass, returnTypes );
+-
+ 		if ( hasScalars ) {
+ 			actualReturnTypes = returnTypes;
+ 		}
+@@ -592,6 +590,7 @@
+ 			int j = 0;
+ 			for ( int i = 0; i < persisters.length; i++ ) {
+ 				if ( includeInSelect[i] ) actualReturnTypes[j++] = TypeFactory.manyToOne( persisters[i].getEntityName() );
++				nestedHolderClass.addType(actualReturnTypes[j++]);
+ 			}
+ 		}
+ 
+@@ -897,7 +896,7 @@
+ 
+ 			PreparedStatement st = prepareQueryStatement( queryParameters, false, session );
+ 			ResultSet rs = getResultSet( st, false, queryParameters.getRowSelection(), session );
+-			Iterator result = new IteratorImpl( rs, st, session, returnTypes, getColumnNames(), holderClass );
++			Iterator result = new IteratorImpl( rs, st, session, returnTypes, getColumnNames(), nestedHolderClass );
+ 
+ 			if ( stats ) {
+ 				session.getFactory().getStatisticsImplementor().queryExecuted( "HQL: " + queryString,
+@@ -927,7 +926,7 @@
+ 		if ( hasScalars ) {
+ 			String[][] scalarColumns = getColumnNames();
+ 			int queryCols = returnTypes.length;
+-			if ( holderClass == null && queryCols == 1 ) {
++			if ( nestedHolderClass == null && queryCols == 1 ) {
+ 				return returnTypes[0].nullSafeGet( rs, scalarColumns[0], session, null );
+ 			}
+ 			else {
+@@ -937,7 +936,7 @@
+ 				return row;
+ 			}
+ 		}
+-		else if ( holderClass == null ) {
++		else if ( nestedHolderClass == null ) {
+ 			return row.length == 1 ? row[0] : row;
+ 		}
+ 		else {
+@@ -947,14 +946,14 @@
+ 	}
+ 
+ 	protected List getResultList(List results) throws QueryException {
+-		if ( holderClass != null ) {
++		if ( nestedHolderClass != null ) {
+ 			for ( int i = 0; i < results.size(); i++ ) {
+ 				Object[] row = ( Object[] ) results.get( i );
+ 				try {
+-					results.set( i, holderConstructor.newInstance( row ) );
++					results.set( i, nestedHolderClass.newHolderClassInstance( row ) );
+ 				}
+ 				catch ( Exception e ) {
+-					throw new QueryException( "could not instantiate: " + holderClass, e );
++					throw new QueryException( "could not instantiate: " + nestedHolderClass.getHolderClass(), e );
+ 				}
+ 			}
+ 		}
+@@ -975,8 +974,8 @@
+ 		}
+ 	}
+ 
+-	void setHolderClass(Class clazz) {
+-		holderClass = clazz;
++	void setNestedHolderClass(NestedHolderClass clazz) {
++		nestedHolderClass = clazz;
+ 	}
+ 
+ 	protected LockMode[] getLockModes(Map lockModes) {
+@@ -1051,8 +1050,8 @@
+ 		return ownerAssociationTypes;
+ 	}
+ 
+-	public Class getHolderClass() {
+-		return holderClass;
++	public NestedHolderClass getNestedHolderClass() {
++		return nestedHolderClass;
+ 	}
+ 
+ 	public Map getEnabledFilters() {
+@@ -1062,7 +1061,7 @@
+ 	public ScrollableResults scroll(final QueryParameters queryParameters,
+ 									final SessionImplementor session)
+ 			throws HibernateException {
+-		return scroll( queryParameters, returnTypes, holderClass, session );
++		return scroll( queryParameters, returnTypes, nestedHolderClass, session );
+ 	}
+ 
+ 	protected String getQueryIdentifier() {
+Index: org/hibernate/hql/classic/SelectParser.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/hql/classic/SelectParser.java,v
+retrieving revision 1.2
+diff -u -r1.2 SelectParser.java
+--- org/hibernate/hql/classic/SelectParser.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/hql/classic/SelectParser.java	19 Apr 2005 23:41:43 -0000
+@@ -6,6 +6,7 @@
+ import org.hibernate.dialect.function.SQLFunction;
+ import org.hibernate.hql.QuerySplitter;
+ import org.hibernate.type.Type;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.ReflectHelper;
+ 
+ import java.util.HashSet;
+@@ -38,7 +39,7 @@
+ 	private boolean afterNew;
+ 	private boolean insideNew;
+ 	private boolean aggregateAddSelectScalar;
+-	private Class holderClass;
++	private NestedHolderClass holderClass;
+ 
+ 	private final SelectPathExpressionParser pathExpressionParser;
+ 	private final PathExpressionParser aggregatePathExpressionParser;
+@@ -70,13 +71,14 @@
+ 		if ( afterNew ) {
+ 			afterNew = false;
+ 			try {
+-				holderClass = ReflectHelper.classForName( QuerySplitter.getImportedClass( token, q.getFactory() ) );
++				holderClass = new NestedHolderClass(
++						ReflectHelper.classForName( QuerySplitter.getImportedClass( token, q.getFactory() ) ));
+ 			}
+ 			catch ( ClassNotFoundException cnfe ) {
+ 				throw new QueryException( cnfe );
+ 			}
+ 			if ( holderClass == null ) throw new QueryException( "class not found: " + token );
+-			q.setHolderClass( holderClass );
++			q.setNestedHolderClass( holderClass );
+ 			insideNew = true;
+ 		}
+ 		else if ( token.equals( "," ) ) {
+Index: org/hibernate/impl/IteratorImpl.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/impl/IteratorImpl.java,v
+retrieving revision 1.2
+diff -u -r1.2 IteratorImpl.java
+--- org/hibernate/impl/IteratorImpl.java	19 Apr 2005 00:11:36 -0000	1.2
++++ org/hibernate/impl/IteratorImpl.java	19 Apr 2005 23:41:43 -0000
+@@ -2,6 +2,5 @@
+ package org.hibernate.impl;
+ 
+-import java.lang.reflect.Constructor;
+ import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
+@@ -16,6 +15,7 @@
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.type.Type;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.ReflectHelper;
+ 
+ /**
+@@ -36,7 +36,7 @@
+ 	private final String[][] names;
+ 	private PreparedStatement ps;
+ 	private Object nextResult;
+-	private Constructor holderConstructor;
++	private NestedHolderClass nestedHolderClass;
+ 
+ 	public IteratorImpl(
+ 	        ResultSet rs,
+@@ -44,7 +44,7 @@
+ 	        SessionImplementor sess,
+ 	        Type[] types,
+ 	        String[][] columnNames,
+-	        Class holderClass)
++			NestedHolderClass nestedHolderClass)
+ 	throws HibernateException, SQLException {
+ 
+ 		this.rs=rs;
+@@ -53,9 +53,7 @@
+ 		this.types = types;
+ 		this.names = columnNames;
+ 
+-		if (holderClass != null) {
+-			holderConstructor = ReflectHelper.getConstructor(holderClass, types);
+-		}
++		this.nestedHolderClass = nestedHolderClass;
+ 
+ 		single = types.length==1;
+ 
+@@ -102,21 +100,21 @@
+ 				nextResult = nextResults;
+ 			}
+ 
+-			if (holderConstructor != null) {
++			if (nestedHolderClass != null) {
+ 				try {
+ 					if ( nextResult == null || !nextResult.getClass().isArray() ) {
+-						nextResult = holderConstructor.newInstance( new Object[] {nextResult} );
++						nextResult = nestedHolderClass.newHolderClassInstance( new Object[] {nextResult} );
+ 					}
+ 					else {
+ 						// NOTE: This doesn't compile under JDK1.4 [jsd]
+ 						// nextResult = holderConstructor.newInstance(nextResult);
+-						nextResult = holderConstructor.newInstance( new Object[] {nextResult} );
++						nextResult = nestedHolderClass.newHolderClassInstance( (Object[]) nextResult );
+ 					}
+ 				}
+ 				catch (Exception e) {
+ 					throw new QueryException(
+ 							"Could not instantiate: " + 
+-							holderConstructor.getDeclaringClass(), 
++							nestedHolderClass.getHolderClass(), 
+ 							e
+ 					);
+ 				}
+Index: org/hibernate/impl/ScrollableResultsImpl.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/impl/ScrollableResultsImpl.java,v
+retrieving revision 1.2
+diff -u -r1.2 ScrollableResultsImpl.java
+--- org/hibernate/impl/ScrollableResultsImpl.java	19 Apr 2005 00:11:36 -0000	1.2
++++ org/hibernate/impl/ScrollableResultsImpl.java	19 Apr 2005 23:41:43 -0000
+@@ -2,6 +2,5 @@
+ package org.hibernate.impl;
+ 
+-import java.lang.reflect.Constructor;
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
+ import java.sql.Blob;
+@@ -24,6 +23,7 @@
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.loader.Loader;
+ import org.hibernate.type.Type;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.ReflectHelper;
+ 
+ /**
+@@ -38,7 +38,7 @@
+ 	private final Loader loader;
+ 	private final QueryParameters queryParameters;
+ 	private final Type[] types;
+-	private Constructor holderConstructor;
++	private NestedHolderClass nestedHolderClass;
+ 
+ 	private Object[] currentRow;
+ 
+@@ -154,7 +154,7 @@
+ 	 * @param returnType a "final" type
+ 	 */
+ 	private Object getFinal(int col, Type returnType) throws HibernateException {
+-		if ( holderConstructor!=null ) {
++		if ( nestedHolderClass!=null ) {
+ 			throw new HibernateException("query specifies a holder class");
+ 		}
+ 		
+@@ -173,7 +173,7 @@
+ 	 * @param returnType any type
+ 	 */
+ 	private Object getNonFinal(int col, Type returnType) throws HibernateException {
+-		if ( holderConstructor!=null ) {
++		if ( nestedHolderClass!=null ) {
+ 			throw new HibernateException("query specifies a holder class");
+ 		}
+ 		
+@@ -192,7 +192,7 @@
+ 			Loader loader,
+ 			QueryParameters queryParameters,
+ 	        Type[] types,
+-	        Class holderClass) throws MappingException {
++			NestedHolderClass nestedHolderClass) throws MappingException {
+ 
+ 		this.rs=rs;
+ 		this.ps=ps;
+@@ -201,9 +201,7 @@
+ 		this.queryParameters = queryParameters;
+ 		this.types = types;
+ 
+-		if (holderClass != null) {
+-			holderConstructor = ReflectHelper.getConstructor(holderClass, types);
+-		}
++		this.nestedHolderClass = nestedHolderClass;
+ 	}
+ 
+ 	/**
+@@ -487,16 +485,16 @@
+ 			currentRow = new Object[] {result};
+ 		}
+ 
+-		if (holderConstructor != null) {
++		if (nestedHolderClass != null) {
+ 			try {
+ 				currentRow = new Object[] {
+-					holderConstructor.newInstance(currentRow)
++						nestedHolderClass.newHolderClassInstance(currentRow)
+ 				};
+ 			}
+ 			catch(Throwable t) {
+ 				throw new QueryException(
+ 						"Could not instantiate: " + 
+-						holderConstructor.getDeclaringClass(), 
++						nestedHolderClass.getHolderClass(), 
+ 						t
+ 				);
+ 			}
+Index: org/hibernate/loader/Loader.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/loader/Loader.java,v
+retrieving revision 1.2
+diff -u -r1.2 Loader.java
+--- org/hibernate/loader/Loader.java	19 Apr 2005 00:11:35 -0000	1.2
++++ org/hibernate/loader/Loader.java	19 Apr 2005 23:41:43 -0000
+@@ -51,6 +51,7 @@
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.VersionType;
++import org.hibernate.util.NestedHolderClass;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -1544,7 +1545,7 @@
+ 	 */
+ 	protected ScrollableResults scroll(final QueryParameters queryParameters,
+ 									   final Type[] returnTypes,
+-									   final Class holderClass,
++									   final NestedHolderClass nestedHolderClass,
+ 									   final SessionImplementor session)
+ 			throws HibernateException {
+ 
+@@ -1574,7 +1575,7 @@
+ 					this,
+ 					queryParameters,
+ 					returnTypes,
+-					holderClass );
++					nestedHolderClass );
+ 
+ 			return result;
+ 
+Index: org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+RCS file: /usr/local/cvsroot/Hibernate-3.0.1/src/org/hibernate/loader/hql/QueryLoader.java,v
+retrieving revision 1.2
+diff -u -r1.2 QueryLoader.java
+--- org/hibernate/loader/hql/QueryLoader.java	19 Apr 2005 00:11:36 -0000	1.2
++++ org/hibernate/loader/hql/QueryLoader.java	19 Apr 2005 23:41:44 -0000
+@@ -37,6 +37,7 @@
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
++import org.hibernate.util.NestedHolderClass;
+ 
+ /**
+  * A delegate that implements the Loader part of QueryTranslator.
+@@ -75,7 +76,7 @@
+ 	private QueryableCollection collectionPersister;
+ 
+ 	private int selectLength;
+-	private Constructor holderConstructor;
++	private NestedHolderClass nestedHolderClass;
+ 	private boolean returnMaps;
+ 	private boolean returnLists;
+ 	
+@@ -106,7 +107,7 @@
+ 		queryReturnTypes = selectClause.getQueryReturnTypes();
+ 		queryReturnAliases = selectClause.getQueryReturnAliases();
+ 
+-		holderConstructor = selectClause.getConstructor();
++		nestedHolderClass = selectClause.getNestedHolderClass();
+ 		returnMaps = selectClause.isMap();
+ 		returnLists = selectClause.isList();
+ 
+@@ -330,7 +331,7 @@
+ 		if ( hasScalars ) {
+ 			String[][] scalarColumns = scalarColumnNames;
+ 			int queryCols = queryReturnTypes.length;
+-			if ( holderConstructor == null && queryCols == 1 ) {
++			if ( nestedHolderClass == null && queryCols == 1 ) {
+ 				return queryReturnTypes[0].nullSafeGet( rs, scalarColumns[0], session, null );
+ 			}
+ 			else {
+@@ -341,7 +342,7 @@
+ 				return row;
+ 			}
+ 		}
+-		else if ( holderConstructor == null ) {
++		else if ( nestedHolderClass == null ) {
+ 			return row.length == 1 ? row[0] : row;
+ 		}
+ 		else {
+@@ -352,16 +353,16 @@
+ 
+ 	protected List getResultList(List results) throws QueryException {
+ 		// meant to handle dynamic instantiation queries...
+-		if ( holderConstructor != null ) {
++		if ( nestedHolderClass != null ) {
+ 			for ( int i = 0; i < results.size(); i++ ) {
+ 				Object[] row = ( Object[] ) results.get( i );
+ 				try {
+-					results.set( i, holderConstructor.newInstance( row ) );
++					results.set( i, nestedHolderClass.newHolderClassInstance( row ) );
+ 				}
+ 				catch ( Exception e ) {
+ 					throw new QueryException( 
+ 						"could not instantiate: " + 
+-						holderConstructor.getDeclaringClass().getName(), 
++						nestedHolderClass.getHolderClass().getName(), 
+ 						e );
+ 				}
+ 			}
+@@ -419,7 +420,7 @@
+ 					session,
+ 					queryReturnTypes,
+ 					queryTranslator.getColumnNames(),
+-					holderConstructor == null ? null : holderConstructor.getDeclaringClass() );
++					nestedHolderClass);
+ 
+ 			if ( stats ) {
+ 				session.getFactory().getStatisticsImplementor().queryExecuted( "HQL: " + queryTranslator.getQueryString(),
+Index: org/hibernate/util/NestedHolderClass.java
+===================================================================
+RCS file: org/hibernate/util/NestedHolderClass.java
+diff -N org/hibernate/util/NestedHolderClass.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/util/NestedHolderClass.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,201 @@
++/*
++ * Created on 11/11/2004
++ *
++ * TODO To change the template for this generated file go to
++ * Window - Preferences - Java - Code Style - Code Templates
++ */
++package org.hibernate.util;
++
++import java.beans.IntrospectionException;
++import java.beans.Introspector;
++import java.beans.PropertyDescriptor;
++import java.lang.reflect.Constructor;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.reflect.Method;
++import java.util.ArrayList;
++import java.util.Hashtable;
++import java.util.List;
++import java.util.Map;
++import java.util.Vector;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.QueryException;
++import org.hibernate.hql.ast.QueryTranslatorImpl;
++import org.hibernate.type.Type;
++
++/**
++ * @author Fabrício Barroso de Carvalho
++ */
++public class NestedHolderClass {
++	private static final Log log = LogFactory.getLog( QueryTranslatorImpl.class );
++	
++	private static int currentResultColumn;
++	// Nested property name that is filled by this NestedHolderClass	
++	private String propertyName;
++	
++	private Class holderClass;
++	
++    // Properties used to fill an object
++    private List usedProperties;
++    
++    // Types used to determinate a constructor in order to instatiate an object
++    private List types;
++    
++    private Constructor constructor;
++    
++    private boolean instantiateByConstructor;
++    
++    // Map containig propertyName -> PropertyDescriptor
++    private Map properties;
++    
++    public NestedHolderClass (Class clazz) {
++        this.holderClass = clazz;
++        usedProperties = new Vector();
++        types = new Vector();
++        properties = new Hashtable();
++        PropertyDescriptor[] props = null;
++		try {
++			props = Introspector.getBeanInfo(clazz).getPropertyDescriptors();
++			for (int i = 0; i < props.length; i ++) 
++				properties.put(props[i].getName(), props[i]);
++		} catch (IntrospectionException e) {
++			if (log.isDebugEnabled())
++				log.debug(e.getMessage());
++		}
++    }
++    
++    public Object newHolderClassInstance(Object[] result) 
++		throws IllegalArgumentException, InstantiationException, 
++			IllegalAccessException, InvocationTargetException  {
++	    
++    	if (log.isDebugEnabled())
++    		log.debug("Instantiating class " + this.getHolderClass().getName());
++    	
++		if (this.instantiateByConstructor)
++			return this.newInstanceByConstructor(result);
++		
++		Object param;	
++	    Object newObject = null;
++	    for (int i = 0; i < this.usedProperties.size(); i++) {
++	        param = this.usedProperties.get(i);
++	        if (param instanceof PropertyDescriptor) { 
++	        	newObject = this.instantiateAndSetPropertyValue(newObject, 
++	        			(PropertyDescriptor)param, result[currentResultColumn]);
++	        	currentResultColumn += 1;
++	        } else {
++	        	NestedHolderClass childHolderClass = ((NestedHolderClass)param);
++	        	Object value = childHolderClass.newHolderClassInstance(result);
++	        	newObject = instantiateAndSetPropertyValue(newObject, 
++	        			(PropertyDescriptor)this.properties.get(childHolderClass.getPropertyName()), value);
++	        }
++	    }
++	    
++	    if (currentResultColumn == result.length)
++			currentResultColumn = 0;
++	    
++	    return newObject;
++	}
++    
++    private Object instantiateAndSetPropertyValue(Object currentObject, PropertyDescriptor propertyDrescriptor, Object value) 
++    	throws InstantiationException, IllegalArgumentException, 
++			IllegalAccessException, InvocationTargetException {
++    	
++    	if (value != null) {
++    		if (currentObject == null)
++        		currentObject = this.getHolderClass().newInstance();
++    		propertyDrescriptor.getWriteMethod().invoke(currentObject, new Object[] {value});
++    	}
++    	return currentObject;
++    }
++    
++    private Object newInstanceByConstructor(Object[] result ) 
++    	throws IllegalArgumentException, InstantiationException, 
++			IllegalAccessException, InvocationTargetException {
++    	
++    	if (this.constructor == null)
++    		this.constructor = ReflectHelper.getConstructor(this.holderClass, 
++    				(Type[])types.toArray(new Type[types.size()]));
++    	return this.constructor.newInstance(result);
++    }
++    
++    public void addUsedProperty(String name, Type dataType) {
++    	PropertyDescriptor property = (PropertyDescriptor)properties.get(name);
++    	if (property != null) {
++    		Class propertyClass = property.getPropertyType().isPrimitive() ? 
++    				this.getWrapper(property.getPropertyType()) : property.getPropertyType(); 
++    		if (!propertyClass.isAssignableFrom(dataType.getReturnedClass()))
++    			throw new QueryException(name + " property is not assignable from " + dataType.getName() + " class");
++    		
++    		usedProperties.add(property);
++    		types.add(dataType);
++    	} else 
++    		throw new QueryException(name + " property not found in " + holderClass.getName() + " class");
++    }
++    
++    private Class getWrapper(Class primitiveClass) {
++    	if (primitiveClass == int.class)
++    		return Integer.class;
++    	else if (primitiveClass == long.class)
++    		return Long.class;
++	    else if (primitiveClass == float.class)
++    		return Float.class;
++	    else if (primitiveClass == double.class)
++	    	return Double.class;
++	    else if (primitiveClass == boolean.class)
++    		return Boolean.class;
++	    else if (primitiveClass == char.class)
++    		return Character.class;
++	    else if (primitiveClass == short.class)
++    		return Short.class;
++	    else
++	    	return null;
++	    	
++    }
++    
++    public void addType(Type type) {
++    	this.types.add(type);
++    	this.instantiateByConstructor = true;
++    }
++    
++    public void addUsedProperty(NestedHolderClass holderClass) {
++    	usedProperties.add(holderClass);
++    }
++    
++    public List getUsedProperties() {
++        return usedProperties;
++    }
++    
++    public Class getHolderClass() {
++        return holderClass;
++    }
++    
++	private PropertyDescriptor getPropertyDescriptor() {
++		return (PropertyDescriptor) properties.get(this.propertyName);
++	}
++
++	public Map getProperties() {
++		return properties;
++	}
++	
++	public String getPropertyName() {
++		return propertyName;
++	}
++	
++	public void setPropertyName(String propertyName) {
++		this.propertyName = propertyName;
++	}
++	public List getScalarTypes() {
++		List result = new ArrayList();
++		result.addAll(types);
++		int index = 0;
++		for (int i = 0; i < usedProperties.size(); i++)
++			if (usedProperties.get(i) instanceof NestedHolderClass) {
++				List nestedTypes = ((NestedHolderClass)usedProperties.get(i)).getScalarTypes();
++				result.addAll(index, nestedTypes);
++				index += nestedTypes.size();
++			} else 
++				index++;
++		return result;
++	}
++}

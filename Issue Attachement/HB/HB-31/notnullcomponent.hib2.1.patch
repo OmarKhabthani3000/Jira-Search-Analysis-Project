@@ -1,0 +1,1983 @@
+Index: src/net/sf/hibernate/PropertyValueException.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Attic/PropertyValueException.java,v
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 PropertyValueException.java
+--- src/net/sf/hibernate/PropertyValueException.java	27 Nov 2003 13:24:16 -0000	1.1.2.1
++++ src/net/sf/hibernate/PropertyValueException.java	6 Dec 2003 14:54:47 -0000
+@@ -35,6 +35,17 @@
+ 		return super.getMessage() +
+ 		StringHelper.qualify( persistentClass.getName(), propertyName );
+ 	}
++	/**
++	 * Return a well formed prperty path.
++	 * basicaly, it will return parent.child
++	 * 
++	 * @param parent parent in path
++	 * @param child child in path
++	 * @return parent-child path
++	 */
++	public static String buildPropertyPath(String parent, String child) {
++		return new StringBuffer(parent).append(StringHelper.DOT).append(child).toString();
++	}
+ }
+ 
+ 
+Index: src/net/sf/hibernate/hibernate-mapping-2.0.dtd
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/hibernate-mapping-2.0.dtd,v
+retrieving revision 1.34.2.27
+diff -u -r1.34.2.27 hibernate-mapping-2.0.dtd
+--- src/net/sf/hibernate/hibernate-mapping-2.0.dtd	27 Nov 2003 14:51:51 -0000	1.34.2.27
++++ src/net/sf/hibernate/hibernate-mapping-2.0.dtd	6 Dec 2003 14:54:47 -0000
+@@ -227,6 +227,7 @@
+   <!ATTLIST component access CDATA #IMPLIED>
+   <!ATTLIST component update (true|false) "true">
+   <!ATTLIST component insert (true|false) "true">
++  <!ATTLIST component not-null (true|false) "false">
+ 
+ <!ELEMENT dynamic-component (
+   (property|many-to-one|one-to-one|component|dynamic-component|any|map|set|list|bag|array|primitive-array)*
+@@ -235,6 +236,7 @@
+   <!ATTLIST dynamic-component access CDATA #IMPLIED>
+   <!ATTLIST dynamic-component update (true|false) "true">
+   <!ATTLIST dynamic-component insert (true|false) "true">
++  <!ATTLIST dynamic-component not-null (true|false) "false">
+ 
+ <!-- The parent element maps a property of the component class as a pointer back to
+ the owning entity. -->
+@@ -402,6 +404,7 @@
+   (property|many-to-one|nested-composite-element)* 
+ )>
+   <!ATTLIST composite-element class CDATA #REQUIRED>
++  <!ATTLIST composite-element not-null (true|false) "false">
+ 
+ <!ELEMENT nested-composite-element ( 
+   parent?,
+@@ -410,6 +413,7 @@
+   <!ATTLIST nested-composite-element class CDATA #REQUIRED>
+   <!ATTLIST nested-composite-element name CDATA #REQUIRED>
+   <!ATTLIST nested-composite-element access CDATA #IMPLIED>
++  <!ATTLIST nested-composite-element not-null (true|false) "false">
+   
+ <!-- Declares the column name of a foreign key. -->
+ 
+Index: src/net/sf/hibernate/cfg/Binder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Binder.java,v
+retrieving revision 1.26.2.48
+diff -u -r1.26.2.48 Binder.java
+--- src/net/sf/hibernate/cfg/Binder.java	4 Dec 2003 07:38:32 -0000	1.26.2.48
++++ src/net/sf/hibernate/cfg/Binder.java	6 Dec 2003 14:54:49 -0000
+@@ -8,7 +8,6 @@
+ 
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.MappingException;
+-import net.sf.hibernate.mapping.IdentifierBag;
+ import net.sf.hibernate.cache.CacheConcurrencyStrategy;
+ import net.sf.hibernate.cache.CacheFactory;
+ import net.sf.hibernate.engine.Cascades;
+@@ -17,20 +16,19 @@
+ import net.sf.hibernate.loader.OuterJoinLoader;
+ import net.sf.hibernate.mapping.Any;
+ import net.sf.hibernate.mapping.Array;
+-import net.sf.hibernate.mapping.MetaAttribute;
+-import net.sf.hibernate.mapping.Value;
+-import net.sf.hibernate.mapping.ToOne;
+ import net.sf.hibernate.mapping.Bag;
+ import net.sf.hibernate.mapping.Collection;
+ import net.sf.hibernate.mapping.Column;
+ import net.sf.hibernate.mapping.Component;
+ import net.sf.hibernate.mapping.Fetchable;
+ import net.sf.hibernate.mapping.Formula;
++import net.sf.hibernate.mapping.IdentifierBag;
+ import net.sf.hibernate.mapping.IdentifierCollection;
+ import net.sf.hibernate.mapping.IndexedCollection;
+ import net.sf.hibernate.mapping.List;
+ import net.sf.hibernate.mapping.ManyToOne;
+ import net.sf.hibernate.mapping.Map;
++import net.sf.hibernate.mapping.MetaAttribute;
+ import net.sf.hibernate.mapping.NamedSQLQuery;
+ import net.sf.hibernate.mapping.OneToMany;
+ import net.sf.hibernate.mapping.OneToOne;
+@@ -39,9 +37,11 @@
+ import net.sf.hibernate.mapping.Property;
+ import net.sf.hibernate.mapping.RootClass;
+ import net.sf.hibernate.mapping.Set;
++import net.sf.hibernate.mapping.SimpleValue;
+ import net.sf.hibernate.mapping.Subclass;
+ import net.sf.hibernate.mapping.Table;
+-import net.sf.hibernate.mapping.SimpleValue;
++import net.sf.hibernate.mapping.ToOne;
++import net.sf.hibernate.mapping.Value;
+ import net.sf.hibernate.persister.EntityPersister;
+ import net.sf.hibernate.persister.NormalizedEntityPersister;
+ import net.sf.hibernate.property.Getter;
+@@ -721,6 +721,12 @@
+ 			);
+ 			model.setEmbedded (true);
+ 		}
++		
++		Attribute nullNode = node.attribute("not-null");
++		model.setNullable( (nullNode!=null) ?
++			!StringHelper.booleanValue( nullNode.getValue() ) :
++			isNullable
++		);
+ 
+ 		Iterator iter = node.elementIterator();
+ 		while ( iter.hasNext() ) {
+@@ -778,6 +784,7 @@
+ 		int span = model.getPropertySpan();
+ 		String[] names = new String[span];
+ 		Type[] types = new Type[span];
++		boolean[] nullabilities = new boolean[span];
+ 		Cascades.CascadeStyle[] cascade = new Cascades.CascadeStyle[span];
+ 		int[] joinedFetch = new int[span];
+ 		iter = model.getPropertyIterator();
+@@ -794,11 +801,13 @@
+ 			types[i] = prop.getType();
+ 			cascade[i] = prop.getCascadeStyle();
+ 			joinedFetch[i] = prop.getValue().getOuterJoinFetchSetting();
++			nullabilities[i] = prop.isNullable();
++			
+ 			i++;
+ 		}
+ 		final Type componentType;
+ 		if ( model.isDynamic() ) {
+-			componentType = new DynamicComponentType(names, types, joinedFetch, cascade);
++			componentType = new DynamicComponentType(names, types, joinedFetch, cascade, nullabilities, model.isNullable());
+ 		}
+ 		else {
+ 			Getter[] getters = new Getter[span];
+@@ -822,6 +831,8 @@
+ 				types,
+ 				joinedFetch,
+ 				cascade,
++				nullabilities,
++				model.isNullable(),
+ 				model.getParentProperty()
+ 			);
+ 		}
+Index: src/net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.59.2.101
+diff -u -r1.59.2.101 SessionImpl.java
+--- src/net/sf/hibernate/impl/SessionImpl.java	6 Dec 2003 02:38:27 -0000	1.59.2.101
++++ src/net/sf/hibernate/impl/SessionImpl.java	6 Dec 2003 14:54:52 -0000
+@@ -79,6 +79,7 @@
+ import net.sf.hibernate.proxy.HibernateProxyHelper;
+ import net.sf.hibernate.proxy.LazyInitializer;
+ import net.sf.hibernate.type.AbstractComponentType;
++import net.sf.hibernate.type.ComponentNotNullableType;
+ import net.sf.hibernate.type.PersistentCollectionType;
+ import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.type.TypeFactory;
+@@ -1198,21 +1199,143 @@
+ 
+ 	}
+ 	
+-	private static void checkNullability(Object[] values, ClassPersister persister, boolean isUpdate) 
+-	throws PropertyValueException {
++	/**
++	 * Check nullability of the class persister properties
++	 * 
++	 * @param values entity properties
++	 * @param persister class persister
++	 * @param isUpdate wether we are updating or not
++	 * @throws PropertyValueException Break the nullability of one property
++	 * @throws HibernateException error while getting Component values
++	 */
++	private void checkNullability(Object[] values, ClassPersister persister, boolean isUpdate) 
++		throws PropertyValueException, HibernateException {
++		/*
++		 * I needed to remove static class attribute to access SessionFactoryImpl
++		 * 
++		 * CAUTION to COMMITER:
++		 * Since SessionFactoryImpl use HashMap to keep
++		 * getCollectionpersister, it seems not to be a bottleneck 
++		 * but I'm not that aware of that.
++		 */
++		 
++		 /*
++		  * Algorithm
++		  * Check for any level one nullability breaks
++		  * Look at non null components to 
++		  *   recursively check next level of nullability breaks
++		  * Look at Collections contraining component to
++		  *   recursively check next level of nullability breaks
++		  * 
++		  * I keep the same semantic for components as for columns
++		  * A null component declared as not-null="false" will fail the check
++		  * if one of it's columns is null and declared as not-null (due to SQL projection
++		  * of the component structure)
++		  * A null component declared as not-null="false" will fail the check 
++		  *   if on of these sub component is declared as not null.
++		  * 
++		  * In the previous implementation, not-null stuffs where checked
++		  * filtering by level one only updateable
++		  * or insertable columns. So setting a sub component as update="false"
++		  * has no effect on not-null check if the main component had good checkeability
++		  * In this implementation, we keep this feature. 
++		  * However, I never see any documentation mentioning that, but it's for
++		  * sure a limitation.  
++		  */
++		Type[] propertyTypes = persister.getPropertyTypes();
+ 		boolean[] nullability = persister.getPropertyNullability();
+ 		boolean[] checkability = isUpdate ? 
+ 			persister.getPropertyUpdateability() : 
+ 			persister.getPropertyInsertability();
+ 		for ( int i=0; i<values.length; i++ ) {
+ 			if ( !nullability[i] && checkability[i] && values[i]==null ) {
++				//check basic level one nullablilty
+ 				throw new PropertyValueException(
+ 					"not-null property references a null or transient value: ", 
+-					persister.getClass(), 
++					persister.getMappedClass(), 
+ 					persister.getPropertyNames()[i]
+ 				);
++			} else if (checkability[i] && values[i]!=null) {
++				String breakProperties = checkSubElementsNullability(propertyTypes[i], values[i]);
++				if (breakProperties != null) {
++					throw new PropertyValueException(
++						"not-null property references a null or transient value: ", 
++						persister.getMappedClass(), 
++						PropertyValueException.buildPropertyPath(persister.getPropertyNames()[i], breakProperties)
++					);
++				}
++			}
++		}
++	}
++	
++	/**
++	 * check component nullability. Returns property path that break
++	 * nullability or null if none
++	 * 
++	 * @param values component properties
++	 * @param compType component not-nullable type
++	 * 
++	 * @return property path
++	 * @throws HibernateException error while getting subcomponent values
++	 */
++	private String checkComponentNullability(Object[] values, ComponentNotNullableType compType) 
++		throws HibernateException {
++				
++		boolean[] nullability = compType.getPropertyNullability();
++		Type[] propertyTypes = compType.getSubtypes();
++		for ( int i=0; i<values.length; i++ ) {
++			if ( !nullability[i] && values[i]==null ) {
++				return	compType.getPropertyNames()[i];
++			} else if (values[i]!=null) {
++				String breakProperties = checkSubElementsNullability(propertyTypes[i], values[i]);
++				if (breakProperties != null) {
++					return PropertyValueException.buildPropertyPath(compType.getPropertyNames()[i], breakProperties);
++				}
+ 			}
+ 		}
++		return null;
++	}
++	
++	/**
++	 * check sub elements-nullability. Returns property path that break
++	 * nullability or null if none
++	 * 
++	 * @param propertyType type to check
++	 * @param value value to check
++	 * 
++	 * @return property path
++	 * @throws HibernateException error while getting subcomponent values
++	 */
++	public String checkSubElementsNullability(Type propertyType, Object value) throws HibernateException {
++		//for non null args, check for components and element containing components
++		if (propertyType.isComponentType() 
++			&& propertyType instanceof ComponentNotNullableType) {
++			ComponentNotNullableType componentType = (ComponentNotNullableType) propertyType;
++			return checkComponentNullability(componentType.getPropertyValues(value), componentType);
++		} else if (propertyType.isPersistentCollectionType()) {
++						
++			//persistent collections may have components
++			PersistentCollectionType collectionType = (PersistentCollectionType) propertyType;
++			Type collectionElementType = collectionType.getElementType(factory);
++			if (collectionElementType.isComponentType()
++				&&  collectionElementType instanceof ComponentNotNullableType) {
++				//check for all components values in the collection
++				
++				ComponentNotNullableType componentType = (ComponentNotNullableType) collectionElementType;
++				Iterator iter = collectionType.getElementsIterator(value);
++				boolean isNullable = componentType.isNullable();
++				
++				while (iter.hasNext()) {
++					Object compValue = iter.next();
++					if (!isNullable && compValue == null) {
++						return "<composite-element>";
++					} else if (compValue != null) {
++						return checkComponentNullability(componentType.getPropertyValues(compValue), componentType);
++					}
++				}
++			}	
++		}
++		return null;
+ 	}
+ 
+ 	void removeCollection(CollectionPersister role, Serializable id) throws HibernateException {
+Index: src/net/sf/hibernate/mapping/Component.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/mapping/Component.java,v
+retrieving revision 1.7.2.3
+diff -u -r1.7.2.3 Component.java
+--- src/net/sf/hibernate/mapping/Component.java	7 Nov 2003 01:04:16 -0000	1.7.2.3
++++ src/net/sf/hibernate/mapping/Component.java	6 Dec 2003 14:54:53 -0000
+@@ -20,6 +20,7 @@
+ 	private String parentProperty;
+ 	private PersistentClass owner;
+ 	private boolean dynamic;
++	private boolean nullable;
+ 	
+ 	public int getPropertySpan() {
+ 		return properties.size();
+@@ -137,6 +138,39 @@
+ 	 */
+ 	public void setDynamic(boolean dynamic) {
+ 		this.dynamic = dynamic;
++	}
++	
++	/**
++	 * A component is not nullable if one of these properties
++	 * is not nullable or if not-null=true
++	 */
++	public boolean isNullable() {
++		/*
++		 * A component is not nullable if one of these properties
++	     * is not nullable or if not-null=true
++	     * TODO: Check during mapping load that not-null=false does not appear with 
++	     * 	not nullable properties as composite-element in set
++		 */
++		if (nullable== false) {
++			return nullable;
++		} else {
++			Iterator props = getPropertyIterator();
++			boolean propNullable = true;
++			while (props.hasNext()) {
++				if (! ((Property) props.next()).isNullable()) {
++					propNullable = false;
++					break;
++				}
++			}
++			return propNullable;
++		}
++	}
++
++	/**
++	 * @param nullable nullablilty to set for this component
++	 */
++	public void setNullable(boolean nullable) {
++		this.nullable = nullable;
+ 	}
+ 
+ }
+Index: src/net/sf/hibernate/type/ComponentNotNullableType.java
+===================================================================
+RCS file: src/net/sf/hibernate/type/ComponentNotNullableType.java
+diff -N src/net/sf/hibernate/type/ComponentNotNullableType.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/type/ComponentNotNullableType.java	6 Dec 2003 14:54:53 -0000
+@@ -0,0 +1,22 @@
++package net.sf.hibernate.type;
++
++/**
++ * Interface used to allow recursive nullability check
++ * 
++ * @see net.sf.hibernate.impl.SessionImpl#checkNullability(Object[], ClassPersister, boolean)
++ */
++public interface ComponentNotNullableType extends AbstractComponentType {
++	/*
++	 * this sub interface was added to allew nullability check of components without
++	 * breaking the CompositeCustomType which cannot be not-nullable
++	 */
++	/**
++	 * @return nullability of component properties
++	 */
++	public boolean[] getPropertyNullability();
++	
++	/**
++	 * Return component nullability
++	 */
++	public boolean isNullable();
++}
+Index: src/net/sf/hibernate/type/ComponentType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/ComponentType.java,v
+retrieving revision 1.17.2.21
+diff -u -r1.17.2.21 ComponentType.java
+--- src/net/sf/hibernate/type/ComponentType.java	19 Nov 2003 10:01:52 -0000	1.17.2.21
++++ src/net/sf/hibernate/type/ComponentType.java	6 Dec 2003 14:54:53 -0000
+@@ -32,7 +32,7 @@
+  * Handles "component" mappings
+  * @author Gavin King
+  */
+-public class ComponentType extends AbstractType implements AbstractComponentType {
++public class ComponentType extends AbstractType implements ComponentNotNullableType {
+ 
+ 	private final Class componentClass;
+ 	private final Constructor constructor;
+@@ -40,6 +40,8 @@
+ 	private final Getter[] getters;
+ 	private final Setter[] setters;
+ 	private final String[] propertyNames;
++	private final boolean[] propertyNullability;
++	private final boolean nullable;
+ 	private final int propertySpan;
+ 	private final Cascades.CascadeStyle[] cascade;
+ 	private final int[] joinedFetch;
+@@ -78,11 +80,15 @@
+ 		Type[] propertyTypes,
+ 		int[] joinedFetch,
+ 		Cascades.CascadeStyle[] cascade,
++		boolean[] nullabilities,
++		boolean nullable,
+ 		String parentProperty
+ 	) throws MappingException {
+ 
+ 		this.componentClass = componentClass;
+ 		this.propertyTypes = propertyTypes;
++		this.propertyNullability = nullabilities;
++		this.nullable = nullable;
+ 		getters = propertyGetters;
+ 		setters = propertySetters;
+ 		propertySpan = propertyNames.length;
+@@ -414,6 +420,20 @@
+ 	
+ 	public int hashCode() {
+ 		return System.identityHashCode(this);
++	}
++
++	/**
++	 * @return nullability of component properties
++	 */
++	public boolean[] getPropertyNullability() {
++		return propertyNullability;
++	}
++
++	/** 
++	 * @see net.sf.hibernate.type.AbstractComponentType#isNullable()
++	 */
++	public boolean isNullable() {
++		return nullable;
+ 	}
+ 
+ }
+Index: src/net/sf/hibernate/type/DynamicComponentType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/Attic/DynamicComponentType.java,v
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 DynamicComponentType.java
+--- src/net/sf/hibernate/type/DynamicComponentType.java	3 Nov 2003 03:37:24 -0000	1.1.2.1
++++ src/net/sf/hibernate/type/DynamicComponentType.java	6 Dec 2003 14:54:53 -0000
+@@ -1,250 +1,271 @@
+-//$Id: DynamicComponentType.java,v 1.1.2.1 2003/11/03 03:37:24 oneovthafew Exp $
+-package net.sf.hibernate.type;
+-
+-import java.sql.PreparedStatement;
+-import java.sql.ResultSet;
+-import java.sql.SQLException;
+-import java.util.HashMap;
+-import java.util.Map;
+-
+-import net.sf.hibernate.HibernateException;
+-import net.sf.hibernate.MappingException;
+-import net.sf.hibernate.engine.Mapping;
+-import net.sf.hibernate.engine.SessionFactoryImplementor;
+-import net.sf.hibernate.engine.SessionImplementor;
+-import net.sf.hibernate.engine.Cascades;
+-import net.sf.hibernate.util.ArrayHelper;
+-
+-/**
+- * Handles "dynamic" components, represented as <tt>Map</tt>s
+- * @author Gavin King
+- */
+-public class DynamicComponentType extends AbstractType implements AbstractComponentType {
+-	
+-	private String[] propertyNames;
+-	private Type[] propertyTypes;
+-	private int propertySpan;
+-	private final Cascades.CascadeStyle[] cascade;
+-	private final int[] joinedFetch;
+-	
+-	public DynamicComponentType(
+-		String[] propertyNames, 
+-		Type[] propertyTypes,
+-		int[] joinedFetch, 
+-		Cascades.CascadeStyle[] cascade 
+-	) {
+-		this.propertyNames = propertyNames;
+-		this.propertyTypes = propertyTypes;
+-		this.joinedFetch = joinedFetch;
+-		this.cascade = cascade;
+-		propertySpan = propertyTypes.length;
+-	}
+-
+-
+-	public Cascades.CascadeStyle cascade(int i) {
+-		return cascade[i];
+-	}
+-
+-	public int enableJoinedFetch(int i) {
+-		return joinedFetch[i];
+-	}
+-
+-	public String[] getPropertyNames() {
+-		return propertyNames;
+-	}
+-
+-	public Object getPropertyValue(Object component, int i, SessionImplementor session) 
+-		throws HibernateException {
+-		return getPropertyValue(component, i);
+-	}
+-
+-	public Object[] getPropertyValues(Object component, SessionImplementor session) 
+-		throws HibernateException {
+-		return getPropertyValues(component);
+-	}
+-
+-	public Object getPropertyValue(Object component, int i)
+-		throws HibernateException {
+-		return ( (Map) component).get( propertyNames[i] );
+-	}
+-
+-	public Object[] getPropertyValues(Object component) throws HibernateException {
+-			
+-		Map bean = (Map) component;
+-		Object[] result = new Object[propertySpan];
+-		for (int i=0; i<propertySpan; i++) {
+-			result[i] = bean.get( propertyNames[i] );
+-		}
+-		return result;
+-	}
+-
+-	public Type[] getSubtypes() {
+-		return propertyTypes;
+-	}
+-
+-	public Object instantiate() throws HibernateException {
+-		return new HashMap();
+-	}
+-
+-	public void setPropertyValues(Object component, Object[] values)
+-		throws HibernateException {
+-			Map map = (Map) component;
+-			for (int i=0; i<propertySpan; i++) {
+-				map.put( propertyNames[i], values[i] );
+-			}		
+-	}
+-
+-	public Object deepCopy(Object component) throws HibernateException {
+-		if (component==null) return null;
+-		
+-		Object[] values = getPropertyValues(component);
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			values[i] = propertyTypes[i].deepCopy( values[i] );
+-		}
+-		Object result = instantiate();
+-		setPropertyValues(result, values);
+-		return result;
+-	}
+-
+-	public boolean equals(Object x, Object y) throws HibernateException {
+-		if (x==y) return true;
+-		if (x==null || y==null) return false;
+-		Map xbean = (Map) x;
+-		Map ybean = (Map) y;
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			if ( !propertyTypes[i].equals( xbean.get( propertyNames[i] ), ybean.get( propertyNames[i] ) ) ) return false;
+-		}
+-		return true;
+-	}
+-
+-	public boolean isDirty(Object x, Object y, SessionImplementor session) throws HibernateException {
+-		if (x==y) return false;
+-		if (x==null || y==null) return true;
+-		Map xbean = (Map) x;
+-		Map ybean = (Map) y;
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			if ( propertyTypes[i].isDirty( xbean.get( propertyNames[i] ), ybean.get( propertyNames[i] ), session ) ) return true;
+-		}
+-		return false;
+-	}
+-
+-	public int getColumnSpan(Mapping mapping) throws MappingException {
+-		int span = 0;
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			span += propertyTypes[i].getColumnSpan(mapping);
+-		}
+-		return span;
+-	}
+-
+-	public String getName() {
+-		//TODO:
+-		return Map.class.getName();
+-	}
+-
+-	public boolean hasNiceEquals() {
+-		return false;
+-	}
+-
+-	public boolean isMutable() {
+-		return true;
+-	}
+-
+-	private Object[] nullSafeGetValues(Object value) throws HibernateException {
+-		if ( value==null ) {
+-			return new Object[propertySpan];
+-		}
+-		else {
+-			return getPropertyValues(value);
+-		}
+-	}
+-	
+-	public Object nullSafeGet(
+-		ResultSet rs,
+-		String name,
+-		SessionImplementor session,
+-		Object owner)
+-		throws HibernateException, SQLException {
+-		return nullSafeGet(rs, new String[] {name}, session, owner);
+-	}
+-
+-	public Object nullSafeGet(
+-		ResultSet rs,
+-		String[] names,
+-		SessionImplementor session,
+-		Object owner)
+-		throws HibernateException, SQLException {
+-
+-		int begin=0;
+-		boolean notNull=false;
+-		Object[] values = new Object[propertySpan];
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			int length = propertyTypes[i].getColumnSpan( session.getFactory() );
+-			String[] range = ArrayHelper.slice(names, begin, length); //cache this
+-			Object val = propertyTypes[i].nullSafeGet(rs, range, session, owner);
+-			if (val!=null) notNull=true;
+-			values[i] = val;
+-			begin+=length;
+-		}
+-	
+-		if (notNull) {
+-			Map result = (Map) instantiate();
+-			for ( int i=0; i<propertySpan; i++ ) {
+-				result.put( propertyNames[i], values[i] );
+-			}
+-			return result;
+-		}
+-		else {
+-			return null;
+-		}
+-	}
+-
+-	public void nullSafeSet(
+-		PreparedStatement st,
+-		Object value,
+-		int begin,
+-		SessionImplementor session)
+-		throws HibernateException, SQLException {
+-			
+-		Object[] subvalues = nullSafeGetValues(value);
+-		
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			propertyTypes[i].nullSafeSet(st, subvalues[i], begin, session);
+-			begin += propertyTypes[i].getColumnSpan( session.getFactory() );
+-		}
+-	}
+-
+-	public Class getReturnedClass() {
+-		return Map.class;
+-	}
+-
+-	public int[] sqlTypes(Mapping mapping) throws MappingException {
+-		//Not called at runtime so doesn't matter if its slow :)
+-		int[] sqlTypes = new int[ getColumnSpan(mapping) ];
+-		int n=0;
+-		for ( int i=0; i<propertySpan; i++ ) {
+-			int[] subtypes = propertyTypes[i].sqlTypes(mapping);
+-			for ( int j=0; j<subtypes.length; j++ ) {
+-				sqlTypes[n++] = subtypes[j];
+-			}
+-		}
+-		return sqlTypes;
+-	}
+-
+-	public String toString(Object value, SessionFactoryImplementor factory)
+-		throws HibernateException {
+-		return (value==null) ? "null" : value.toString();
+-	}
+-
+-	public boolean equals(Object object) {
+-		return this==object;
+-	}
+-	public Object fromString(String xml, SessionFactoryImplementor factory) throws HibernateException {
+-		throw new UnsupportedOperationException();
+-	}
+-
+-	public int hashCode() {
+-		return System.identityHashCode(this);
+-	}
+-	
+-
+-}
++//$Id: DynamicComponentType.java,v 1.1.2.1 2003/11/03 03:37:24 oneovthafew Exp $
++package net.sf.hibernate.type;
++
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.HashMap;
++import java.util.Map;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.MappingException;
++import net.sf.hibernate.engine.Cascades;
++import net.sf.hibernate.engine.Mapping;
++import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.SessionImplementor;
++import net.sf.hibernate.util.ArrayHelper;
++
++/**
++ * Handles "dynamic" components, represented as <tt>Map</tt>s
++ * @author Gavin King
++ */
++public class DynamicComponentType extends AbstractType implements ComponentNotNullableType  {
++	
++	private String[] propertyNames;
++	private Type[] propertyTypes;
++	private int propertySpan;
++	private final Cascades.CascadeStyle[] cascade;
++	private final int[] joinedFetch;
++	private boolean[] propertyNullability;
++	private boolean nullable;
++	
++	public DynamicComponentType(
++		String[] propertyNames, 
++		Type[] propertyTypes,
++		int[] joinedFetch, 
++		Cascades.CascadeStyle[] cascade,
++		boolean[] nullabilities,
++		boolean nullable
++	) {
++		this.propertyNames = propertyNames;
++		this.propertyTypes = propertyTypes;
++		this.joinedFetch = joinedFetch;
++		this.cascade = cascade;
++		propertySpan = propertyTypes.length;
++		this.propertyNullability = nullabilities;
++		this.nullable = nullable;
++	}
++
++
++	public Cascades.CascadeStyle cascade(int i) {
++		return cascade[i];
++	}
++
++	public int enableJoinedFetch(int i) {
++		return joinedFetch[i];
++	}
++
++	public String[] getPropertyNames() {
++		return propertyNames;
++	}
++
++	public Object getPropertyValue(Object component, int i, SessionImplementor session) 
++		throws HibernateException {
++		return getPropertyValue(component, i);
++	}
++
++	public Object[] getPropertyValues(Object component, SessionImplementor session) 
++		throws HibernateException {
++		return getPropertyValues(component);
++	}
++
++	public Object getPropertyValue(Object component, int i)
++		throws HibernateException {
++		return ( (Map) component).get( propertyNames[i] );
++	}
++
++	public Object[] getPropertyValues(Object component) throws HibernateException {
++			
++		Map bean = (Map) component;
++		Object[] result = new Object[propertySpan];
++		for (int i=0; i<propertySpan; i++) {
++			result[i] = bean.get( propertyNames[i] );
++		}
++		return result;
++	}
++
++	public Type[] getSubtypes() {
++		return propertyTypes;
++	}
++
++	public Object instantiate() throws HibernateException {
++		return new HashMap();
++	}
++
++	public void setPropertyValues(Object component, Object[] values)
++		throws HibernateException {
++			Map map = (Map) component;
++			for (int i=0; i<propertySpan; i++) {
++				map.put( propertyNames[i], values[i] );
++			}		
++	}
++
++	public Object deepCopy(Object component) throws HibernateException {
++		if (component==null) return null;
++		
++		Object[] values = getPropertyValues(component);
++		for ( int i=0; i<propertySpan; i++ ) {
++			values[i] = propertyTypes[i].deepCopy( values[i] );
++		}
++		Object result = instantiate();
++		setPropertyValues(result, values);
++		return result;
++	}
++
++	public boolean equals(Object x, Object y) throws HibernateException {
++		if (x==y) return true;
++		if (x==null || y==null) return false;
++		Map xbean = (Map) x;
++		Map ybean = (Map) y;
++		for ( int i=0; i<propertySpan; i++ ) {
++			if ( !propertyTypes[i].equals( xbean.get( propertyNames[i] ), ybean.get( propertyNames[i] ) ) ) return false;
++		}
++		return true;
++	}
++
++	public boolean isDirty(Object x, Object y, SessionImplementor session) throws HibernateException {
++		if (x==y) return false;
++		if (x==null || y==null) return true;
++		Map xbean = (Map) x;
++		Map ybean = (Map) y;
++		for ( int i=0; i<propertySpan; i++ ) {
++			if ( propertyTypes[i].isDirty( xbean.get( propertyNames[i] ), ybean.get( propertyNames[i] ), session ) ) return true;
++		}
++		return false;
++	}
++
++	public int getColumnSpan(Mapping mapping) throws MappingException {
++		int span = 0;
++		for ( int i=0; i<propertySpan; i++ ) {
++			span += propertyTypes[i].getColumnSpan(mapping);
++		}
++		return span;
++	}
++
++	public String getName() {
++		//TODO:
++		return Map.class.getName();
++	}
++
++	public boolean hasNiceEquals() {
++		return false;
++	}
++
++	public boolean isMutable() {
++		return true;
++	}
++
++	private Object[] nullSafeGetValues(Object value) throws HibernateException {
++		if ( value==null ) {
++			return new Object[propertySpan];
++		}
++		else {
++			return getPropertyValues(value);
++		}
++	}
++	
++	public Object nullSafeGet(
++		ResultSet rs,
++		String name,
++		SessionImplementor session,
++		Object owner)
++		throws HibernateException, SQLException {
++		return nullSafeGet(rs, new String[] {name}, session, owner);
++	}
++
++	public Object nullSafeGet(
++		ResultSet rs,
++		String[] names,
++		SessionImplementor session,
++		Object owner)
++		throws HibernateException, SQLException {
++
++		int begin=0;
++		boolean notNull=false;
++		Object[] values = new Object[propertySpan];
++		for ( int i=0; i<propertySpan; i++ ) {
++			int length = propertyTypes[i].getColumnSpan( session.getFactory() );
++			String[] range = ArrayHelper.slice(names, begin, length); //cache this
++			Object val = propertyTypes[i].nullSafeGet(rs, range, session, owner);
++			if (val!=null) notNull=true;
++			values[i] = val;
++			begin+=length;
++		}
++	
++		if (notNull) {
++			Map result = (Map) instantiate();
++			for ( int i=0; i<propertySpan; i++ ) {
++				result.put( propertyNames[i], values[i] );
++			}
++			return result;
++		}
++		else {
++			return null;
++		}
++	}
++
++	public void nullSafeSet(
++		PreparedStatement st,
++		Object value,
++		int begin,
++		SessionImplementor session)
++		throws HibernateException, SQLException {
++			
++		Object[] subvalues = nullSafeGetValues(value);
++		
++		for ( int i=0; i<propertySpan; i++ ) {
++			propertyTypes[i].nullSafeSet(st, subvalues[i], begin, session);
++			begin += propertyTypes[i].getColumnSpan( session.getFactory() );
++		}
++	}
++
++	public Class getReturnedClass() {
++		return Map.class;
++	}
++
++	public int[] sqlTypes(Mapping mapping) throws MappingException {
++		//Not called at runtime so doesn't matter if its slow :)
++		int[] sqlTypes = new int[ getColumnSpan(mapping) ];
++		int n=0;
++		for ( int i=0; i<propertySpan; i++ ) {
++			int[] subtypes = propertyTypes[i].sqlTypes(mapping);
++			for ( int j=0; j<subtypes.length; j++ ) {
++				sqlTypes[n++] = subtypes[j];
++			}
++		}
++		return sqlTypes;
++	}
++
++	public String toString(Object value, SessionFactoryImplementor factory)
++		throws HibernateException {
++		return (value==null) ? "null" : value.toString();
++	}
++
++	public boolean equals(Object object) {
++		return this==object;
++	}
++	public Object fromString(String xml, SessionFactoryImplementor factory) throws HibernateException {
++		throw new UnsupportedOperationException();
++	}
++
++	public int hashCode() {
++		return System.identityHashCode(this);
++	}
++	
++
++	/**
++	 * @return nullability of component properties
++	 */
++	public boolean[] getPropertyNullability() {
++		return propertyNullability;
++	}
++
++
++	/**
++	 * @see net.sf.hibernate.type.AbstractComponentType#isNullable()
++	 */
++	public boolean isNullable() {
++		return nullable;
++	}
++
++}
+Index: src/net/sf/hibernate/type/PersistentCollectionType.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/type/PersistentCollectionType.java,v
+retrieving revision 1.14.2.19
+diff -u -r1.14.2.19 PersistentCollectionType.java
+--- src/net/sf/hibernate/type/PersistentCollectionType.java	30 Nov 2003 12:31:13 -0000	1.14.2.19
++++ src/net/sf/hibernate/type/PersistentCollectionType.java	6 Dec 2003 14:54:54 -0000
+@@ -252,7 +252,7 @@
+ 		return result;
+ 	}
+ 
+-	protected final Type getElementType(SessionFactoryImplementor factory) 
++	public final Type getElementType(SessionFactoryImplementor factory) 
+ 	throws MappingException {
+ 		return factory.getCollectionPersister( getRole() ).getElementType();
+ 	}
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/Attic/AllTests.java,v
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 AllTests.java
+--- test/org/hibernate/test/AllTests.java	8 Nov 2003 09:17:42 -0000	1.1.2.1
++++ test/org/hibernate/test/AllTests.java	6 Dec 2003 14:54:54 -0000
+@@ -1,34 +1,35 @@
+-//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
+-package org.hibernate.test;
+-
+-import junit.framework.Test;
+-import junit.framework.TestSuite;
+-import junit.textui.TestRunner;
+-
+-/**
+- * @author Gavin King
+- */
+-public class AllTests {
+-	
+-	public static Test suite() {
+-
+-		TestSuite suite = new TestSuite();
+-
+-		suite.addTest( FooBarTest.suite() );
+-		suite.addTest( FumTest.suite() );
+-		suite.addTest( MasterDetailTest.suite() );
+-		suite.addTest( ParentChildTest.suite() );
+-		suite.addTest( ABCTest.suite() );
+-		suite.addTest( ABCProxyTest.suite() );
+-		suite.addTest( SQLFunctionsTest.suite() );
+-		suite.addTest( SQLLoaderTest.suite() );
+-		suite.addTest( ODMGTest.suite() );
+-		suite.addTest( MultiTableTest.suite() );
+-		
+-		return suite;
+-	}
+-
+-	public static void main(String args[]) {
+-		TestRunner.run( suite() );
+-	}
+-}
++//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
++package org.hibernate.test;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++
++/**
++ * @author Gavin King
++ */
++public class AllTests {
++	
++	public static Test suite() {
++
++		TestSuite suite = new TestSuite();
++
++		suite.addTest( FooBarTest.suite() );
++		suite.addTest( FumTest.suite() );
++		suite.addTest( MasterDetailTest.suite() );
++		suite.addTest( ParentChildTest.suite() );
++		suite.addTest( ABCTest.suite() );
++		suite.addTest( ABCProxyTest.suite() );
++		suite.addTest( SQLFunctionsTest.suite() );
++		suite.addTest( SQLLoaderTest.suite() );
++		suite.addTest( ODMGTest.suite() );
++		suite.addTest( MultiTableTest.suite() );
++		suite.addTest(ComponentTest.suite());
++		
++		return suite;
++	}
++
++	public static void main(String args[]) {
++		TestRunner.run( suite() );
++	}
++}
+Index: test/org/hibernate/test/Component.java
+===================================================================
+RCS file: test/org/hibernate/test/Component.java
+diff -N test/org/hibernate/test/Component.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Component.java	6 Dec 2003 14:54:54 -0000
+@@ -0,0 +1,149 @@
++package org.hibernate.test;
++
++import org.apache.commons.lang.builder.ToStringBuilder;
++
++public class Component {
++	private String enn1;
++	private String enn2;
++	private String n1;
++	private String n2;
++	private String inn1;
++	private String inn2;
++	private String a;		
++	private Component subcomp;
++	private String subclass;
++	
++	/**
++	 * @return
++	 */
++	public String getEnn1() {
++		return enn1;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getEnn2() {
++		return enn2;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getInn1() {
++		return inn1;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getInn2() {
++		return inn2;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getN1() {
++		return n1;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getN2() {
++		return n2;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setEnn1(String string) {
++		enn1 = string;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setEnn2(String string) {
++		enn2 = string;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setInn1(String string) {
++		inn1 = string;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setInn2(String string) {
++		inn2 = string;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setN1(String string) {
++		n1 = string;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setN2(String string) {
++		n2 = string;
++	}
++
++	/**
++	 * @return
++	 */
++	public Component getSubcomp() {
++		return subcomp;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setSubcomp(Component component) {
++		subcomp = component;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getA() {
++		return a;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setA(String string) {
++		a = string;
++	}
++	
++	public String toString() {
++		return new ToStringBuilder(this)
++			.append("a", a).append("enn1", enn1).append("enn2", enn2)
++			.append("inn1", inn1).append("inn2", inn2).append("n1", n1)
++			.append("n2", n2).toString();
++	}
++
++	/**
++	 * @return
++	 */
++	public String getSubclass() {
++		return subclass;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setSubclass(String string) {
++		subclass = string;
++	}
++
++}
+Index: test/org/hibernate/test/ComponentNotNull.hbm.xml
+===================================================================
+RCS file: test/org/hibernate/test/ComponentNotNull.hbm.xml
+diff -N test/org/hibernate/test/ComponentNotNull.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/ComponentNotNull.hbm.xml	6 Dec 2003 14:54:54 -0000
+@@ -0,0 +1,84 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd" >
++
++<hibernate-mapping>
++
++	<class name="org.hibernate.test.ComponentNotNull" discriminator-value="A">
++		<id name="id" column="container_id">
++			<generator class="native" />
++		</id>
++		<!-- discriminator / -->
++		<property name="test"/>
++		<component name="explicitNotNull" not-null="true">
++		  <property name="enn1"/>
++		  <property name="enn2"/>
++		</component>
++		
++		<component name="nullable">
++		  <property name="n1" />
++		  <property name="n2"/>
++		</component>
++		
++		<component name="supercomp">
++		  <component name="subcomp" not-null="true">
++    		  <property name="a"/>
++		  </component>
++		</component>
++		
++		<component name="implicitNotNull">
++		  <property not-null="true" name="inn1"/>
++		  <property name="inn2"/>
++		</component>
++		
++		<list name="components" lazy="true">
++			<key column = "container_id"/>
++			<index column = "list_index"/>
++			<composite-element class="org.hibernate.test.ComponentNotNull$ContainerInnerClass">
++				<property name="name"/>
++				<property name="count" column="count_"/>
++				<many-to-one name="simple" cascade="save-update"/>
++				<many-to-one name="one" cascade="save-update"/>
++				<many-to-one name="many" cascade="save-update"/>
++			</composite-element>
++		</list>
++		
++		<list name="componentsExplicit" lazy="true">
++			<key column = "container_id"/>
++			<index column = "list_index"/>
++			<composite-element not-null="true" class="org.hibernate.test.ComponentNotNull$ContainerInnerClass">
++				<property name="name"/>
++				<property name="count" column="count_"/>
++				<many-to-one name="simple" cascade="save-update"/>
++				<many-to-one name="one" cascade="save-update"/>
++				<many-to-one name="many" cascade="save-update"/>
++			</composite-element>
++		</list>
++		
++		<list name="componentsImplicit" lazy="true">
++			<key column = "container_id"/>
++			<index column = "list_index3"/>
++			<composite-element class="org.hibernate.test.ComponentNotNull$ContainerInnerClass">
++				<property name="name"/>
++				<property name="count" column="count_"/>
++				<many-to-one name="simple" cascade="save-update"/>
++				<many-to-one name="one" cascade="save-update"/>
++				<nested-composite-element name="nested" class="org.hibernate.test.ComponentNotNull$ContainerInnerClass" not-null="true">
++					<!-- many-to-one name="many" not-null="true" cascade="save-update"/ -->
++					<property name="nestedproperty"/>
++				</nested-composite-element>
++			</composite-element>
++		</list>
++		<!-- subclass name="org.hibernate.test.ExtendedComponentNotNull" discriminator-value="B">
++		  <component name="subclassComp" not-null="true">
++		    <property name="subclass" />
++		  </component>
++		</subclass -->
++		<joined-subclass name="org.hibernate.test.ExtendedComponentNotNull">
++		  <key column="id"/>
++		  <component name="subclassComp" not-null="true">
++		    <property name="subclass" />
++		  </component>
++		</joined-subclass>
++	</class>
++	
++</hibernate-mapping>
+Index: test/org/hibernate/test/ComponentNotNull.java
+===================================================================
+RCS file: test/org/hibernate/test/ComponentNotNull.java
+diff -N test/org/hibernate/test/ComponentNotNull.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/ComponentNotNull.java	6 Dec 2003 14:54:54 -0000
+@@ -0,0 +1,266 @@
++//$Id: Container.java,v 1.1.2.1 2003/11/08 02:25:29 oneovthafew Exp $
++package org.hibernate.test;
++
++import java.util.List;
++
++public class ComponentNotNull {
++	
++	private int id;
++	private String test;
++	private Component explicitNotNull;
++	private Component implicitNotNull;
++	private Component nullable;
++	private Component supercomp;
++	private List components;
++	private List componentsExplicit;
++	private List componentsImplicit;
++
++	/**
++	 * @return
++	 */
++	public Component getExplicitNotNull() {
++		return explicitNotNull;
++	}
++
++	/**
++	 * @return
++	 */
++	public int getId() {
++		return id;
++	}
++
++	/**
++	 * @return
++	 */
++	public Component getImplicitNotNull() {
++		return implicitNotNull;
++	}
++
++	/**
++	 * @return
++	 */
++	public Component getNullable() {
++		return nullable;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setExplicitNotNull(Component component) {
++		explicitNotNull = component;
++	}
++
++	/**
++	 * @param i
++	 */
++	public void setId(int i) {
++		id = i;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setImplicitNotNull(Component component) {
++		implicitNotNull = component;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setNullable(Component component) {
++		nullable = component;
++	}
++
++	public static final class ContainerInnerClass {
++		private Simple simple;
++		private String name;
++		private One one;
++		private Many many;
++		private int count;
++		private ContainerInnerClass nested;
++		private String nestedproperty;
++		
++		public void setSimple(Simple simple) {
++			this.simple = simple;
++		}
++		
++		public Simple getSimple() {
++			return simple;
++		}
++		/**
++		 * Returns the name.
++		 * @return String
++		 */
++		public String getName() {
++			return name;
++		}
++		
++		/**
++		 * Sets the name.
++		 * @param name The name to set
++		 */
++		public void setName(String name) {
++			this.name = name;
++		}
++		
++		public String toString() {
++			return name + " = " + simple.getCount()
++			+ "/" + ( one==null ? "nil" : one.getKey().toString() )
++			+ "/" + ( many==null ? "nil" : many.getKey().toString() );
++		}
++		
++		
++		/**
++		 * Returns the one.
++		 * @return One
++		 */
++		public One getOne() {
++			return one;
++		}
++		
++		/**
++		 * Sets the one.
++		 * @param one The one to set
++		 */
++		public void setOne(One one) {
++			this.one = one;
++		}
++		
++		/**
++		 * Returns the many.
++		 * @return Many
++		 */
++		public Many getMany() {
++			return many;
++		}
++		
++		/**
++		 * Sets the many.
++		 * @param many The many to set
++		 */
++		public void setMany(Many many) {
++			this.many = many;
++		}
++		
++		/**
++		 * Returns the count.
++		 * @return int
++		 */
++		public int getCount() {
++			return count;
++		}
++
++		/**
++		 * Sets the count.
++		 * @param count The count to set
++		 */
++		public void setCount(int count) {
++			this.count = count;
++		}
++
++		/**
++		 * @return
++		 */
++		public ContainerInnerClass getNested() {
++			return nested;
++		}
++
++		/**
++		 * @param class1
++		 */
++		public void setNested(ContainerInnerClass class1) {
++			nested = class1;
++		}
++
++		/**
++		 * @return
++		 */
++		public String getNestedproperty() {
++			return nestedproperty;
++		}
++
++		/**
++		 * @param string
++		 */
++		public void setNestedproperty(String string) {
++			nestedproperty = string;
++		}
++
++	}
++	/**
++	 * @return
++	 */
++	public List getComponents() {
++		return components;
++	}
++
++	/**
++	 * @param list
++	 */
++	public void setComponents(List list) {
++		components = list;
++	}
++
++	/**
++	 * @return
++	 */
++	public List getComponentsExplicit() {
++		return componentsExplicit;
++	}
++
++	/**
++	 * @return
++	 */
++	public List getComponentsImplicit() {
++		return componentsImplicit;
++	}
++
++	/**
++	 * @param list
++	 */
++	public void setComponentsExplicit(List list) {
++		componentsExplicit = list;
++	}
++
++	/**
++	 * @param list
++	 */
++	public void setComponentsImplicit(List list) {
++		componentsImplicit = list;
++	}
++
++	/**
++	 * @return
++	 */
++	public Component getSupercomp() {
++		return supercomp;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setSupercomp(Component component) {
++		supercomp = component;
++	}
++
++	/**
++	 * @return
++	 */
++	public String getTest() {
++		return test;
++	}
++
++	/**
++	 * @param string
++	 */
++	public void setTest(String string) {
++		test = string;
++	}
++
++}
++
++
++
++
++
++
+Index: test/org/hibernate/test/ComponentTest.java
+===================================================================
+RCS file: test/org/hibernate/test/ComponentTest.java
+diff -N test/org/hibernate/test/ComponentTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/ComponentTest.java	6 Dec 2003 14:54:54 -0000
+@@ -0,0 +1,335 @@
++package org.hibernate.test;
++
++import java.util.ArrayList;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++import net.sf.hibernate.PropertyValueException;
++import net.sf.hibernate.Session;
++import net.sf.hibernate.Transaction;
++
++/**
++ * @author ebernard
++ */
++public class ComponentTest extends TestCase {
++
++	/**
++	 * @param x
++	 */
++	public ComponentTest(String x) {
++		super(x);
++	}
++
++	/** 
++	 * @see org.hibernate.test.TestCase#getMappings()
++	 */
++	protected String[] getMappings() {
++		return new String[] {
++			"ComponentNotNull.hbm.xml",
++			"One.hbm.xml",
++			"Many.hbm.xml",
++			"Simple.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite(ComponentTest.class);
++	}
++
++	public static void main(String[] args) throws Exception {
++		TestRunner.run(suite());
++	}
++
++	public void testComponentNotNull() throws Exception {
++
++		//everything not null
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		ComponentNotNull c = new ComponentNotNull();
++		Component sc1 = new Component();
++		Component sc2 = new Component();
++		Component sc3 = new Component();
++		Component sc4 = new Component();
++		Component sc5 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		c.setImplicitNotNull(sc3);
++		
++		sc5 = new Component();
++		sc4 = new Component();
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		try {
++			s.save(c);
++			t.commit();
++		} catch (PropertyValueException e) {
++			fail("Inserting non null components should not fail\n" + e);
++		}
++		s.close();
++
++		//explicit null
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc3 = new Component();
++		sc2 = new Component();
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		c.setImplicitNotNull(sc3);
++		
++		sc5 = new Component();
++		sc4 = new Component();
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting explicit not-null null component should fail");
++		} catch (PropertyValueException e) {
++			//succeed
++			
++		}
++		s.close();
++
++		//nullable null
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc3 = new Component();
++		sc1 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		c.setImplicitNotNull(sc3);
++		
++		sc5 = new Component();
++		sc4 = new Component();
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		try {
++			s.save(c);
++			t.commit();
++		} catch (PropertyValueException e) {
++			fail("Inserting nullable component should not raise PropertyValueException");
++			
++		}
++		s.close();
++
++		//implicit null
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc1 = new Component();
++		sc2 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++		
++		sc5 = new Component();
++		sc4 = new Component();
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting implicit not-null null component should fail");
++		} catch (PropertyValueException e) {
++			//succeed
++		}
++		s.close();
++		
++		//sub comp
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc3 = new Component();
++		sc2 = new Component();
++		sc1 = new Component();
++		
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		c.setImplicitNotNull(sc3);
++		
++		sc4 = new Component();
++		c.setSupercomp(sc4);
++		sc4.setSubcomp(null);
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting explicit not-null null subcomponent should fail");
++		} catch (PropertyValueException e) {
++			//succeed
++		}
++		s.close();
++	}
++	
++	public void testSubclass() throws Exception {
++		//in subclass subcomponent null
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		ExtendedComponentNotNull c = new ExtendedComponentNotNull();
++		Component sc1 = new Component();
++		Component sc2 = new Component();
++		Component sc3 = new Component();
++		Component sc4 = new Component();
++		Component sc5 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		c.setImplicitNotNull(sc3);
++		
++		sc5 = new Component();
++		sc4 = new Component();
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting non null components in joined*subclass should not fail");
++		} catch (PropertyValueException e) {
++			//succeed
++		}
++		s.close();
++		
++	}
++
++	public void testCompositeElement() throws Exception {
++		//composite-element nullable
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		ComponentNotNull c = new ComponentNotNull();
++		Component sc1 = new Component();
++		Component sc2 = new Component();
++		Component sc3 = new Component();
++		Component sc4 = new Component();
++		Component sc5 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		
++		c.setImplicitNotNull(sc3);
++		c.setComponents(new ArrayList());
++		ComponentNotNull.ContainerInnerClass cc =
++			new ComponentNotNull.ContainerInnerClass();
++		c.getComponents().add(cc);
++
++		try {
++			s.save(c);
++			t.commit();
++		} catch (PropertyValueException e) {
++			fail("Inserting non null components should not fail" + e);
++		}
++		s.close();
++
++		//composite-element explicitNotNull
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc1 = new Component();
++		sc2 = new Component();
++		sc3 = new Component();
++		sc4 = new Component();
++		sc5 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		
++		c.setImplicitNotNull(sc3);
++		c.setComponentsExplicit(new ArrayList());
++		c.getComponentsExplicit().add(null);
++
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting null components on explicit not null should fail");
++		} catch (PropertyValueException e) {
++			//succeed
++		}
++		s.close();
++
++		//composite-element implicit
++		s = openSession();
++		t = s.beginTransaction();
++		c = new ComponentNotNull();
++		sc1 = new Component();
++		sc2 = new Component();
++		sc3 = new Component();
++		sc4 = new Component();
++		sc5 = new Component();
++
++		sc1.setEnn1("A");
++		c.setExplicitNotNull(sc1);
++
++		sc2.setN1("A");
++		c.setNullable(sc2);
++
++		sc3.setInn1("A");
++		sc3.setInn2("B");
++		
++		sc4.setSubcomp(sc5);
++		c.setSupercomp(sc4);
++		
++		c.setImplicitNotNull(sc3);
++		c.setComponentsImplicit(new ArrayList());
++		c.getComponentsImplicit().add(null);
++//		ComponentNotNull.ContainerInnerClass sc6 = new ComponentNotNull.ContainerInnerClass();
++//		c.getComponentsImplicit().add(sc6);
++
++		try {
++			s.save(c);
++			t.commit();
++			fail("Inserting null composite-element having subpart not null should fail");
++		} catch (PropertyValueException e) {
++			//succeed
++		}
++		s.close();
++	}
++}
+Index: test/org/hibernate/test/ExtendedComponentNotNull.java
+===================================================================
+RCS file: test/org/hibernate/test/ExtendedComponentNotNull.java
+diff -N test/org/hibernate/test/ExtendedComponentNotNull.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/ExtendedComponentNotNull.java	6 Dec 2003 14:54:54 -0000
+@@ -0,0 +1,24 @@
++package org.hibernate.test;
++
++/**
++ * @author ebernard
++ */
++public class ExtendedComponentNotNull extends ComponentNotNull {
++	private Component subclassComp;
++	
++	
++	/**
++	 * @return
++	 */
++	public Component getSubclassComp() {
++		return subclassComp;
++	}
++
++	/**
++	 * @param component
++	 */
++	public void setSubclassComp(Component component) {
++		subclassComp = component;
++	}
++
++}

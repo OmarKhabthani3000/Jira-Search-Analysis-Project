@@ -1,0 +1,838 @@
+Index: sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.27.2.23
+diff -u -r1.27.2.23 Configuration.java
+--- sf/hibernate/cfg/Configuration.java	1 Dec 2003 05:29:15 -0000	1.27.2.23
++++ sf/hibernate/cfg/Configuration.java	10 Dec 2003 22:32:55 -0000
+@@ -498,12 +498,13 @@
+ 		Iterator iter = getTableMappings();
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+-			TableMetadata tableInfo = databaseMetadata.getTableMetadata( table.getName() );
++			TableMetadata tableInfo = databaseMetadata.getTableMetadata( table );
+ 			if (tableInfo==null) {
+ 				script.add( table.sqlCreateString(dialect, mapping) );
+ 			}
+-			else {
+-				Iterator subiter = table.sqlAlterStrings(dialect, mapping, tableInfo);
++			else 
++			{
++				Iterator subiter = table.sqlAlterAddColumnsStrings(dialect, mapping, tableInfo);
+ 				while ( subiter.hasNext() ) script.add( subiter.next() );
+ 			}
+ 		}
+@@ -512,7 +513,7 @@
+ 		while ( iter.hasNext() ) {
+ 
+ 			Table table = (Table) iter.next();
+-			TableMetadata tableInfo = databaseMetadata.getTableMetadata( table.getName() );
++			TableMetadata tableInfo = databaseMetadata.getTableMetadata( table );
+ 			Iterator subIter;
+ 
+ 			if ( dialect.hasAlterTable() ) {
+Index: sf/hibernate/cfg/Mappings.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Mappings.java,v
+retrieving revision 1.7.2.7
+diff -u -r1.7.2.7 Mappings.java
+--- sf/hibernate/cfg/Mappings.java	24 Nov 2003 03:25:29 -0000	1.7.2.7
++++ sf/hibernate/cfg/Mappings.java	10 Dec 2003 22:32:55 -0000
+@@ -74,9 +74,7 @@
+ 		Table table = (Table) tables.get(key);
+ 		
+ 		if (table == null) {
+-			table = new Table();
+-			table.setName(name);
+-			table.setSchema(schema);
++			table = new Table(schema,name);
+ 			tables.put(key, table);
+ 		}
+ 		
+Index: sf/hibernate/dialect/DB2Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/DB2Dialect.java,v
+retrieving revision 1.7.2.6
+diff -u -r1.7.2.6 DB2Dialect.java
+--- sf/hibernate/dialect/DB2Dialect.java	14 Nov 2003 03:37:40 -0000	1.7.2.6
++++ sf/hibernate/dialect/DB2Dialect.java	10 Dec 2003 22:32:56 -0000
+@@ -34,9 +34,15 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, NO_BATCH);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
+ 	}
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++	
+ 	public boolean dropConstraints() {
+ 		return false;
+ 	}
+Index: sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.20.2.19
+diff -u -r1.20.2.19 Dialect.java
+--- sf/hibernate/dialect/Dialect.java	1 Dec 2003 05:29:15 -0000	1.20.2.19
++++ sf/hibernate/dialect/Dialect.java	10 Dec 2003 22:32:56 -0000
+@@ -215,6 +215,14 @@
+ 	public String getAddColumnString() {
+ 		throw new UnsupportedOperationException("No add column syntax supported by Dialect");
+ 	}
++
++	/**
++	 * The syntax used to drop a column from a table (optional).
++	 */
++	public String getDropColumnString()
++	{
++		throw new UnsupportedOperationException("No drop column syntax supported by Dialect");
++	}
+ 	
+ 	/**
+ 	 * The syntax used to add a foreign key constraint to a table.
+@@ -500,7 +508,6 @@
+ 	public char getSchemaSeperator(){
+ 		return StringHelper.DOT;
+ 	}
+-
+ }
+ 
+ 
+Index: sf/hibernate/dialect/FrontBaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/FrontBaseDialect.java,v
+retrieving revision 1.4.2.2
+diff -u -r1.4.2.2 FrontBaseDialect.java
+--- sf/hibernate/dialect/FrontBaseDialect.java	9 Aug 2003 11:24:49 -0000	1.4.2.2
++++ sf/hibernate/dialect/FrontBaseDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -45,6 +45,11 @@
+ 		return "add column";
+ 	}
+ 
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++
+ 	public String getCascadeConstraintsString() {
+ 		return " cascade";
+ 	}
+Index: sf/hibernate/dialect/HSQLDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/HSQLDialect.java,v
+retrieving revision 1.13.2.7
+diff -u -r1.13.2.7 HSQLDialect.java
+--- sf/hibernate/dialect/HSQLDialect.java	7 Nov 2003 06:39:25 -0000	1.13.2.7
++++ sf/hibernate/dialect/HSQLDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -43,8 +43,13 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, NO_BATCH);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
++	}
++	public String getDropColumnString()
++	{
++		return "drop column";
+ 	}
+ 	
+ 	public boolean supportsIdentityColumns() {
+Index: sf/hibernate/dialect/InformixDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/InformixDialect.java,v
+retrieving revision 1.3.2.3
+diff -u -r1.3.2.3 InformixDialect.java
+--- sf/hibernate/dialect/InformixDialect.java	10 Aug 2003 02:56:50 -0000	1.3.2.3
++++ sf/hibernate/dialect/InformixDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -1,72 +1,77 @@
+-package net.sf.hibernate.dialect;
+-
+-import java.sql.Types;
+-import net.sf.hibernate.MappingException;
+-
+-/**
+- * Informix dialect. This class is required in order to use Hibernate with
+- * Informix.<br>
+- * <br>
+- * Seems to work with Informix Dynamic Server Version 7.31.UD3, 
+- * Informix JDBC driver version 2.21JC3.
+- * @author Steve Molitor
+- */
+-public class InformixDialect extends Dialect {
+-
+-	/**
+-	 * Creates new <code>InformixDialect</code> instance. Sets up the JDBC /
+-	 * Informix type mappings.
+-	 */
+-	public InformixDialect() {
+-		super();
+-
+-		registerColumnType(Types.BIGINT, "INT8");
+-		registerColumnType(Types.BINARY, "BYTE");
+-		registerColumnType(Types.BIT, "SMALLINT"); // Informix doesn't have a bit type
+-		registerColumnType(Types.CHAR, "CHAR($l)");
+-		registerColumnType(Types.DATE, "DATE");
+-		registerColumnType(Types.DECIMAL, "DECIMAL");
+-		registerColumnType(Types.DOUBLE, "DOUBLE");
+-		registerColumnType(Types.FLOAT, "FLOAT");
+-		registerColumnType(Types.INTEGER, "INTEGER");
+-		registerColumnType(Types.LONGVARBINARY, "BLOB"); // or BYTE
+-		registerColumnType(Types.LONGVARCHAR, "CLOB"); // or TEXT?
+-		registerColumnType(Types.NUMERIC, "DECIMAL"); // or MONEY
+-		registerColumnType(Types.REAL, "SMALLFLOAT");
+-		registerColumnType(Types.SMALLINT, "SMALLINT");
+-		registerColumnType(Types.TIME, "DATETIME YEAR TO FRACTION(5)");
+-		registerColumnType(Types.TIMESTAMP, "DATETIME HOUR TO SECOND");
+-		registerColumnType(Types.TINYINT, "SMALLINT");
+-		registerColumnType(Types.VARBINARY, "BYTE");
+-		registerColumnType(Types.VARCHAR, "VARCHAR($l)");
+-	}
+-
+-	/**
+-	 * @see net.sf.hibernate.dialect.Dialect#getAddColumnString()
+-	 */
+-	public String getAddColumnString() {
+-		return "add";
+-	}
+-
+-	/**
+-	 * @see net.sf.hibernate.dialect.Dialect#supportsIdentityColumns()
+-	 */
+-	public boolean supportsIdentityColumns() {
+-		return true;
+-	}
+-
+-	/**
+-	 * @see net.sf.hibernate.dialect.Dialect#getIdentitySelectString()
+-	 */
+-	public String getIdentitySelectString() throws MappingException {
+-		return "select first 1 dbinfo('sqlca.sqlerrd1') from systables";
+-	}
+-
+-	/**
+-	 * @see net.sf.hibernate.dialect.Dialect#getIdentityColumnString()
+-	 */
+-	public String getIdentityColumnString() throws MappingException {
+-		return "SERIAL NOT NULL";
+-	}
+-
++package net.sf.hibernate.dialect;
++
++import java.sql.Types;
++import net.sf.hibernate.MappingException;
++
++/**
++ * Informix dialect. This class is required in order to use Hibernate with
++ * Informix.<br>
++ * <br>
++ * Seems to work with Informix Dynamic Server Version 7.31.UD3, 
++ * Informix JDBC driver version 2.21JC3.
++ * @author Steve Molitor
++ */
++public class InformixDialect extends Dialect {
++
++	/**
++	 * Creates new <code>InformixDialect</code> instance. Sets up the JDBC /
++	 * Informix type mappings.
++	 */
++	public InformixDialect() {
++		super();
++
++		registerColumnType(Types.BIGINT, "INT8");
++		registerColumnType(Types.BINARY, "BYTE");
++		registerColumnType(Types.BIT, "SMALLINT"); // Informix doesn't have a bit type
++		registerColumnType(Types.CHAR, "CHAR($l)");
++		registerColumnType(Types.DATE, "DATE");
++		registerColumnType(Types.DECIMAL, "DECIMAL");
++		registerColumnType(Types.DOUBLE, "DOUBLE");
++		registerColumnType(Types.FLOAT, "FLOAT");
++		registerColumnType(Types.INTEGER, "INTEGER");
++		registerColumnType(Types.LONGVARBINARY, "BLOB"); // or BYTE
++		registerColumnType(Types.LONGVARCHAR, "CLOB"); // or TEXT?
++		registerColumnType(Types.NUMERIC, "DECIMAL"); // or MONEY
++		registerColumnType(Types.REAL, "SMALLFLOAT");
++		registerColumnType(Types.SMALLINT, "SMALLINT");
++		registerColumnType(Types.TIME, "DATETIME YEAR TO FRACTION(5)");
++		registerColumnType(Types.TIMESTAMP, "DATETIME HOUR TO SECOND");
++		registerColumnType(Types.TINYINT, "SMALLINT");
++		registerColumnType(Types.VARBINARY, "BYTE");
++		registerColumnType(Types.VARCHAR, "VARCHAR($l)");
++	}
++
++	/**
++	 * @see net.sf.hibernate.dialect.Dialect#getAddColumnString()
++	 */
++	public String getAddColumnString() 
++	{
++		return "add";
++	}
++	public String getDropColumnString()
++	{
++		return "drop";
++	}
++
++	/**
++	 * @see net.sf.hibernate.dialect.Dialect#supportsIdentityColumns()
++	 */
++	public boolean supportsIdentityColumns() {
++		return true;
++	}
++
++	/**
++	 * @see net.sf.hibernate.dialect.Dialect#getIdentitySelectString()
++	 */
++	public String getIdentitySelectString() throws MappingException {
++		return "select first 1 dbinfo('sqlca.sqlerrd1') from systables";
++	}
++
++	/**
++	 * @see net.sf.hibernate.dialect.Dialect#getIdentityColumnString()
++	 */
++	public String getIdentityColumnString() throws MappingException {
++		return "SERIAL NOT NULL";
++	}
++
+ }
+Index: sf/hibernate/dialect/IngresDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/IngresDialect.java,v
+retrieving revision 1.3.2.2
+diff -u -r1.3.2.2 IngresDialect.java
+--- sf/hibernate/dialect/IngresDialect.java	29 Sep 2003 12:06:28 -0000	1.3.2.2
++++ sf/hibernate/dialect/IngresDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -32,8 +32,13 @@
+ 		registerColumnType( Types.VARBINARY, "LONG VARCHAR" );
+ 	}
+ 
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
++	}
++	public String getDropColumnString()
++	{
++		return "drop column";
+ 	}
+ 
+  	/**
+Index: sf/hibernate/dialect/InterbaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/InterbaseDialect.java,v
+retrieving revision 1.8.2.7
+diff -u -r1.8.2.7 InterbaseDialect.java
+--- sf/hibernate/dialect/InterbaseDialect.java	14 Nov 2003 03:37:40 -0000	1.8.2.7
++++ sf/hibernate/dialect/InterbaseDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -35,8 +35,13 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_CACHE_SIZE, "0");
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add";
++	}
++	public String getDropColumnString()
++	{
++		return "drop";
+ 	}
+ 	
+ 	public String getSequenceNextValString(String sequenceName) {
+Index: sf/hibernate/dialect/MckoiDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/MckoiDialect.java,v
+retrieving revision 1.8.2.3
+diff -u -r1.8.2.3 MckoiDialect.java
+--- sf/hibernate/dialect/MckoiDialect.java	10 Aug 2003 02:56:50 -0000	1.8.2.3
++++ sf/hibernate/dialect/MckoiDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -37,9 +37,15 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, NO_BATCH);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
+ 	}
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++
+ 	public String getSequenceNextValString(String sequenceName) {
+ 		return  "SELECT UNIQUEKEY('" + sequenceName + "')";
+ 	}
+Index: sf/hibernate/dialect/MySQLDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/MySQLDialect.java,v
+retrieving revision 1.11.2.10
+diff -u -r1.11.2.10 MySQLDialect.java
+--- sf/hibernate/dialect/MySQLDialect.java	1 Dec 2003 05:29:15 -0000	1.11.2.10
++++ sf/hibernate/dialect/MySQLDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -44,9 +44,15 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, DEFAULT_BATCH_SIZE);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
+ 	}
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++
+ 	public boolean dropConstraints() {
+ 		return false;
+ 	}
+Index: sf/hibernate/dialect/Oracle9Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Oracle9Dialect.java,v
+retrieving revision 1.11.2.14
+diff -u -r1.11.2.14 Oracle9Dialect.java
+--- sf/hibernate/dialect/Oracle9Dialect.java	8 Dec 2003 23:13:30 -0000	1.11.2.14
++++ sf/hibernate/dialect/Oracle9Dialect.java	10 Dec 2003 22:32:56 -0000
+@@ -66,8 +66,13 @@
+ 		registerFunction( "lastday", new StandardSQLFunction(Hibernate.DATE) );
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add";
++	}
++	public String getDropColumnString()
++	{
++		return "drop column";
+ 	}
+ 	
+ 	public String getSequenceNextValString(String sequenceName) {
+Index: sf/hibernate/dialect/PointbaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/PointbaseDialect.java,v
+retrieving revision 1.6.2.1
+diff -u -r1.6.2.1 PointbaseDialect.java
+--- sf/hibernate/dialect/PointbaseDialect.java	7 Aug 2003 13:08:50 -0000	1.6.2.1
++++ sf/hibernate/dialect/PointbaseDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -40,8 +40,13 @@
+ 		
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add";
++	}
++	public String getDropColumnString()
++	{
++		return "drop column";
+ 	}
+ 	
+ 	public boolean dropConstraints() {
+Index: sf/hibernate/dialect/PostgreSQLDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/PostgreSQLDialect.java,v
+retrieving revision 1.16.2.4
+diff -u -r1.16.2.4 PostgreSQLDialect.java
+--- sf/hibernate/dialect/PostgreSQLDialect.java	23 Oct 2003 07:27:28 -0000	1.16.2.4
++++ sf/hibernate/dialect/PostgreSQLDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -34,9 +34,15 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, DEFAULT_BATCH_SIZE);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
+ 	}
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++
+ 	public boolean dropConstraints() {
+ 		return true;
+ 	}
+Index: sf/hibernate/dialect/ProgressDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/ProgressDialect.java,v
+retrieving revision 1.4.2.1
+diff -u -r1.4.2.1 ProgressDialect.java
+--- sf/hibernate/dialect/ProgressDialect.java	7 Aug 2003 13:08:50 -0000	1.4.2.1
++++ sf/hibernate/dialect/ProgressDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -43,8 +43,13 @@
+ 		return false;
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add column";
++	}
++	public String getDropColumnString()
++	{
++		return "drop column";
+ 	}
+ 	
+ 	public boolean qualifyIndexName() {
+Index: sf/hibernate/dialect/SAPDBDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/SAPDBDialect.java,v
+retrieving revision 1.12.2.4
+diff -u -r1.12.2.4 SAPDBDialect.java
+--- sf/hibernate/dialect/SAPDBDialect.java	28 Oct 2003 23:48:38 -0000	1.12.2.4
++++ sf/hibernate/dialect/SAPDBDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -49,8 +49,13 @@
+ 		return false;
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add";
++	}
++	public String getDropColumnString()
++	{
++		return "drop";
+ 	}
+ 	
+ 	public String getAddForeignKeyConstraintString(String constraintName, String[] foreignKey, String referencedTable, String[] primaryKey) {
+Index: sf/hibernate/dialect/SQLServerDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Attic/SQLServerDialect.java,v
+retrieving revision 1.1.2.2
+diff -u -r1.1.2.2 SQLServerDialect.java
+--- sf/hibernate/dialect/SQLServerDialect.java	14 Nov 2003 03:37:40 -0000	1.1.2.2
++++ sf/hibernate/dialect/SQLServerDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -1,42 +1,48 @@
+-//$Id: SQLServerDialect.java,v 1.1.2.2 2003/11/14 03:37:40 oneovthafew Exp $
+-package net.sf.hibernate.dialect;
+-
+-/**
+- * A dialect for Microsoft SQL Server 2000
+- * @author Gavin King
+- */
+-public class SQLServerDialect extends SybaseDialect {
+-	
+-	public boolean bindLimitParametersFirst() {
+-		return super.bindLimitParametersFirst();
+-	}
+-
+-	public String getLimitString(String querySelect, boolean hasOffset, int limit) {
+-		if (hasOffset) throw new UnsupportedOperationException("sql server has no offset");
+-		return new StringBuffer( querySelect.length()+6 )
+-			.append(querySelect)
+-			.insert( getAfterSelectInsertPoint(querySelect), " top " + limit )
+-			.toString();
+-	}
+-
+-	public boolean supportsLimit() {
+-		return true;
+-	}
+-
+-	public boolean useMaxForLimit() {
+-		return true;
+-	}
+-
+-	public boolean supportsLimitOffset() {
+-		return false;
+-	}
+-
+-	public boolean supportsVariableLimit() {
+-		return false;
+-	}
+-
+-	private static int getAfterSelectInsertPoint(String sql) {
+-		return sql.startsWith("select distinct") ? 15 : 6;
+-	}
+-
+-}
++//$Id: SQLServerDialect.java,v 1.1.2.2 2003/11/14 03:37:40 oneovthafew Exp $
++package net.sf.hibernate.dialect;
++
++/**
++ * A dialect for Microsoft SQL Server 2000
++ * @author Gavin King
++ */
++public class SQLServerDialect extends SybaseDialect 
++{
++	
++	public String getDropColumnString()
++	{
++		return "drop column";
++	}
++
++	public boolean bindLimitParametersFirst() {
++		return super.bindLimitParametersFirst();
++	}
++
++	public String getLimitString(String querySelect, boolean hasOffset, int limit) {
++		if (hasOffset) throw new UnsupportedOperationException("sql server has no offset");
++		return new StringBuffer( querySelect.length()+6 )
++			.append(querySelect)
++			.insert( getAfterSelectInsertPoint(querySelect), " top " + limit )
++			.toString();
++	}
++
++	public boolean supportsLimit() {
++		return true;
++	}
++
++	public boolean useMaxForLimit() {
++		return true;
++	}
++
++	public boolean supportsLimitOffset() {
++		return false;
++	}
++
++	public boolean supportsVariableLimit() {
++		return false;
++	}
++
++	private static int getAfterSelectInsertPoint(String sql) {
++		return sql.startsWith("select distinct") ? 15 : 6;
++	}
++
++}
+Index: sf/hibernate/dialect/SybaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/SybaseDialect.java,v
+retrieving revision 1.7.2.3
+diff -u -r1.7.2.3 SybaseDialect.java
+--- sf/hibernate/dialect/SybaseDialect.java	10 Aug 2003 02:56:50 -0000	1.7.2.3
++++ sf/hibernate/dialect/SybaseDialect.java	10 Dec 2003 22:32:56 -0000
+@@ -34,9 +34,15 @@
+ 		getDefaultProperties().setProperty(Environment.STATEMENT_BATCH_SIZE, NO_BATCH);
+ 	}
+ 	
+-	public String getAddColumnString() {
++	public String getAddColumnString() 
++	{
+ 		return "add";
+ 	}
++	public String getDropColumnString()
++	{
++		return "drop";
++	}
++
+ 	public String getNullColumnString() {
+ 		return " null";
+ 	}
+Index: sf/hibernate/mapping/Table.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/mapping/Table.java,v
+retrieving revision 1.13.2.10
+diff -u -r1.13.2.10 Table.java
+--- sf/hibernate/mapping/Table.java	1 Dec 2003 05:29:16 -0000	1.13.2.10
++++ sf/hibernate/mapping/Table.java	10 Dec 2003 22:32:57 -0000
+@@ -36,8 +36,10 @@
+ 	private boolean quoted;
+ 	private static int tableCounter=0;
+ 	
+-	public Table() {
++	public Table(String schema,String name) {
+ 		uniqueInteger = tableCounter++;
++		this.schema = schema;
++		this.name = name;
+ 	}
+ 	
+ 	public String getQualifiedName(Dialect dialect) {
+@@ -101,37 +103,50 @@
+ 		return uniqueKeys.values().iterator();
+ 	}
+ 	
+-	public Iterator sqlAlterStrings(Dialect dialect, Mapping p, TableMetadata tableInfo) throws HibernateException {
+-		
+-		StringBuffer root = new StringBuffer("alter table ")
+-			.append( getQualifiedName(dialect) )
+-			.append(' ')
+-			.append( dialect.getAddColumnString() );
+-		
+-		Iterator iter=getColumnIterator();
++	public Iterator sqlAlterAddColumnsStrings(Dialect dialect, Mapping p, TableMetadata tableInfo) throws HibernateException 
++	{		
+ 		List results = new ArrayList();
+-		while ( iter.hasNext() ) {
++		Iterator iter = getColumnIterator();
++		while ( iter.hasNext() ) 
++		{
+ 			Column col = (Column) iter.next();
+-			
+-			ColumnMetadata columnInfo=tableInfo.getColumnMetadata( col.getName() );
+-			
+-			if (columnInfo==null) {
++			ColumnMetadata columnInfo = tableInfo.getColumnMetadata( col.getName() );
++			if (columnInfo == null) 
++			{
+ 				// the column doesnt exist at all.
+-				StringBuffer alter = new StringBuffer( root.toString() )
+-					.append(' ')
+-					.append( col.getQuotedName(dialect) )
+-					.append(' ')
+-					.append( col.getSqlType(dialect, p) );
+-				if ( col.isUnique() && dialect.supportsUnique() ) {
+-					alter.append(" unique");
+-				}
+-				results.add( alter.toString() );
++				results.add( sqlAlterAddColumnString(dialect, p, tableInfo, col) );
+ 			}
+-			
+ 		}
+-		
+ 		return results.iterator();
+ 	}
++
++	public String sqlAlterAddColumnString(Dialect dialect, Mapping p, TableMetadata tableInfo,Column col) throws HibernateException 
++	{
++		StringBuffer root = new StringBuffer("alter table ")
++			.append( getQualifiedName(dialect) )
++			.append(' ')
++			.append( dialect.getAddColumnString())
++			.append(' ')
++			.append( col.getQuotedName(dialect) )
++			.append(' ')
++			.append( col.getSqlType(dialect, p) );
++		if ( col.isUnique() && dialect.supportsUnique() ) 
++		{
++			root.append(" unique");
++		}
++		return root.toString();
++	}
++
++	public String sqlAlterDropColumnString(Dialect dialect, Mapping p, TableMetadata tableInfo,Column col) throws HibernateException 
++	{
++		StringBuffer root = new StringBuffer("alter table ")
++			.append( getQualifiedName(dialect) )
++			.append(' ')
++			.append( dialect.getDropColumnString())
++			.append(' ')
++			.append( col.getQuotedName(dialect) );
++		return root.toString();
++	}
+ 	
+ 	public String sqlCreateString(Dialect dialect, Mapping p) throws HibernateException {
+ 		StringBuffer buf = new StringBuffer("create table ")
+@@ -313,6 +328,10 @@
+ 		this.quoted = quoted;
+ 	}
+ 
++	public Object getKey()
++	{
++		return schema != null ? schema + "." + name : name;
++	}
+ }
+ 
+ 
+Index: sf/hibernate/tool/hbm2ddl/DatabaseMetadata.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/DatabaseMetadata.java,v
+retrieving revision 1.1
+diff -u -r1.1 DatabaseMetadata.java
+--- sf/hibernate/tool/hbm2ddl/DatabaseMetadata.java	16 Jun 2003 03:25:00 -0000	1.1
++++ sf/hibernate/tool/hbm2ddl/DatabaseMetadata.java	10 Dec 2003 22:32:57 -0000
+@@ -13,15 +13,16 @@
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.dialect.Dialect;
++import net.sf.hibernate.mapping.Table;
+ 
+ /**
+  * JDBC database metadata
+  * @author Christoph Sturm, Teodor Danciu
+  */
+-public class DatabaseMetadata {
+-	private final Map tables = new HashMap();
++public class DatabaseMetadata 
++{
++	private final Map tables = new HashMap(); // map( '[schema.]tableName' -> TableMetadata ) 
+ 	private final Set sequences = new HashSet();
+-	
+ 	private DatabaseMetaData meta;
+ 	
+ 	public DatabaseMetadata(Connection connection, Dialect dialect) throws SQLException {
+@@ -29,24 +30,25 @@
+ 		initSequences(connection, dialect);
+ 	}
+ 	
+-	public TableMetadata getTableMetadata(String name) throws HibernateException {
++	public TableMetadata getTableMetadata(Table tableDef) throws HibernateException 
++	{
+ 		TableMetadata table = null;
++	
++		if (tableDef!=null) {
+ 		
+-		if (name!=null) {
+-			
+-			table = (TableMetadata) tables.get( name.toUpperCase() );
++			table = (TableMetadata) tables.get( tableDef.getKey() );  //was using name.toUpperCase()
+ 			if (table==null) {
+ 				String[] types = {"TABLE"};
+ 				ResultSet rs = null;
+-		
++	
+ 				try {
+ 					try {
+-						rs = meta.getTables(null, "%", name.toUpperCase(), types);
+-				
++						rs = meta.getTables(null, tableDef.getSchema(), tableDef.getName().toUpperCase(), types);//was using "%" as schema
++			
+ 						while ( rs.next() ) {
+-							if ( name.equalsIgnoreCase( rs.getString("TABLE_NAME") ) ) {
++							if ( tableDef.getName().equalsIgnoreCase( rs.getString("TABLE_NAME") ) ) {
+ 								table = new TableMetadata(rs, meta);
+-								tables.put( name.toUpperCase(), table );
++								tables.put( tableDef.getKey(), table ); //was using name.toUpperCase()
+ 								break;
+ 							}
+ 						}
+@@ -60,10 +62,10 @@
+ 				}
+ 			}
+ 		}
+-		
++	
+ 		return table;
+ 	}
+-
++		
+ 	private void initSequences(Connection connection, Dialect dialect) throws SQLException {
+ 		String sql = dialect.getQuerySequencesString();
+ 		
+@@ -87,8 +89,12 @@
+ 		return key instanceof String && sequences.contains( ( (String) key ).toUpperCase() );
+ 	}
+ 
++	/**
++	 * Check if key is a table obj.
++	 * @param key string in format '[schema.]tableName'
++	 */
+ 	public boolean isTable(Object key) throws HibernateException {
+-		return key instanceof String && ( getTableMetadata( (String) key ) != null );
++		return key instanceof String && ( tables.containsKey((String) key ));
+ 	}
+ }
+ 
+Index: sf/hibernate/tool/hbm2ddl/TableMetadata.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/TableMetadata.java,v
+retrieving revision 1.2.2.2
+diff -u -r1.2.2.2 TableMetadata.java
+--- sf/hibernate/tool/hbm2ddl/TableMetadata.java	2 Nov 2003 04:26:44 -0000	1.2.2.2
++++ sf/hibernate/tool/hbm2ddl/TableMetadata.java	10 Dec 2003 22:32:57 -0000
+@@ -124,7 +124,7 @@
+ 		ResultSet rs = null;
+ 		
+ 		try {
+-			rs = meta.getColumns(null, "%", getName(), "%");
++			rs = meta.getColumns(null, schema, getName(), "%");
+ 			while ( rs.next() ) addColumn(rs);
+ 		} 
+ 		finally  {

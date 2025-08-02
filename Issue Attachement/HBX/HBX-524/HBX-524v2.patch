@@ -1,0 +1,557 @@
+Index: java/org/hibernate/cfg/reveng/OverrideBinder.java
+===================================================================
+--- java/org/hibernate/cfg/reveng/OverrideBinder.java	(revision 15155)
++++ java/org/hibernate/cfg/reveng/OverrideBinder.java	(working copy)
+@@ -160,6 +160,8 @@
+ 			}
+ 			
+ 			if(StringHelper.isNotEmpty(constraintName)) {
++				if (!validateFkAssociations(element))
++					throw new IllegalArgumentException("you can't mix <many-to-one/> or <set/> with <(inverse-)one-to-one/> ");
+ 				String manyToOneProperty = null;
+ 				Boolean excludeManyToOne = null;
+ 				
+@@ -176,13 +178,53 @@
+ 					collectionProperty = collection.attributeValue("property");
+ 					excludeCollection = BooleanValue(collection.attributeValue("exclude"));
+ 				}
+-				repository.addForeignKeyInfo(constraintName, manyToOneProperty, excludeManyToOne, collectionProperty, excludeCollection);
++				
++				if ( (manyToOne!=null) || (collection!=null) ) {
++					repository.addForeignKeyInfo(constraintName, manyToOneProperty, excludeManyToOne, collectionProperty, excludeCollection);
++					continue;
++				}
++				
++				String oneToOneProperty = null;
++				Boolean excludeOneToOne = null;
++				Element oneToOne = element.element("one-to-one");
++				if(oneToOne!=null) {
++					oneToOneProperty = oneToOne.attributeValue("property");
++					excludeOneToOne = BooleanValue(oneToOne.attributeValue("exclude"));					
++				}
++				
++				String inverseOneToOneProperty = null;
++				Boolean excludeInverseOneToOne = null;
++				Element inverseOneToOne = element.element("inverse-one-to-one");
++				if(inverseOneToOne!=null) {
++					inverseOneToOneProperty = oneToOne.attributeValue("property");
++					excludeInverseOneToOne = BooleanValue(inverseOneToOne.attributeValue("exclude"));					
++				}	
++				
++				// having oneToOne = null and inverseOneToOne != null doesn't make sense
++				// we cannot have the inserse side without the owning side in this case
++				
++				if ( (oneToOne!=null) ) {
++					repository.addForeignKeyInfo(constraintName, oneToOneProperty, excludeOneToOne, inverseOneToOneProperty, excludeInverseOneToOne);
++				}
+ 			}
+-			
+ 		}
+ 		
+ 	}
+ 
++	private static boolean validateFkAssociations(Element element){
++		Element manyToOne = element.element("many-to-one");
++		Element oneToOne = element.element("one-to-one");
++		Element set = element.element("set");
++		Element inverseOneToOne = element.element("inverse-one-to-one");
++		
++		if (manyToOne != null && ( oneToOne != null || inverseOneToOne != null)
++				|| oneToOne != null && set != null
++				|| inverseOneToOne != null && set != null)
++			return false;
++		
++		return true;
++	}
++	
+ 	private static Boolean BooleanValue(String string) {
+ 		if(string==null) return null;
+ 		return Boolean.valueOf(string);		
+Index: java/org/hibernate/cfg/reveng/OverrideRepository.java
+===================================================================
+--- java/org/hibernate/cfg/reveng/OverrideRepository.java	(revision 15155)
++++ java/org/hibernate/cfg/reveng/OverrideRepository.java	(working copy)
+@@ -62,13 +62,13 @@
+ 
+ 	final private Map compositeIdNameForTable;
+ 
+-	final private Map foreignKeyToEntityName;
++	final private Map foreignKeyToOneName;
+ 
+-	final private Map foreignKeyToCollectionName;
++	final private Map foreignKeyToInverseName;
+ 
+-	final private Map foreignKeyCollectionExclude;
++	final private Map foreignKeyInverseExclude;
+ 
+-	final private Map foreignKeyManyToOneExclude;
++	final private Map foreignKeyToOneExclude;
+ 
+ 	final private Map tableMetaAttributes; // TI -> MultiMap of SimpleMetaAttributes
+ 
+@@ -96,10 +96,10 @@
+ 		excludedColumns = new HashSet();
+ 		schemaSelections = new ArrayList();
+ 		compositeIdNameForTable = new HashMap();
+-		foreignKeyToEntityName = new HashMap();
+-		foreignKeyToCollectionName = new HashMap();
+-		foreignKeyCollectionExclude = new HashMap();
+-		foreignKeyManyToOneExclude = new HashMap();
++		foreignKeyToOneName = new HashMap();
++		foreignKeyToInverseName = new HashMap();
++		foreignKeyInverseExclude = new HashMap();
++		foreignKeyToOneExclude = new HashMap();
+ 		tableMetaAttributes = new HashMap();
+ 		columnMetaAttributes = new HashMap();
+ 	}
+@@ -418,7 +418,7 @@
+ 			}
+ 			
+ 			public String foreignKeyToEntityName(String keyname, TableIdentifier fromTable, List fromColumnNames, TableIdentifier referencedTable, List referencedColumnNames, boolean uniqueReference) {
+-				String property = (String) foreignKeyToEntityName.get(keyname);
++				String property = (String) foreignKeyToOneName.get(keyname);
+ 				if(property==null) {
+ 					return super.foreignKeyToEntityName(keyname, fromTable, fromColumnNames, referencedTable, referencedColumnNames, uniqueReference);
+ 				} else {
+@@ -427,7 +427,7 @@
+ 			}
+ 			
+ 			public String foreignKeyToCollectionName(String keyname, TableIdentifier fromTable, List fromColumns, TableIdentifier referencedTable, List referencedColumns, boolean uniqueReference) {
+-				String property = (String) foreignKeyToCollectionName.get(keyname);
++				String property = (String) foreignKeyToInverseName.get(keyname);
+ 				if(property==null) {
+ 					return super.foreignKeyToCollectionName(keyname, fromTable, fromColumns, referencedTable, referencedColumns, uniqueReference);
+ 				} else {
+@@ -436,7 +436,7 @@
+ 			}
+ 			
+ 			public boolean excludeForeignKeyAsCollection(String keyname, TableIdentifier fromTable, List fromColumns, TableIdentifier referencedTable, List referencedColumns) {
+-				Boolean bool = (Boolean) foreignKeyCollectionExclude.get(keyname);
++				Boolean bool = (Boolean) foreignKeyInverseExclude.get(keyname);
+ 				if(bool!=null) {
+ 					return bool.booleanValue();
+ 				} else {
+@@ -446,7 +446,7 @@
+ 			}
+ 			
+ 			public boolean excludeForeignKeyAsManytoOne(String keyname, TableIdentifier fromTable, List fromColumns, TableIdentifier referencedTable, List referencedColumns) {
+-				Boolean bool = (Boolean) foreignKeyManyToOneExclude.get(keyname);
++				Boolean bool = (Boolean) foreignKeyToOneExclude.get(keyname);
+ 				if(bool!=null) {
+ 					return bool.booleanValue();
+ 				} else {
+@@ -604,18 +604,23 @@
+ 		schemaSelections.add(schemaSelection);
+ 	}
+ 
+-	public void addForeignKeyInfo(String constraintName, String manyToOneProperty, Boolean excludeManyToOne, String collectionProperty, Boolean excludeCollection) {
+-		if(StringHelper.isNotEmpty(manyToOneProperty)) {
+-			foreignKeyToEntityName.put(constraintName, manyToOneProperty);
++	/**
++	 * Both sides of the FK are important, 
++	 * the owning side can generate a toOne (ManyToOne or OneToOne), we call this side foreignKeyToOne
++	 * the inverse side can generate a OneToMany OR a OneToOne (in case we have a pure bidirectional OneToOne, we call this side foreignKeyToInverse
++	 */
++	public void addForeignKeyInfo(String constraintName, String toOneProperty, Boolean excludeToOne, String inverseProperty, Boolean excludeInverse) {
++		if(StringHelper.isNotEmpty(toOneProperty)) {
++			foreignKeyToOneName.put(constraintName, toOneProperty);
+ 		}		
+-		if(StringHelper.isNotEmpty(collectionProperty)) {
+-			foreignKeyToCollectionName.put(constraintName, collectionProperty);
++		if(StringHelper.isNotEmpty(inverseProperty)) {
++			foreignKeyToInverseName.put(constraintName, inverseProperty);
+ 		}
+-		if(excludeCollection!=null) {
+-			foreignKeyCollectionExclude.put(constraintName, excludeCollection);
++		if(excludeInverse!=null) {
++			foreignKeyInverseExclude.put(constraintName, excludeInverse);
+ 		}
+-		if(excludeManyToOne!=null) {
+-			foreignKeyManyToOneExclude.put(constraintName, excludeManyToOne);
++		if(excludeToOne!=null) {
++			foreignKeyToOneExclude.put(constraintName, excludeToOne);
+ 		}
+ 	}
+ 
+Index: java/org/hibernate/hibernate-reverse-engineering-3.0.dtd
+===================================================================
+--- java/org/hibernate/hibernate-reverse-engineering-3.0.dtd	(revision 15155)
++++ java/org/hibernate/hibernate-reverse-engineering-3.0.dtd	(working copy)
+@@ -84,7 +84,7 @@
+ <!ATTLIST param name CDATA #REQUIRED>
+ 
+ <!-- A foreign-key has to have at least a constraint-name AND/OR foreign-table+column-ref's -->
+-<!ELEMENT foreign-key (column-ref*,many-to-one?,(set)?) >
++<!ELEMENT foreign-key (column-ref*,many-to-one?,(set)?,one-to-one?,(inverse-one-to-one)?) >
+ <!ATTLIST foreign-key constraint-name        CDATA    #IMPLIED >
+ <!ATTLIST foreign-key foreign-catalog CDATA  #IMPLIED >
+ <!ATTLIST foreign-key foreign-schema CDATA   #IMPLIED >
+@@ -98,7 +98,14 @@
+ <!ATTLIST many-to-one property CDATA #IMPLIED>
+ <!ATTLIST many-to-one exclude (true|false) #IMPLIED>
+ 
++<!ELEMENT one-to-one EMPTY >
++<!ATTLIST one-to-one property CDATA #IMPLIED>
++<!ATTLIST one-to-one exclude (true|false) #IMPLIED>
+ 
++<!ELEMENT inverse-one-to-one EMPTY >
++<!ATTLIST inverse-one-to-one property CDATA #IMPLIED>
++<!ATTLIST inverse-one-to-one exclude (true|false) #IMPLIED>
++
+ <!ELEMENT set EMPTY >
+ <!ATTLIST set property CDATA #IMPLIED>
+ <!ATTLIST set exclude (true|false) #IMPLIED>
+Index: java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java
+===================================================================
+--- java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	(revision 15155)
++++ java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	(working copy)
+@@ -22,6 +22,7 @@
+ import org.hibernate.mapping.JoinedSubclass;
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.OneToMany;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.PersistentClassVisitor;
+ import org.hibernate.mapping.Property;
+@@ -174,6 +175,10 @@
+         return (property.getValue()!=null) && (property.getValue() instanceof ManyToOne);
+     }
+ 	
++	public boolean isOneToOne(Property property) {
++        return (property.getValue()!=null) && (property.getValue() instanceof OneToOne);
++    }
++	
+ 	public boolean isTemporalValue(Property property) {
+ 		if(property.getValue() instanceof SimpleValue) {
+ 			String typeName = ((SimpleValue)property.getValue()).getTypeName();
+Index: java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+--- java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(revision 15155)
++++ java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(working copy)
+@@ -20,6 +20,7 @@
+ import org.hibernate.mapping.KeyValue;
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.OneToMany;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.RootClass;
+@@ -445,6 +446,21 @@
+ 		buffer.append(getHibernateCascadeTypeAnnotation(property));
+ 		return buffer.toString();
+ 	}
++	
++	public String generateOneToOneAnnotation(Property property, Configuration cfg) {
++		AnnotationBuilder ab = AnnotationBuilder.createAnnotation( importType("javax.persistence.OneToOne") )
++			.addAttribute( "cascade", getCascadeTypes(property))
++			.addAttribute( "fetch", getFetchType(property));
++		OneToOne oneToOne = (OneToOne)property.getValue();
++		if (oneToOne.isConstrained())
++			ab.addQuotedAttribute("mappedBy", getOneToOneMappedBy(cfg, oneToOne));
++		
++		StringBuffer buffer = new StringBuffer(ab.getResult());
++		
++		buffer.append(getHibernateCascadeTypeAnnotation(property));
++		return buffer.toString();
++	}
++	
+ 	public String getHibernateCascadeTypeAnnotation(Property property) {
+ 		StringTokenizer st =  new StringTokenizer( property.getCascade(), ", ", false );
+ 		String cascadeType = null;
+@@ -508,7 +524,6 @@
+ 		}
+ 	}
+ 
+-
+ 	public Object getDecoratedObject() {
+ 		return clazz;
+ 	}
+@@ -665,6 +680,42 @@
+ 		return mappedBy;
+ 	}
+ 	
++	private String getOneToOneMappedBy(Configuration cfg, OneToOne oneToOne) {
++		String mappedBy;
++		Iterator joinColumnsIt = oneToOne.getColumnIterator();
++		Set joinColumns = new HashSet();
++		while ( joinColumnsIt.hasNext() ) {
++			joinColumns.add( joinColumnsIt.next() );
++		}
++		PersistentClass pc = cfg.getClassMapping( oneToOne.getReferencedEntityName() );
++		Iterator properties = pc.getPropertyClosureIterator();
++		//TODO we should check the table too
++		boolean isOtherSide = false;
++		mappedBy = "unresolved";
++		while ( ! isOtherSide && properties.hasNext() ) {
++			Property oneProperty = (Property) properties.next();
++			Value manyValue = oneProperty.getValue();
++			if ( manyValue != null && manyValue instanceof OneToOne ) {
++				if ( joinColumns.size() == manyValue.getColumnSpan() ) {
++					isOtherSide = true;
++					Iterator it = manyValue.getColumnIterator();
++					while ( it.hasNext() ) {
++						Object column = it.next();
++						if (! joinColumns.contains( column ) ) {
++							isOtherSide = false;
++							break;
++						}
++					}
++					if (isOtherSide) {
++						mappedBy = oneProperty.getName();
++					}
++				}
++
++			}
++		}
++		return mappedBy;
++	}
++	
+ 	public boolean isSubclass() {
+ 		return clazz.getSuperclass()!=null; 
+ 	}
+Index: templates/pojo/Ejb3PropertyGetAnnotation.ftl
+===================================================================
+--- templates/pojo/Ejb3PropertyGetAnnotation.ftl	(revision 15155)
++++ templates/pojo/Ejb3PropertyGetAnnotation.ftl	(working copy)
+@@ -6,8 +6,10 @@
+ <#-- explicitly set the column name for this property-->
+ </#if>
+ </#if>
+-<#if c2h.isManyToOne(property)>
+-<#--TODO support @OneToOne true and false-->    
++
++<#if c2h.isOneToOne(property)>
++${pojo.generateOneToOneAnnotation(property, cfg)}
++<#elseif c2h.isManyToOne(property)>
+ ${pojo.generateManyToOneAnnotation(property)}
+ <#--TODO support optional and targetEntity-->    
+ ${pojo.generateJoinColumnsAnnotation(property, cfg)}
+Index: test/org/hibernate/tool/test/jdbc2cfg/foreignkeytest.reveng.xml
+===================================================================
+--- test/org/hibernate/tool/test/jdbc2cfg/foreignkeytest.reveng.xml	(revision 15155)
++++ test/org/hibernate/tool/test/jdbc2cfg/foreignkeytest.reveng.xml	(working copy)
+@@ -3,6 +3,8 @@
+ <hibernate-reverse-engineering>
+ 
+ <!-- This one assumes set and many-to-one is exclude=false -->
++
++
+     <table name="EMPLOYEE">
+ 		<foreign-key constraint-name="EMPLOYEE_MANAGER"> 
+ 			<many-to-one property="manager"/>
+@@ -17,5 +19,18 @@
+ 	    </foreign-key>
+ 	</table>	
+ 	
++	<table name="ADDRESS_PERSON">
++	    <foreign-key constraint-name="ADDRESS_PERSON">
++	    	<one-to-one exclude="true"/>
++	    	<inverse-one-to-one exclude="true"/>
++	    </foreign-key>
++	</table>
+ 	
++	<table name="ADDRESS_MULTI_PERSON">
++	    <foreign-key constraint-name="ADDRESS_MULTI_PERSON">
++	    	<one-to-one exclude="false"/>
++	    	<inverse-one-to-one exclude="true"/>
++	    </foreign-key>
++	</table>
++	
+ </hibernate-reverse-engineering>
+\ No newline at end of file
+Index: test/org/hibernate/tool/test/jdbc2cfg/OneToOneTest.java
+===================================================================
+--- test/org/hibernate/tool/test/jdbc2cfg/OneToOneTest.java	(revision 15155)
++++ test/org/hibernate/tool/test/jdbc2cfg/OneToOneTest.java	(working copy)
+@@ -5,21 +5,28 @@
+ package org.hibernate.tool.test.jdbc2cfg;
+ 
+ import java.io.File;
++import java.net.MalformedURLException;
++import java.net.URL;
++import java.net.URLClassLoader;
++import java.util.ArrayList;
++import java.util.List;
+ 
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ 
+ import org.hibernate.MappingException;
++import org.hibernate.cfg.AnnotationConfiguration;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.JDBCMetaDataConfiguration;
+ import org.hibernate.cfg.reveng.DefaultReverseEngineeringStrategy;
+-import org.hibernate.cfg.reveng.ReverseEngineeringSettings;
+ import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.tool.JDBCMetaDataBinderTestCase;
+ import org.hibernate.tool.hbm2x.HibernateMappingExporter;
++import org.hibernate.tool.hbm2x.POJOExporter;
++import org.hibernate.tool.test.TestHelper;
+ 
+ /**
+  * @author max
+@@ -166,7 +173,7 @@
+ 		localCfg.buildMappings();
+ 	}
+ 	
+-	public void testGenerateAndReadable() {
++	public void testGenerateMappingAndReadable() {
+ 		
+ 		cfg.buildMappings();
+ 		
+@@ -190,7 +197,61 @@
+ 		
+ 	}
+ 	
+-
++	public void testGenerateAnnotatedClassesAndReadable() throws MappingException, ClassNotFoundException, MalformedURLException {
++		
++		cfg.buildMappings();
++		POJOExporter exporter = new POJOExporter(cfg, getOutputDir() );
++		exporter.setTemplatePath(new String[0]);
++		exporter.getProperties().setProperty("ejb3", "true");
++		exporter.getProperties().setProperty("jdk5", "true");
++		exporter.start();		
++		
++		assertFileAndExists( new File(getOutputDir(), "Person.java") );
++		assertFileAndExists( new File(getOutputDir(), "AddressPerson.java") );
++		assertFileAndExists( new File(getOutputDir(), "MultiPersonId.java") );
++		assertFileAndExists( new File(getOutputDir(), "AddressMultiPerson.java") );
++		assertFileAndExists( new File(getOutputDir(), "AddressMultiPersonId.java") );
++		assertFileAndExists( new File(getOutputDir(), "MultiPerson.java") );
++		
++		assertEquals(6, getOutputDir().listFiles().length);
++		ArrayList list = new ArrayList();
++		List jars = new ArrayList();
++		addAnnotationJars(jars);
++		TestHelper.compile(
++				getOutputDir(), getOutputDir(), TestHelper.visitAllFiles( getOutputDir(), list ), "1.5",
++				TestHelper.buildClasspath( jars )
++		);
++        URL[] urls = new URL[] { getOutputDir().toURL() };
++        URLClassLoader ucl = new URLClassLoader(urls, Thread.currentThread().getContextClassLoader() );
++        Class personClass = ucl.loadClass("Person");
++        Class multiPersonClass = ucl.loadClass("MultiPerson");
++        Class addressMultiPerson = ucl.loadClass("AddressMultiPerson");
++        Class addressMultiPersonId = ucl.loadClass("AddressMultiPersonId");
++        Class addressPerson = ucl.loadClass("AddressPerson");
++        Class multiPersonIdClass = ucl.loadClass("MultiPersonId");
++        Thread.currentThread().setContextClassLoader(ucl);
++		AnnotationConfiguration configuration = new AnnotationConfiguration();
++		configuration.addAnnotatedClass(personClass)
++			.addAnnotatedClass(multiPersonClass)
++			.addAnnotatedClass(addressMultiPerson)
++			.addAnnotatedClass(addressMultiPersonId)
++			.addAnnotatedClass(addressPerson)
++			.addAnnotatedClass(multiPersonIdClass);
++		
++		configuration.buildMappings();
++		
++	}
++	
++	private void addAnnotationJars(List jars) {
++		jars.add( "ejb3-persistence.jar" );
++		jars.add( "hibernate-annotations.jar" );
++		jars.add( "hibernate-commons-annotations.jar" );
++		jars.add( "hibernate3.jar" );
++		jars.add( "dom4j-1.6.1.jar" );
++		jars.add( "commons-logging-1.0.4.jar" );
++		
++	}
++	
+ 	private void assertPropertyNotExist(PersistentClass projectClass, String prop) {
+ 		try {
+ 			projectClass.getProperty(prop);
+Index: test/org/hibernate/tool/test/jdbc2cfg/RevEngForeignKeyTests.java
+===================================================================
+--- test/org/hibernate/tool/test/jdbc2cfg/RevEngForeignKeyTests.java	(revision 15155)
++++ test/org/hibernate/tool/test/jdbc2cfg/RevEngForeignKeyTests.java	(working copy)
+@@ -4,6 +4,9 @@
+  */
+ package org.hibernate.tool.test.jdbc2cfg;
+ 
++import java.net.MalformedURLException;
++import java.util.List;
++
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ 
+@@ -68,7 +71,7 @@
+ 		
+ 		or.addResource(OVERRIDETEST_FOREIGNKEY_XML);
+ 		ReverseEngineeringStrategy repository = or.getReverseEngineeringStrategy(new DefaultReverseEngineeringStrategy());
+-
++	
+ 		JDBCMetaDataConfiguration localCfg = new JDBCMetaDataConfiguration();
+ 		localCfg.setReverseEngineeringStrategy(repository);
+ 		localCfg.readFromJDBC();			
+@@ -101,7 +104,42 @@
+ 		assertEquals("id", worksOn.getIdentifierProperty().getName());
+ 	
+ 	}
++
++	private void addAnnotationJars(List jars) {
++		jars.add( "ejb3-persistence.jar" );
++		jars.add( "hibernate-annotations.jar" );
++		jars.add( "hibernate-commons-annotations.jar" );
++		jars.add( "hibernate3.jar" );
++		jars.add( "dom4j-1.6.1.jar" );
++		jars.add( "commons-logging-1.0.4.jar" );
++		
++	}
+ 	
++	public void testOneToOne() throws MalformedURLException, ClassNotFoundException {
++		
++		OverrideRepository or = buildOverrideRepository();
++		
++		or.addResource(OVERRIDETEST_FOREIGNKEY_XML);
++		ReverseEngineeringStrategy repository = or.getReverseEngineeringStrategy(new DefaultReverseEngineeringStrategy());
++
++		JDBCMetaDataConfiguration localCfg = new JDBCMetaDataConfiguration();
++		localCfg.setReverseEngineeringStrategy(repository);
++		localCfg.readFromJDBC();			
++
++		PersistentClass person = localCfg.getClassMapping("Person");
++		PersistentClass addressPerson = localCfg.getClassMapping("AddressPerson");
++		PersistentClass addressMultiPerson = localCfg.getClassMapping("AddressMultiPerson");
++		PersistentClass multiPerson = localCfg.getClassMapping("MultiPerson");
++		
++		assertPropertyNotExists(addressPerson, "person", "should be removed by reveng.xml");
++		assertPropertyNotExists(person, "addressPerson", "should be removed by reveng.xml");
++		
++		Property property = addressMultiPerson.getProperty("multiPerson");
++		assertNotNull(property);
++		
++		assertPropertyNotExists(multiPerson, "addressMultiPerson", "should be removed by reveng.xml");
++	}
++	
+ 	public void testDuplicateForeignKeyDefinition() {
+ 		
+ 		OverrideRepository or = buildOverrideRepository();
+@@ -145,6 +183,10 @@
+ 			"create table PROJECT ( project_id integer not null, name varchar(50), team_lead integer, primary key (project_id) )",
+ 			"create table EMPLOYEE ( id integer not null, name varchar(50), manager_id integer, primary key (id), constraint employee_manager foreign key (manager_id) references EMPLOYEE)",
+ 			"create table WORKS_ON ( project_id integer not null, employee_id integer not null, start_date date, end_date date, primary key (project_id, employee_id), constraint workson_employee foreign key (employee_id) references EMPLOYEE, foreign key (project_id) references PROJECT )",
++			"create table PERSON ( person_id integer not null, name varchar(50), primary key (person_id) )",
++			"create table ADDRESS_PERSON ( address_id integer not null, name varchar(50), primary key (address_id), constraint address_person foreign key (address_id) references PERSON)",			
++			"create table MULTI_PERSON ( person_id integer not null, person_compid integer not null, name varchar(50), primary key (person_id, person_compid) )",
++			"create table ADDRESS_MULTI_PERSON ( address_id integer not null, address_compid integer not null, name varchar(50), primary key (address_id, address_compid), constraint address_multi_person foreign key (address_id, address_compid) references MULTI_PERSON)",
+ 			"alter  table PROJECT add constraint project_manager foreign key (team_lead) references EMPLOYEE"
+ 		};
+ 	}
+@@ -154,7 +196,11 @@
+ 				"alter table PROJECT drop constraint project_manager",
+ 				"drop table WORKS_ON",
+ 				"drop table EMPLOYEE",
+-				"drop table PROJECT",											
++				"drop table PROJECT",	
++				"drop table ADDRESS_PERSON",
++				"drop table PERSON",
++				"drop table ADDRESS_MULTI_PERSON",
++				"drop table MULTI_PERSON"
+ 			};
+ 	}
+ 

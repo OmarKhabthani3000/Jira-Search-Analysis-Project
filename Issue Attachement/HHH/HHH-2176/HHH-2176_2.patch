@@ -1,0 +1,126 @@
+Index: src/org/hibernate/dialect/DB2Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/DB2Dialect.java	(revision 11214)
++++ src/org/hibernate/dialect/DB2Dialect.java	(working copy)
+@@ -200,60 +200,25 @@
+ 		return pagingSelect.toString();
+ 	}*/
+ 
+-	/**
+-	 * Render the <tt>rownumber() over ( .... ) as rownumber_,</tt> 
+-	 * bit, that goes in the select list
+-	 */
+-	private String getRowNumber(String sql) {
+-		StringBuffer rownumber = new StringBuffer(50)
+-			.append("rownumber() over(");
+-
+-		int orderByIndex = sql.toLowerCase().indexOf("order by");
+-
+-		if ( orderByIndex>0 && !hasDistinct(sql) ) {
+-			rownumber.append( sql.substring(orderByIndex) );
+-		}
+-
+-		rownumber.append(") as rownumber_,");
+-
+-		return rownumber.toString();
++	public boolean supportsVariableLimit() {
++		return false;
+ 	}
+-
+-	public String getLimitString(String sql, boolean hasOffset) {
+-
+-		int startOfSelect = sql.toLowerCase().indexOf("select");
+-
+-		StringBuffer pagingSelect = new StringBuffer( sql.length()+100 )
+-					.append( sql.substring(0, startOfSelect) ) //add the comment
+-					.append("select * from ( select ") //nest the main query in an outer select
+-					.append( getRowNumber(sql) ); //add the rownnumber bit into the outer query select list
+-
+-		if ( hasDistinct(sql) ) {
+-			pagingSelect.append(" row_.* from ( ") //add another (inner) nested select
+-				.append( sql.substring(startOfSelect) ) //add the main query
+-				.append(" ) as row_"); //close off the inner nested select
++	
++	public String getLimitString(String sql, int offset, int limit) {
++		if (offset == 0) {
++			return sql + " fetch first " + limit + " rows only";
+ 		}
+-		else {
+-			pagingSelect.append( sql.substring( startOfSelect + 6 ) ); //add the main query
+-		}
+-
+-		pagingSelect.append(" ) as temp_ where rownumber_ ");
+-
+-		//add the restriction to the outer select
+-		if (hasOffset) {
+-			pagingSelect.append("between ?+1 and ?");
+-		}
+-		else {
+-			pagingSelect.append("<= ?");
+-		}
+-
++		StringBuffer pagingSelect = new StringBuffer( sql.length()+200 )
++					.append("select * from ( select inner2_.*, rownumber() over(order by order of inner2_) as rownumber_ from ( ")
++					.append( sql )  //nest the main query in an outer select
++					.append(" fetch first ")
++					.append(limit)
++					.append(" rows only ) as inner2_ ) as inner1_ where rownumber_ > ")
++					.append(offset)
++					.append(" order by rownumber_");
+ 		return pagingSelect.toString();
+ 	}
+ 
+-	private static boolean hasDistinct(String sql) {
+-		return sql.toLowerCase().indexOf("select distinct")>=0;
+-	}
+-
+ 	public String getForUpdateString() {
+ 		return " for read only with rs";
+ 	}
+Index: test/org/hibernate/test/pagination/PaginationTest.java
+===================================================================
+--- test/org/hibernate/test/pagination/PaginationTest.java	(revision 11214)
++++ test/org/hibernate/test/pagination/PaginationTest.java	(working copy)
+@@ -2,6 +2,7 @@
+ package org.hibernate.test.pagination;
+ 
+ import java.math.BigDecimal;
++import java.util.List;
+ 
+ import junit.framework.Test;
+ 
+@@ -45,6 +46,7 @@
+ 			DataPoint dp = new DataPoint();
+ 			dp.setX( new BigDecimal(i * 0.1d).setScale(19, BigDecimal.ROUND_DOWN) );
+ 			dp.setY( new BigDecimal( Math.cos( dp.getX().doubleValue() ) ).setScale(19, BigDecimal.ROUND_DOWN) );
++			dp.setDescription("Description: " + i%5);
+ 			s.persist(dp);
+ 		}
+ 		t.commit();
+@@ -68,6 +70,26 @@
+ 			.setFirstResult(8)
+ 			.list().size();
+ 		assertEquals(size, 2);
++		List results = s.createQuery("select distinct description from DataPoint order by description")
++		.setFirstResult(2)
++		.setMaxResults(3)
++		.list();
++		assertEquals(3, results.size());
++		assertEquals("Description: 2", (String) results.get(0));
++		assertEquals("Description: 3", (String) results.get(1));
++		assertEquals("Description: 4", (String) results.get(2));
++		results = s.createSQLQuery("select description, xval, yval from DataPoint order by xval, yval")
++		.setFirstResult(2)
++		.setMaxResults(5)
++		.list();
++		assertEquals(5, results.size());
++		Object[] row = (Object[]) results.get(0);
++		assertClassAssignability(row[0].getClass(), String.class);
++		results = s.createSQLQuery("select * from DataPoint order by xval, yval")
++		.setFirstResult(2)
++		.setMaxResults(5)
++		.list();
++		assertEquals(5, results.size());
+ 		t.commit();
+ 		s.close();
+ 		

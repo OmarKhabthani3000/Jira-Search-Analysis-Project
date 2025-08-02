@@ -1,0 +1,367 @@
+# HG changeset patch
+# User dpatiejunaite
+# Date 1551715581 -7200
+#      Mon Mar 04 18:06:21 2019 +0200
+# Branch hibernate_patch_5.2.18
+# Node ID a31fed1bd0b7a73dc421f308f428105493228c1a
+# Parent  608fe89915c1f5faf0383c03a0e77b99c07adf71
+Dynamic parameters patch
+
+diff -r 608fe89915c1 -r a31fed1bd0b7 hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/engine/spi/QueryParameters.java
+--- a/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/engine/spi/QueryParameters.java	Tue Mar 12 12:47:24 2019 +0200
++++ b/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/engine/spi/QueryParameters.java	Mon Mar 04 18:06:21 2019 +0200
+@@ -68,7 +68,7 @@
+ 	private String processedSQL;
+ 	private Type[] processedPositionalParameterTypes;
+ 	private Object[] processedPositionalParameterValues;
+-
++	private int[] dynamicParameterPositions;
+ 	private HQLQueryPlan queryPlan;
+ 
+ 	public QueryParameters() {
+@@ -89,6 +89,7 @@
+ 		this.optionalObject = optionalObject;
+ 		this.optionalId = optionalObjectId;
+ 		this.optionalEntityName = optionalEntityName;
++
+ 	}
+ 
+ 	public QueryParameters(
+@@ -97,6 +98,12 @@
+ 		this( positionalParameterTypes, positionalParameterValues, null, null, false, false, false, null, null, null, false, null );
+ 	}
+ 
++	public QueryParameters(final Type[] positionalParameterTypes, final Object[] postionalParameterValues,
++			final int[] parameterPositions, final Map namedParameters, final Serializable[] collectionKeys) {
++		this(positionalParameterTypes, postionalParameterValues, namedParameters, collectionKeys);
++		dynamicParameterPositions = parameterPositions;
++	}
++	   
+ 	public QueryParameters(
+ 			final Type[] positionalParameterTypes,
+ 			final Object[] positionalParameterValues,
+@@ -263,6 +270,10 @@
+ 
+ 	}
+ 
++	public int[] getDynamicParameterPositions() {
++		return dynamicParameterPositions;
++	}
++	
+ 	@SuppressWarnings( {"UnusedDeclaration"})
+ 	public boolean hasRowSelection() {
+ 		return rowSelection != null;
+@@ -351,6 +362,7 @@
+ 		}
+ 	}
+ 
++	
+ 	public String getComment() {
+ 		return comment;
+ 	}
+@@ -662,20 +674,31 @@
+ 	public void setQueryPlan(HQLQueryPlan queryPlan) {
+ 		this.queryPlan = queryPlan;
+ 	}
+-
+-	public void bindDynamicParameter(Type paramType, Object paramValue) {
+-		if(processedPositionalParameterTypes != null) {
+-			int length = processedPositionalParameterTypes.length;
+-			Type[] types = new Type[length + 1];
+-			Object[] values = new Object[length + 1];
+-			for ( int i = 0; i < length; i++ ) {
+-				types[i] = processedPositionalParameterTypes[i];
+-				values[i] = processedPositionalParameterValues[i];
+-			}
+-			types[length] = paramType;
+-			values[length] = paramValue;
+-			processedPositionalParameterTypes = types;
+-			processedPositionalParameterValues = values;
++	
++	public void bindDynamicParameter(Type paramType, Object paramValue, int position) {
++		if(processedPositionalParameterTypes == null) {
++			processedPositionalParameterTypes = getPositionalParameterTypes();
++		}
++		if(processedPositionalParameterValues == null) {
++			processedPositionalParameterValues = getPositionalParameterValues();
++		}
++		int length = processedPositionalParameterTypes.length;
++		if (dynamicParameterPositions == null) {
++			dynamicParameterPositions = new int[length];
+ 		}
++		int[] positions = new int[length + 1];
++		Type[] types = new Type[length + 1];
++		Object[] values = new Object[length + 1];
++		for (int i = 0; i < length; i++) {
++			positions[i] = dynamicParameterPositions[i];
++			types[i] = processedPositionalParameterTypes[i];
++			values[i] = processedPositionalParameterValues[i];
++		}
++		positions[length] = position;
++		types[length] = paramType;
++		values[length] = paramValue;
++		dynamicParameterPositions = positions;
++		processedPositionalParameterTypes = types;
++		processedPositionalParameterValues = values;
+ 	}
+ }
+diff -r 608fe89915c1 -r a31fed1bd0b7 hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/Loader.java
+--- a/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/Loader.java	Tue Mar 12 12:47:24 2019 +0200
++++ b/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/Loader.java	Mon Mar 04 18:06:21 2019 +0200
+@@ -17,8 +17,10 @@
+ import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.HashSet;
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Map.Entry;
+ import java.util.Set;
+ import java.util.concurrent.TimeUnit;
+ 
+@@ -2062,95 +2064,60 @@
+ 			QueryParameters queryParameters,
+ 			int startIndex,
+ 			SharedSessionContractImplementor session) throws SQLException {
+-		int span = 0;
+-		span += bindPositionalParameters( statement, queryParameters, startIndex, session );
+-		span += bindNamedParameters( statement, queryParameters.getNamedParameters(), startIndex + span, session );
+-		return span;
+-	}
++	    final TypedValue[] namedParams = getNamedParameters(queryParameters);
++	           int span = 0;
++	           int j = 0; // named param index
++	           
++	            final Object[] values = queryParameters.getFilteredPositionalParameterValues();
++	            final Type[] types = queryParameters.getFilteredPositionalParameterTypes();
++	            final int[] positions = queryParameters.getDynamicParameterPositions();
++	            for ( int i = 0; i < values.length; ) {
++	                if(positions == null || positions[i] == (startIndex + span + j)) { // No gaps, everything ok
++	                    types[i].nullSafeSet( statement, values[i], startIndex + span + j, session );
++	                    span += types[i].getColumnSpan( getFactory() );
++	                    i++;
++	                } else if(j < namedParams.length) { // Named param in the gap           
++	                    namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), startIndex + span + j, session );
++	                    j++;
++	                } else {
++	                    throw new IllegalArgumentException("Named and positional parameters doesnt match up, named parameter indexes: " + Arrays.toString(positions));
++	                }
++	            }
++        for (; j < namedParams.length; j++) {
++            namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), startIndex + span + j, session );
++        }
+ 
+-	/**
+-	 * Bind positional parameter values to the JDBC prepared statement.
+-	 * <p/>
+-	 * Positional parameters are those specified by JDBC-style ? parameters
+-	 * in the source query.  It is (currently) expected that these come
+-	 * before any named parameters in the source query.
+-	 *
+-	 * @param statement The JDBC prepared statement
+-	 * @param queryParameters The encapsulation of the parameter values to be bound.
+-	 * @param startIndex The position from which to start binding parameter values.
+-	 * @param session The originating session.
+-	 *
+-	 * @return The number of JDBC bind positions actually bound during this method execution.
+-	 *
+-	 * @throws SQLException Indicates problems performing the binding.
+-	 * @throws org.hibernate.HibernateException Indicates problems delegating binding to the types.
+-	 */
+-	protected int bindPositionalParameters(
+-			final PreparedStatement statement,
+-			final QueryParameters queryParameters,
+-			final int startIndex,
+-			final SharedSessionContractImplementor session) throws SQLException, HibernateException {
+-		final Object[] values = queryParameters.getFilteredPositionalParameterValues();
+-		final Type[] types = queryParameters.getFilteredPositionalParameterTypes();
+-		int span = 0;
+-		for ( int i = 0; i < values.length; i++ ) {
+-			types[i].nullSafeSet( statement, values[i], startIndex + span, session );
+-			span += types[i].getColumnSpan( getFactory() );
+-		}
+-		return span;
++        return span + j;
+ 	}
+ 
+-	/**
+-	 * Bind named parameters to the JDBC prepared statement.
+-	 * <p/>
+-	 * This is a generic implementation, the problem being that in the
+-	 * general case we do not know enough information about the named
+-	 * parameters to perform this in a complete manner here.  Thus this
+-	 * is generally overridden on subclasses allowing named parameters to
+-	 * apply the specific behavior.  The most usual limitation here is that
+-	 * we need to assume the type span is always one...
+-	 *
+-	 * @param statement The JDBC prepared statement
+-	 * @param namedParams A map of parameter names to values
+-	 * @param startIndex The position from which to start binding parameter values.
+-	 * @param session The originating session.
+-	 *
+-	 * @return The number of JDBC bind positions actually bound during this method execution.
+-	 *
+-	 * @throws SQLException Indicates problems performing the binding.
+-	 * @throws org.hibernate.HibernateException Indicates problems delegating binding to the types.
+-	 */
+-	protected int bindNamedParameters(
+-			final PreparedStatement statement,
+-			final Map<String, TypedValue> namedParams,
+-			final int startIndex,
+-			final SharedSessionContractImplementor session) throws SQLException, HibernateException {
+-		int result = 0;
+-		if ( CollectionHelper.isEmpty( namedParams ) ) {
+-			return result;
+-		}
++    private TypedValue[] getNamedParameters(QueryParameters queryParameters) {
++        final Map namedParams = queryParameters.getNamedParameters();
++        TypedValue[] result = new TypedValue[0];
++        if (namedParams == null) {
++            return result;
++        }
++        for (Iterator mapIter = namedParams.entrySet().iterator(); mapIter.hasNext();) {
++            Entry e = (Entry) mapIter.next();
++            String name = (String) e.getKey();
++            TypedValue typedval = (TypedValue) e.getValue();
++            int[] locs = getNamedParameterLocs(name);
++            for (int i = 0; i < locs.length; i++) {
++                int position = locs[i];
+ 
+-		for ( String name : namedParams.keySet() ) {
+-			TypedValue typedValue = namedParams.get( name );
+-			int columnSpan = typedValue.getType().getColumnSpan( getFactory() );
+-			int[] locs = getNamedParameterLocs( name );
+-			for ( int loc : locs ) {
+-				if ( DEBUG_ENABLED ) {
+-					LOG.debugf(
+-							"bindNamedParameters() %s -> %s [%s]",
+-							typedValue.getValue(),
+-							name,
+-							loc + startIndex
+-					);
+-				}
+-				int start = loc * columnSpan + startIndex;
+-				typedValue.getType().nullSafeSet( statement, typedValue.getValue(), start, session );
+-			}
+-			result += locs.length;
+-		}
+-		return result;
+-	}
++//                if (log.isDebugEnabled()) {
++//                    log.debug("bindNamedParameters() " + typedval.getValue() + " -> " + name + " [" + position + "]");
++//                }
+ 
++                if (result.length <= position) { // make sure array has enough
++                                                 // length
++                    result = (TypedValue[]) Arrays.copyOf(result, position + 1);
++                }
++
++                result[position] = typedval;
++            }
++        }
++        return result;
++    }
+ 	public int[] getNamedParameterLocs(String name) {
+ 		throw new AssertionFailure( "no named parameters" );
+ 	}
+@@ -2462,6 +2429,7 @@
+ 			final Serializable[] ids,
+ 			final Object[] parameterValues,
+ 			final Type[] parameterTypes,
++			final int[] parameterPositions,
+ 			final Map<String, TypedValue> namedParameters,
+ 			final Type type) throws HibernateException {
+ 		final Type[] idTypes = new Type[ids.length];
+@@ -2469,7 +2437,7 @@
+ 		try {
+ 			doQueryAndInitializeNonLazyCollections(
+ 					session,
+-					new QueryParameters( parameterTypes, parameterValues, namedParameters, ids ),
++                    new QueryParameters(parameterTypes, parameterValues, parameterPositions, namedParameters, ids),
+ 					true
+ 			);
+ 		}
+diff -r 608fe89915c1 -r a31fed1bd0b7 hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectCollectionLoader.java
+--- a/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectCollectionLoader.java	Tue Mar 12 12:47:24 2019 +0200
++++ b/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectCollectionLoader.java	Mon Mar 04 18:06:21 2019 +0200
+@@ -31,6 +31,7 @@
+ 	private final Serializable[] keys;
+ 	private final Type[] types;
+ 	private final Object[] values;
++	private final int[] positions;
+ 	private final Map<String, TypedValue> namedParameters;
+ 	private final Map<String, int[]> namedParameterLocMap;
+ 
+@@ -54,6 +55,7 @@
+ 		this.namedParameters = queryParameters.getNamedParameters();
+ 		this.types = queryParameters.getFilteredPositionalParameterTypes();
+ 		this.values = queryParameters.getFilteredPositionalParameterValues();
++		this.positions = queryParameters.getDynamicParameterPositions();
+ 		this.namedParameterLocMap = namedParameterLocMap;
+ 		
+ 	}
+@@ -66,6 +68,7 @@
+ 				keys, 
+ 				values,
+ 				types,
++				positions,
+ 				namedParameters,
+ 				getKeyType() 
+ 		);
+diff -r 608fe89915c1 -r a31fed1bd0b7 hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectOneToManyLoader.java
+--- a/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectOneToManyLoader.java	Tue Mar 12 12:47:24 2019 +0200
++++ b/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/loader/collection/SubselectOneToManyLoader.java	Mon Mar 04 18:06:21 2019 +0200
+@@ -31,6 +31,7 @@
+ 	private final Serializable[] keys;
+ 	private final Type[] types;
+ 	private final Object[] values;
++	private final int[] positions;
+ 	private final Map<String, TypedValue> namedParameters;
+ 	private final Map<String, int[]> namedParameterLocMap;
+ 
+@@ -54,6 +55,7 @@
+ 		this.namedParameters = queryParameters.getNamedParameters();
+ 		this.types = queryParameters.getFilteredPositionalParameterTypes();
+ 		this.values = queryParameters.getFilteredPositionalParameterValues();
++		this.positions = queryParameters.getDynamicParameterPositions();
+ 		this.namedParameterLocMap = namedParameterLocMap;
+ 	}
+ 
+@@ -64,6 +66,7 @@
+ 				keys, 
+ 				values,
+ 				types,
++				positions,
+ 				namedParameters,
+ 				getKeyType() 
+ 		);
+diff -r 608fe89915c1 -r a31fed1bd0b7 hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java
+--- a/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java	Tue Mar 12 12:47:24 2019 +0200
++++ b/hibernate/hibernate-core-5.2.18.x/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java	Mon Mar 04 18:06:21 2019 +0200
+@@ -50,7 +50,7 @@
+ 			SharedSessionContractImplementor session,
+ 			int start) throws SQLException {
+ 		final int columnSpan = definedParameterType.getColumnSpan( session.getFactory() );
+-		final String fullParamName = filterName + '.' + parameterName;
++		String fullParamName = filterName + '.' + parameterName;
+ 		final Object value = session.getLoadQueryInfluencers().getFilterParameterValue(fullParamName);
+ 		final Type type = session.getLoadQueryInfluencers().getFilterParameterType(fullParamName);
+ 		if ( Collection.class.isInstance( value ) ) {
+@@ -58,14 +58,14 @@
+ 			Iterator itr = ( ( Collection ) value ).iterator();
+ 			while ( itr.hasNext() ) {
+ 				Object next = itr.next();
+-				qp.bindDynamicParameter( type, next );
+-				definedParameterType.nullSafeSet( statement, next, start + positions, session );
++				qp.bindDynamicParameter(type, next, start + positions);
++				definedParameterType.nullSafeSet(statement, next, start + positions, session);
+ 				positions += columnSpan;
+ 			}
+ 			return positions;
+ 		}
+ 		else {
+-			qp.bindDynamicParameter(type, value);
++			qp.bindDynamicParameter(type, value, start);
+ 			definedParameterType.nullSafeSet( statement, value, start, session );
+ 			return columnSpan;
+ 		}

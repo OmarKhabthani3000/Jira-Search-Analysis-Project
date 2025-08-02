@@ -1,0 +1,1176 @@
+Index: etc/hibernate.properties
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/etc/hibernate.properties,v
+retrieving revision 1.1
+diff -u -r1.1 hibernate.properties
+--- etc/hibernate.properties	9 Dec 2004 14:11:33 -0000	1.1
++++ etc/hibernate.properties	5 May 2005 15:24:56 -0000
+@@ -21,10 +21,11 @@
+ 
+ ## HypersonicSQL
+ 
+-#hibernate.dialect org.hibernate.dialect.HSQLDialect
+-#hibernate.connection.driver_class org.hsqldb.jdbcDriver
+-#hibernate.connection.username sa
+-#hibernate.connection.password
++hibernate.dialect org.hibernate.dialect.HSQLDialect
++hibernate.connection.driver_class org.hsqldb.jdbcDriver
++hibernate.connection.username sa
++hibernate.connection.password
++hibernate.connection.url jdbc:hsqldb:hsql://localhost:9001/hibernate
+ #hibernate.connection.url jdbc:hsqldb:hsql://localhost
+ #hibernate.connection.url jdbc:hsqldb:test
+ #hibernate.connection.url jdbc:hsqldb:.
+@@ -43,11 +44,11 @@
+ ## Oracle
+ 
+ #hibernate.dialect org.hibernate.dialect.OracleDialect
+-hibernate.dialect org.hibernate.dialect.Oracle9Dialect
+-hibernate.connection.driver_class oracle.jdbc.driver.OracleDriver
+-hibernate.connection.username max
+-hibernate.connection.password max
+-hibernate.connection.url jdbc:oracle:thin:@localhost:1521:orcl
++#hibernate.dialect org.hibernate.dialect.Oracle9Dialect
++#hibernate.connection.driver_class oracle.jdbc.driver.OracleDriver
++#hibernate.connection.username max
++#hibernate.connection.password max
++#hibernate.connection.url jdbc:oracle:thin:@localhost:1521:orcl
+ 
+ 
+ ## PostgreSQL
+@@ -294,7 +295,7 @@
+ 
+ ## specify a default schema and catalog for unqualified tablenames
+ 
+-hibernate.default_schema MAX
++#hibernate.default_schema MAX
+ #hibernate.default_catalog 
+ 
+ 
+Index: src/java/org/hibernate/tool/ant/HibernateToolTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/HibernateToolTask.java,v
+retrieving revision 1.2
+diff -u -r1.2 HibernateToolTask.java
+--- src/java/org/hibernate/tool/ant/HibernateToolTask.java	23 Mar 2005 19:55:50 -0000	1.2
++++ src/java/org/hibernate/tool/ant/HibernateToolTask.java	5 May 2005 15:24:56 -0000
+@@ -65,6 +65,12 @@
+ 		return generator;
+ 	}
+ 	
++    public GeneratorTask createCfg2Hbm() {
++        GeneratorTask generator= new Cfg2HbmGeneratorTask(this);
++        generators.add(generator);
++        return generator;
++    }
++    
+ 	/**
+      * Set the classpath to be used when running the Java class
+      *
+Index: src/java/org/hibernate/tool/ant/JDBCConfigurationTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/JDBCConfigurationTask.java,v
+retrieving revision 1.2
+diff -u -r1.2 JDBCConfigurationTask.java
+--- src/java/org/hibernate/tool/ant/JDBCConfigurationTask.java	22 Apr 2005 16:18:59 -0000	1.2
++++ src/java/org/hibernate/tool/ant/JDBCConfigurationTask.java	5 May 2005 15:24:56 -0000
+@@ -4,15 +4,23 @@
+  */
+ package org.hibernate.tool.ant;
+ 
++import org.apache.tools.ant.BuildException;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.JDBCMetaDataConfiguration;
++import org.hibernate.cfg.reveng.ConfigurableReverseNamingStrategy;
++import org.hibernate.cfg.reveng.ReverseNamingStrategy;
+ 
+ /**
+  * @author max
+- *
++ * @author <a href='mailto:the_mindstorm@evolva.ro'>Alexandru Popescu</a>
+  */
+ public class JDBCConfigurationTask extends ConfigurationTask {
+-
++    private boolean preferRawCompositeIds = false;
++    private boolean generateDynamicClasses = false;
++    private String reverseNamingStrategyClass;
++    private String packageName;
++    private ReverseNamingStrategy reverseNamingStrategy;
++    
+ 	protected Configuration createConfiguration() {
+ 		return new JDBCMetaDataConfiguration();
+ 	}
+@@ -24,6 +32,62 @@
+ 		JDBCMetaDataConfiguration jmdc = (JDBCMetaDataConfiguration) configuration;
+ 		super.doConfiguration(jmdc);
+ 		
++        jmdc.setPreferRawCompositeIds(preferRawCompositeIds);
++        jmdc.setGeneratingDynamicClasses(generateDynamicClasses);
++        
++        if(null != packageName) {
++            ((ConfigurableReverseNamingStrategy) reverseNamingStrategy).setPackageName(packageName);
++        }
++        jmdc.setReverseNamingStrategy(reverseNamingStrategy);
++        
+ 		jmdc.readFromJDBC(); // TODO: need to allow configuraiton of oracle stuff!
+ 	}
++
++    /**
++     * Custom validation:
++     * - check if reverseNamingStrategyClass is an implementation of ReverseNamingStrategy
++     * - check if reverseNamingStrategyClass has a no-args constructor
++     * - check if packageName specified and reverseNamingStrategy supports setting a package name
++     * 
++     * @see org.hibernate.tool.ant.ConfigurationTask#validateParameters()
++     */
++    protected void validateParameters() throws BuildException {
++        super.validateParameters();
++        
++        if (null == reverseNamingStrategyClass) {
++            reverseNamingStrategy = new ConfigurableReverseNamingStrategy(); 
++        } else {
++            reverseNamingStrategy = loadReverseNamingStrategy(reverseNamingStrategyClass);
++        }
++        if (null != packageName 
++                && !(reverseNamingStrategy instanceof ConfigurableReverseNamingStrategy)) {
++            throw new BuildException("reverseNamingStrategy " 
++                    + reverseNamingStrategy.getClass().getName()
++                    + " does not support setting packageName");
++        }
++    }
++    
++    public void setPackageName(String pkgName) {
++        packageName = pkgName;
++    }
++    
++    public void setNamingStrategy(String fqn) {
++        reverseNamingStrategyClass = fqn;
++    }
++    
++    private ReverseNamingStrategy loadReverseNamingStrategy(final String className) 
++    throws BuildException {
++        try {
++            Class clazz = Class.forName(className);
++            return (ReverseNamingStrategy) clazz.newInstance();
++        } catch(ClassNotFoundException cnfe) {
++            throw new BuildException("Cannot load reverseNamingStrategy " + className, cnfe);
++        } catch(InstantiationException ie) {
++            ie.printStackTrace();
++            throw new BuildException("reverseNamingStrategy " + className + " has not a no-args constructor");
++        } catch(IllegalAccessException iae) {
++            iae.printStackTrace();
++            throw new BuildException("reverseNamingStrategy " + className + " has not a public no-args constructor");
++        }
++    }
+ }
+Index: src/test/org/hibernate/tool/JDBCMetaDataBinderTestCase.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/JDBCMetaDataBinderTestCase.java,v
+retrieving revision 1.4
+diff -u -r1.4 JDBCMetaDataBinderTestCase.java
+--- src/test/org/hibernate/tool/JDBCMetaDataBinderTestCase.java	22 Apr 2005 16:18:58 -0000	1.4
++++ src/test/org/hibernate/tool/JDBCMetaDataBinderTestCase.java	5 May 2005 15:24:57 -0000
+@@ -101,7 +101,6 @@
+                 executeDDL(getDropSQL());
+             } catch (SQLException se) {
+                 System.err.println("Error while dropping - normally ok.");
+-                se.printStackTrace();
+             }
+         
+ 		String[] sqls = getCreateSQL();
+Index: src/test/org/hibernate/tool/ant/HibernateToolTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/ant/HibernateToolTest.java,v
+retrieving revision 1.5
+diff -u -r1.5 HibernateToolTest.java
+--- src/test/org/hibernate/tool/ant/HibernateToolTest.java	3 May 2005 22:22:33 -0000	1.5
++++ src/test/org/hibernate/tool/ant/HibernateToolTest.java	5 May 2005 15:24:57 -0000
+@@ -37,6 +37,36 @@
+ 		executeTarget("testantejb3hbm2java");
+ 	}
+ 	
++    public void testCfg2HbmNoError() {
++        executeTarget("testantcfg2hbm1");
++    }
++    
++    public void testCfg2HbmWithCustomReverseNamingStrategy() {
++        executeTarget("testantcfg2hbm2");
++    }
++    
++    public void testCfg2HbmWithInvalidReverseNamingStrategy() {
++        expectSpecificBuildException("testantcfg2hbm3", 
++                "namingStrategy attribute should not be loaded", 
++                "Cannot load reverseNamingStrategy invalid.classname");
++    }
++    
++    public void testCfg2HbmWithPackageName() {
++        executeTarget("testantcfg2hbm4");
++    }
++    
++    public void testCfg2HbmWithPackageNameAndReverseNamingStrategy() {
++        executeTarget("testantcfg2hbm5");
++    }
++    
++    public void testCfg2HbmWithPackageNameAndWrongReverseNamingStrategy() {
++        expectSpecificBuildException("testantcfg2hbm6",
++                "",
++                "reverseNamingStrategy "
++                + NonProtectedDefaultReverseNamingStrategy.class.getName() + 
++                " does not support setting packageName");
++    }
++    
+ 	public static Test suite() {
+ 		return new TestSuite(HibernateToolTest.class);
+ 	}
+Index: src/testsupport/anttest-build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/testsupport/anttest-build.xml,v
+retrieving revision 1.3
+diff -u -r1.3 anttest-build.xml
+--- src/testsupport/anttest-build.xml	4 May 2005 08:49:56 -0000	1.3
++++ src/testsupport/anttest-build.xml	5 May 2005 15:25:00 -0000
+@@ -1,117 +1,200 @@
+ <project name="anttest">
+-
+-   <property name="hibernate-core.jar" location="../../../../hibernate-3.0/hibernate3.jar"/>
+-   <property name="hibernate-core.home" location="../../../../hibernate3"/>   
+-   <property name="hibernate-core.lib.dir" location="${hibernate-core.home}/lib"/>
+-   <property name="build.dir" location="../../build/anttest"/>
+-    
+-    <!-- task for testing ant tasks. Will not work without being run from inside the Hibernate ant task test case.
+-        Will try and find a better place for it. -->
+-    <target name="testantcfg">
+-     
+-     <mkdir dir="build/testsupport"/>
+-        
+-   <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask"/>
+-      <hibernatetool destdir="${build.dir}/topdown">
+-        <classpath>
+-         <path location="../../build/testsupport"/>
+-        </classpath>    
+-  
+-        <configuration>
+-            <fileset dir="../test" id="id">
+-              <include name="**/*TopDown.hbm.xml"/>   
+-            </fileset>   
+-        </configuration>
+-
+-        <hbm2java/> 
+-        <hbm2ddl drop="false" export="false" outputfilename="xxx.sql"/>          
+-      </hibernatetool>   
+-
+-    </target>
+-
+-    <target name="testantjdbccfg">
+-   <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpath="${hibernate-core.jar};../build/classes;lib/velocity-1.4.jar;lib/velocity-tools-generic-1.1.jar;../../metadata/build/classes;${hibernate-core.home}\jdbc\hsqldb.jar"/>
+-
+-        <property file="../etc/hibernate.properties" prefix="tools"/>
+-<!--       <sql onerror="continue" driver="${tools.hibernate.connection.driver_class}" password="${tools.hibernate.connection.password}" url="${tools.hibernate.connection.url}" userid="${tools.hibernate.connection.username}" classpath="C:\work\products\hsqldb-1.7.2.6\lib\hsqldb.jar">
+-        create table BottomUp (
+-           id bigint not null,
+-           name varchar(255),
+-           primary key (id)
+-        )
+-       </sql>    -->
+-             
+-        <hibernatetool destdir="${build.dir}/bottomup">
+-                <jdbcconfiguration propertyfile="../../etc/hibernate.properties">
+-                </jdbcconfiguration>
+-            
+-                <hbm2java/>
+-                <hbm2java templatespath="templates"/>   
+-        </hibernatetool>   
+-        
+-    </target>
+-
++	<property name="hibernate-core.jar" location="../../../../hibernate-3.0/hibernate3.jar"/>
++	<property name="hibernate-core.home" location="../../../../hibernate3"/>
++	<property name="hibernate-core.lib.dir" location="${hibernate-core.home}/lib"/>
++	<property name="build.dir" location="../../build/anttest"/>
++	<property file="../../etc/hibernate.properties"/>
++	
++	<!-- task for testing ant tasks. Will not work without being run from inside the Hibernate ant task test case.
++		Will try and find a better place for it. -->
++	<target name="testantcfg">
++		<mkdir dir="build/testsupport"/>
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask"/>
++		<hibernatetool destdir="${build.dir}/topdown">
++			<classpath>
++				<path location="../../build/testsupport"/>
++			</classpath>
++			<configuration>
++				<fileset dir="../test" id="id">
++					<include name="**/*TopDown.hbm.xml"/>
++				</fileset>
++			</configuration>
++			<hbm2java/>
++			<hbm2ddl drop="false" export="false" outputfilename="xxx.sql"/>
++		</hibernatetool>
++	</target>
++	
++	<target name="testantjdbccfg">
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask"
++			classpath="${hibernate-core.jar};../build/classes;lib/velocity-1.4.jar;lib/velocity-tools-generic-1.1.jar;../../metadata/build/classes;${hibernate-core.home}\jdbc\hsqldb.jar"/>
++		<property file="../etc/hibernate.properties" prefix="tools"/>
++		<!--       <sql onerror="continue" driver="${tools.hibernate.connection.driver_class}" password="${tools.hibernate.connection.password}" url="${tools.hibernate.connection.url}" userid="${tools.hibernate.connection.username}" classpath="C:\work\products\hsqldb-1.7.2.6\lib\hsqldb.jar">
++		create table BottomUp (
++		   id bigint not null,
++		   name varchar(255),
++		   primary key (id)
++		)
++	   </sql>    -->
++		<hibernatetool destdir="${build.dir}/bottomup">
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"/>
++			<hbm2java/>
++			<hbm2java templatespath="templates"/>
++		</hibernatetool>
++	</target>
++	
++	<path id="tasks.classpath">
++		<fileset dir="${hibernate-core.lib.dir}">
++			<include name="**/*.jar"/>
++		</fileset>
++		<fileset dir="lib">
++			<include name="**/*.jar"/>
++		</fileset>
++		<pathelement location="${hibernate-core.jar}"/>
++		<pathelement path="build/classes"/>
++	</path>
++	
++	<target name="testanthbm2java">
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask"
++			classpathref="tasks.classpath"/>
++		<hibernatetool destdir="${build.dir}/bottomup">
++			<configuration propertyfile="../../etc/hibernate.properties">
++				<fileset dir="src/test/org/hibernate/tool/hbm2x">
++					<include name="**/*.hbm.xml"/>
++				</fileset>
++			</configuration>
++			<hbm2java generics="true"/>
++		</hibernatetool>
++	</target>
++	
++	<target name="testantannotationcfg">
++		<taskdef name="hibernatetoolx" classname="org.hibernate.tool.ant.HibernateToolTask"
++			classpath="${hibernate-core.jar};build/classes;../metadata/build/classes"/>
++		<hibernatetoolx destdir="${build.dir}/bottomup">
++			<annotationconfiguration/>
++			<hbm2ddl/>
++		</hibernatetoolx>
++	</target>
++	
++	<path id="tasks.classpath">
++		<fileset dir="${hibernate-core.lib.dir}">
++			<include name="**/*.jar"/>
++		</fileset>
++		<fileset dir="../../lib">
++			<include name="**/*.jar"/>
++		</fileset>
++		<pathelement location="${hibernate-core.jar}"/>
++		<pathelement path="build/classes"/>
++	</path>
++	
++	<target name="testantejb3hbm2java">
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask"
++			classpathref="tasks.classpath"/>
++		<hibernatetool destdir="${build.dir}/bottomup">
++			<configuration propertyfile="../../etc/hibernate.properties">
++				<fileset dir="../test/org/hibernate/tool/hbm2x">
++					<include name="**/*.hbm.xml"/>
++				</fileset>
++			</configuration>
++			<hbm2java ejb3="true"/>
++		</hibernatetool>
++	</target>
++	
++	<target name="prepareCfg2hbm" description="prepare for cfg2hbm tasks">
++		<sql onerror="continue"
++			 driver="${hibernate.connection.driver_class}"
++			 url="${hibernate.connection.url}"
++			 userid="${hibernate.connection.username}"
++			 password="${hibernate.connection.password}"
++			 classpath="${hibernate-core.lib.dir}/hsqldb-1.7.3.3.jar">
++		create table VeriSimplyTable ( id bigint not null, name varchar(255), primary key (id) )
++		</sql>
++		
++		<delete dir="${build.dir}/cfg2hbm" failonerror="false"/>
++		<mkdir dir="${build.dir}/cfg2hbm"/>
++	</target>
++	
++	<target name="testantcfg2hbm1" 
++			depends="prepareCfg2hbm" 
++			description="simple CFG2HBM">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
++
++	<target name="testantcfg2hbm2" 
++			depends="prepareCfg2hbm"
++			description="valid custom ReverseNamingStrategy">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"
++							   namingStrategy="org.hibernate.tool.ant.NonProtectedDefaultReverseNamingStrategy"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
++	
++	<target name="testantcfg2hbm3" 
++			depends="prepareCfg2hbm" 
++			description="invalid ReverseNamingStrategy classname">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++		
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"
++							   namingStrategy="invalid.classname"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
++	
++	<target name="testantcfg2hbm4" 
++		 	depends="prepareCfg2hbm"
++			description="CFG2HBM with packageName">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++		
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"
++							   packageName="org.h3.test"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
++	
++	<target name="testantcfg2hbm5" 
++			depends="prepareCfg2hbm" 
++			description="CFG2HBM with packageName and ReverseNamingStrategy">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++		
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"
++							   packageName="org.h3.test"
++							   namingStrategy="org.hibernate.cfg.reveng.ConfigurableReverseNamingStrategy"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
+ 	
+-  <path id="tasks.classpath">
+-    <fileset dir="${hibernate-core.lib.dir}">
+-      <include name="**/*.jar" />
+-    </fileset>
+-      <fileset dir="lib">
+-        <include name="**/*.jar" />
+-      </fileset>    
+-    <pathelement location="${hibernate-core.jar}"/>
+-    <pathelement path="build/classes"/>
+-  </path>
+-  
+-  <target name="testanthbm2java">
+-    
+- <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
+-      <hibernatetool destdir="${build.dir}/bottomup">
+-        <configuration propertyfile="../../etc/hibernate.properties">
+-          <fileset dir="src/test/org/hibernate/tool/hbm2x">
+-            <include name="**/*.hbm.xml" />
+-          </fileset>        
+-        </configuration>
+-          
+-              <hbm2java generics="true"/>
+-      </hibernatetool>   
+-      
+-  </target>  
+-  
+-    <target name="testantannotationcfg">
+-        <taskdef name="hibernatetoolx" classname="org.hibernate.tool.ant.HibernateToolTask" classpath="${hibernate-core.jar};build/classes;../metadata/build/classes"/>   
+-        <hibernatetoolx destdir="${build.dir}/bottomup">
+-            <annotationconfiguration>
+-            </annotationconfiguration>
+-                    
+-            <hbm2ddl/>
+-        </hibernatetoolx>        
+-    </target>   
+-	
+-	  <path id="tasks.classpath">
+-	    <fileset dir="${hibernate-core.lib.dir}">
+-	      <include name="**/*.jar" />
+-	    </fileset>
+-	      <fileset dir="../../lib">
+-	        <include name="**/*.jar" />
+-	      </fileset>    
+-	    <pathelement location="${hibernate-core.jar}"/>
+-	    <pathelement path="build/classes"/>
+-	  </path>
+-	  
+-	  <target name="testantejb3hbm2java">
+-	    
+-	 <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
+-	      <hibernatetool destdir="${build.dir}/bottomup">
+-	        <configuration propertyfile="../../etc/hibernate.properties">
+-	          <fileset dir="../test/org/hibernate/tool/hbm2x">
+-	            <include name="**/*.hbm.xml" />
+-	          </fileset>        
+-	        </configuration>
+-	          
+-	              <hbm2java ejb3="true"/>
+-	      </hibernatetool>   
+-	      
+-	  </target>
+-	  
+-</project>	  
+\ No newline at end of file
++	<target name="testantcfg2hbm6" 
++			depends="prepareCfg2hbm" 
++			description="CFG2HBM with packageName and ReverseNamingStrategy not supporting packageName">
++		<taskdef name="hibernatetool" 
++				 classname="org.hibernate.tool.ant.HibernateToolTask"
++				 classpathref="tasks.classpath"/>
++		
++		<hibernatetool>
++			<jdbcconfiguration propertyfile="../../etc/hibernate.properties"
++							   packageName="org.h3.test"
++							   namingStrategy="org.hibernate.tool.ant.NonProtectedDefaultReverseNamingStrategy"/>
++			<cfg2hbm destdir="${build.dir}/cfg2hbm"/> 
++		</hibernatetool>
++	</target>
++</project>
+Index: .classpath
+===================================================================
+RCS file: .classpath
+diff -N .classpath
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ .classpath	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,48 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<classpath>
++	<classpathentry kind="src" path="src/java">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="src" path="src/test">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="src" path="src/testsupport">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="lib" path="lib/jdom.jar">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="lib" path="lib/jtidy-r8-21122004.jar">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="lib" path="lib/velocity-1.4.jar">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="lib" path="lib/velocity-tools-generic-1.1.jar">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry combineaccessrules="false" kind="src" path="/hibernate-3.0.2">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry sourcepath="/ANT_SRC" kind="var" path="ANT_HOME/lib/ant.jar">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="var" path="TOOLS_1.4.2_08_JAR">
++		<attributes>
++		</attributes>
++	</classpathentry>
++	<classpathentry kind="output" path="build/classes"/>
++</classpath>
+Index: .project
+===================================================================
+RCS file: .project
+diff -N .project
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ .project	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<projectDescription>
++	<name>hibernate-tools</name>
++	<comment></comment>
++	<projects>
++	</projects>
++	<buildSpec>
++		<buildCommand>
++			<name>org.eclipse.jdt.core.javabuilder</name>
++			<arguments>
++			</arguments>
++		</buildCommand>
++	</buildSpec>
++	<natures>
++		<nature>org.eclipse.jdt.core.javanature</nature>
++	</natures>
++</projectDescription>
+Index: .settings/org.eclipse.jdt.core.prefs
+===================================================================
+RCS file: .settings/org.eclipse.jdt.core.prefs
+diff -N .settings/org.eclipse.jdt.core.prefs
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ .settings/org.eclipse.jdt.core.prefs	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,241 @@
++#Mon May 02 12:58:19 GMT+02:00 2005
++eclipse.preferences.version=1
++org.eclipse.jdt.core.formatter.align_type_members_on_columns=false
++org.eclipse.jdt.core.formatter.alignment_for_arguments_in_allocation_expression=16
++org.eclipse.jdt.core.formatter.alignment_for_arguments_in_enum_constant=16
++org.eclipse.jdt.core.formatter.alignment_for_arguments_in_explicit_constructor_call=16
++org.eclipse.jdt.core.formatter.alignment_for_arguments_in_method_invocation=16
++org.eclipse.jdt.core.formatter.alignment_for_arguments_in_qualified_allocation_expression=16
++org.eclipse.jdt.core.formatter.alignment_for_binary_expression=16
++org.eclipse.jdt.core.formatter.alignment_for_compact_if=16
++org.eclipse.jdt.core.formatter.alignment_for_conditional_expression=80
++org.eclipse.jdt.core.formatter.alignment_for_expressions_in_array_initializer=16
++org.eclipse.jdt.core.formatter.alignment_for_multiple_fields=16
++org.eclipse.jdt.core.formatter.alignment_for_parameters_in_constructor_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_parameters_in_method_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_selector_in_method_invocation=16
++org.eclipse.jdt.core.formatter.alignment_for_superclass_in_type_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_superinterfaces_in_enum_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_superinterfaces_in_type_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_throws_clause_in_constructor_declaration=16
++org.eclipse.jdt.core.formatter.alignment_for_throws_clause_in_method_declaration=16
++org.eclipse.jdt.core.formatter.blank_lines_after_imports=1
++org.eclipse.jdt.core.formatter.blank_lines_after_package=1
++org.eclipse.jdt.core.formatter.blank_lines_before_field=1
++org.eclipse.jdt.core.formatter.blank_lines_before_first_class_body_declaration=0
++org.eclipse.jdt.core.formatter.blank_lines_before_imports=1
++org.eclipse.jdt.core.formatter.blank_lines_before_member_type=1
++org.eclipse.jdt.core.formatter.blank_lines_before_method=1
++org.eclipse.jdt.core.formatter.blank_lines_before_new_chunk=1
++org.eclipse.jdt.core.formatter.blank_lines_before_package=0
++org.eclipse.jdt.core.formatter.blank_lines_between_type_declarations=1
++org.eclipse.jdt.core.formatter.brace_position_for_annotation_type_declaration=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_anonymous_type_declaration=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_array_initializer=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_block=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_block_in_case=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_constructor_declaration=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_enum_constant=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_enum_declaration=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_method_declaration=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_switch=end_of_line
++org.eclipse.jdt.core.formatter.brace_position_for_type_declaration=end_of_line
++org.eclipse.jdt.core.formatter.comment.clear_blank_lines=true
++org.eclipse.jdt.core.formatter.comment.format_comments=true
++org.eclipse.jdt.core.formatter.comment.format_header=false
++org.eclipse.jdt.core.formatter.comment.format_html=true
++org.eclipse.jdt.core.formatter.comment.format_source_code=true
++org.eclipse.jdt.core.formatter.comment.indent_parameter_description=true
++org.eclipse.jdt.core.formatter.comment.indent_root_tags=true
++org.eclipse.jdt.core.formatter.comment.insert_new_line_before_root_tags=insert
++org.eclipse.jdt.core.formatter.comment.insert_new_line_for_parameter=insert
++org.eclipse.jdt.core.formatter.comment.line_length=80
++org.eclipse.jdt.core.formatter.compact_else_if=true
++org.eclipse.jdt.core.formatter.continuation_indentation=2
++org.eclipse.jdt.core.formatter.continuation_indentation_for_array_initializer=2
++org.eclipse.jdt.core.formatter.format_guardian_clause_on_one_line=false
++org.eclipse.jdt.core.formatter.indent_body_declarations_compare_to_enum_constant_header=true
++org.eclipse.jdt.core.formatter.indent_body_declarations_compare_to_enum_declaration_header=true
++org.eclipse.jdt.core.formatter.indent_body_declarations_compare_to_type_header=true
++org.eclipse.jdt.core.formatter.indent_breaks_compare_to_cases=true
++org.eclipse.jdt.core.formatter.indent_statements_compare_to_block=true
++org.eclipse.jdt.core.formatter.indent_statements_compare_to_body=true
++org.eclipse.jdt.core.formatter.indent_switchstatements_compare_to_cases=true
++org.eclipse.jdt.core.formatter.indent_switchstatements_compare_to_switch=false
++org.eclipse.jdt.core.formatter.indentation.size=4
++org.eclipse.jdt.core.formatter.insert_new_line_after_annotation=insert
++org.eclipse.jdt.core.formatter.insert_new_line_after_opening_brace_in_array_initializer=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_at_end_of_file_if_missing=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_before_catch_in_try_statement=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_before_closing_brace_in_array_initializer=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_before_else_in_if_statement=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_before_finally_in_try_statement=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_before_while_in_do_statement=do not insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_anonymous_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_block=insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_enum_constant=insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_enum_declaration=insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_method_body=insert
++org.eclipse.jdt.core.formatter.insert_new_line_in_empty_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_after_and_in_type_parameter=insert
++org.eclipse.jdt.core.formatter.insert_space_after_assignment_operator=insert
++org.eclipse.jdt.core.formatter.insert_space_after_at_in_annotation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_at_in_annotation_type_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_binary_operator=insert
++org.eclipse.jdt.core.formatter.insert_space_after_closing_angle_bracket_in_type_arguments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_closing_angle_bracket_in_type_parameters=insert
++org.eclipse.jdt.core.formatter.insert_space_after_closing_brace_in_block=insert
++org.eclipse.jdt.core.formatter.insert_space_after_closing_paren_in_cast=insert
++org.eclipse.jdt.core.formatter.insert_space_after_colon_in_assert=insert
++org.eclipse.jdt.core.formatter.insert_space_after_colon_in_case=insert
++org.eclipse.jdt.core.formatter.insert_space_after_colon_in_conditional=insert
++org.eclipse.jdt.core.formatter.insert_space_after_colon_in_for=insert
++org.eclipse.jdt.core.formatter.insert_space_after_colon_in_labeled_statement=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_allocation_expression=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_annotation=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_array_initializer=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_constructor_declaration_parameters=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_constructor_declaration_throws=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_enum_constant_arguments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_enum_declarations=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_explicitconstructorcall_arguments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_for_increments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_for_inits=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_method_declaration_parameters=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_method_declaration_throws=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_method_invocation_arguments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_multiple_field_declarations=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_multiple_local_declarations=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_parameterized_type_reference=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_superinterfaces=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_type_arguments=insert
++org.eclipse.jdt.core.formatter.insert_space_after_comma_in_type_parameters=insert
++org.eclipse.jdt.core.formatter.insert_space_after_ellipsis=insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_angle_bracket_in_parameterized_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_angle_bracket_in_type_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_angle_bracket_in_type_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_brace_in_array_initializer=insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_bracket_in_array_allocation_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_bracket_in_array_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_annotation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_cast=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_catch=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_constructor_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_enum_constant=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_for=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_if=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_method_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_method_invocation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_parenthesized_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_switch=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_synchronized=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_opening_paren_in_while=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_postfix_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_prefix_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_question_in_conditional=insert
++org.eclipse.jdt.core.formatter.insert_space_after_question_in_wildcard=do not insert
++org.eclipse.jdt.core.formatter.insert_space_after_semicolon_in_for=insert
++org.eclipse.jdt.core.formatter.insert_space_after_unary_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_and_in_type_parameter=insert
++org.eclipse.jdt.core.formatter.insert_space_before_assignment_operator=insert
++org.eclipse.jdt.core.formatter.insert_space_before_at_in_annotation_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_binary_operator=insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_angle_bracket_in_parameterized_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_angle_bracket_in_type_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_angle_bracket_in_type_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_brace_in_array_initializer=insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_bracket_in_array_allocation_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_bracket_in_array_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_annotation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_cast=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_catch=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_constructor_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_enum_constant=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_for=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_if=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_method_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_method_invocation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_parenthesized_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_switch=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_synchronized=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_closing_paren_in_while=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_assert=insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_case=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_conditional=insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_default=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_for=insert
++org.eclipse.jdt.core.formatter.insert_space_before_colon_in_labeled_statement=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_allocation_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_annotation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_array_initializer=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_constructor_declaration_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_constructor_declaration_throws=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_enum_constant_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_enum_declarations=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_explicitconstructorcall_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_for_increments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_for_inits=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_method_declaration_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_method_declaration_throws=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_method_invocation_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_multiple_field_declarations=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_multiple_local_declarations=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_parameterized_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_superinterfaces=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_type_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_comma_in_type_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_ellipsis=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_angle_bracket_in_parameterized_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_angle_bracket_in_type_arguments=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_angle_bracket_in_type_parameters=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_annotation_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_anonymous_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_array_initializer=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_block=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_constructor_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_enum_constant=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_enum_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_method_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_switch=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_brace_in_type_declaration=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_bracket_in_array_allocation_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_bracket_in_array_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_bracket_in_array_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_annotation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_annotation_type_member_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_catch=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_constructor_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_enum_constant=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_for=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_if=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_method_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_method_invocation=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_parenthesized_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_switch=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_synchronized=insert
++org.eclipse.jdt.core.formatter.insert_space_before_opening_paren_in_while=insert
++org.eclipse.jdt.core.formatter.insert_space_before_postfix_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_prefix_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_question_in_conditional=insert
++org.eclipse.jdt.core.formatter.insert_space_before_question_in_wildcard=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_semicolon=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_semicolon_in_for=do not insert
++org.eclipse.jdt.core.formatter.insert_space_before_unary_operator=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_brackets_in_array_type_reference=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_braces_in_array_initializer=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_brackets_in_array_allocation_expression=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_parens_in_annotation_type_member_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_parens_in_constructor_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_parens_in_enum_constant=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_parens_in_method_declaration=do not insert
++org.eclipse.jdt.core.formatter.insert_space_between_empty_parens_in_method_invocation=do not insert
++org.eclipse.jdt.core.formatter.keep_else_statement_on_same_line=false
++org.eclipse.jdt.core.formatter.keep_empty_array_initializer_on_one_line=false
++org.eclipse.jdt.core.formatter.keep_imple_if_on_one_line=false
++org.eclipse.jdt.core.formatter.keep_then_statement_on_same_line=false
++org.eclipse.jdt.core.formatter.lineSplit=100
++org.eclipse.jdt.core.formatter.number_of_blank_lines_at_beginning_of_method_body=0
++org.eclipse.jdt.core.formatter.number_of_empty_lines_to_preserve=1
++org.eclipse.jdt.core.formatter.put_empty_statement_on_new_line=true
++org.eclipse.jdt.core.formatter.tabulation.char=space
++org.eclipse.jdt.core.formatter.tabulation.size=4
+Index: .settings/org.eclipse.jdt.ui.prefs
+===================================================================
+RCS file: .settings/org.eclipse.jdt.ui.prefs
+diff -N .settings/org.eclipse.jdt.ui.prefs
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ .settings/org.eclipse.jdt.ui.prefs	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,3 @@
++#Mon May 02 12:58:19 GMT+02:00 2005
++eclipse.preferences.version=1
++formatter_settings_version=8
+Index: src/test/org/hibernate/tool/ant/NonProtectedDefaultReverseNamingStrategy.java
+===================================================================
+RCS file: src/test/org/hibernate/tool/ant/NonProtectedDefaultReverseNamingStrategy.java
+diff -N src/test/org/hibernate/tool/ant/NonProtectedDefaultReverseNamingStrategy.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/ant/NonProtectedDefaultReverseNamingStrategy.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,9 @@
++package org.hibernate.tool.ant;
++
++import org.hibernate.cfg.reveng.DefaultReverseNamingStrategy;
++
++
++public class NonProtectedDefaultReverseNamingStrategy extends DefaultReverseNamingStrategy {
++    public NonProtectedDefaultReverseNamingStrategy() {
++    }
++}
+Index: src/testsupport/Basic.hbm.xml
+===================================================================
+RCS file: src/testsupport/Basic.hbm.xml
+diff -N src/testsupport/Basic.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/Basic.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="Basic" table="BASIC">
++        <id name="a" type="integer">
++            <column name="A" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/Basicview.hbm.xml
+===================================================================
+RCS file: src/testsupport/Basicview.hbm.xml
+diff -N src/testsupport/Basicview.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/Basicview.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="Basicview" table="BASICVIEW">
++        <id name="a" type="integer">
++            <column name="A" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/GeneralHbmSettings.hbm.xml
+===================================================================
+RCS file: src/testsupport/GeneralHbmSettings.hbm.xml
+diff -N src/testsupport/GeneralHbmSettings.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/GeneralHbmSettings.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,14 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping>	
++<!-- 
++	Auto-generated mapping file from
++	the hibernate.org cfg2hbm engine
++	for General Global Setttings
++-->
++
++
++</hibernate-mapping>
+Index: src/testsupport/Multikeyed.hbm.xml
+===================================================================
+RCS file: src/testsupport/Multikeyed.hbm.xml
+diff -N src/testsupport/Multikeyed.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/Multikeyed.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,22 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="Multikeyed" table="MULTIKEYED">
++        <composite-id name="id" class="MultikeyedId">
++            <key-property name="orderid" type="string">
++                <column name="ORDERID" scale="10" precision="10" />
++            </key-property>
++            <key-property name="customerid" type="string">
++                <column name="CUSTOMERID" scale="10" precision="10" />
++            </key-property>
++        </composite-id>
++        <property name="name" type="string">
++            <column name="NAME" scale="10" precision="10" />
++        </property>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/Somecolumnsnopk.hbm.xml
+===================================================================
+RCS file: src/testsupport/Somecolumnsnopk.hbm.xml
+diff -N src/testsupport/Somecolumnsnopk.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/Somecolumnsnopk.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,22 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="Somecolumnsnopk" table="SOMECOLUMNSNOPK">
++        <composite-id name="id" class="SomecolumnsnopkId">
++            <key-property name="pk" type="string">
++                <column name="PK" scale="25" precision="25" />
++            </key-property>
++            <key-property name="b" type="character">
++                <column name="B" />
++            </key-property>
++            <key-property name="c" type="integer">
++                <column name="C" scale="0" precision="0" />
++            </key-property>
++        </composite-id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/Verisimplytable.hbm.xml
+===================================================================
+RCS file: src/testsupport/Verisimplytable.hbm.xml
+diff -N src/testsupport/Verisimplytable.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/Verisimplytable.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,18 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="Verisimplytable" table="VERISIMPLYTABLE">
++        <id name="id" type="long">
++            <column name="ID" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++        <property name="name" type="string">
++            <column name="NAME" scale="255" precision="255" />
++        </property>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/org/h3/test/Basic.hbm.xml
+===================================================================
+RCS file: src/testsupport/org/h3/test/Basic.hbm.xml
+diff -N src/testsupport/org/h3/test/Basic.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/org/h3/test/Basic.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="org.h3.test.Basic" table="BASIC">
++        <id name="a" type="integer">
++            <column name="A" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/org/h3/test/Basicview.hbm.xml
+===================================================================
+RCS file: src/testsupport/org/h3/test/Basicview.hbm.xml
+diff -N src/testsupport/org/h3/test/Basicview.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/org/h3/test/Basicview.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="org.h3.test.Basicview" table="BASICVIEW">
++        <id name="a" type="integer">
++            <column name="A" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/org/h3/test/Multikeyed.hbm.xml
+===================================================================
+RCS file: src/testsupport/org/h3/test/Multikeyed.hbm.xml
+diff -N src/testsupport/org/h3/test/Multikeyed.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/org/h3/test/Multikeyed.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,22 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="org.h3.test.Multikeyed" table="MULTIKEYED">
++        <composite-id name="id" class="org.h3.test.MultikeyedId">
++            <key-property name="orderid" type="string">
++                <column name="ORDERID" scale="10" precision="10" />
++            </key-property>
++            <key-property name="customerid" type="string">
++                <column name="CUSTOMERID" scale="10" precision="10" />
++            </key-property>
++        </composite-id>
++        <property name="name" type="string">
++            <column name="NAME" scale="10" precision="10" />
++        </property>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/org/h3/test/Somecolumnsnopk.hbm.xml
+===================================================================
+RCS file: src/testsupport/org/h3/test/Somecolumnsnopk.hbm.xml
+diff -N src/testsupport/org/h3/test/Somecolumnsnopk.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/org/h3/test/Somecolumnsnopk.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,22 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="org.h3.test.Somecolumnsnopk" table="SOMECOLUMNSNOPK">
++        <composite-id name="id" class="org.h3.test.SomecolumnsnopkId">
++            <key-property name="pk" type="string">
++                <column name="PK" scale="25" precision="25" />
++            </key-property>
++            <key-property name="b" type="character">
++                <column name="B" />
++            </key-property>
++            <key-property name="c" type="integer">
++                <column name="C" scale="0" precision="0" />
++            </key-property>
++        </composite-id>
++    </class>
++</hibernate-mapping>
+Index: src/testsupport/org/h3/test/Verisimplytable.hbm.xml
+===================================================================
+RCS file: src/testsupport/org/h3/test/Verisimplytable.hbm.xml
+diff -N src/testsupport/org/h3/test/Verisimplytable.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/testsupport/org/h3/test/Verisimplytable.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,18 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++<!-- 
++        Auto-generated mapping file from
++        the hibernate.org cfg2hbm engine
++-->
++    <class name="org.h3.test.Verisimplytable" table="VERISIMPLYTABLE">
++        <id name="id" type="long">
++            <column name="ID" scale="0" precision="0" />
++            <generator class="assigned" />
++        </id>
++        <property name="name" type="string">
++            <column name="NAME" scale="255" precision="255" />
++        </property>
++    </class>
++</hibernate-mapping>

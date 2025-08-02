@@ -1,0 +1,36 @@
+select c.* 
+from 
+	child c join parent p on c.parent_id = p.id
+where 
+	c.status = 'findme'
+	and p.id in (
+		select top 50 p.id
+		from 
+			child c2
+				join parent p2 on c2.parent_id = p2.id
+		where 
+			c2.status = 'findme'
+			and not exists (select * from other_child oc where oc.parent_id = p2.id and oc.status != 'done')
+	)
+
+
+Criteria crit = session.createCriteria(Child.class, "c");
+Criteria pCrit = crit.createCriteria("parent", "p");
+
+crit.add(Restrictions.eq(Child.STATUS, 'findme'));
+
+DetachedCriteria inSubq = DetachedCriteria.forClass(Child.class, "c2");
+DetachedCriteria inPCrit = inSubq.createCriteria("parent", "p2");
+
+inSubq.add(Restrictions.eq(Child.STATUS, 'findme'));
+
+inPCrit.setProjection( Projections.id() );
+pCrit.add( Subqueries.propertyIn(Parent.ID, inSubq) );
+
+DetachedCriteria existsSubq = DetachedCriteria.forClass(OtherChild.class, "oc");
+existsSubq.add(Restrictions.ne(OtherChild.STATUS, 'done'));
+existsSubq.add( Restrictions.eqProperty("oc.parent.id", "p2.id") ); //didn't work without patch
+existsSubq.setProjection(Projections.id());
+inSubq.add( Subqueries.notExists(existsSubq) );
+
+inSubq.setMaxResults(50); //doesn't work - see HHH-912

@@ -1,0 +1,1268 @@
+Index: core/src/main/java/org/hibernate/dialect/Dialect.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/Dialect.java	(revision 18111)
++++ core/src/main/java/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -43,6 +43,7 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
++import org.hibernate.LockOptions;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.dialect.function.CastFunction;
+ import org.hibernate.dialect.function.SQLFunction;
+@@ -972,6 +973,28 @@
+ 	/**
+ 	 * Given a lock mode, determine the appropriate for update fragment to use.
+ 	 *
++	 * @param lockOptions contains the lock mode to apply.
++	 * @return The appropriate for update fragment.
++	 */
++	public String getForUpdateString(LockOptions lockOptions) {
++		LockMode lockMode = lockOptions.getLockMode();
++		if ( lockMode==LockMode.UPGRADE || lockMode==LockMode.PESSIMISTIC_READ || lockMode==LockMode.PESSIMISTIC_WRITE) {
++			return getForUpdateString();
++		}
++		else if ( lockMode==LockMode.UPGRADE_NOWAIT ) {
++			return getForUpdateNowaitString();
++		}
++		else if ( lockMode==LockMode.FORCE || lockMode==LockMode.PESSIMISTIC_FORCE_INCREMENT) {
++			return getForUpdateNowaitString();
++		}
++		else {
++			return "";
++		}
++	}
++
++	/**
++	 * Given a lock mode, determine the appropriate for update fragment to use.
++	 *
+ 	 * @param lockMode The lock mode to apply.
+ 	 * @return The appropriate for update fragment.
+ 	 */
+@@ -1078,12 +1101,12 @@
+ 	 * <tt>SELECT FOR UPDATE</tt> to achieve this in their own fashion.
+ 	 *
+ 	 * @param sql the SQL string to modify
+-	 * @param aliasedLockModes a map of lock modes indexed by aliased table names.
++	 * @param aliasedLockOptions a map of lock options indexed by aliased table names.
+ 	 * @param keyColumnNames a map of key columns indexed by aliased table names.
+ 	 * @return the modified SQL string.
+ 	 */
+-	public String applyLocksToSql(String sql, Map aliasedLockModes, Map keyColumnNames) {
+-		return sql + new ForUpdateFragment( this, aliasedLockModes, keyColumnNames ).toFragmentString();
++	public String applyLocksToSql(String sql, Map aliasedLockOptions, Map keyColumnNames) {
++		return sql + new ForUpdateFragment( this, aliasedLockOptions, keyColumnNames ).toFragmentString();
+ 	}
+ 
+ 
+Index: core/src/main/java/org/hibernate/dialect/AbstractTransactSQLDialect.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/AbstractTransactSQLDialect.java	(revision 18111)
++++ core/src/main/java/org/hibernate/dialect/AbstractTransactSQLDialect.java	(working copy)
+@@ -34,6 +34,7 @@
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.dialect.function.CharIndexFunction;
+ import org.hibernate.dialect.function.NoArgSQLFunction;
+@@ -168,13 +169,14 @@
+ 		}
+ 	}
+ 
+-	public String applyLocksToSql(String sql, Map aliasedLockModes, Map keyColumnNames) {
+-		Iterator itr = aliasedLockModes.entrySet().iterator();
++	public String applyLocksToSql(String sql, Map aliasedLockOptions, Map keyColumnNames) {
++		Iterator itr = aliasedLockOptions.entrySet().iterator();
+ 		StringBuffer buffer = new StringBuffer( sql );
+ 		int correction = 0;
+ 		while ( itr.hasNext() ) {
+ 			final Map.Entry entry = ( Map.Entry ) itr.next();
+-			final LockMode lockMode = ( LockMode ) entry.getValue();
++			final LockOptions lockOption = ( LockOptions ) entry.getValue();
++			final LockMode lockMode = lockOption.getLockMode();
+ 			if ( lockMode.greaterThan( LockMode.READ ) ) {
+ 				final String alias = ( String ) entry.getKey();
+ 				int start = -1, end = -1;
+Index: core/src/main/java/org/hibernate/sql/ForUpdateFragment.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/ForUpdateFragment.java	(revision 18111)
++++ core/src/main/java/org/hibernate/sql/ForUpdateFragment.java	(working copy)
+@@ -29,6 +29,7 @@
+ 
+ import org.hibernate.LockMode;
+ import org.hibernate.QueryException;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -44,13 +45,14 @@
+ 		this.dialect = dialect;
+ 	}
+ 
+-	public ForUpdateFragment(Dialect dialect, Map lockModes, Map keyColumnNames) throws QueryException {
++	public ForUpdateFragment(Dialect dialect, Map lockOptions, Map keyColumnNames) throws QueryException {
+ 		this( dialect );
+ 		LockMode upgradeType = null;
+-		Iterator iter = lockModes.entrySet().iterator();
++		Iterator iter = lockOptions.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			final Map.Entry me = ( Map.Entry ) iter.next();
+-			final LockMode lockMode = ( LockMode ) me.getValue();
++			final LockOptions lockOption = ( LockOptions ) me.getValue();
++			final LockMode lockMode = lockOption.getLockMode();
+ 			if ( LockMode.READ.lessThan( lockMode ) ) {
+ 				final String tableAlias = ( String ) me.getKey();
+ 				if ( dialect.forUpdateOfColumns() ) {
+Index: core/src/main/java/org/hibernate/sql/Select.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/Select.java	(revision 18111)
++++ core/src/main/java/org/hibernate/sql/Select.java	(working copy)
+@@ -25,6 +25,7 @@
+ package org.hibernate.sql;
+ 
+ import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -43,7 +44,7 @@
+ 	private String orderByClause;
+ 	private String groupByClause;
+ 	private String comment;
+-	private LockMode lockMode;
++	private LockOptions lockOptions = new LockOptions();
+ 	public final Dialect dialect;
+ 
+ 	private int guesstimatedBufferSize = 20;
+@@ -91,8 +92,8 @@
+ 			buf.append(" order by ").append(orderByClause);
+ 		}
+ 		
+-		if (lockMode!=null) {
+-			buf.append( dialect.getForUpdateString(lockMode) );
++		if (lockOptions.getLockMode()!=LockMode.NONE) {
++			buf.append( dialect.getForUpdateString(lockOptions) );
+ 		}
+ 		
+ 		return dialect.transformSelectString( buf.toString() );
+@@ -168,11 +169,19 @@
+ 	}
+ 
+ 	public LockMode getLockMode() {
+-		return lockMode;
++		return lockOptions.getLockMode();
+ 	}
+ 	
+ 	public Select setLockMode(LockMode lockMode) {
+-		this.lockMode = lockMode;
++		lockOptions.setLockMode(lockMode);
+ 		return this;
+ 	}
++
++	public Select setLockOptions(LockOptions lockOptions) {
++		this.lockOptions.setLockMode(lockOptions.getLockMode());
++		this.lockOptions.setScope(lockOptions.getScope());
++		this.lockOptions.setTimeOut(lockOptions.getTimeOut());
++		return this;
++	}
++
+ }
+Index: core/src/main/java/org/hibernate/engine/QueryParameters.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/QueryParameters.java	(revision 18111)
++++ core/src/main/java/org/hibernate/engine/QueryParameters.java	(working copy)
+@@ -55,7 +55,7 @@
+ 	private Type[] positionalParameterTypes;
+ 	private Object[] positionalParameterValues;
+ 	private Map namedParameters;
+-	private Map lockModes;
++	private Map lockOptions;
+ 	private RowSelection rowSelection;
+ 	private boolean cacheable;
+ 	private String cacheRegion;
+@@ -133,7 +133,7 @@
+ 	public QueryParameters(
+ 			final Type[] positionalParameterTypes,
+ 			final Object[] positionalParameterValues,
+-			final Map lockModes,
++			final Map lockOptions,
+ 			final RowSelection rowSelection,
+ 			final boolean cacheable,
+ 			final String cacheRegion,
+@@ -145,7 +145,7 @@
+ 				positionalParameterTypes,
+ 				positionalParameterValues,
+ 				null,
+-				lockModes,
++				lockOptions,
+ 				rowSelection,
+ 				false,
+ 				cacheable,
+@@ -161,7 +161,7 @@
+ 			final Type[] positionalParameterTypes,
+ 			final Object[] positionalParameterValues,
+ 			final Map namedParameters,
+-			final Map lockModes,
++			final Map lockOptions,
+ 			final RowSelection rowSelection,
+ 			final boolean readOnly,
+ 			final boolean cacheable,
+@@ -173,7 +173,7 @@
+ 		this.positionalParameterTypes = positionalParameterTypes;
+ 		this.positionalParameterValues = positionalParameterValues;
+ 		this.namedParameters = namedParameters;
+-		this.lockModes = lockModes;
++		this.lockOptions = lockOptions;
+ 		this.rowSelection = rowSelection;
+ 		this.cacheable = cacheable;
+ 		this.cacheRegion = cacheRegion;
+@@ -188,7 +188,7 @@
+ 			final Type[] positionalParameterTypes,
+ 			final Object[] positionalParameterValues,
+ 			final Map namedParameters,
+-			final Map lockModes,
++			final Map lockOptions,
+ 			final RowSelection rowSelection,
+ 			final boolean readOnly,
+ 			final boolean cacheable,
+@@ -204,7 +204,7 @@
+ 				positionalParameterTypes,
+ 				positionalParameterValues,
+ 				namedParameters,
+-				lockModes,
++				lockOptions,
+ 				rowSelection,
+ 				readOnly,
+ 				cacheable,
+@@ -258,12 +258,12 @@
+ 		rowSelection = selection;
+ 	}
+ 
+-	public Map getLockModes() {
+-		return lockModes;
++	public Map getLockOptions() {
++		return lockOptions;
+ 	}
+ 
+-	public void setLockModes(Map map) {
+-		lockModes = map;
++	public void setLockOptions(Map map) {
++		lockOptions = map;
+ 	}
+ 
+ 	public void traceParameters(SessionFactoryImplementor factory) throws HibernateException {
+@@ -468,7 +468,7 @@
+ 				this.positionalParameterTypes,
+ 				this.positionalParameterValues,
+ 				this.namedParameters,
+-				this.lockModes,
++				this.lockOptions,
+ 				selection,
+ 				this.readOnly,
+ 				this.cacheable,
+Index: core/src/main/java/org/hibernate/util/ArrayHelper.java
+===================================================================
+--- core/src/main/java/org/hibernate/util/ArrayHelper.java	(revision 18111)
++++ core/src/main/java/org/hibernate/util/ArrayHelper.java	(working copy)
+@@ -84,8 +84,8 @@
+ 		return array;
+ 	}
+ 
+-	public static LockMode[] fillArray(LockOptions lockOptions, int length) {
+-		LockMode[] array = new LockMode[length];
++	public static LockOptions[] fillArray(LockOptions lockOptions, int length) {
++		LockOptions[] array = new LockOptions[length];
+ 		Arrays.fill(array, lockOptions);
+ 		return array;
+ 	}
+Index: core/src/main/java/org/hibernate/LockOptions.java
+===================================================================
+--- core/src/main/java/org/hibernate/LockOptions.java	(revision 18111)
++++ core/src/main/java/org/hibernate/LockOptions.java	(working copy)
+@@ -34,6 +34,9 @@
+ 
+ 	public static final int NO_WAIT = 0;
+ 	public static final int WAIT_FOREVER = -1;
++	public static final LockOptions NONE = new LockOptions(LockMode.NONE);
++	public static final LockOptions READ = new LockOptions(LockMode.READ);
++	public static final LockOptions UPGRADE = new LockOptions(LockMode.UPGRADE);
+ 
+ 	private LockMode lockMode = LockMode.NONE;
+ 
+Index: core/src/main/java/org/hibernate/Query.java
+===================================================================
+--- core/src/main/java/org/hibernate/Query.java	(revision 18111)
++++ core/src/main/java/org/hibernate/Query.java	(working copy)
+@@ -207,11 +207,11 @@
+ 	public Query setFetchSize(int fetchSize);
+ 
+ 	/**
+-	 * Set the lockmode for the objects idententified by the
++	 * Set the lock options for the objects idententified by the
+ 	 * given alias that appears in the <tt>FROM</tt> clause.
+ 	 * @param alias a query alias, or <tt>this</tt> for a collection filter
+ 	 */
+-	public Query setLockMode(String alias, LockMode lockMode);
++	public Query setLockOptions(String alias, LockOptions lockOptions);
+ 
+ 	/**
+ 	 * Add a comment to the generated SQL.
+Index: core/src/main/java/org/hibernate/impl/SQLQueryImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/SQLQueryImpl.java	(revision 18111)
++++ core/src/main/java/org/hibernate/impl/SQLQueryImpl.java	(working copy)
+@@ -41,6 +41,7 @@
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.MappingException;
++import org.hibernate.LockOptions;
+ import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
+ import org.hibernate.engine.ResultSetMappingDefinition;
+ import org.hibernate.engine.NamedSQLQueryDefinition;
+@@ -249,11 +250,11 @@
+ 		throw new UnsupportedOperationException("not yet implemented for SQL queries");
+ 	}
+ 
+-	public Query setLockMode(String alias, LockMode lockMode) {
++	public Query setLockOptions(String alias, LockOptions lockOptions) {
+ 		throw new UnsupportedOperationException("cannot set the lock mode for a native SQL query");
+ 	}
+ 
+-	protected Map getLockModes() {
++	protected Map getLockOptions() {
+ 		//we never need to apply locks to the SQL
+ 		return CollectionHelper.EMPTY_MAP;
+ 	}
+Index: core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java	(revision 18111)
++++ core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java	(working copy)
+@@ -227,7 +227,7 @@
+ 		return session;
+ 	}
+ 
+-	protected abstract Map getLockModes();
++	protected abstract Map getLockOptions();
+ 
+ 
+ 	// Parameter handling code ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@@ -874,7 +874,7 @@
+ 				typeArray(),
+ 				valueArray(),
+ 				namedParams,
+-				getLockModes(),
++				getLockOptions(),
+ 				getSelection(),
+ 				readOnly,
+ 				cacheable,
+Index: core/src/main/java/org/hibernate/impl/QueryImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/QueryImpl.java	(revision 18111)
++++ core/src/main/java/org/hibernate/impl/QueryImpl.java	(working copy)
+@@ -35,6 +35,7 @@
+ import org.hibernate.Query;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.LockOptions;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.query.ParameterMetadata;
+@@ -47,7 +48,7 @@
+  */
+ public class QueryImpl extends AbstractQueryImpl {
+ 
+-	private Map lockModes = new HashMap(2);
++	private Map lockOptions = new HashMap(2);
+ 
+ 	public QueryImpl(
+ 			String queryString,
+@@ -124,13 +125,13 @@
+ 		}
+ 	}
+ 
+-	public Query setLockMode(String alias, LockMode lockMode) {
+-		lockModes.put(alias, lockMode);
++	public Query setLockOptions(String alias, LockOptions lockOption) {
++		lockOptions.put(alias, lockOption);
+ 		return this;
+ 	}
+ 
+-	protected Map getLockModes() {
+-		return lockModes;
++	protected Map getLockOptions() {
++		return lockOptions;
+ 	}
+ 
+ }
+Index: core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java	(revision 18111)
++++ core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java	(working copy)
+@@ -46,6 +46,7 @@
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.JoinSequence;
+ import org.hibernate.engine.QueryParameters;
+@@ -139,6 +140,8 @@
+ 
+ 	private Map enabledFilters;
+ 
++	private static final LockOptions DEFAULT_OPTION = new LockOptions(LockMode.NONE);
++
+ 	private static final Logger log = LoggerFactory.getLogger( QueryTranslatorImpl.class );
+ 
+ 	/**
+@@ -1036,40 +1039,40 @@
+ 		holderClass = clazz;
+ 	}
+ 
+-	protected LockMode[] getLockModes(Map lockModes) {
++	protected LockOptions[] getLockOptions(Map lockOptions) {
+ 		// unfortunately this stuff can't be cached because
+ 		// it is per-invocation, not constant for the
+ 		// QueryTranslator instance
+-		HashMap nameLockModes = new HashMap();
+-		if ( lockModes != null ) {
+-			Iterator iter = lockModes.entrySet().iterator();
++		HashMap nameLockOptions = new HashMap();
++		if ( lockOptions != null ) {
++			Iterator iter = lockOptions.entrySet().iterator();
+ 			while ( iter.hasNext() ) {
+ 				Map.Entry me = ( Map.Entry ) iter.next();
+-				nameLockModes.put( getAliasName( ( String ) me.getKey() ),
++				nameLockOptions.put( getAliasName( ( String ) me.getKey() ),
+ 						me.getValue() );
+ 			}
+ 		}
+-		LockMode[] lockModeArray = new LockMode[names.length];
++		LockOptions[] lockOptionsArray = new LockOptions[names.length];
+ 		for ( int i = 0; i < names.length; i++ ) {
+-			LockMode lm = ( LockMode ) nameLockModes.get( names[i] );
+-			if ( lm == null ) lm = LockMode.NONE;
+-			lockModeArray[i] = lm;
++			LockOptions lm = ( LockOptions ) nameLockOptions.get( names[i] );
++			if ( lm == null ) lm = DEFAULT_OPTION;
++			lockOptionsArray[i] = lm;
+ 		}
+-		return lockModeArray;
++		return lockOptionsArray;
+ 	}
+ 
+-	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws QueryException {
++	protected String applyLocks(String sql, Map lockOptions, Dialect dialect) throws QueryException {
+ 		// can't cache this stuff either (per-invocation)
+ 		final String result;
+-		if ( lockModes == null || lockModes.size() == 0 ) {
++		if ( lockOptions == null || lockOptions.size() == 0 ) {
+ 			result = sql;
+ 		}
+ 		else {
+-			Map aliasedLockModes = new HashMap();
+-			Iterator iter = lockModes.entrySet().iterator();
++			Map aliasedLockOptions = new HashMap();
++			Iterator iter = lockOptions.entrySet().iterator();
+ 			while ( iter.hasNext() ) {
+ 				Map.Entry me = ( Map.Entry ) iter.next();
+-				aliasedLockModes.put( getAliasName( ( String ) me.getKey() ), me.getValue() );
++				aliasedLockOptions.put( getAliasName( ( String ) me.getKey() ), me.getValue() );
+ 			}
+ 			Map keyColumnNames = null;
+ 			if ( dialect.forUpdateOfColumns() ) {
+@@ -1078,7 +1081,7 @@
+ 					keyColumnNames.put( names[i], persisters[i].getIdentifierColumnNames() );
+ 				}
+ 			}
+-			result = dialect.applyLocksToSql( sql, aliasedLockModes, keyColumnNames );
++			result = dialect.applyLocksToSql( sql, aliasedLockOptions, keyColumnNames );
+ 		}
+ 		logQuery( queryString, result );
+ 		return result;
+Index: core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java
+===================================================================
+--- core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java	(revision 18111)
++++ core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java	(working copy)
+@@ -47,6 +47,7 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
+ import org.hibernate.jdbc.util.FormatStyle;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.util.PropertiesHelper;
+@@ -153,6 +154,7 @@
+ 
+ 	public static final String OPT_PARAM = "optimizer";
+ 
++	private static final LockOptions UPGRADE_OPTION = new LockOptions(LockMode.UPGRADE);
+ 
+ 	private Type identifierType;
+ 
+@@ -411,7 +413,8 @@
+ 				" from " + tableName + ' ' + alias +
+ 				" where " + StringHelper.qualify( alias, segmentColumnName ) + "=?";
+ 		HashMap lockMap = new HashMap();
+-		lockMap.put( alias, LockMode.UPGRADE );
++		lockMap.put( alias,  UPGRADE_OPTION );
++
+ 		Map updateTargetColumnsMap = Collections.singletonMap( alias, new String[] { valueColumnName } );
+ 		return dialect.applyLocksToSql( query, lockMap, updateTargetColumnsMap );
+ 	}
+Index: core/src/main/java/org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/hql/QueryLoader.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/hql/QueryLoader.java	(working copy)
+@@ -36,6 +36,7 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionFactoryImplementor;
+@@ -100,8 +101,9 @@
+ 	private ResultTransformer implicitResultTransformer;
+ 	private String[] queryReturnAliases;
+ 
+-	private LockMode[] defaultLockModes;
++	private LockOptions[] defaultLockOptions;
+ 
++	private static final LockOptions DEFAULT_OPTION = new LockOptions(LockMode.NONE);
+ 
+ 	/**
+ 	 * Creates a new Loader implementation.
+@@ -197,8 +199,7 @@
+ 		}
+ 
+ 		//NONE, because its the requested lock mode, not the actual! 
+-		defaultLockModes = ArrayHelper.fillArray(LockMode.NONE, size);
+-
++		defaultLockOptions = ArrayHelper.fillArray(DEFAULT_OPTION, size);
+ 	}
+ 
+ 	// -- Loader implementation --
+@@ -277,42 +278,42 @@
+ 	}
+ 
+ 	/**
+-	 * @param lockModes a collection of lock modes specified dynamically via the Query interface
++	 * @param lockOptions a collection of lock modes specified dynamically via the Query interface
+ 	 */
+-	protected LockMode[] getLockModes(Map lockModes) {
++	protected LockOptions[] getLockOptions(Map lockOptions) {
+ 
+-		if ( lockModes==null || lockModes.size()==0 ) {
+-			return defaultLockModes;
++		if ( lockOptions==null || lockOptions.size()==0 ) {
++			return defaultLockOptions;
+ 		}
+ 		else {
+ 			// unfortunately this stuff can't be cached because
+ 			// it is per-invocation, not constant for the
+ 			// QueryTranslator instance
+ 
+-			LockMode[] lockModeArray = new LockMode[entityAliases.length];
++			LockOptions[] lockOptionsArray = new LockOptions[entityAliases.length];
+ 			for ( int i = 0; i < entityAliases.length; i++ ) {
+-				LockMode lockMode = (LockMode) lockModes.get( entityAliases[i] );
+-				if ( lockMode == null ) {
++				LockOptions options = (LockOptions) lockOptions.get( entityAliases[i] );
++				if ( options == null ) {
+ 					//NONE, because its the requested lock mode, not the actual! 
+-					lockMode = LockMode.NONE;
++					options = DEFAULT_OPTION;
+ 				}
+-				lockModeArray[i] = lockMode;
++				lockOptionsArray[i] = options;
+ 			}
+-			return lockModeArray;
++			return lockOptionsArray;
+ 		}
+ 	}
+ 
+-	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws QueryException {
+-		if ( lockModes == null || lockModes.size() == 0 ) {
++	protected String applyLocks(String sql, Map lockOptions, Dialect dialect) throws QueryException {
++		if ( lockOptions == null || lockOptions.size() == 0 ) {
+ 			return sql;
+ 		}
+ 
+ 		// can't cache this stuff either (per-invocation)
+ 		// we are given a map of user-alias -> lock mode
+ 		// create a new map of sql-alias -> lock mode
+-		final Map aliasedLockModes = new HashMap();
++		final Map aliasedLockOptions = new HashMap();
+ 		final Map keyColumnNames = dialect.forUpdateOfColumns() ? new HashMap() : null;
+-		final Iterator iter = lockModes.entrySet().iterator();
++		final Iterator iter = lockOptions.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) iter.next();
+ 			final String userAlias = ( String ) me.getKey();
+@@ -329,12 +330,12 @@
+ 			final QueryNode select = ( QueryNode ) queryTranslator.getSqlAST();
+ 			final Lockable drivingPersister = ( Lockable ) select.getFromClause().getFromElement( userAlias ).getQueryable();
+ 			final String sqlAlias = drivingPersister.getRootTableAlias( drivingSqlAlias );
+-			aliasedLockModes.put( sqlAlias, me.getValue() );
++			aliasedLockOptions.put( sqlAlias, me.getValue() );
+ 			if ( keyColumnNames != null ) {
+ 				keyColumnNames.put( sqlAlias, drivingPersister.getRootTableIdentifierColumnNames() );
+ 			}
+ 		}
+-		return dialect.applyLocksToSql( sql, aliasedLockModes, keyColumnNames );
++		return dialect.applyLocksToSql( sql, aliasedLockOptions, keyColumnNames );
+ 	}
+ 
+ 	protected boolean upgradeLocks() {
+Index: core/src/main/java/org/hibernate/loader/JoinWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/JoinWalker.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/JoinWalker.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.FetchMode;
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.CascadeStyle;
+ import org.hibernate.engine.JoinHelper;
+@@ -81,7 +82,7 @@
+ 	protected CollectionPersister[] collectionPersisters;
+ 	protected int[] collectionOwners;
+ 	protected String[] aliases;
+-	protected LockMode[] lockModeArray;
++	protected LockOptions[] lockOptionsArray;
+ 	protected String sql;
+ 
+ 	protected JoinWalker(
+@@ -100,12 +101,12 @@
+ 		this.collectionSuffixes = collectionSuffixes;
+ 	}
+ 
+-	public LockMode[] getLockModeArray() {
+-		return lockModeArray;
++	public LockOptions[] getLockModeOptions() {
++		return lockOptionsArray;
+ 	}
+ 
+-	public void setLockModeArray(LockMode[] lockModeArray) {
+-		this.lockModeArray = lockModeArray;
++	public void setLockOptionsArray(LockOptions[] lockOptionsArray) {
++		this.lockOptionsArray = lockOptionsArray;
+ 	}
+ 
+ 	public String[] getSuffixes() {
+@@ -978,7 +979,12 @@
+ 		}
+ 	}
+ 
++
+ 	protected void initPersisters(final List associations, final LockMode lockMode) throws MappingException {
++		initPersisters( associations, new LockOptions(lockMode));
++	}
++
++	protected void initPersisters(final List associations, final LockOptions lockOptions) throws MappingException {
+ 		
+ 		final int joins = countEntityPersisters(associations);
+ 		final int collections = countCollectionPersisters(associations);
+@@ -991,7 +997,7 @@
+ 		aliases = new String[joins];
+ 		owners = new int[joins];
+ 		ownerAssociationTypes = new EntityType[joins];
+-		lockModeArray = ArrayHelper.fillArray(lockMode, joins);
++		lockOptionsArray = ArrayHelper.fillArray(lockOptions, joins);
+ 		
+ 		int i=0;
+ 		int j=0;
+Index: core/src/main/java/org/hibernate/loader/OuterJoinLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/OuterJoinLoader.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/OuterJoinLoader.java	(working copy)
+@@ -28,6 +28,7 @@
+ import java.util.Set;
+ 
+ import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.LoadQueryInfluencers;
+@@ -49,7 +50,7 @@
+ 	protected CollectionPersister[] collectionPersisters;
+ 	protected int[] collectionOwners;
+ 	protected String[] aliases;
+-	protected LockMode[] lockModeArray;
++	protected LockOptions[] lockOptionsArray;
+ 	protected int[] owners;
+ 	protected EntityType[] ownerAssociationTypes;
+ 	protected String sql;
+@@ -93,8 +94,8 @@
+ 		return ownerAssociationTypes;
+ 	}
+ 
+-	protected LockMode[] getLockModes(Map lockModes) {
+-		return lockModeArray;
++	protected LockOptions[] getLockOptions(Map lockModes) {
++		return lockOptionsArray;
+ 	}
+ 
+ 	public LoadQueryInfluencers getLoadQueryInfluencers() {
+@@ -117,7 +118,7 @@
+ 		persisters = walker.getPersisters();
+ 		collectionPersisters = walker.getCollectionPersisters();
+ 		ownerAssociationTypes = walker.getOwnerAssociationTypes();
+-		lockModeArray = walker.getLockModeArray();
++		lockOptionsArray = walker.getLockModeOptions();
+ 		suffixes = walker.getSuffixes();
+ 		collectionSuffixes = walker.getCollectionSuffixes();
+ 		owners = walker.getOwners();
+Index: core/src/main/java/org/hibernate/loader/Loader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/Loader.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/Loader.java	(working copy)
+@@ -47,6 +47,7 @@
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.StaleObjectStateException;
+ import org.hibernate.WrongClassException;
++import org.hibernate.LockOptions;
+ import org.hibernate.cache.FilterKey;
+ import org.hibernate.cache.QueryCache;
+ import org.hibernate.cache.QueryKey;
+@@ -173,18 +174,18 @@
+ 	}
+ 
+ 	/**
+-	 * What lock mode does this load entities with?
++	 * What lock options does this load entities with?
+ 	 *
+-	 * @param lockModes a collection of lock modes specified dynamically via the Query interface
++	 * @param lockOptions a collection of lock options specified dynamically via the Query interface
+ 	 */
+-	protected abstract LockMode[] getLockModes(Map lockModes);
++	protected abstract LockOptions[] getLockOptions(Map lockOptions);
+ 
+ 	/**
+ 	 * Append <tt>FOR UPDATE OF</tt> clause, if necessary. This
+ 	 * empty superclass implementation merely returns its first
+ 	 * argument.
+ 	 */
+-	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws HibernateException {
++	protected String applyLocks(String sql, Map lockOptions, Dialect dialect) throws HibernateException {
+ 		return sql;
+ 	}
+ 
+@@ -219,7 +220,7 @@
+ 	protected String preprocessSQL(String sql, QueryParameters parameters, Dialect dialect)
+ 			throws HibernateException {
+ 		
+-		sql = applyLocks( sql, parameters.getLockModes(), dialect );
++		sql = applyLocks( sql, parameters.getLockOptions(), dialect );
+ 		
+ 		return getFactory().getSettings().isCommentsEnabled() ?
+ 				prependComment( sql, parameters ) : sql;
+@@ -290,7 +291,7 @@
+ 			        resultSet,
+ 					session,
+ 					queryParameters,
+-					getLockModes( queryParameters.getLockModes() ),
++					getLockOptions( queryParameters.getLockOptions() ),
+ 					null,
+ 					hydratedObjects,
+ 					new EntityKey[entitySpan],
+@@ -336,7 +337,7 @@
+ 						resultSet,
+ 						session,
+ 						queryParameters,
+-						getLockModes( queryParameters.getLockModes() ),
++						getLockOptions( queryParameters.getLockOptions() ),
+ 						null,
+ 						hydratedObjects,
+ 						loadedKeys,
+@@ -573,7 +574,7 @@
+ 	        final ResultSet resultSet,
+ 	        final SessionImplementor session,
+ 	        final QueryParameters queryParameters,
+-	        final LockMode[] lockModeArray,
++	        final LockOptions[] lockOptionsArray,
+ 	        final EntityKey optionalObjectKey,
+ 	        final List hydratedObjects,
+ 	        final EntityKey[] keys,
+@@ -604,7 +605,7 @@
+ 				keys,
+ 				queryParameters.getOptionalObject(),
+ 				optionalObjectKey,
+-				lockModeArray,
++				lockOptionsArray,
+ 				hydratedObjects,
+ 				session
+ 		);
+@@ -699,7 +700,7 @@
+ //
+ // Would need to change the way the max-row stuff is handled (i.e. behind an interface) so
+ // that I could do the control breaking at the means to know when to stop
+-		final LockMode[] lockModeArray = getLockModes( queryParameters.getLockModes() );
++		final LockOptions[] lockOptionsArray = getLockOptions( queryParameters.getLockOptions() );
+ 		final EntityKey optionalObjectKey = getOptionalObjectKey( queryParameters, session );
+ 
+ 		final boolean createSubselects = isSubselectLoadingEnabled();
+@@ -723,7 +724,7 @@
+ 						rs,
+ 						session,
+ 						queryParameters,
+-						lockModeArray,
++						lockOptionsArray,
+ 						optionalObjectKey,
+ 						hydratedObjects,
+ 						keys,
+@@ -1183,7 +1184,7 @@
+ 	        final EntityKey[] keys,
+ 	        final Object optionalObject,
+ 	        final EntityKey optionalObjectKey,
+-	        final LockMode[] lockModes,
++	        final LockOptions[] lockOptions,
+ 	        final List hydratedObjects,
+ 	        final SessionImplementor session) 
+ 	throws HibernateException, SQLException {
+@@ -1220,7 +1221,7 @@
+ 							persisters[i],
+ 							key,
+ 							object,
+-							lockModes[i],
++							lockOptions[i],
+ 							session 
+ 						);
+ 				}
+@@ -1231,7 +1232,7 @@
+ 							persisters[i],
+ 							descriptors[i].getRowIdAlias(),
+ 							key,
+-							lockModes[i],
++							lockOptions[i],
+ 							optionalObjectKey,
+ 							optionalObject,
+ 							hydratedObjects,
+@@ -1257,10 +1258,10 @@
+ 	        final Loadable persister,
+ 	        final EntityKey key,
+ 	        final Object object,
+-	        final LockMode lockMode,
++	        final LockOptions lockOptions,
+ 	        final SessionImplementor session) 
+ 	throws HibernateException, SQLException {
+-
++		LockMode lockMode = (lockOptions == null) ? null : lockOptions.getLockMode();
+ 		if ( !persister.isInstance( object, session.getEntityMode() ) ) {
+ 			throw new WrongClassException( 
+ 					"loaded object was of wrong class " + object.getClass(), 
+@@ -1296,13 +1297,13 @@
+ 	        final Loadable persister,
+ 	        final String rowIdAlias,
+ 	        final EntityKey key,
+-	        final LockMode lockMode,
++	        final LockOptions lockOptions,
+ 	        final EntityKey optionalObjectKey,
+ 	        final Object optionalObject,
+ 	        final List hydratedObjects,
+ 	        final SessionImplementor session) 
+ 	throws HibernateException, SQLException {
+-
++		LockMode lockMode = (lockOptions == null) ? null : lockOptions.getLockMode();
+ 		final String instanceClass = getInstanceClass( 
+ 				rs, 
+ 				i, 
+Index: core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java	(working copy)
+@@ -32,6 +32,7 @@
+ import org.hibernate.FetchMode;
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
++import org.hibernate.LockOptions;
+ import org.hibernate.engine.CascadeStyle;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.LoadQueryInfluencers;
+@@ -104,13 +105,13 @@
+ 					translator.getWhereCondition(), 
+ 					translator.getOrderBy(),
+ 					translator.getGroupBy(),
+-					LockMode.NONE 
++					LockOptions.NONE  
+ 				);
+ 		}
+ 		else {
+ 			resultTypes = new Type[] { TypeFactory.manyToOne( persister.getEntityName() ) };
+ 
+-			initAll( translator.getWhereCondition(), translator.getOrderBy(), LockMode.NONE );
++			initAll( translator.getWhereCondition(), translator.getOrderBy(), LockOptions.NONE );
+ 		}
+ 		
+ 		userAliasList.add( criteria.getAlias() ); //root entity comes *last*
+Index: core/src/main/java/org/hibernate/loader/criteria/CriteriaLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/criteria/CriteriaLoader.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/criteria/CriteriaLoader.java	(working copy)
+@@ -36,6 +36,7 @@
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.LockOptions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionFactoryImplementor;
+@@ -70,6 +71,8 @@
+ 	//these are not the actual "physical" SQL aliases
+ 	private final String[] userAliases;
+ 
++	private static final LockOptions DEFAULT_OPTION = new LockOptions(LockMode.NONE);
++
+ 	public CriteriaLoader(
+ 			final OuterJoinLoadable persister, 
+ 			final SessionFactoryImplementor factory, 
+@@ -143,38 +146,38 @@
+ 		return querySpaces;
+ 	}
+ 
+-	protected String applyLocks(String sqlSelectString, Map lockModes, Dialect dialect) throws QueryException {
+-		if ( lockModes == null || lockModes.isEmpty() ) {
++	protected String applyLocks(String sqlSelectString, Map lockOptions, Dialect dialect) throws QueryException {
++		if ( lockOptions == null || lockOptions.isEmpty() ) {
+ 			return sqlSelectString;
+ 		}
+ 
+-		final Map aliasedLockModes = new HashMap();
++		final Map aliasedLockOptions = new HashMap();
+ 		final Map keyColumnNames = dialect.forUpdateOfColumns() ? new HashMap() : null;
+ 		final String[] drivingSqlAliases = getAliases();
+ 		for ( int i = 0; i < drivingSqlAliases.length; i++ ) {
+-			final LockMode lockMode = ( LockMode ) lockModes.get( drivingSqlAliases[i] );
+-			if ( lockMode != null ) {
++			final LockOptions lockOption = ( LockOptions ) lockOptions.get( drivingSqlAliases[i] );
++			if ( lockOption != null ) {
+ 				final Lockable drivingPersister = ( Lockable ) getEntityPersisters()[i];
+ 				final String rootSqlAlias = drivingPersister.getRootTableAlias( drivingSqlAliases[i] );
+-				aliasedLockModes.put( rootSqlAlias, lockMode );
++				aliasedLockOptions.put( rootSqlAlias, lockOption );
+ 				if ( keyColumnNames != null ) {
+ 					keyColumnNames.put( rootSqlAlias, drivingPersister.getRootTableIdentifierColumnNames() );
+ 				}
+ 			}
+ 		}
+-		return dialect.applyLocksToSql( sqlSelectString, aliasedLockModes, keyColumnNames );
++		return dialect.applyLocksToSql( sqlSelectString, aliasedLockOptions, keyColumnNames );
+ 	}
+ 
+-	protected LockMode[] getLockModes(Map lockModes) {
++	protected LockOptions[] getLockOptions(Map lockOptions) {
+ 		final String[] entityAliases = getAliases();
+ 		if ( entityAliases == null ) {
+ 			return null;
+ 		}
+ 		final int size = entityAliases.length;
+-		LockMode[] lockModesArray = new LockMode[size];
++		LockOptions[] lockModesArray = new LockOptions[size];
+ 		for ( int i=0; i<size; i++ ) {
+-			LockMode lockMode = (LockMode) lockModes.get( entityAliases[i] );
+-			lockModesArray[i] = lockMode==null ? LockMode.NONE : lockMode;
++			LockOptions lockOption = (LockOptions) lockOptions.get( entityAliases[i] );
++			lockModesArray[i] = lockOption==null ? DEFAULT_OPTION : lockOption;
+ 		}
+ 		return lockModesArray;
+ 	}
+Index: core/src/main/java/org/hibernate/loader/AbstractEntityJoinWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/AbstractEntityJoinWalker.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/AbstractEntityJoinWalker.java	(working copy)
+@@ -75,29 +75,6 @@
+ 	protected final void initAll(
+ 			final String whereString,
+ 			final String orderByString,
+-			final LockMode lockMode) throws MappingException {
+-		walkEntityTree( persister, getAlias() );
+-		List allAssociations = new ArrayList();
+-		allAssociations.addAll(associations);
+-		allAssociations.add(
+-				new OuterJoinableAssociation(
+-						persister.getEntityType(),
+-						null,
+-						null,
+-						alias,
+-						JoinFragment.LEFT_OUTER_JOIN,
+-						null,
+-						getFactory(),
+-						CollectionHelper.EMPTY_MAP
+-				)
+-		);
+-		initPersisters(allAssociations, lockMode);
+-		initStatementString( whereString, orderByString, lockMode);
+-	}
+-
+-	protected final void initAll(
+-			final String whereString,
+-			final String orderByString,
+ 			final LockOptions lockOptions) throws MappingException {
+ 		walkEntityTree( persister, getAlias() );
+ 		List allAssociations = new ArrayList();
+@@ -114,8 +91,8 @@
+ 						CollectionHelper.EMPTY_MAP
+ 				)
+ 		);
+-		initPersisters(allAssociations, lockOptions.getLockMode());
+-		initStatementString( whereString, orderByString, lockOptions.getLockMode());
++		initPersisters(allAssociations, lockOptions);
++		initStatementString( whereString, orderByString, lockOptions);
+ 	}
+ 
+ 	protected final void initProjection(
+@@ -123,17 +100,17 @@
+ 			final String whereString,
+ 			final String orderByString,
+ 			final String groupByString,
+-			final LockMode lockMode) throws MappingException {
++			final LockOptions lockOptions) throws MappingException {
+ 		walkEntityTree( persister, getAlias() );
+ 		persisters = new Loadable[0];
+-		initStatementString(projectionString, whereString, orderByString, groupByString, lockMode);
++		initStatementString(projectionString, whereString, orderByString, groupByString, lockOptions);
+ 	}
+ 
+ 	private void initStatementString(
+ 			final String condition,
+ 			final String orderBy,
+-			final LockMode lockMode) throws MappingException {
+-		initStatementString(null, condition, orderBy, "", lockMode);
++			final LockOptions lockOptions) throws MappingException {
++		initStatementString(null, condition, orderBy, "", lockOptions);
+ 	}
+ 
+ 	private void initStatementString(
+@@ -141,7 +118,7 @@
+ 			final String condition,
+ 			final String orderBy,
+ 			final String groupBy,
+-			final LockMode lockMode) throws MappingException {
++			final LockOptions lockOptions) throws MappingException {
+ 
+ 		final int joins = countEntityPersisters( associations );
+ 		suffixes = BasicLoader.generateSuffixes( joins + 1 );
+@@ -149,14 +126,14 @@
+ 		JoinFragment ojf = mergeOuterJoins( associations );
+ 
+ 		Select select = new Select( getDialect() )
+-				.setLockMode( lockMode )
++				.setLockOptions( lockOptions )
+ 				.setSelectClause(
+ 						projection == null ?
+ 								persister.selectFragment( alias, suffixes[joins] ) + selectString( associations ) :
+ 								projection
+ 				)
+ 				.setFromClause(
+-						getDialect().appendLockHint( lockMode, persister.fromTableFragment( alias ) ) +
++						getDialect().appendLockHint( lockOptions.getLockMode(), persister.fromTableFragment( alias ) ) +
+ 								persister.fromJoinFragment( alias, true, true )
+ 				)
+ 				.setWhereClause( condition )
+Index: core/src/main/java/org/hibernate/loader/custom/CustomLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/custom/CustomLoader.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/custom/CustomLoader.java	(working copy)
+@@ -38,6 +38,7 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.LockOptions;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+@@ -78,7 +79,7 @@
+ 	private final int[] collectionOwners;
+ 	private final CollectionAliases[] collectionAliases;
+ 
+-	private final LockMode[] lockModes;
++	private final LockOptions[] lockOptions;
+ //	private final String[] sqlAliases;
+ //	private final String[] sqlAliasSuffixes;
+ 	private final ResultRowProcessor rowProcessor;
+@@ -106,7 +107,7 @@
+ 		List collectionOwners = new ArrayList();
+ 		List collectionAliases = new ArrayList();
+ 
+-		List lockModes = new ArrayList();
++		List lockOptions = new ArrayList();
+ 		List resultColumnProcessors = new ArrayList();
+ 		List nonScalarReturnList = new ArrayList();
+ 		List resultTypes = new ArrayList();
+@@ -133,7 +134,8 @@
+ 				RootReturn rootRtn = ( RootReturn ) rtn;
+ 				Queryable persister = ( Queryable ) factory.getEntityPersister( rootRtn.getEntityName() );
+ 				entityPersisters.add( persister );
+-				lockModes.add( rootRtn.getLockMode() );
++				// TODO: get lock options from rootRTN
++				lockOptions.add( new LockOptions(rootRtn.getLockMode()) );
+ 				resultColumnProcessors.add( new NonScalarResultColumnProcessor( returnableCounter++ ) );
+ 				nonScalarReturnList.add( rtn );
+ 				entityOwners.add( new Integer( -1 ) );
+@@ -147,7 +149,8 @@
+ 				String role = collRtn.getOwnerEntityName() + "." + collRtn.getOwnerProperty();
+ 				QueryableCollection persister = ( QueryableCollection ) factory.getCollectionPersister( role );
+ 				collectionPersisters.add( persister );
+-				lockModes.add( collRtn.getLockMode() );
++				// TODO: get lock options from collRtn
++				lockOptions.add( new LockOptions(collRtn.getLockMode()) );
+ 				resultColumnProcessors.add( new NonScalarResultColumnProcessor( returnableCounter++ ) );
+ 				nonScalarReturnList.add( rtn );
+ 				collectionOwners.add( new Integer( -1 ) );
+@@ -169,7 +172,8 @@
+ 				NonScalarReturn ownerDescriptor = fetchRtn.getOwner();
+ 				int ownerIndex = nonScalarReturnList.indexOf( ownerDescriptor );
+ 				entityOwners.add( new Integer( ownerIndex ) );
+-				lockModes.add( fetchRtn.getLockMode() );
++				// TODO:  get lock options from fetchRtn
++				lockOptions.add( new LockOptions(fetchRtn.getLockMode()) );
+ 				Queryable ownerPersister = determineAppropriateOwnerPersister( ownerDescriptor );
+ 				EntityType fetchedType = ( EntityType ) ownerPersister.getPropertyType( fetchRtn.getOwnerProperty() );
+ 				String entityName = fetchedType.getAssociatedEntityName( getFactory() );
+@@ -185,7 +189,8 @@
+ 				NonScalarReturn ownerDescriptor = fetchRtn.getOwner();
+ 				int ownerIndex = nonScalarReturnList.indexOf( ownerDescriptor );
+ 				collectionOwners.add( new Integer( ownerIndex ) );
+-				lockModes.add( fetchRtn.getLockMode() );
++				// TODO:  get lock options from fetchRtn
++				lockOptions.add( new LockOptions(fetchRtn.getLockMode()) );
+ 				Queryable ownerPersister = determineAppropriateOwnerPersister( ownerDescriptor );
+ 				String role = ownerPersister.getEntityName() + '.' + fetchRtn.getOwnerProperty();
+ 				QueryableCollection persister = ( QueryableCollection ) factory.getCollectionPersister( role );
+@@ -228,9 +233,9 @@
+ 			this.collectionAliases[i] = ( CollectionAliases ) collectionAliases.get( i );
+ 		}
+ 
+-		this.lockModes = new LockMode[ lockModes.size() ];
+-		for ( int i = 0; i < lockModes.size(); i++ ) {
+-			this.lockModes[i] = ( LockMode ) lockModes.get( i );
++		this.lockOptions = new LockOptions[ lockOptions.size() ];
++		for ( int i = 0; i < lockOptions.size(); i++ ) {
++			this.lockOptions[i] = ( LockOptions ) lockOptions.get( i );
+ 		}
+ 
+ 		this.resultTypes = ArrayHelper.toTypeArray( resultTypes );
+@@ -288,8 +293,8 @@
+ 		return querySpaces;
+ 	}
+ 
+-	protected LockMode[] getLockModes(Map lockModesMap) {
+-		return lockModes;
++	protected LockOptions[] getLockOptions(Map lockModesMap) {
++		return lockOptions;
+ 	}
+ 
+ 	protected Loadable[] getEntityPersisters() {
+Index: core/src/main/java/org/hibernate/loader/entity/CascadeEntityJoinWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/entity/CascadeEntityJoinWalker.java	(revision 18111)
++++ core/src/main/java/org/hibernate/loader/entity/CascadeEntityJoinWalker.java	(working copy)
+@@ -27,6 +27,7 @@
+ import org.hibernate.FetchMode;
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
++import org.hibernate.LockOptions;
+ import org.hibernate.engine.CascadeStyle;
+ import org.hibernate.engine.CascadingAction;
+ import org.hibernate.engine.SessionFactoryImplementor;
+@@ -48,7 +49,7 @@
+ 				//include the discriminator and class-level where, but not filters
+ 				.append( persister.filterFragment( getAlias(), CollectionHelper.EMPTY_MAP ) );
+ 	
+-		initAll( whereCondition.toString(), "", LockMode.READ );
++		initAll( whereCondition.toString(), "", LockOptions.READ );
+ 	}
+ 
+ 	protected boolean isJoinedFetchEnabled(AssociationType type, FetchMode config, CascadeStyle cascadeStyle) {
+Index: testsuite/src/test/java/org/hibernate/test/dialect/unit/lockhint/AbstractLockHintTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/dialect/unit/lockhint/AbstractLockHintTest.java	(revision 18111)
++++ testsuite/src/test/java/org/hibernate/test/dialect/unit/lockhint/AbstractLockHintTest.java	(working copy)
+@@ -7,6 +7,7 @@
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.util.StringHelper;
+ import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
+ 
+ /**
+  * {@inheritDoc}
+@@ -55,9 +56,9 @@
+ 		}
+ 
+ 		public void verify() {
+-			HashMap lockModes = new HashMap();
+-			lockModes.put( aliasToLock, LockMode.UPGRADE );
+-			String actualProcessedSql = dialect.applyLocksToSql( rawSql, lockModes, Collections.EMPTY_MAP );
++			HashMap lockOptions = new HashMap();
++			lockOptions.put( aliasToLock, new LockOptions(LockMode.UPGRADE) );
++			String actualProcessedSql = dialect.applyLocksToSql( rawSql, lockOptions, Collections.EMPTY_MAP );
+ 			assertEquals( expectedProcessedSql, actualProcessedSql );
+ 		}
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/legacy/FooBarTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/legacy/FooBarTest.java	(revision 18111)
++++ testsuite/src/test/java/org/hibernate/test/legacy/FooBarTest.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.Transaction;
++import org.hibernate.LockOptions;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.classic.Session;
+ import org.hibernate.connection.ConnectionProvider;
+@@ -1354,7 +1355,7 @@
+ 		s.save(baz);
+ 		Query q = s.createQuery("from Foo foo, Bar bar");
+ 		if ( !(getDialect() instanceof DB2Dialect) ) {
+-			q.setLockMode("bar", LockMode.UPGRADE);
++			q.setLockOptions("bar", LockOptions.UPGRADE);
+ 		}
+ 		Object[] result = (Object[]) q.uniqueResult();
+ 		Object b = result[0];
+@@ -1368,7 +1369,7 @@
+ 		s.createQuery( "from Foo foo" ).list();
+ 		assertTrue( s.getCurrentLockMode(b)==LockMode.NONE );
+ 		q = s.createQuery("from Foo foo");
+-		q.setLockMode("foo", LockMode.READ);
++		q.setLockOptions("foo", LockOptions.READ);
+ 		q.list();
+ 		assertTrue( s.getCurrentLockMode(b)==LockMode.READ);
+ 		s.evict(baz);
+@@ -1387,9 +1388,9 @@
+ 		tx = s.beginTransaction();
+ 		q = s.createQuery("from Foo foo, Bar bar, Bar bar2");
+ 		if ( !(getDialect() instanceof DB2Dialect) ) {
+-			q.setLockMode("bar", LockMode.UPGRADE);
++			q.setLockOptions("bar", LockOptions.UPGRADE);
+ 		}
+-		q.setLockMode("bar2", LockMode.READ);
++		q.setLockOptions("bar2", LockOptions.READ);
+ 		result = (Object[]) q.list().get(0);
+ 		if ( !(getDialect() instanceof DB2Dialect) ) {
+ 			assertTrue( s.getCurrentLockMode( result[0] )==LockMode.UPGRADE && s.getCurrentLockMode( result[1] )==LockMode.UPGRADE );
+Index: envers/src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java
+===================================================================
+--- envers/src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(revision 18111)
++++ envers/src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(working copy)
+@@ -46,6 +46,7 @@
+ import org.hibernate.FlushMode;
+ import org.hibernate.LockMode;
+ import org.hibernate.Query;
++import org.hibernate.LockOptions;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -202,6 +203,6 @@
+         if (flushMode != null) query.setFlushMode(flushMode);
+         if (cacheMode != null) query.setCacheMode(cacheMode);
+         if (timeout != null) query.setTimeout(timeout);
+-        if (lockMode != null) query.setLockMode("e", lockMode);
++        if (lockMode != null) query.setLockOptions("e", new LockOptions(lockMode));
+     }
+ }

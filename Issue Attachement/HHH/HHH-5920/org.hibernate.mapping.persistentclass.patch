@@ -1,0 +1,96 @@
+Index: org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- org/hibernate/mapping/PersistentClass.java	(revision 20898)
++++ org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -54,6 +54,7 @@
+ 	private String entityName;
+ 
+ 	private String className;
++	private Class mappedClass;
+ 	private String proxyInterfaceName;
+ 	
+ 	private String nodeName;
+@@ -105,6 +106,7 @@
+ 
+ 	public void setClassName(String className) {
+ 		this.className = className==null ? null : className.intern();
++		mappedClass = null;
+ 	}
+ 
+ 	public String getProxyInterfaceName() {
+@@ -118,7 +120,10 @@
+ 	public Class getMappedClass() throws MappingException {
+ 		if (className==null) return null;
+ 		try {
+-			return ReflectHelper.classForName(className);
++			if (mappedClass == null) {
++				mappedClass = ReflectHelper.classForName(className);
++			}
++			return mappedClass;
+ 		}
+ 		catch (ClassNotFoundException cnfe) {
+ 			throw new MappingException("entity class not found: " + className, cnfe);
+@@ -397,17 +402,12 @@
+ 					}
+ 					else if ( identifierProperty == null && getIdentifierMapper() != null ) {
+ 						// we have an embedded composite identifier
+-						try {
+-							identifierProperty = getProperty( element, getIdentifierMapper().getPropertyIterator() );
+-							if ( identifierProperty != null ) {
+-								// the root of the incoming property path matched one
+-								// of the embedded composite identifier properties
+-								property = identifierProperty;
+-							}
++						identifierProperty = getPropertyWithoutException( element, getIdentifierMapper().getPropertyIterator() );
++						if ( identifierProperty != null ) {
++							// the root of the incoming property path matched one
++							// of the embedded composite identifier properties
++							property = identifierProperty;
+ 						}
+-						catch( MappingException ignore ) {
+-							// ignore it...
+-						}
+ 					}
+ 
+ 					if ( property == null ) {
+@@ -421,18 +421,34 @@
+ 			}
+ 		}
+ 		catch ( MappingException e ) {
+-			throw new MappingException( "property [" + propertyPath + "] not found on entity [" + getEntityName() + "]" );
++			throw new MappingException( e.getMessage() );
+ 		}
+ 
+ 		return property;
+ 	}
+ 
++	private Property getPropertyWithoutException(String propertyName, Iterator iterator) {
++		if ( iterator.hasNext() ) {
++			String root = StringHelper.root( propertyName );
++			do {
++				Property prop = (Property) iterator.next();
++				if ( prop.getName().equals( root ) ) {
++					return prop;
++				}
++			} while ( iterator.hasNext() );
++		}
++		return null;
++	}
++
+ 	private Property getProperty(String propertyName, Iterator iterator) throws MappingException {
+-		while ( iterator.hasNext() ) {
+-			Property prop = (Property) iterator.next();
+-			if ( prop.getName().equals( StringHelper.root(propertyName) ) ) {
+-				return prop;
+-			}
++		if ( iterator.hasNext() ) {
++			String root = StringHelper.root( propertyName );
++			do {
++				Property prop = (Property) iterator.next();
++				if ( prop.getName().equals( root ) ) {
++					return prop;
++				}
++			} while ( iterator.hasNext() );
+ 		}
+ 		throw new MappingException( "property [" + propertyName + "] not found on entity [" + getEntityName() + "]" );
+ 	}

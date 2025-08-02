@@ -1,0 +1,197 @@
+Index: C:/workspace/hibernate-324sp1/test/org/hibernate/test/tuple/EntityModeToTuplizerMappingPerformanceTest.java
+===================================================================
+--- C:/workspace/hibernate-324sp1/test/org/hibernate/test/tuple/EntityModeToTuplizerMappingPerformanceTest.java	(revision 0)
++++ C:/workspace/hibernate-324sp1/test/org/hibernate/test/tuple/EntityModeToTuplizerMappingPerformanceTest.java	(revision 0)
+@@ -0,0 +1,170 @@
++package org.hibernate.test.tuple;
++
++import java.util.Collections;
++import java.util.Map;
++
++import org.apache.commons.collections.SequencedHashMap;
++import org.hibernate.EntityMode;
++import org.hibernate.HibernateException;
++import org.hibernate.tuple.EntityModeToTuplizerMapping;
++import org.hibernate.tuple.Tuplizer;
++import org.hibernate.util.FastHashMap;
++
++import EDU.oswego.cs.dl.util.concurrent.ConcurrentHashMap;
++import EDU.oswego.cs.dl.util.concurrent.ConcurrentReaderHashMap;
++import EDU.oswego.cs.dl.util.concurrent.CountDown;
++import EDU.oswego.cs.dl.util.concurrent.Latch;
++
++public class EntityModeToTuplizerMappingPerformanceTest {
++	final static int DRY_RUN_THREADS = 20;
++	final static int DRY_RUN_ITERATIONS_PER_THREAD = 1000;
++	final static int LIVE_RUN_THREADS = 80;
++	final static int LIVE_RUN_ITERATIONS_PER_THREAD = 10000;
++	
++	final static int GUESS_ENTITY_MODES_PER_ITERATION = 1;
++	final static int GET_TUPLIZERS_PER_ITERATION = 20;
++
++	private void run() {
++		dryRun(Collections.synchronizedMap(new SequencedHashMap()));
++		dryRun(new FastHashMap());
++		dryRun(new ConcurrentHashMap());
++		dryRun(new ConcurrentReaderHashMap());
++
++		long base = liveRun(Collections.synchronizedMap(new SequencedHashMap()), 0);
++		liveRun(new FastHashMap(), base);
++		liveRun(new ConcurrentHashMap(), base);
++		liveRun(new ConcurrentReaderHashMap(), base);
++	}
++
++	private void dryRun(Map map) {
++		runTest(map, DRY_RUN_THREADS, DRY_RUN_ITERATIONS_PER_THREAD, 0, true);
++	}
++
++	private long liveRun(Map map, long baseTime) {
++		return runTest(map, LIVE_RUN_THREADS, LIVE_RUN_ITERATIONS_PER_THREAD, baseTime, false);
++	}
++
++	private long runTest(Map map, int threads, final int iterationsPerThread,
++			long baseTime, boolean dryRun) {
++		long start = System.currentTimeMillis();
++		
++		final EntityModeToTuplizerMapping mapping = new TestEntityModeToTuplizerMapping(map);
++
++		final Latch startLatch = new Latch();
++		final CountDown finishLatch = new CountDown(threads);
++		
++		for (int i = 0; i < threads; i++) {
++			new Thread(new DummyTuplizerWorker(mapping, startLatch, finishLatch,
++					iterationsPerThread)).start();
++		}
++		
++		startLatch.release();
++		try {
++			finishLatch.acquire();
++		} catch (InterruptedException e) {
++			throw new RuntimeException(e);
++		}
++
++		long finish = System.currentTimeMillis();
++		long duration = (finish - start);
++		if (!dryRun) {
++			System.out.print("Map class: " + map.getClass() + ": "
++					+ duration + "ms");
++			if (baseTime == 0) {
++				System.out.println();
++			} else {
++				System.out.println(" (x" + (double) duration / baseTime + ")");
++			}
++		}
++		return (finish - start);
++	}
++
++	public static void main(String[] args) {
++		EntityModeToTuplizerMappingPerformanceTest test = new EntityModeToTuplizerMappingPerformanceTest();
++		test.run();
++	}
++
++
++	private static final class DummyTuplizerWorker implements Runnable {
++		private final EntityModeToTuplizerMapping mapping;
++		private final Latch startLatch;
++		private final CountDown finishLatch;
++		private final int iterationsPerThread;
++
++		private static final char[] TUPLIZERS = {'D', 'P'};
++		private static final EntityMode[] ENTITY_MODES = {EntityMode.DOM4J, EntityMode.POJO, EntityMode.MAP};
++
++		private DummyTuplizerWorker(EntityModeToTuplizerMapping mapping,
++				Latch startLatch, CountDown finishLatch, int iterationsPerThread) {
++			this.mapping = mapping;
++			this.startLatch = startLatch;
++			this.finishLatch = finishLatch;
++			this.iterationsPerThread = iterationsPerThread;
++		}
++
++		public void run() {
++			try {
++				startLatch.acquire();
++			} catch (InterruptedException e) {
++				throw new RuntimeException(e);
++			}
++			
++			for (int i = 0; i < iterationsPerThread; i++) {
++				for (int j = 0; j < GUESS_ENTITY_MODES_PER_ITERATION; j++) {
++					mapping.guessEntityMode(TUPLIZERS[j % TUPLIZERS.length]);
++				}
++
++				for (int j = 0; j < GET_TUPLIZERS_PER_ITERATION; j++) {
++					mapping.getTuplizerOrNull(ENTITY_MODES[j % ENTITY_MODES.length]);
++				}
++			}
++			
++			finishLatch.release();
++		}
++	}
++
++	public class DummyTuplizer implements Tuplizer {
++		private char match;
++
++		public DummyTuplizer(char match) {
++			this.match = match;
++		}
++
++		public Class getMappedClass() {
++			return Character.class;
++		}
++
++		public Object getPropertyValue(Object entity, int i)
++				throws HibernateException {
++			return null;
++		}
++
++		public Object[] getPropertyValues(Object entity)
++				throws HibernateException {
++			return null;
++		}
++
++		public Object instantiate() throws HibernateException {
++			return null;
++		}
++
++		public boolean isInstance(Object object) {
++			return ((Character) object).charValue() == match;
++		}
++
++		public void setPropertyValues(Object entity, Object[] values)
++				throws HibernateException {
++		}
++
++	}
++
++	public class TestEntityModeToTuplizerMapping extends
++			EntityModeToTuplizerMapping {
++
++		private TestEntityModeToTuplizerMapping(Map map) {
++			super(map);
++			addTuplizer(EntityMode.DOM4J, new DummyTuplizer('D'));
++			addTuplizer(EntityMode.POJO, new DummyTuplizer('P'));
++		}
++	}
++}
+Index: C:/workspace/hibernate-324sp1/src/org/hibernate/tuple/EntityModeToTuplizerMapping.java
+===================================================================
+--- C:/workspace/hibernate-324sp1/src/org/hibernate/tuple/EntityModeToTuplizerMapping.java	(revision 14198)
++++ C:/workspace/hibernate-324sp1/src/org/hibernate/tuple/EntityModeToTuplizerMapping.java	(working copy)
+@@ -18,8 +18,16 @@
+ public abstract class EntityModeToTuplizerMapping implements Serializable {
+ 
+ 	// map of EntityMode -> Tuplizer
+-	private final Map tuplizers = Collections.synchronizedMap( new SequencedHashMap() );
++	private final Map tuplizers;
++	
++	public EntityModeToTuplizerMapping() {
++		this(Collections.synchronizedMap( new SequencedHashMap() ));
++	}
+ 
++	public EntityModeToTuplizerMapping(Map tuplizers) {
++		this.tuplizers = tuplizers;
++	}
++
+ 	protected void addTuplizer(EntityMode entityMode, Tuplizer tuplizer) {
+ 		tuplizers.put( entityMode, tuplizer );
+ 	}

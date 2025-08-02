@@ -1,0 +1,80 @@
+Index: test/org/hibernate/test/hql/BulkManipulationTest.java
+===================================================================
+--- test/org/hibernate/test/hql/BulkManipulationTest.java	(revision 17009)
++++ test/org/hibernate/test/hql/BulkManipulationTest.java	(working copy)
+@@ -472,7 +472,61 @@
+ 		s.getTransaction().commit();
+ 		s.close();
+ 	}
++	
++	public void testInsertWithNestedAliasReferencesInSubQuery() {
++		// this test insures that alias references in a subquery of an INSERT 
++		// are not inappropriately replaced by the table name.
++		String[] zooNames = new String[]{ "SanDiegoZoo", "MarylandZoo", "PhoenixZoo", "BronxZoo", "CincinnatiZoo", "SanAntonioZoo" };
++		{
++			// Create some test data.
++			Session s = openSession();
++			Transaction t = s.beginTransaction();
++			for( int i=0; i < zooNames.length; i++ ) {
++				Zoo zoo = new Zoo();
++				zoo.setName(zooNames[i]);
++				zoo.setClassification( ( i % 2 == 0)? Classification.COOL : Classification.LAME );
++				s.persist( zoo );
++			}
++			t.commit();
++			s.close();
++		}
++		
++		// Check that no PettingZoos exist.
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		
++		// Execute the insert.
++		s.createQuery( "insert into PettingZoo (name, classification) select name, classification " +
++				"from Zoo zoo " +
++				"where exists (" +
++					"select innerZoo " +
++					"from Zoo innerZoo " +
++					"where innerZoo.id = zoo.id and innerZoo.classification = :classification)" )
++			.setParameter( "classification", Classification.LAME )
++			.executeUpdate();
++		
++		s.flush();
++		
++		// Check that PettingZoo instances were inserted.
++		for( int i = 1; i < zooNames.length; i = i+2 ) {
++			assertEquals( 1,
++				s.createQuery("select zoo from PettingZoo zoo where zoo.name = :name and zoo.classification = :classification" )
++					.setParameter( "name", zooNames[i] )
++					.setParameter( "classification", Classification.LAME )
++					.list().size()
++			);
++		}
++		
++		s.flush();
++		
++		// Clean up.
++		s.createQuery( "delete from Zoo" ).executeUpdate();
++		
++		t.commit();
++		s.close();
++	}
+ 
++
+ 	// UPDATES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 	public void testIncorrectSyntax() {
+Index: src/org/hibernate/hql/ast/tree/FromElementType.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/FromElementType.java	(revision 17009)
++++ src/org/hibernate/hql/ast/tree/FromElementType.java	(working copy)
+@@ -316,6 +316,9 @@
+ 			else if ( fromElement.getWalker().getStatementType() == HqlSqlTokenTypes.SELECT ) {
+ 				return propertyMapping.toColumns( tableAlias, path );
+ 			}
++			else if ( fromElement.getWalker().getStatementType() == HqlSqlTokenTypes.INSERT ) {
++				return propertyMapping.toColumns( tableAlias, path );
++			}
+ 			else if ( fromElement.getWalker().getCurrentClauseType() == HqlSqlTokenTypes.SELECT ) {
+ 				return propertyMapping.toColumns( tableAlias, path );
+ 			}

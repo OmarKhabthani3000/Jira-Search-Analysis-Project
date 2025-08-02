@@ -1,0 +1,66 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java b/hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+index dd87b91f25..1b652640eb 100644
+--- a/hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
++++ b/hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+@@ -4173,20 +4173,27 @@ public abstract class AbstractEntityPersister
+ 		// We load the entity loaders for the most common lock modes.
+ 
+ 		noneLockLoader = createEntityLoader( LockMode.NONE );
++		loaders.put( LockMode.NONE, noneLockLoader );
++
++		if ( ! factory.getSessionFactoryOptions().isDelayBatchFetchLoaderCreationsEnabled() ) {
++
++		
+ 		readLockLoader = createEntityLoader( LockMode.READ );
+ 
+ 
+ 		// The loaders for the other lock modes are lazily loaded and will later be stored in this map,
+ 		//		unless this setting is disabled
+-		if ( ! factory.getSessionFactoryOptions().isDelayBatchFetchLoaderCreationsEnabled() ) {
+-			for ( LockMode lockMode : EnumSet.complementOf( EnumSet.of( LockMode.NONE, LockMode.READ, LockMode.WRITE ) ) ) {
+-				loaders.put( lockMode, createEntityLoader( lockMode ) );
+-			}
++		for ( LockMode lockMode : EnumSet.complementOf( EnumSet.of( LockMode.NONE, LockMode.READ, LockMode.WRITE ) ) ) {
++			loaders.put( lockMode, createEntityLoader( lockMode ) );
+ 		}
+ 
+ 
+ 		// And finally, create the internal merge and refresh load plans
++		createMergeAndRefreshLoaders();
++		}
++	}
+ 
++	private void createMergeAndRefreshLoaders() {
+ 		loaders.put(
+ 				"merge",
+ 				new CascadeEntityLoader( this, CascadingActions.MERGE, getFactory() )
+@@ -4194,7 +4201,7 @@ public abstract class AbstractEntityPersister
+ 		loaders.put(
+ 				"refresh",
+ 				new CascadeEntityLoader( this, CascadingActions.REFRESH, getFactory() )
+-		);
++		);		
+ 	}
+ 
+ 	protected final UniqueEntityLoader getLoaderByLockMode(LockMode lockMode) {
+@@ -4202,6 +4209,8 @@ public abstract class AbstractEntityPersister
+ 			return noneLockLoader;
+ 		}
+ 		else if ( LockMode.READ == lockMode ) {
++			if( readLockLoader==null )
++				readLockLoader = createEntityLoader( LockMode.READ );
+ 			return readLockLoader;
+ 		}
+ 
+@@ -4319,7 +4328,10 @@ public abstract class AbstractEntityPersister
+ 			// Next, we consider whether an 'internal' fetch profile has been set.
+ 			// This indicates a special fetch profile Hibernate needs applied
+ 			// (for its merge loading process e.g.).
+-			return loaders.get( session.getLoadQueryInfluencers().getInternalFetchProfile() );
++			String loaderKey = session.getLoadQueryInfluencers().getInternalFetchProfile();
++			if( loaders.get(loaderKey)==null)
++				createMergeAndRefreshLoaders();
++			return loaders.get( loaderKey );
+ 		}
+ 		else if ( isAffectedByEnabledFetchProfiles( session ) ) {
+ 			// If the session has associated influencers we need to adjust the

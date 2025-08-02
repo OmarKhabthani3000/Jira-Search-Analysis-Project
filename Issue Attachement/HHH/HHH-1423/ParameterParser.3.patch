@@ -1,0 +1,63 @@
+--- src/org/hibernate/engine/query/ParameterParser.java.org	2006-03-14 10:03:19.264318306 +0100
++++ src/org/hibernate/engine/query/ParameterParser.java	2006-03-20 11:11:38.401880292 +0100
+@@ -26,6 +26,26 @@
+ 		// disallow instantiation
+ 	}
+ 
++	protected static boolean isStartOfMainOutputParam(String sql, int index, int length) {
++		if ( '?' == sql.charAt(index) ) {
++			index++;
++			while ( index < length && ' ' == sql.charAt(index) ) {
++				index++;
++			}
++			if ( index < length && '=' == sql.charAt(index) ) {
++				index++;
++				while ( index < length && ' ' == sql.charAt(index) ) {
++					index++;
++				}
++				String call = "call ";
++				if ( index < length && call.equals(sql.substring(index, index + call.length())) ) {
++					return true;
++				}
++			}
++		}
++		return false;
++	}
++
+ 	/**
+ 	 * Performs the actual parsing and tokenizing of the query string making appropriate
+ 	 * callbacks to the given recognizer upon recognition of the various tokens.
+@@ -39,9 +59,9 @@
+ 	 * @throws QueryException
+ 	 */
+ 	public static void parse(String sqlString, Recognizer recognizer) throws QueryException {
+-		boolean hasMainOutputParameter = sqlString.indexOf( "call" ) > 0 &&
+-		                                 sqlString.indexOf( "?" ) < sqlString.indexOf( "call" ) &&
+-		                                 sqlString.indexOf( "=" ) < sqlString.indexOf( "call" );
++		boolean couldHaveMainOutputParameter = sqlString.indexOf( "call " ) > 0 &&
++						 sqlString.indexOf( "?" ) < sqlString.indexOf( "call" ) &&
++						 sqlString.indexOf( "=" ) < sqlString.indexOf( "call" );
+ 		boolean foundMainOutputParam = false;
+ 
+ 		int stringLength = sqlString.length();
+@@ -85,13 +105,14 @@
+ 						indx = chopLocation - 1;
+ 					}
+ 					else {
+-						if ( hasMainOutputParameter && !foundMainOutputParam ) {
+-							foundMainOutputParam = true;
+-							recognizer.outParameter( indx );
+-						}
+-						else {
+-							recognizer.ordinalParameter( indx );
++						if ( couldHaveMainOutputParameter && !foundMainOutputParam ) {
++							if ( isStartOfMainOutputParam(sqlString, indx, stringLength) ) {
++								foundMainOutputParam = true;
++								recognizer.outParameter( indx );
++								continue;
++							}
+ 						}
++						recognizer.ordinalParameter( indx );
+ 					}
+ 				}
+ 				else {

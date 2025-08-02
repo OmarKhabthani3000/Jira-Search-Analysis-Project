@@ -1,0 +1,262 @@
+
+Property changes on: .
+___________________________________________________________________
+Name: svn:ignore
+   - target
+local
+*.ipr
+*.iws
+*.iml
+.classpath
+.project
+.nbattrs
+*.log
+*.properties
+.clover
+
+   + target
+local
+*.ipr
+*.iws
+*.iml
+.classpath
+.project
+.nbattrs
+*.log
+*.properties
+.clover
+.compatibility
+.settings
+
+
+Index: src/main/java/org/hibernate/criterion/AliasedProjection.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/AliasedProjection.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/AliasedProjection.java	(working copy)
+@@ -61,5 +61,8 @@
+ 	public boolean isGrouped() {
+ 		return projection.isGrouped();
+ 	}
+-
++	
++	public boolean isSelected() {
++		return projection.isSelected();
++	}
+ }
+Index: src/main/java/org/hibernate/criterion/Distinct.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/Distinct.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/Distinct.java	(working copy)
+@@ -51,6 +51,10 @@
+ 	public boolean isGrouped() {
+ 		return projection.isGrouped();
+ 	}
++	
++	public boolean isSelected() {
++		return projection.isSelected();
++	}
+ 
+ 	public String toString() {
+ 		return "distinct " + projection.toString();
+Index: src/main/java/org/hibernate/criterion/Projection.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/Projection.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/Projection.java	(working copy)
+@@ -78,4 +78,8 @@
+ 	 */
+ 	public boolean isGrouped();
+ 	
++	/**
++	 * Should this projection specifically be excluded from the select statement?
++	 */
++	public boolean isSelected();
+ }
+Index: src/main/java/org/hibernate/criterion/ProjectionList.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/ProjectionList.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/ProjectionList.java	(working copy)
+@@ -33,10 +33,14 @@
+ 
+ 	public Type[] getTypes(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+-		List types = new ArrayList( getLength() );
++ 		List types = new ArrayList( getLength() );
+ 		for ( int i=0; i<getLength(); i++ ) {
+-			Type[] elemTypes = getProjection(i).getTypes(criteria, criteriaQuery);
+-			ArrayHelper.addAll(types, elemTypes);
++			Projection proj = getProjection(i);
++			// if projection is not _selected_, don't include it in the projected types.
++			if(proj.isSelected()){
++				Type[] elemTypes = proj.getTypes(criteria, criteriaQuery);
++				ArrayHelper.addAll(types, elemTypes);
++			}
+ 		}
+ 		return ArrayHelper.toTypeArray(types);
+ 	}
+@@ -46,10 +50,16 @@
+ 		StringBuffer buf = new StringBuffer();
+ 		for ( int i=0; i<getLength(); i++ ) {
+ 			Projection proj = getProjection(i);
+-			buf.append( proj.toSqlString(criteria, loc, criteriaQuery) );
+-			loc += proj.getColumnAliases(loc).length;
+-			if ( i<elements.size()-1 ) buf.append(", ");
++			if ( proj.isSelected() ) {
++				buf.append( proj.toSqlString(criteria, loc, criteriaQuery) );
++				loc += proj.getColumnAliases(loc).length;
++				//if ( i<elements.size()-1 ) buf.append(", ");
++				// can no longer use this technique
++				buf.append(", ");
++			}
+ 		}
++		// remove trailing ','. MUCH SLOWER THAN OLD METHOD!
++		buf = buf.deleteCharAt(buf.length()-2);
+ 		return buf.toString();
+ 	}
+ 	
+@@ -122,4 +132,14 @@
+ 		}
+ 		return false;
+ 	}
++	
++	/**
++	 * Is this meaningful?
++	 */
++	public boolean isSelected() {
++		for ( int i=0; i<getLength(); i++ ) {
++			if ( getProjection(i).isSelected() ) return true;
++		}
++		return false;
++	}
+ }
+Index: src/main/java/org/hibernate/criterion/Projections.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/Projections.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/Projections.java	(working copy)
+@@ -104,6 +104,17 @@
+ 	public static PropertyProjection groupProperty(String propertyName) {
+ 		return new PropertyProjection(propertyName, true);
+ 	}
++
++	/**
++	 * A grouping property value
++	 * 
++	 * @param excludeFromSelect
++	 *            indicates not to include this parameter in the select clause,
++	 *            and _only_ in the GROUP BY clause.
++	 */
++	public static PropertyProjection groupProperty(String propertyName, boolean excludeFromSelect) {
++		return new PropertyProjection(propertyName, true, excludeFromSelect);
++	}
+ 	
+ 	/**
+ 	 * A projected property value
+@@ -111,7 +122,7 @@
+ 	public static PropertyProjection property(String propertyName) {
+ 		return new PropertyProjection(propertyName);
+ 	}
+-	
++		
+ 	/**
+ 	 * A projected identifier value
+ 	 */
+Index: src/main/java/org/hibernate/criterion/PropertyProjection.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/PropertyProjection.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/PropertyProjection.java	(working copy)
+@@ -13,6 +13,26 @@
+ 
+ 	private String propertyName;
+ 	private boolean grouped;
++
++	/**
++	 * Indicates not to include this parameter in the select clause, and _only_
++	 * in the GROUP BY clause.
++	 */
++	private boolean excludeFromSelect;
++
++	/**
++	 * @param excludeFromSelect
++	 *            indicates not to include this parameter in the select clause,
++	 *            and _only_ in the GROUP BY clause.
++	 */
++	public PropertyProjection(String prop, boolean grouped, boolean excludeFromSelect) {
++		if(excludeFromSelect) {
++			if(!grouped) throw new IllegalArgumentException("Property excluded from the select statement must be be grouped.");
++		}
++		this.propertyName = prop;
++		this.grouped = grouped;
++		this.excludeFromSelect = excludeFromSelect;
++	}
+ 	
+ 	protected PropertyProjection(String prop, boolean grouped) {
+ 		this.propertyName = prop;
+@@ -23,6 +43,7 @@
+ 		this(prop, false);
+ 	}
+ 
++
+ 	public String getPropertyName() {
+ 		return propertyName;
+ 	}
+@@ -38,14 +59,23 @@
+ 
+ 	public String toSqlString(Criteria criteria, int position, CriteriaQuery criteriaQuery) 
+ 	throws HibernateException {
+-		return new StringBuffer()
+-			.append( criteriaQuery.getColumn(criteria, propertyName) )
+-			.append(" as y")
+-			.append(position)
+-			.append('_')
+-			.toString();
++		// only build the string buffer if excludeFromSelect is false
++		if (excludeFromSelect){
++			return "";
++		} else {
++			return new StringBuffer()
++				.append( criteriaQuery.getColumn(criteria, propertyName) )
++				.append(" as y")
++				.append(position)
++				.append('_')
++				.toString();
++		}
+ 	}
+ 
++	public boolean isSelected(){
++		return !excludeFromSelect;
++	}
++	
+ 	public boolean isGrouped() {
+ 		return grouped;
+ 	}
+Index: src/main/java/org/hibernate/criterion/SimpleProjection.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/SimpleProjection.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/SimpleProjection.java	(working copy)
+@@ -41,5 +41,12 @@
+ 	public boolean isGrouped() {
+ 		return false;
+ 	}
++	
++	/**
++	 * Is this meaningful?
++	 */
++	public boolean isSelected() {
++		return true;
++	}
+ 
+ }
+Index: src/main/java/org/hibernate/criterion/SQLProjection.java
+===================================================================
+--- src/main/java/org/hibernate/criterion/SQLProjection.java	(revision 14095)
++++ src/main/java/org/hibernate/criterion/SQLProjection.java	(working copy)
+@@ -66,6 +66,10 @@
+ 	public boolean isGrouped() {
+ 		return grouped;
+ 	}
++	
++	public boolean isSelected() {
++		return true;
++	}
+ 
+ 	public Type[] getTypes(String alias, Criteria crit, CriteriaQuery criteriaQuery) {
+ 		return null; //unsupported

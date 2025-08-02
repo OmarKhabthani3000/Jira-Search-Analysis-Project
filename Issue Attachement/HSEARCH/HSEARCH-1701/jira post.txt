@@ -1,0 +1,87 @@
+@Transactional
+public static void editAccount() {
+    int id = request().body().asJson().get("acctId").asInt();
+	String name = request().body().asJson().get("name").asText();
+	
+    Custom_account acct = Custom_account.findById(id);
+	acct.setName(name);
+
+	JPA.em().merge(acct);
+}
+
+@Indexed
+@Entity
+@Table(name = "t_account")
+public class Custom_account extends Account implements Comparable<Custom_account> {
+	@ContainedIn
+	@ManyToMany(mappedBy = "accounts", fetch = FetchType.LAZY)
+	private Collection<User> users = new HashSet<User>();
+	
+	// ... other 
+}
+
+@Indexed
+@Entity
+@Table(name="t_user")
+public class User implements Serializable{
+	@IndexedEmbedded(includePaths = {"id", "type"})
+	@ManyToMany
+	@Fetch(FetchMode.SUBSELECT)
+	@JoinTable(name = "t_user_account", joinColumns = { 
+			@JoinColumn(name = "user_id", referencedColumnName = "user_id") }, inverseJoinColumns = { 
+			@JoinColumn(name = "account_id", referencedColumnName = "account_id") })
+	private Set<Custom_account> accounts = new HashSet<Custom_account>();
+	
+	@ContainedIn
+	@ManyToMany(mappedBy="users")
+	private Collection<Lesson> lessons = new HashSet<Lesson>();
+	
+	// ... other
+}
+
+@AnalyzerDef(name = "SomeAnalyzer", tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class), filters = {
+		@TokenFilterDef(factory = StandardFilterFactory.class),
+		@TokenFilterDef(factory = LowerCaseFilterFactory.class, params = { @Parameter(name = "language", value = "English") }) })
+@Entity
+@Indexed
+@Analyzer(definition = "SomeAnalyzer")
+@Table(name = "t_lesson")
+public class Lesson{
+	@IndexedEmbedded(includePaths = {"id"})
+	@Fetch(FetchMode.SUBSELECT)
+	@ManyToMany(fetch = FetchType.LAZY)
+	@JoinTable(name = "v_user_lesson", joinColumns = { @JoinColumn(name = "lesson_id", referencedColumnName = "lesson_id") }, inverseJoinColumns = { @JoinColumn(name = "user_id", referencedColumnName = "user_id") })
+	private Collection<User> users = new HashSet<User>();
+	
+	// ...other
+}
+
+
+Query1 :
+
+    select
+        lessons0_.someAttributes
+    from
+        v_user_lesson lessons0_ 
+    where
+        lessons0_.user_id in (
+            ?, ?
+        )
+		
+Query2 :
+    select
+        accounts0_.someAttributes
+    from
+        t_user_account accounts0_ 
+    inner join
+        t_account custom_accoun1_ 
+            on accounts0_.account_id=custom_accoun1_.account_id 
+    where
+        accounts0_.user_id in (
+            select
+                user1_.user_id 
+            from
+                t_user_account users0_ 
+            where
+                users0_.account_id=?
+        )

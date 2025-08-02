@@ -1,0 +1,325 @@
+Index: org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/StatelessSessionImpl.java,v
+retrieving revision 1.21
+diff -u -r1.21 StatelessSessionImpl.java
+--- org/hibernate/impl/StatelessSessionImpl.java	20 Jan 2006 12:57:29 -0000	1.21
++++ org/hibernate/impl/StatelessSessionImpl.java	23 Jan 2006 20:45:23 -0000
+@@ -32,6 +32,8 @@
+ import org.hibernate.engine.StatefulPersistenceContext;
+ import org.hibernate.engine.Versioning;
+ import org.hibernate.engine.query.HQLQueryPlan;
++import org.hibernate.engine.query.NativeSQLQueryPlan;
++import org.hibernate.engine.query.NativeSQLQuerySpecification;
+ import org.hibernate.event.EventListeners;
+ import org.hibernate.id.IdentifierGeneratorFactory;
+ import org.hibernate.jdbc.Batcher;
+@@ -39,6 +41,8 @@
+ import org.hibernate.loader.criteria.CriteriaLoader;
+ import org.hibernate.loader.custom.CustomLoader;
+ import org.hibernate.loader.custom.CustomQuery;
++import org.hibernate.loader.custom.SQLQueryReturn;
++import org.hibernate.loader.custom.SQLQueryScalarReturn;
+ import org.hibernate.persister.entity.EntityPersister;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+ import org.hibernate.proxy.HibernateProxy;
+@@ -196,6 +200,27 @@
+ 		return result;
+ 	}
+ 
++    public int executeNativeUpdate(String sqlQuery,
++            QueryParameters queryParameters) throws HibernateException {
++        errorIfClosed();
++        queryParameters.validateParameters();
++        NativeSQLQuerySpecification nativeSQLQuerySpecification = new NativeSQLQuerySpecification(
++                sqlQuery, new SQLQueryReturn[0], new SQLQueryScalarReturn[0],
++                Collections.EMPTY_LIST);
++        NativeSQLQueryPlan plan = getNativeSQLQueryPlan(nativeSQLQuerySpecification);
++
++        boolean success = false;
++        int result = 0;
++        try {
++            result = plan.performExecuteUpdate(queryParameters, this);
++            success = true;
++        } finally {
++            afterOperation(success);
++        }
++        temporaryPersistenceContext.clear();
++        return result;
++    }
++
+ 	public Batcher getBatcher() {
+ 		errorIfClosed();
+ 		return jdbcContext.getConnectionManager()
+Index: org/hibernate/impl/AbstractQueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/AbstractQueryImpl.java,v
+retrieving revision 1.41
+diff -u -r1.41 AbstractQueryImpl.java
+--- org/hibernate/impl/AbstractQueryImpl.java	10 Jan 2006 12:48:09 -0000	1.41
++++ org/hibernate/impl/AbstractQueryImpl.java	23 Jan 2006 20:45:23 -0000
+@@ -749,10 +749,6 @@
+ 		return uniqueElement( list() );
+ 	}
+ 
+-	public int executeUpdate() throws HibernateException {
+-		throw new UnsupportedOperationException( "Update queries only supported through HQL" );
+-	}
+-
+ 	static Object uniqueElement(List list) throws NonUniqueResultException {
+ 		int size = list.size();
+ 		if (size==0) return null;
+Index: org/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.174
+diff -u -r1.174 SessionImpl.java
+--- org/hibernate/impl/SessionImpl.java	20 Jan 2006 12:57:29 -0000	1.174
++++ org/hibernate/impl/SessionImpl.java	23 Jan 2006 20:45:23 -0000
+@@ -54,6 +54,8 @@
+ import org.hibernate.engine.Status;
+ import org.hibernate.engine.query.FilterQueryPlan;
+ import org.hibernate.engine.query.HQLQueryPlan;
++import org.hibernate.engine.query.NativeSQLQueryPlan;
++import org.hibernate.engine.query.NativeSQLQuerySpecification;
+ import org.hibernate.event.AutoFlushEvent;
+ import org.hibernate.event.AutoFlushEventListener;
+ import org.hibernate.event.DeleteEvent;
+@@ -88,6 +90,8 @@
+ import org.hibernate.loader.criteria.CriteriaLoader;
+ import org.hibernate.loader.custom.CustomLoader;
+ import org.hibernate.loader.custom.CustomQuery;
++import org.hibernate.loader.custom.SQLQueryReturn;
++import org.hibernate.loader.custom.SQLQueryScalarReturn;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.persister.entity.EntityPersister;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+@@ -1133,23 +1137,44 @@
+ 		return results;
+ 	}
+ 
+-	public int executeUpdate(String query, QueryParameters queryParameters) throws HibernateException {
+-		errorIfClosed();
+-		checkTransactionSynchStatus();
+-		queryParameters.validateParameters();
+-		HQLQueryPlan plan = getHQLQueryPlan( query, false );
+-
+-		boolean success = false;
+-		int result = 0;
+-		try {
+-			result = plan.performExecuteUpdate( queryParameters, this );
+-			success = true;
+-		}
+-		finally {
+-			afterOperation(success);
+-		}
+-		return result;
+-	}
++    public int executeUpdate(String query, QueryParameters queryParameters) throws HibernateException {
++        errorIfClosed();
++        checkTransactionSynchStatus();
++        queryParameters.validateParameters();
++        HQLQueryPlan plan = getHQLQueryPlan( query, false );
++
++        boolean success = false;
++        int result = 0;
++        try {
++            result = plan.performExecuteUpdate( queryParameters, this );
++            success = true;
++        }
++        finally {
++            afterOperation(success);
++        }
++        return result;
++    }
++
++    public int executeNativeUpdate(String sqlQuery,
++            QueryParameters queryParameters) throws HibernateException {
++        errorIfClosed();
++        checkTransactionSynchStatus();
++        queryParameters.validateParameters();
++        NativeSQLQuerySpecification nativeSQLQuerySpecification = new NativeSQLQuerySpecification(
++                sqlQuery, new SQLQueryReturn[0], new SQLQueryScalarReturn[0],
++                Collections.EMPTY_LIST);
++        NativeSQLQueryPlan plan = getNativeSQLQueryPlan(nativeSQLQuerySpecification);
++
++        boolean success = false;
++        int result = 0;
++        try {
++            result = plan.performExecuteUpdate(queryParameters, this);
++            success = true;
++        } finally {
++            afterOperation(success);
++        }
++        return result;
++    }
+ 
+ 	public Iterator iterate(String query) throws HibernateException {
+ 		return iterate( query, new QueryParameters() );
+Index: org/hibernate/impl/SQLQueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SQLQueryImpl.java,v
+retrieving revision 1.45
+diff -u -r1.45 SQLQueryImpl.java
+--- org/hibernate/impl/SQLQueryImpl.java	12 Jan 2006 22:54:14 -0000	1.45
++++ org/hibernate/impl/SQLQueryImpl.java	23 Jan 2006 20:45:23 -0000
+@@ -203,7 +203,12 @@
+ 	public Iterator iterate() throws HibernateException {
+ 		throw new UnsupportedOperationException("SQL queries do not currently support iteration");
+ 	}
+-
++    
++    public int executeUpdate() throws HibernateException {
++        Map namedParams = getNamedParams();
++        return getSession().executeNativeUpdate(getQueryString(), getQueryParameters(namedParams));
++    }
++    
+ 	public QueryParameters getQueryParameters(Map namedParams) {
+ 		QueryParameters qp = super.getQueryParameters(namedParams);
+ 		qp.setCallable(callable);
+Index: org/hibernate/engine/SessionImplementor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/engine/SessionImplementor.java,v
+retrieving revision 1.61
+diff -u -r1.61 SessionImplementor.java
+--- org/hibernate/engine/SessionImplementor.java	20 Jan 2006 12:57:28 -0000	1.61
++++ org/hibernate/engine/SessionImplementor.java	23 Jan 2006 20:45:23 -0000
+@@ -249,10 +249,15 @@
+ 	 */
+ 	public PersistenceContext getPersistenceContext();
+ 	
+-	/**
+-	 * Execute a HQL update or delete query
+-	 */
+-	int executeUpdate(String query, QueryParameters queryParameters) throws HibernateException;
++    /**
++     * Execute a HQL update or delete query
++     */
++    int executeUpdate(String query, QueryParameters queryParameters) throws HibernateException;
++
++    /**
++     * Execute a SQL update or delete query
++     */
++    int executeNativeUpdate(String query, QueryParameters queryParameters) throws HibernateException;
+ 	
+ 	// copied from Session:
+ 	
+Index: org/hibernate/engine/query/NativeSQLQueryPlan.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/engine/query/NativeSQLQueryPlan.java,v
+retrieving revision 1.2
+diff -u -r1.2 NativeSQLQueryPlan.java
+--- org/hibernate/engine/query/NativeSQLQueryPlan.java	7 Nov 2005 17:39:09 -0000	1.2
++++ org/hibernate/engine/query/NativeSQLQueryPlan.java	23 Jan 2006 20:45:23 -0000
+@@ -1,37 +1,86 @@
+ package org.hibernate.engine.query;
+ 
+-import org.hibernate.loader.custom.SQLCustomQuery;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.NamedSQLQueryDefinition;
+-
+ import java.io.Serializable;
++import java.sql.Connection;
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.HibernateException;
++import org.hibernate.engine.QueryParameters;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.exception.JDBCExceptionHelper;
++import org.hibernate.loader.custom.SQLCustomQuery;
++import org.hibernate.mapping.Value;
++import org.hibernate.type.Type;
+ 
+ /**
+  * Defines a query execution plan for a native-SQL query.
+- *
++ * 
+  * @author <a href="mailto:steve@hibernate.org">Steve Ebersole </a>
+  */
+ public class NativeSQLQueryPlan implements Serializable {
+-	private final String sourceQuery;
+-	private final SQLCustomQuery customQuery;
++    private final String sourceQuery;
++
++    private final SQLCustomQuery customQuery;
+ 
+-	public NativeSQLQueryPlan(NativeSQLQuerySpecification specification, SessionFactoryImplementor factory) {
+-		this.sourceQuery = specification.getQueryString();
++    private static final Log log = LogFactory.getLog(NativeSQLQueryPlan.class);
+ 
+-		customQuery = new SQLCustomQuery(
+-				specification.getSqlQueryReturns(),
+-		        specification.getSqlQueryScalarReturns(),
+-		        specification.getQueryString(),
+-		        specification.getQuerySpaces(),
+-		        factory
+-		);
+-	}
+-
+-	public String getSourceQuery() {
+-		return sourceQuery;
+-	}
+-
+-	public SQLCustomQuery getCustomQuery() {
+-		return customQuery;
+-	}
++    public NativeSQLQueryPlan(NativeSQLQuerySpecification specification,
++            SessionFactoryImplementor factory) {
++        this.sourceQuery = specification.getQueryString();
++
++        customQuery = new SQLCustomQuery(specification.getSqlQueryReturns(),
++                specification.getSqlQueryScalarReturns(), specification
++                        .getQueryString(), specification.getQuerySpaces(),
++                factory);
++    }
++
++    public int performExecuteUpdate(QueryParameters queryParameters,
++            SessionImplementor session) throws HibernateException {
++        if (log.isTraceEnabled()) {
++            log.trace("executeUpdate: " + getSourceQuery());
++            queryParameters.traceParameters(session.getFactory());
++        }
++        int result = 0;
++        try {
++            Connection connection = session.connection();
++            try {
++                PreparedStatement ps = connection
++                        .prepareStatement(this.sourceQuery);
++                try {
++                    Type[] types = queryParameters
++                            .getPositionalParameterTypes();
++                    Object[] values = queryParameters
++                            .getPositionalParameterValues();
++
++                    for (int i = 0; i < types.length; i++) {
++                        types[i].nullSafeSet(ps, values[i], i + 1, session);
++                    }
++
++                    result = ps.executeUpdate();
++                } finally {
++                    ps.close();
++                }
++            } finally {
++                connection.close();
++            }
++        } catch (SQLException sqle) {
++            throw JDBCExceptionHelper.convert(session.getFactory()
++                    .getSQLExceptionConverter(), sqle,
++                    "could not execute update query", this.sourceQuery);
++        }
++
++        return result;
++    }
++
++    public String getSourceQuery() {
++        return sourceQuery;
++    }
++
++    public SQLCustomQuery getCustomQuery() {
++        return customQuery;
++    }
+ }

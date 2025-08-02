@@ -1,0 +1,98 @@
+Index: Expression.java
+===================================================================
+retrieving revision 1.6.2.8
+diff -u -r1.6.2.8 Expression.java
+--- Expression.java	25 Oct 2003 07:43:52 -0000	1.6.2.8
++++ Expression.java	2 Jan 2004 23:21:52 -0000
+@@ -135,6 +135,26 @@
+ 	public static Criterion in(String propertyName, Collection values) {
+ 		return new InExpression( propertyName, values.toArray() );
+ 	}
++	
++	/**
++	 * Apply an "not in" constraint to the named property
++	 * @param propertyName
++	 * @param values
++	 * @return Criterion
++	 */
++	public static Criterion notIn(String propertyName, Object[] values) {
++		return new NotInExpression(propertyName, values);
++	}
++	/**
++	 * Apply an "not in" constraint to the named property
++	 * @param propertyName
++	 * @param values
++	 * @return Criterion
++	 */
++	public static Criterion notIn(String propertyName, Collection values) {
++		return new NotInExpression( propertyName, values.toArray() );
++	}
++	
+ 	/**
+ 	 * Apply an "is null" constraint to the named property
+ 	 * @return Criterion
+ 	 
+Index: src/net/sf/hibernate/expression/NotInExpression.java
+===================================================================
+RCS file: src/net/sf/hibernate/expression/NotInExpression.java
+diff -N src/net/sf/hibernate/expression/NotInExpression.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/expression/NotInExpression.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,57 @@
++package net.sf.hibernate.expression;
++
++import java.util.Map;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.TypedValue;
++import net.sf.hibernate.util.StringHelper;
++
++/**
++ * Constrains the property to have none of a specified 
++ * list of values
++ * @author Michael Gloegl
++ */
++public class NotInExpression extends AbstractCriterion {
++
++	private final String propertyName;
++	private final Object[] values;
++	
++	NotInExpression(String propertyName, Object[] values) {
++		this.propertyName = propertyName;
++		this.values = values;
++	}
++
++	public String toSqlString(SessionFactoryImplementor sessionFactory, Class persistentClass, String alias, Map aliasClasses)
++	throws HibernateException {
++		String params;
++		if ( values.length>0 ) {
++			params = StringHelper.repeat( "?, ", values.length-1 );
++			params += "?";
++		}
++		else {
++			params = StringHelper.EMPTY_STRING;
++		}
++		String condition = " not in (" + params + ')';
++		return StringHelper.join(
++				" and ",
++				StringHelper.suffix(
++						getColumns(sessionFactory, persistentClass, propertyName, alias, aliasClasses),
++						condition
++				)
++		);
++	}
++	
++	public TypedValue[] getTypedValues(SessionFactoryImplementor sessionFactory, Class persistentClass, Map aliasClasses) throws HibernateException {
++		TypedValue[] tvs = new TypedValue[ values.length ];
++		for ( int i=0; i<tvs.length; i++ ) {
++			tvs[i] = getTypedValue( sessionFactory, persistentClass, propertyName, values[i], aliasClasses );
++		}
++		return tvs;
++	}
++
++	public String toString() {
++		return propertyName + " not in (" + StringHelper.toString(values) + ')';
++	}
++	
++} 

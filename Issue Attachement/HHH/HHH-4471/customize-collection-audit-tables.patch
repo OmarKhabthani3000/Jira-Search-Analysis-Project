@@ -1,0 +1,228 @@
+Index: src/main/java/org/hibernate/envers/AuditCollectionTable.java
+===================================================================
+--- src/main/java/org/hibernate/envers/AuditCollectionTable.java	(revision 0)
++++ src/main/java/org/hibernate/envers/AuditCollectionTable.java	(revision 0)
+@@ -0,0 +1,25 @@
++package org.hibernate.envers;
++
++import java.lang.annotation.ElementType;
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++import java.lang.annotation.Target;
++
++/**
++ * Provide a mapping between a collection and its audit table name.
++ * @author Nicolas Roug&eacute; (nicolas at nrouge dot com)
++ */
++@Target(ElementType.TYPE)
++@Retention(RetentionPolicy.RUNTIME)
++public @interface AuditCollectionTable {
++	
++	/**
++	 * @return the collection name
++	 */
++	String collectionName();
++	
++	/**
++	 * @return the audit table name
++	 */
++	String tableName();
++}
+Index: src/main/java/org/hibernate/envers/AuditCollectionTables.java
+===================================================================
+--- src/main/java/org/hibernate/envers/AuditCollectionTables.java	(revision 0)
++++ src/main/java/org/hibernate/envers/AuditCollectionTables.java	(revision 0)
+@@ -0,0 +1,21 @@
++package org.hibernate.envers;
++
++import java.lang.annotation.ElementType;
++import java.lang.annotation.Retention;
++import java.lang.annotation.RetentionPolicy;
++import java.lang.annotation.Target;
++
++/**
++ * Provides a list of {@link AuditCollectionTable}
++ * @author Nicolas Roug&eacute; (nicolas at nrouge dot com)
++ */
++@Target(ElementType.TYPE)
++@Retention(RetentionPolicy.RUNTIME)
++public @interface AuditCollectionTables {
++	
++	/**
++	 * A list of {@link AuditCollectionTable}
++	 */
++	AuditCollectionTable[] value();
++	
++}
+Index: src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java	(working copy)
+@@ -27,6 +27,8 @@
+ import java.util.Map;
+ import java.util.Properties;
+ 
++import org.hibernate.envers.tools.StringTools;
++
+ /**
+  * Configuration of versions entities - names of fields, entities and tables created to store versioning information.
+  * @author Adam Warski (adam at warski dot org)
+@@ -48,6 +50,8 @@
+ 
+     private final Map<String, String> customAuditTablesNames;
+ 
++    private final Map<String, String> customAuditCollectionTablesNames;
++
+     public AuditEntitiesConfiguration(Properties properties, String revisionInfoEntityName) {
+         this.revisionInfoEntityName = revisionInfoEntityName;
+ 
+@@ -62,6 +66,7 @@
+         revisionTypePropType = "byte";
+ 
+         customAuditTablesNames = new HashMap<String, String>();
++        customAuditCollectionTablesNames = new HashMap<String, String>();
+ 
+         revisionNumberPath = originalIdPropName + "." + revisionFieldName + ".id";
+         revisionPropBasePath = originalIdPropName + "." + revisionFieldName + ".";
+@@ -105,6 +110,10 @@
+         customAuditTablesNames.put(entityName, tableName);
+     }
+ 
++    public void addCustomAuditCollectionTableName(String entityName, String collectionName, String tableName) {
++    	customAuditCollectionTablesNames.put(StringTools.getLastComponent(entityName) + "_" + collectionName, tableName);
++    }
++
+     //
+ 
+     public String getAuditEntityName(String entityName) {
+@@ -112,7 +121,7 @@
+     }
+ 
+     public String getAuditTableName(String entityName, String tableName) {
+-        String customHistoryTableName = customAuditTablesNames.get(entityName);
++        String customHistoryTableName = (entityName == null) ? customAuditCollectionTablesNames.get(tableName) : customAuditTablesNames.get(entityName);
+         if (customHistoryTableName == null) {
+             return auditTablePrefix + tableName + auditTableSuffix;
+         }
+Index: src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(working copy)
+@@ -30,6 +30,7 @@
+ import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.Map;
++import java.util.Map.Entry;
+ 
+ import org.dom4j.Document;
+ import org.dom4j.DocumentException;
+@@ -78,11 +79,17 @@
+ 
+             if (auditData.isAudited()) {
+                 pcDatas.put(pc, auditData);
++                
++                String entityName = pc.getEntityName();
+ 
+                 if (!StringTools.isEmpty(auditData.getAuditTable().value())) {
+-                    verEntCfg.addCustomAuditTableName(pc.getEntityName(), auditData.getAuditTable().value());
++                    verEntCfg.addCustomAuditTableName(entityName, auditData.getAuditTable().value());
+                 }
+ 
++                for (Entry<String, String> auditCollectionTable : auditData.getAuditCollectionTables().entrySet()) {
++                	verEntCfg.addCustomAuditCollectionTableName(entityName, auditCollectionTable.getKey(), auditCollectionTable.getValue());
++                }
++
+                 EntityXmlMappingData xmlMappingData = new EntityXmlMappingData();
+                 auditMetaGen.generateFirstPass(pc, auditData, xmlMappingData, true);
+                 xmlMappings.put(pc, xmlMappingData);
+Index: src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(working copy)
+@@ -163,9 +163,10 @@
+                 .get(referencedEntityName);
+ 
+ 		if (referencedEntityConfiguration == null) {
+-			throwRelationNotAudited(referencedEntityName);
++			return;
++			//throwRelationNotAudited(referencedEntityName);
+ 			// Impossible to get here.
+-            throw new AssertionError();
++            //throw new AssertionError();
+ 		}
+         IdMappingData referencedIdMapping = referencedEntityConfiguration.getIdMappingData();
+         IdMappingData referencingIdMapping = referencingEntityConfiguration.getIdMappingData();
+@@ -230,7 +231,7 @@
+         if (value.getElement() instanceof OneToMany && !value.isInverse()) {
+             // This must be a @JoinColumn+@OneToMany mapping. Generating the table name, as Hibernate doesn't use a
+             // middle table for mapping this relation.
+-            return StringTools.getLastComponent(entityName) + "_" + StringTools.getLastComponent(getReferencedEntityName(value.getElement()));
++            return StringTools.getLastComponent(entityName) + "_" + value.getNodeName();
+         } else {
+             // Hibernate uses a middle table for mapping this relation, so we get it's name directly.
+             return value.getCollectionTable().getName();
+Index: src/main/java/org/hibernate/envers/configuration/metadata/reader/AnnotationsMetadataReader.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/reader/AnnotationsMetadataReader.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/metadata/reader/AnnotationsMetadataReader.java	(working copy)
+@@ -104,6 +104,19 @@
+ 		}
+ 	}
+ 
++	private void addAuditCollectionTables(XClass clazz) {
++		AuditCollectionTables auditCollectionTables = clazz.getAnnotation(AuditCollectionTables.class);
++		if (auditCollectionTables != null) {
++			for (AuditCollectionTable auditCollectionTable : auditCollectionTables.value()) {
++				auditData.addAuditCollectionTable(auditCollectionTable.collectionName(), auditCollectionTable.tableName());
++			}
++		}
++		AuditCollectionTable auditCollectionTable = clazz.getAnnotation(AuditCollectionTable.class);
++		if (auditCollectionTable != null) {
++			auditData.addAuditCollectionTable(auditCollectionTable.collectionName(), auditCollectionTable.tableName());
++		}
++	}
++
+ 	public ClassAuditingData getAuditData() {
+ 		if (pc.getClassName() == null) {
+ 			return auditData;
+@@ -122,6 +135,7 @@
+ 
+ 			addAuditTable(xclass);
+ 			addAuditSecondaryTables(xclass);
++			addAuditCollectionTables(xclass);
+ 		} catch (ClassNotFoundException e) {
+ 			throw new MappingException(e);
+ 		}
+Index: src/main/java/org/hibernate/envers/configuration/metadata/reader/ClassAuditingData.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/reader/ClassAuditingData.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/metadata/reader/ClassAuditingData.java	(working copy)
+@@ -35,6 +35,7 @@
+ public class ClassAuditingData implements AuditedPropertiesHolder {
+     private final Map<String, PropertyAuditingData> properties;
+     private final Map<String, String> secondaryTableDictionary;
++    private final Map<String, String> collectionTables;
+ 
+     private AuditTable auditTable;
+ 
+@@ -47,6 +48,7 @@
+     public ClassAuditingData() {
+         properties = newHashMap();
+         secondaryTableDictionary = newHashMap();
++        collectionTables = newHashMap();
+     }
+ 
+ 	public void addPropertyAuditingData(String propertyName, PropertyAuditingData auditingData) {
+@@ -76,4 +78,12 @@
+ 	public boolean isAudited() {
+         return defaultAudited || properties.size() > 0;
+     }
++	
++	public void addAuditCollectionTable(String collectionName, String tableName) {
++		collectionTables.put(collectionName, tableName);
++	}
++	
++	public Map<String, String> getAuditCollectionTables() {
++		return collectionTables;
++	}
+ }

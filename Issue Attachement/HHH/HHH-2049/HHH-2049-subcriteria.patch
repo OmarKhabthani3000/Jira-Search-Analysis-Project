@@ -1,0 +1,226 @@
+Index: src/test/java/org/hibernate/test/criteria/OuterJoinCriteriaTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/OuterJoinCriteriaTest.java	(revision b932edd109dc32e6d0efa5a7a388efbf26e3ebf3)
++++ src/test/java/org/hibernate/test/criteria/OuterJoinCriteriaTest.java	(revision )
+@@ -82,6 +82,43 @@
+ 		s.close();
+ 	}
+ 
++  /** Test that left outer joins do not filter children, even if there are intermediate levels without any restrictions */
++  public void testMultiLevelSubcriteriaWithNonNullRestrictions() {
++    Session s = openSession();
++    s.getTransaction().begin();
++
++    Criteria rootCriteria = s.createCriteria( Order.class );
++    Criteria firstLevelSubCriteria = rootCriteria.createCriteria( "orderLines", JoinFragment.LEFT_OUTER_JOIN );
++    Criteria secondLevelSubCriteria = firstLevelSubCriteria.createCriteria( "subLines", JoinFragment.LEFT_OUTER_JOIN );
++    assertNotSame( rootCriteria, firstLevelSubCriteria);
++    assertNotSame( rootCriteria, secondLevelSubCriteria);
++    assertNotSame( firstLevelSubCriteria, secondLevelSubCriteria);
++
++    // Leaving first level sub criteria without restrictions
++    // add restrictions to second level sub criteria
++    assertSame(secondLevelSubCriteria, secondLevelSubCriteria.add( Restrictions.eq( "subProperty", "bbb" ) ) );
++
++    List orders = rootCriteria.list();
++
++    // order1 should be returned because it has subline "bbb"
++    // It should have its full collections
++    assertEquals( 1, orders.size() );
++    Order o = (Order) orders.iterator().next();
++    assertEquals( order1.getOrderId(), o.getOrderId() );
++    assertEquals( order1.getLines().size(), o.getLines().size() );
++    for(Iterator it = order1.getLines().iterator(); it.hasNext(); ) {
++      OrderLine line = (OrderLine) it.next();
++      if("1000".equals(line.getArticleId()))
++        assertEquals( 2, line.getSubLines().size()); // Sub lines have not been filtered
++      else if("3000".equals(line.getArticleId()))
++        assertEquals( 0, line.getSubLines().size()); // There are no sub lines
++      else
++        fail( "unknown line" );
++    }
++    s.getTransaction().commit();
++    s.close();
++  }
++
+ 	public void testSubcriteriaWithNonNullRestrictionsAliasToEntityMap() {
+ 		Session s = openSession();
+ 		s.getTransaction().begin();
+@@ -376,6 +413,13 @@
+ 		OrderLine line = new OrderLine();
+ 		line.setArticleId( "1000" );
+ 		order1.addLine( line );
++		SubLine subLine = new SubLine();
++		subLine.setSubProperty("aaa");
++		line.addSubLine(subLine);
++		subLine = new SubLine();
++		subLine.setSubProperty("bbb");
++		line.addSubLine(subLine);
++    
+ 		line = new OrderLine();
+ 		line.setArticleId( "3000" );
+ 		order1.addLine( line );
+@@ -400,7 +444,9 @@
+ 		Session s = openSession();
+ 		s.getTransaction().begin();
+ 
++		s.createQuery( "delete from SubLine" ).executeUpdate();
++    
+-		s.createQuery( "delete from OrderLine" ).executeUpdate();
++        s.createQuery( "delete from OrderLine" ).executeUpdate();
+ 
+ 		s.createQuery( "delete from Order" ).executeUpdate();
+ 
+Index: src/test/java/org/hibernate/test/criteria/OrderLine.java
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/OrderLine.java	(revision b932edd109dc32e6d0efa5a7a388efbf26e3ebf3)
++++ src/test/java/org/hibernate/test/criteria/OrderLine.java	(revision )
+@@ -23,6 +23,10 @@
+  */
+ package org.hibernate.test.criteria;
+ 
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.Set;
++
+ public class OrderLine {
+ 
+   private int lineId = 0;
+@@ -52,6 +56,17 @@
+     this.articleId = articleId;
+   }
+   
++  private Set<SubLine> subLines = new HashSet<SubLine>();
++
++  public Set<SubLine> getSubLines() {
++    return Collections.unmodifiableSet(subLines);
++  }
++
++  public void addSubLine(SubLine subLine){
++    subLine.setOrderLine(this);
++    this.subLines.add(subLine);
++  }
++  
+   public String toString() {
+     return "[" + getLineId() + ":" + getArticleId() + "]";
+   }
+Index: ../hibernate-core/src/main/java/org/hibernate/impl/CriteriaImpl.java
+===================================================================
+--- ../hibernate-core/src/main/java/org/hibernate/impl/CriteriaImpl.java	(revision b932edd109dc32e6d0efa5a7a388efbf26e3ebf3)
++++ ../hibernate-core/src/main/java/org/hibernate/impl/CriteriaImpl.java	(revision )
+@@ -426,7 +426,7 @@
+ 			this.parent = parent;
+ 			this.joinType = joinType;
+ 			this.withClause = withClause;
+-			this.hasRestriction = withClause != null;
++			this.setHasRestriction( withClause != null );
+ 			CriteriaImpl.this.subcriteriaList.add( this );
+ 		}
+ 
+@@ -484,11 +484,18 @@
+ 		public boolean hasRestriction() {
+ 			return hasRestriction;
+ 		}
+-
++    
++		private void setHasRestriction(boolean hasRestriction) {
++			this.hasRestriction = hasRestriction;
++			if(hasRestriction && this.parent instanceof Subcriteria) { // Propagate up
++				((Subcriteria)this.parent).setHasRestriction(hasRestriction);
++			}
++		}
++
+ 		// Criteria impl ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 		public Criteria add(Criterion expression) {
+-			hasRestriction = true;
++			setHasRestriction( true );
+ 			CriteriaImpl.this.add(this, expression);
+ 			return this;
+ 		}
+Index: src/test/java/org/hibernate/test/criteria/SubLine.java
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/SubLine.java	(revision )
++++ src/test/java/org/hibernate/test/criteria/SubLine.java	(revision )
+@@ -0,0 +1,58 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2011, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.criteria;
++
++ public class SubLine {
++
++  private int subId = 0;
++
++  private OrderLine orderLine;
++
++  private String subProperty;
++
++
++  public int getSubId() {
++    return subId;
++  }
++
++  public OrderLine getOrderLine() {
++    return orderLine;
++  }
++
++  public String getSubProperty() {
++    return subProperty;
++  }
++
++  public void setOrderLine(OrderLine orderLine) {
++    this.orderLine = orderLine;
++  }
++
++  public void setSubProperty(String subProperty) {
++    this.subProperty = subProperty;
++  }
++
++  public String toString() {
++    return "[" + getSubId() + ":" + getSubProperty() + "]";
++  }
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/test/criteria/Order.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/test/criteria/Order.hbm.xml	(revision b932edd109dc32e6d0efa5a7a388efbf26e3ebf3)
++++ src/test/java/org/hibernate/test/criteria/Order.hbm.xml	(revision )
+@@ -17,6 +17,17 @@
+     </id>
+     <many-to-one name="order" column="order_id" class="Order" />
+     <property name="articleId" column="article_id" type="string" />
++    <set name="subLines" cascade="all-delete-orphan" access="field" inverse="true" fetch="select">
++      <key column="order_line_id" />
++      <one-to-many class="SubLine" />
++    </set>
+   </class>
++  <class name="SubLine" table="sub_line">
++    <id name="subId" column="sub_line_id" type="int" unsaved-value="0" access="field" >
++      <generator class="identity" />
++    </id>
++    <many-to-one name="orderLine" column="order_line_id" class="OrderLine" />
++    <property name="subProperty" column="sub_property" type="string" />
++  </class>
+ </hibernate-mapping>
+ 

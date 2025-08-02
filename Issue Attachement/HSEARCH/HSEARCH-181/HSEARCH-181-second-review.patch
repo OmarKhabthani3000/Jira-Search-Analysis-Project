@@ -1,0 +1,707 @@
+Index: src/test/org/hibernate/search/test/FSDirectoryTest.java
+===================================================================
+16a17
+> import org.apache.lucene.search.TermQuery;
+22a24
+> import org.hibernate.search.store.DirectoryProviderHelper;
+24c26
+< import org.hibernate.search.util.DirectoryProviderHelper;
+---
+> import org.hibernate.search.util.FileHelper;
+31d32
+< 
+38c39
+< 				delete( file );
+---
+> 				FileHelper.delete( file );
+54,75c55
+< 		delete( sub );
+< 	}
+< 
+< 	private void delete(File sub) {
+< 		if ( sub.isDirectory() ) {
+< 			for (File file : sub.listFiles()) {
+< 				delete( file );
+< 			}
+< 			sub.delete();
+< 		}
+< 		else {
+< 			sub.delete();
+< 		}
+< 	}
+< 
+< 	private void recursiveDelete(File f) {
+< 		for (File file : f.listFiles()) {
+< 			if ( file.isDirectory() ) {
+< 				recursiveDelete( file );
+< 			}
+< 		}
+< 		f.delete();
+---
+> 		FileHelper.delete( sub );
+83,84c63,64
+< 		properties.put( "root", root );
+< 		properties.put( "relative", relative );
+---
+> 		properties.put( "sourceBase", root );
+> 		properties.put( "source", relative );
+86c66
+< 		String rel = DirectoryProviderHelper.getSourceDirectory( "root", "relative", "name", properties );
+---
+> 		File rel = DirectoryProviderHelper.getSourceDirectory( "name", properties, true );
+88,89c68
+< 		File f = new File( rel );
+< 		assertTrue( f.exists() );
+---
+> 		assertTrue( rel.exists() );
+91c70
+< 		recursiveDelete( new File( root ) );
+---
+> 		FileHelper.delete( new File( root ) );
+102c81
+< 		File f = DirectoryProviderHelper.determineIndexDir( "name", properties );
+---
+> 		File f = DirectoryProviderHelper.getVerifiedIndexDir( "name", properties, true );
+106c85
+< 		recursiveDelete( new File( "./testDir" ) );
+---
+> 		FileHelper.delete( new File( "./testDir" ) );
+111d89
+< 
+208d185
+< 
+218a196,213
+> 	public void testSearchOnDeletedIndex() throws Exception {
+> 		Session s = getSessions().openSession();
+> 		s.getTransaction().begin();
+> 		s.persist( new Document( "Hibernate Search in Action", "", "") );
+> 		s.getTransaction().commit();
+> 		s.close();
+> 		
+> 		IndexSearcher searcher = new IndexSearcher( new File( getBaseIndexDir(), "Documents" ).getCanonicalPath() );
+> 		// deleting before search, but after IndexSearcher creation:
+> 		// ( fails when deleting -concurrently- to IndexSearcher initialization! )
+> 		FileHelper.delete(getBaseIndexDir());
+> 		TermQuery query = new TermQuery( new Term("title","action") );
+> 		Hits hits = searcher.search( query );
+> 		assertEquals( 1, hits.length() );
+> 		assertEquals( "Hibernate Search in Action", hits.doc( 0 ).get( "title" ) );
+> 		searcher.close();
+> 	}
+> 
+Index: src/java/org/hibernate/search/store/DirectoryProviderHelper.java
+===================================================================
+0a1,143
+> //$Id$
+> package org.hibernate.search.store;
+> 
+> import java.util.Properties;
+> import java.io.File;
+> import java.io.IOException;
+> 
+> import org.hibernate.search.SearchException;
+> import org.hibernate.annotations.common.util.StringHelper;
+> import org.apache.commons.logging.Log;
+> import org.apache.commons.logging.LogFactory;
+> import org.apache.lucene.analysis.standard.StandardAnalyzer;
+> import org.apache.lucene.index.IndexReader;
+> import org.apache.lucene.index.IndexWriter;
+> import org.apache.lucene.store.FSDirectory;
+> 
+> /**
+>  * @author Emmanuel Bernard
+>  * @author Sanne Grinovero
+>  */
+> public class DirectoryProviderHelper {
+> 	
+> 	private static final Log log = LogFactory.getLog( DirectoryProviderHelper.class );
+> 	private static final String ROOTINDEX_PROP_NAME = "sourceBase";
+> 	private static final String RELATIVEINDEX_PROP_NAME = "source";
+> 
+> 	/**
+> 	 * Build a directory name out of a root and relative path, guessing the significant part
+> 	 * and checking for the file availability
+> 	 * @param directoryProviderName
+> 	 * @param properties
+> 	 * @param needWritePermissions when true the directory will be tested for read-write permissions. 
+> 	 * @return
+> 	 */
+> 	public static File getSourceDirectory( String directoryProviderName, Properties properties, boolean needWritePermissions ) {
+> 		String root = properties.getProperty( ROOTINDEX_PROP_NAME );
+> 		String relative = properties.getProperty( RELATIVEINDEX_PROP_NAME );
+> 		File sourceDirectory;
+> 		if ( log.isTraceEnabled() ) {
+> 			log.trace(
+> 					"Guess source directory from " + ROOTINDEX_PROP_NAME + " " + root != null ? root : "<null>"
+> 							+ " and " + RELATIVEINDEX_PROP_NAME + " " + relative != null ? relative : "<null>"
+> 			);
+> 		}
+> 		if ( relative == null ) relative = directoryProviderName;
+> 		if ( StringHelper.isEmpty( root ) ) {
+> 			log.debug( "No root directory, go with relative " + relative );
+> 			sourceDirectory = new File( relative );
+> 			if ( ! sourceDirectory.isDirectory() ) { // this also tests for existence
+> 				throw new SearchException( "Unable to read source directory: " + relative );
+> 			}
+> 			//else keep source as it
+> 		}
+> 		else {
+> 			File rootDir = new File( root );
+> 			makeSanityCheckedDirectory( rootDir, directoryProviderName, needWritePermissions );
+> 			sourceDirectory = new File( root, relative );
+> 			makeSanityCheckedDirectory( sourceDirectory, directoryProviderName, needWritePermissions );
+> 			log.debug( "Get directory from root + relative" );
+> 		}
+> 		return sourceDirectory;
+> 	}
+> 	
+> 	/**
+> 	 * Creates an FSDirectory in provided directory if not already existing.
+> 	 * @param indexDir The directory where to write a new index
+> 	 * @return the created FSDirectory
+> 	 * @throws IOException
+> 	 */
+> 	public static FSDirectory createFSIndex(File indexDir) throws IOException {
+> 		FSDirectory fsDirectory = FSDirectory.getDirectory( indexDir );
+> 		if ( ! IndexReader.indexExists( fsDirectory ) ) {
+> 			log.debug( "Initialize index: '" + indexDir.getAbsolutePath() + "'" );
+> 			IndexWriter iw = new IndexWriter( fsDirectory, new StandardAnalyzer(), true );
+> 			iw.close();
+> 		}
+> 		return fsDirectory;
+> 	}
+> 
+> 	/**
+> 	 * Verify the index directory exists and is writable,
+> 	 * or creates it if not existing.
+> 	 * @param annotatedIndexName The index name declared on the @Indexed annotation
+> 	 * @param properties The properties may override the indexname.
+> 	 * @param verifyIsWritable Verify the directory is writable
+> 	 * @return the File representing the Index Directory
+> 	 * @throws SearchException
+> 	 */
+> 	public static File getVerifiedIndexDir(String annotatedIndexName, Properties properties, boolean verifyIsWritable) {
+> 		String indexBase = properties.getProperty( "indexBase", "." );
+> 		String indexName = properties.getProperty( "indexName", annotatedIndexName );
+> 		File baseIndexDir = new File( indexBase );
+> 		makeSanityCheckedDirectory( baseIndexDir, indexName, verifyIsWritable );
+> 		File indexDir = new File( baseIndexDir, indexName );
+> 		makeSanityCheckedDirectory( indexDir, indexName, verifyIsWritable );
+> 		return indexDir;
+> 	}
+> 	
+> 	/**
+> 	 * @param directory The directory to create or verify
+> 	 * @param indexName To label exceptions
+> 	 * @param verifyIsWritable Verify the directory is writable
+> 	 * @throws SearchException
+> 	 */
+> 	private static void makeSanityCheckedDirectory(File directory, String indexName, boolean verifyIsWritable) {
+> 		if ( ! directory.exists() ) {
+> 			log.warn( "Index directory not found, creating: '" + directory.getAbsolutePath() + "'" );
+> 			//if not existing, create the full path
+> 			if ( ! directory.mkdirs() ) {
+> 				throw new SearchException( "Unable to create index directory: "
+> 						+ directory.getAbsolutePath() + " for index "
+> 						+ indexName );
+> 			}
+> 		}
+> 		else {
+> 			// else check it is not a file
+> 			if ( ! directory.isDirectory() ) {
+> 				throw new SearchException( "Unable to initialize index: "
+> 						+ indexName + ": "
+> 						+ directory.getAbsolutePath() + " is a file." );
+> 			}
+> 		}
+> 		// and ensure it's writable
+> 		if ( verifyIsWritable && ( ! directory.canWrite() ) ) {
+> 			throw new SearchException( "Cannot write into index directory: "
+> 					+ directory.getAbsolutePath() + " for index "
+> 					+ indexName );
+> 		}
+> 	}
+> 
+> 	static long getRefreshPeriod(Properties properties, String directoryProviderName) {
+> 		String refreshPeriod = properties.getProperty( "refresh", "3600" );
+> 		long period;
+> 		try {
+> 			period = Long.parseLong( refreshPeriod );
+> 		} catch (NumberFormatException nfe) {
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName +"; refresh period is not numeric.", nfe );
+> 		}
+> 		log.debug( "Refresh period " + period + " seconds" );
+> 		return period * 1000; //per second
+> 	}
+> 	
+> }
+Index: src/java/org/hibernate/search/store/FSSlaveDirectoryProvider.java
+===================================================================
+13,14d12
+< import org.apache.lucene.index.IndexWriter;
+< import org.apache.lucene.analysis.standard.StandardAnalyzer;
+17d14
+< import org.hibernate.HibernateException;
+18a16
+> import org.hibernate.search.SearchException;
+20d17
+< import org.hibernate.search.util.DirectoryProviderHelper;
+32a30
+>  * @author Sanne Grinovero
+34a33
+> 	
+35a35
+> 	
+43c43
+< 	private String source;
+---
+> 	private File sourceIndexDir;
+52,56c52,54
+< 		source = DirectoryProviderHelper.getSourceDirectory( "sourceBase", "source", directoryProviderName, properties );
+< 		if (source == null)
+< 			throw new IllegalStateException("FSSlaveDirectoryProvider requires a viable source directory");
+< 		if ( ! new File(source, "current1").exists() && ! new File(source, "current2").exists() ) {
+< 			throw new IllegalStateException("No current marker in source directory");
+---
+> 		sourceIndexDir = DirectoryProviderHelper.getSourceDirectory( directoryProviderName, properties, false );
+> 		if ( ! new File( sourceIndexDir, "current1" ).exists() && ! new File( sourceIndexDir, "current2" ).exists() ) {
+> 			throw new IllegalStateException( "No current marker in source directory" );
+58,59c56,57
+< 		log.debug( "Source directory: " + source );
+< 		indexDir = DirectoryProviderHelper.determineIndexDir( directoryProviderName, properties );
+---
+> 		log.debug( "Source directory: " + sourceIndexDir.getPath() );
+> 		indexDir = DirectoryProviderHelper.getVerifiedIndexDir( directoryProviderName, properties, true );
+62,66d59
+< 			boolean create = !indexDir.exists();
+< 			if (create) {
+< 				log.debug( "index directory not found, creating: '" + indexDir.getAbsolutePath() + "'" );
+< 				indexDir.mkdirs();
+< 			}
+70c63
+< 			throw new HibernateException( "Unable to initialize index: " + directoryProviderName, e );
+---
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName, e );
+75,79c68
+< 		//source guessing
+< 		String refreshPeriod = properties.getProperty( "refresh", "3600" );
+< 		long period = Long.parseLong( refreshPeriod );
+< 		log.debug("Refresh period " + period + " seconds");
+< 		period *= 1000; //per second
+---
+> 		long period = DirectoryProviderHelper.getRefreshPeriod( properties, directoryProviderName );
+81,101c70,73
+< 			boolean create;
+< 
+< 			File subDir = new File( indexName, "1" );
+< 			create = ! subDir.exists();
+< 			directory1 = FSDirectory.getDirectory( subDir.getCanonicalPath());
+< 			if ( create ) {
+< 				log.debug( "Initialize index: '" + subDir.getAbsolutePath() + "'" );
+< 				IndexWriter iw = new IndexWriter( directory1, new StandardAnalyzer(), create );
+< 				iw.close();
+< 			}
+< 
+< 			subDir = new File( indexName, "2" );
+< 			create = ! subDir.exists();
+< 			directory2 = FSDirectory.getDirectory( subDir.getCanonicalPath());
+< 			if ( create ) {
+< 				log.debug( "Initialize index: '" + subDir.getAbsolutePath() + "'" );
+< 				IndexWriter iw = new IndexWriter( directory2, new StandardAnalyzer(), create );
+< 				iw.close();
+< 			}
+< 			File currentMarker = new File(indexName, "current1");
+< 			File current2Marker = new File(indexName, "current2");
+---
+> 			directory1 = DirectoryProviderHelper.createFSIndex( new File(indexDir, "1") );
+> 			directory2 = DirectoryProviderHelper.createFSIndex( new File(indexDir, "2") );
+> 			File currentMarker = new File( indexDir, "current1" );
+> 			File current2Marker = new File( indexDir, "current2" );
+103a76,78
+> 				if ( current2Marker.exists() ) {
+> 					current2Marker.delete(); //TODO or throw an exception?
+> 				}
+112,113c87
+< 				File sourceFile = new File(source);
+< 				File destinationFile = new File(indexName, Integer.valueOf(current).toString() );
+---
+> 				File destinationFile = new File( indexDir, Integer.valueOf( current ).toString() );
+115c89
+< 				if ( new File(sourceFile, "current1").exists() ) {
+---
+> 				if ( new File( sourceIndexDir, "current1").exists() ) {
+118c92
+< 				else if ( new File(sourceFile, "current2").exists() ) {
+---
+> 				else if ( new File( sourceIndexDir, "current2").exists() ) {
+122c96
+< 					throw new AssertionFailure("No current file marker found in source directory: " + source);
+---
+> 					throw new AssertionFailure( "No current file marker found in source directory: " + sourceIndexDir.getPath() );
+125c99
+< 					FileHelper.synchronize( new File(sourceFile, String.valueOf(sourceCurrent) ), destinationFile, true);
+---
+> 					FileHelper.synchronize( new File( sourceIndexDir, String.valueOf(sourceCurrent) ), destinationFile, true);
+128c102
+< 					throw new HibernateException("Umable to synchonize directory: " + indexName, e);
+---
+> 					throw new SearchException( "Unable to synchronize directory: " + indexName, e );
+131c105
+< 					throw new HibernateException("Unable to create the directory marker file: " + indexName);
+---
+> 					throw new SearchException( "Unable to create the directory marker file: " + indexName );
+137c111
+< 			throw new HibernateException( "Unable to initialize index: " + directoryProviderName, e );
+---
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName, e );
+140c114
+< 		TimerTask task = new TriggerTask(source, indexName);
+---
+> 		TimerTask task = new TriggerTask( sourceIndexDir, indexDir );
+143a118
+> 	//FIXME this is Thread-Unsafe! A memory barrier is missing.
+152c127
+< 			throw new AssertionFailure("Illegal current directory: " + current);
+---
+> 			throw new AssertionFailure( "Illegal current directory: " + current );
+177,178c152,153
+< 		private ExecutorService executor;
+< 		private CopyDirectory copyTask;
+---
+> 		private final ExecutorService executor;
+> 		private final CopyDirectory copyTask;
+180c155
+< 		public TriggerTask(String source, String destination) {
+---
+> 		public TriggerTask(File sourceIndexDir, File destination) {
+182c157
+< 			copyTask = new CopyDirectory( source, destination  );
+---
+> 			copyTask = new CopyDirectory( sourceIndexDir, destination  );
+196,197c171,172
+< 		private String source;
+< 		private String destination;
+---
+> 		private final File source;
+> 		private final File destination;
+200,201c175,176
+< 		public CopyDirectory(String source, String destination) {
+< 			this.source = source;
+---
+> 		public CopyDirectory(File sourceIndexDir, File destination) {
+> 			this.source = sourceIndexDir;
+219c194
+< 					log.error("Unable to determine current in source directory");
+---
+> 					log.error( "Unable to determine current in source directory" );
+224c199
+< 				File destinationFile = new File(destination, Integer.valueOf(index).toString() );
+---
+> 				File destinationFile = new File( destination, Integer.valueOf( index ).toString() );
+227,228c202,203
+< 					log.trace("Copying " + sourceFile + " into " + destinationFile);
+< 					FileHelper.synchronize( sourceFile, destinationFile, true);
+---
+> 					log.trace( "Copying " + sourceFile + " into " + destinationFile );
+> 					FileHelper.synchronize( sourceFile, destinationFile, true );
+237c212
+< 				if ( ! new File(indexName, "current" + oldIndex).delete() ) {
+---
+> 				if ( ! new File( indexName, "current" + oldIndex ).delete() ) {
+241c216
+< 					new File(indexName, "current" + index).createNewFile();
+---
+> 					new File( indexName, "current" + index ).createNewFile();
+250c225
+< 			log.trace( "Copy for " + indexName + " took " + (System.currentTimeMillis() - start) + " ms");
+---
+> 			log.trace( "Copy for " + indexName + " took " + (System.currentTimeMillis() - start) + " ms" );
+Index: src/java/org/hibernate/search/store/FSMasterDirectoryProvider.java
+===================================================================
+14,15d13
+< import org.apache.lucene.index.IndexWriter;
+< import org.apache.lucene.analysis.standard.StandardAnalyzer;
+18c16
+< import org.hibernate.search.util.DirectoryProviderHelper;
+---
+> import org.hibernate.search.SearchException;
+21d18
+< import org.hibernate.HibernateException;
+31a29
+>  * @author Sanne Grinovero
+34a33
+> 	
+35a35
+> 	
+43c43
+< 	private String source;
+---
+> 	private File sourceDir;
+48d47
+< 
+53,58c52,55
+< 		source = DirectoryProviderHelper.getSourceDirectory( "sourceBase", "source", directoryProviderName, properties );
+< 		if ( source == null)
+< 			throw new IllegalStateException("FSMasterDirectoryProvider requires a viable source directory");
+< 		log.debug( "Source directory: " + source );
+< 		indexDir = DirectoryProviderHelper.determineIndexDir( directoryProviderName, properties );
+< 		log.debug( "Index directory: " + indexDir );
+---
+> 		sourceDir = DirectoryProviderHelper.getSourceDirectory( directoryProviderName, properties, true );
+> 		log.debug( "Source directory: " + sourceDir.getPath() );
+> 		indexDir = DirectoryProviderHelper.getVerifiedIndexDir( directoryProviderName, properties, true );
+> 		log.debug( "Index directory: " + indexDir.getPath() );
+60,64d56
+< 			boolean create = !indexDir.exists();
+< 			if (create) {
+< 				log.debug( "index directory not found, creating: '" + indexDir.getAbsolutePath() + "'" );
+< 				indexDir.mkdirs();
+< 			}
+66,71c58
+< 			directory = FSDirectory.getDirectory( indexName);
+< 			if ( create ) {
+< 				log.debug( "Initialize index: '" + indexName + "'" );
+< 				IndexWriter iw = new IndexWriter( directory, new StandardAnalyzer(), create );
+< 				iw.close();
+< 			}
+---
+> 			directory = DirectoryProviderHelper.createFSIndex( indexDir );
+74c61
+< 			throw new HibernateException( "Unable to initialize index: " + directoryProviderName, e );
+---
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName, e );
+80,84c67
+< 		//source guessing
+< 		String refreshPeriod = properties.getProperty( "refresh", "3600" );
+< 		long period = Long.parseLong( refreshPeriod );
+< 		log.debug("Refresh period " + period + " seconds");
+< 		period *= 1000; //per second
+---
+> 		long period = DirectoryProviderHelper.getRefreshPeriod( properties, directoryProviderName );
+87c70
+< 			if ( new File( source, "current1").exists() ) {
+---
+> 			if ( new File( sourceDir, "current1").exists() ) {
+90c73
+< 			else if ( new File( source, "current2").exists() ) {
+---
+> 			else if ( new File( sourceDir, "current2").exists() ) {
+98c81
+< 			File subDir = new File( source, currentString );
+---
+> 			File subDir = new File( sourceDir, currentString );
+100,101c83,84
+< 			new File( source, "current1").delete();
+< 			new File( source, "current2").delete();
+---
+> 			new File( sourceDir, "current1 ").delete();
+> 			new File( sourceDir, "current2" ).delete();
+103,104c86,87
+< 			new File( source, "current" + currentString).createNewFile();
+< 			log.debug( "Current directory: " + current);
+---
+> 			new File( sourceDir, "current" + currentString ).createNewFile();
+> 			log.debug( "Current directory: " + current );
+107c90
+< 			throw new HibernateException( "Unable to initialize index: " + directoryProviderName, e );
+---
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName, e );
+109,110c92,93
+< 		timer = new Timer(true); //daemon thread, the copy algorithm is robust
+< 		TimerTask task = new FSMasterDirectoryProvider.TriggerTask(indexName, source, this );
+---
+> 		timer = new Timer( true ); //daemon thread, the copy algorithm is robust
+> 		TimerTask task = new FSMasterDirectoryProvider.TriggerTask( indexDir, sourceDir, this );
+139,140c122,123
+< 		private ExecutorService executor;
+< 		private FSMasterDirectoryProvider.CopyDirectory copyTask;
+---
+> 		private final ExecutorService executor;
+> 		private final FSMasterDirectoryProvider.CopyDirectory copyTask;
+142c125
+< 		public TriggerTask(String source, String destination, DirectoryProvider directoryProvider) {
+---
+> 		public TriggerTask(File source, File destination, DirectoryProvider directoryProvider) {
+152c135
+< 				log.info( "Skipping directory synchronization, previous work still in progress: " + indexName);
+---
+> 				log.info( "Skipping directory synchronization, previous work still in progress: " + indexName );
+158,159c141,142
+< 		private String source;
+< 		private String destination;
+---
+> 		private final File source;
+> 		private final File destination;
+164c147
+< 		public CopyDirectory(String source, String destination, DirectoryProvider directoryProvider) {
+---
+> 		public CopyDirectory(File source, File destination, DirectoryProvider directoryProvider) {
+174c157
+< 			if (directoryProviderLock == null) {
+---
+> 			if ( directoryProviderLock == null ) {
+183d165
+< 				File sourceFile = new File(source);
+188,189c170,171
+< 					log.trace("Copying " + sourceFile + " into " + destinationFile);
+< 					FileHelper.synchronize( sourceFile, destinationFile, true);
+---
+> 					log.trace( "Copying " + source + " into " + destinationFile );
+> 					FileHelper.synchronize( source, destinationFile, true );
+194c176
+< 					log.error( "Unable to synchronize source of " + indexName, e);
+---
+> 					log.error( "Unable to synchronize source of " + indexName, e );
+198c180
+< 				if ( ! new File(destination, "current" + oldIndex).delete() ) {
+---
+> 				if ( ! new File( destination, "current" + oldIndex ).delete() ) {
+202c184
+< 					new File(destination, "current" + index).createNewFile();
+---
+> 					new File( destination, "current" + index ).createNewFile();
+212c194
+< 			log.trace( "Copy for " + indexName + " took " + (System.currentTimeMillis() - start) + " ms");
+---
+> 			log.trace( "Copy for " + indexName + " took " + (System.currentTimeMillis() - start) + " ms" );
+Index: src/java/org/hibernate/search/store/FSDirectoryProvider.java
+===================================================================
+8,9d7
+< import org.apache.lucene.analysis.standard.StandardAnalyzer;
+< import org.apache.lucene.index.IndexWriter;
+11,14c9,10
+< import org.apache.commons.logging.LogFactory;
+< import org.apache.commons.logging.Log;
+< import org.hibernate.HibernateException;
+< import org.hibernate.search.util.DirectoryProviderHelper;
+---
+> import org.hibernate.search.Environment;
+> import org.hibernate.search.SearchException;
+23a20
+>  * @author Sanne Grinovero
+26c23
+< 	private static Log log = LogFactory.getLog( FSDirectoryProvider.class );
+---
+> 	
+31c28,30
+< 		File indexDir = DirectoryProviderHelper.determineIndexDir( directoryProviderName, properties );
+---
+> 		// on "manual" indexing skip read-write check on index directory
+> 		boolean manual = properties.getProperty( Environment.INDEXING_STRATEGY, "" ).equals( "manual" );
+> 		File indexDir = DirectoryProviderHelper.getVerifiedIndexDir( directoryProviderName, properties, ! manual );
+33,37d31
+< 			boolean create = !indexDir.exists();
+< 			if (create) {
+< 				log.debug( "index directory not found, creating: '" + indexDir.getAbsolutePath() + "'" );
+< 				indexDir.mkdirs();
+< 			}
+39d32
+< 			directory = FSDirectory.getDirectory( indexName );
+41,45c34
+< 			if ( create ) {
+< 				log.debug( "Initialize index: '" + indexName + "'" );
+< 				IndexWriter iw = new IndexWriter( directory, new StandardAnalyzer(), create );
+< 				iw.close();
+< 			}
+---
+> 			directory = DirectoryProviderHelper.createFSIndex( indexDir );
+48c37
+< 			throw new HibernateException( "Unable to initialize index: " + directoryProviderName, e );
+---
+> 			throw new SearchException( "Unable to initialize index: " + directoryProviderName, e );
+Index: src/java/org/hibernate/search/util/DirectoryProviderHelper.java
+===================================================================
+1,93d0
+< //$Id$
+< package org.hibernate.search.util;
+< 
+< import java.util.Properties;
+< import java.io.File;
+< import java.io.IOException;
+< import java.text.MessageFormat;
+< 
+< import org.hibernate.HibernateException;
+< import org.hibernate.AssertionFailure;
+< import org.hibernate.search.SearchException;
+< import org.hibernate.annotations.common.util.StringHelper;
+< import org.apache.commons.logging.Log;
+< import org.apache.commons.logging.LogFactory;
+< 
+< /**
+<  * @author Emmanuel Bernard
+<  */
+< public class DirectoryProviderHelper {
+< 	private static Log log = LogFactory.getLog( DirectoryProviderHelper.class );
+< 	/**
+< 	 * Build a directory name out of a root and relative path, guessing the significant part
+< 	 * and checking for the file availability
+< 	 * 
+< 	 */
+< 	public static String getSourceDirectory(String rootPropertyName, String relativePropertyName,
+< 											String directoryProviderName, Properties properties) {
+< 		//TODO check that it's a directory
+< 		String root = properties.getProperty( rootPropertyName );
+< 		String relative = properties.getProperty( relativePropertyName );
+< 		if ( log.isTraceEnabled() ) {
+< 			log.trace(
+< 					"Guess source directory from " + rootPropertyName + " " + root != null ? root : "<null>"
+< 							+ " and " + relativePropertyName + " " + relative != null ? relative : "<null>"
+< 			);
+< 		}
+< 		if (relative == null) relative = directoryProviderName;
+< 		if ( StringHelper.isEmpty( root ) ) {
+< 			log.debug( "No root directory, go with relative " + relative );
+< 			File sourceFile = new File(relative);
+< 			if ( ! sourceFile.exists() ) {
+< 				throw new SearchException("Unable to read source directory: " + relative);
+< 			}
+< 			//else keep source as it
+< 		}
+< 		else {
+< 			File rootDir = new File(root);
+< 			if ( ! rootDir.exists() ) {
+< 				rootDir.mkdirs();
+< 			}
+< 			else if ( ! rootDir.isDirectory() ) {
+< 				throw new SearchException(rootPropertyName + " is not a directory");
+< 			}
+< 			//test it again in case mkdir failed for wrong reasons
+< 			if ( rootDir.exists() ) {
+< 				File sourceFile = new File(root, relative);
+< 				if (! sourceFile.exists() ) sourceFile.mkdirs();
+< 				log.debug( "Get directory from root + relative");
+< 				try {
+< 					relative = sourceFile.getCanonicalPath();
+< 				}
+< 				catch (IOException e) {
+< 					throw new AssertionFailure("Unable to get canonical path: " + root + " + " + relative);
+< 				}
+< 			}
+< 			else {
+< 				throw new SearchException(rootPropertyName + " does not exist and cannot be created");
+< 			}
+< 		}
+< 		return relative;
+< 	}
+< 
+< 	public static File determineIndexDir(String directoryProviderName, Properties properties) {
+< 		String indexBase = properties.getProperty( "indexBase", "." );
+< 		String indexName = properties.getProperty( "indexName", directoryProviderName );
+< 		File indexDir = new File( indexBase );
+< 		if ( ! indexDir.exists() ) {
+< 			//if the base directory does not exist, create it
+< 			//we do not fear concurrent creation since mkdir does not raise exceptions
+< 			indexDir.mkdirs();
+< 		}
+< 		else if ( ! indexDir.isDirectory() ) {
+< 			throw new SearchException( MessageFormat.format( "Index directory is not a directory: {0}", indexBase ) );
+< 		}
+< 		if ( !indexDir.canWrite() ) {
+< 			throw new SearchException( "Cannot write into index directory: "
+< 					+ ( indexDir.isAbsolute() ? indexBase : indexDir.getAbsolutePath() ) );
+< 		}
+< 
+< 		indexDir = new File( indexDir, indexName );
+< 		return indexDir;
+< 	}
+< }

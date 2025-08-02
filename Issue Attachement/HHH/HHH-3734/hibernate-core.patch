@@ -1,0 +1,83 @@
+Index: src/main/java/org/hibernate/cache/QueryCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/QueryCache.java	(revision 15793)
++++ src/main/java/org/hibernate/cache/QueryCache.java	(working copy)
+@@ -43,7 +43,7 @@
+ 
+ 	public void clear() throws CacheException;
+ 	
+-	public boolean put(QueryKey key, Type[] returnTypes, List result, boolean isNaturalKeyLookup, SessionImplementor session) throws HibernateException;
++	public boolean put(QueryKey key, Type[] returnTypes, List result, Set spaces, boolean isNaturalKeyLookup, SessionImplementor session) throws HibernateException;
+ 
+ 	public List get(QueryKey key, Type[] returnTypes, boolean isNaturalKeyLookup, Set spaces, SessionImplementor session) throws HibernateException;
+ 
+Index: src/main/java/org/hibernate/cache/StandardQueryCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/StandardQueryCache.java	(revision 15793)
++++ src/main/java/org/hibernate/cache/StandardQueryCache.java	(working copy)
+@@ -82,6 +82,7 @@
+ 			QueryKey key,
+ 			Type[] returnTypes,
+ 			List result,
++			Set spaces,
+ 			boolean isNaturalKeyLookup,
+ 			SessionImplementor session) throws HibernateException {
+ 		if ( isNaturalKeyLookup && result.size() == 0 ) {
+@@ -109,6 +110,7 @@
+ 				}
+ 			}
+ 
++			updateTimestampsCache.populate((Serializable[]) spaces.toArray(new Serializable[0]));
+ 			cacheRegion.put( key, cacheable );
+ 
+ 			return true;
+Index: src/main/java/org/hibernate/cache/UpdateTimestampsCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(revision 15793)
++++ src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(working copy)
+@@ -85,6 +85,19 @@
+ 			region.put( spaces[i], ts );
+ 		}
+ 	}
++	 
++	public synchronized void populate(Serializable[] spaces) throws CacheException {
++		Long ts = new Long( System.currentTimeMillis() );
++		for ( int i=0; i<spaces.length; i++ ) {
++			Long lastUpdate = (Long) region.get(spaces[i]);
++			if (lastUpdate == null) {
++				if ( log.isDebugEnabled() ) {
++					log.debug( "Populating space [" + spaces[i] + "], timestamp: " + ts);
++				}
++				region.put( spaces[i], ts );
++			}
++		}
++	}	 
+ 
+ 	public synchronized boolean isUpToDate(Set spaces, Long timestamp) throws HibernateException {
+ 		Iterator iter = spaces.iterator();
+Index: src/main/java/org/hibernate/loader/Loader.java
+===================================================================
+--- src/main/java/org/hibernate/loader/Loader.java	(revision 15793)
++++ src/main/java/org/hibernate/loader/Loader.java	(working copy)
+@@ -2160,6 +2160,7 @@
+ 					session, 
+ 					queryParameters, 
+ 					resultTypes,
++					querySpaces,
+ 					queryCache, 
+ 					key, 
+ 					result 
+@@ -2201,11 +2202,12 @@
+ 			final SessionImplementor session,
+ 			final QueryParameters queryParameters,
+ 			final Type[] resultTypes,
++			final Set querySpaces,
+ 			final QueryCache queryCache,
+ 			final QueryKey key,
+ 			final List result) {
+ 		if ( session.getCacheMode().isPutEnabled() ) {
+-			boolean put = queryCache.put( key, resultTypes, result, queryParameters.isNaturalKeyLookup(), session );
++			boolean put = queryCache.put( key, resultTypes, result, querySpaces, queryParameters.isNaturalKeyLookup(), session );
+ 			if ( put && factory.getStatistics().isStatisticsEnabled() ) {
+ 				factory.getStatisticsImplementor()
+ 						.queryCachePut( getQueryIdentifier(), queryCache.getRegion().getName() );

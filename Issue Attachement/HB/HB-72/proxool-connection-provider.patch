@@ -1,0 +1,166 @@
+? src/net/sf/hibernate/connection/ProxoolConnectionProvider.java
+? src/net/sf/hibernate/test/Master.hbm.xml
+Index: src/hibernate.properties
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/hibernate.properties,v
+retrieving revision 1.17
+diff -u -r1.17 hibernate.properties
+--- src/hibernate.properties	21 Apr 2003 07:39:42 -0000	1.17
++++ src/hibernate.properties	13 May 2003 06:24:20 -0000
+@@ -164,6 +164,31 @@
+ hibernate.statement_cache.size 25
+ 
+ 
++##############################
++### Proxool Connection Pool###
++##############################
++
++## Properties for external configuration of Proxool
++#hibernate.proxool.exising-pool true
++#hibernate.proxool.pool-alias
++#hibernate.proxool.jaxp-configurator proxool.xml
++#hibernate.proxool.properties-configurator proxool.properties
++
++## Standard configuration properties of Proxool
++#hibernate.proxool.house-keeping-sleep-time 30000
++#hibernate.proxool.house-keeping-test-sql 
++#hibernate.proxool.maximum-connection-count 15
++#hibernate.proxool.maximum-connection-lifetime 4
++#hibernate.proxool.maximum-new-connections 2
++#hibernate.proxool.maximum-active-time 15
++#hibernate.proxool.minimum-connection-count 2
++#hibernate.proxool.fatal-sql-exception
++#hibernate.proxool.prototype-count
++#hibernate.proxool.statistics
++#hibernate.proxool.recently-started-threshold
++#hibernate.proxool.overload-without-refusal-lifetime
++
++
+ 
+ ###########################
+ ### C3P0 Connection Pool###
+@@ -212,7 +237,7 @@
+ #hibernate.connection.provider_class net.sf.hibernate.connection.DatasourceConnectionProvider
+ #hibernate.connection.provider_class net.sf.hibernate.connection.C3P0ConnectionProvider
+ #hibernate.connection.provider_class net.sf.hibernate.connection.DBCPConnectionProvider
+-
++#hibernate.connection.provider_class net.sf.hibernate.connection.ProxoolConnectionProvider
+ 
+ 
+ #######################
+Index: src/net/sf/hibernate/cfg/Environment.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Environment.java,v
+retrieving revision 1.12
+diff -u -r1.12 Environment.java
+--- src/net/sf/hibernate/cfg/Environment.java	10 May 2003 09:59:11 -0000	1.12
++++ src/net/sf/hibernate/cfg/Environment.java	13 May 2003 06:24:21 -0000
+@@ -298,7 +298,26 @@
+ 	 * Action to take in case of an exhausted DBCP statement pool ( 0 = fail, 1 = block, 2= grow)
+ 	 */
+ 	public static final String DBCP_PS_WHENEXHAUSTED = "hibernate.dbcp.ps.whenExhaustedAction";
+-	
++  /**
++   * Proxool/Hibernate property prefix
++   */
++  public static final String PROXOOL_PREFIX = "hibernate.proxool";
++  /**
++   * Proxool property to configure the Proxool Provider using an XML (/path/to/file.xml)
++   */  
++  public static final String PROXOOL_JAXP_CONFIGURATOR = "hibernate.proxool.jaxp-configurator";
++  /**
++   * Proxool property to configure the Proxool Provider  using a properties file (/path/to/proxool.properties)
++   */    
++  public static final String PROXOOL_PROPERTIES_CONFIGURATOR = "hibernate.proxool.properties-configurator";
++  /**
++   * Proxool property to configure the Proxool Provider from an already existing pool (true / false)
++   */    
++  public static final String PROXOOL_EXISTING_POOL = "hibernate.proxool.existing-pool";
++  /**
++   * Proxool property with the Proxool pool alias to use (Required for PROXOOL_EXISTING_POOL, PROXOOL_PROPERTIES_CONFIGURATOR, or PROXOOL_JAXP_CONFIGURATOR)
++   */  
++  public static final String PROXOOL_POOL_ALIAS = "hibernate.proxool.pool-alias";  	
+ 	/**
+ 	 * <tt>TransactionFactory</tt> implementor to use for creating <tt>Transaction</tt>s
+ 	 */
+Index: src/net/sf/hibernate/connection/ConnectionProviderFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/connection/ConnectionProviderFactory.java,v
+retrieving revision 1.7
+diff -u -r1.7 ConnectionProviderFactory.java
+--- src/net/sf/hibernate/connection/ConnectionProviderFactory.java	25 Apr 2003 03:40:31 -0000	1.7
++++ src/net/sf/hibernate/connection/ConnectionProviderFactory.java	13 May 2003 06:24:22 -0000
+@@ -26,9 +26,9 @@
+  */
+ 
+ public final class ConnectionProviderFactory {
+-	
++
+ 	private static final Log log = LogFactory.getLog(ConnectionProviderFactory.class);
+-	
++
+ 	/**
+ 	 * Instantiate a <tt>ConnectionProvider</tt> using <tt>System</tt> properties.
+ 	 * @return ConnectionProvider
+@@ -37,7 +37,7 @@
+ 	public static ConnectionProvider newConnectionProvider() throws HibernateException {
+ 		return newConnectionProvider( Environment.getProperties() );
+ 	}
+-	
++
+ 	/**
+ 	 * Instantiate a <tt>ConnectionProvider</tt> using given properties.
+ 	 * Method newConnectionProvider.
+@@ -67,6 +67,11 @@
+ 		else if ( properties.getProperty(Environment.DBCP_MAXIDLE)!=null ) {
+ 			connections = new DBCPConnectionProvider();
+ 		}
++		else if ( properties.getProperty(Environment.PROXOOL_JAXP_CONFIGURATOR)!=null ||
++              properties.getProperty(Environment.PROXOOL_PROPERTIES_CONFIGURATOR)!=null || 
++              properties.getProperty(Environment.PROXOOL_EXISTING_POOL)!=null ) {
++			connections = new ProxoolConnectionProvider();
++		}
+ 		else if ( properties.getProperty(Environment.URL)!=null ) {
+ 			connections = new DriverManagerConnectionProvider();
+ 		}
+@@ -76,16 +81,16 @@
+ 		connections.configure(properties);
+ 		return connections;
+ 	}
+-	
++
+ 	// cannot be instantiated
+ 	private ConnectionProviderFactory() { throw new UnsupportedOperationException(); }
+-	
++
+ 	/**
+ 	 * Transform JDBC connection properties passed in the form <tt>hibernate.connection.*</tt> to the
+ 	 * format accepted by <tt>DriverManager</tt> by triming the leading "<tt>hibernate.connection</tt>".
+ 	 */
+ 	public static Properties getConnectionProperties(Properties properties) {
+-		
++
+ 		Iterator iter = properties.keySet().iterator();
+ 		Properties result = new Properties();
+ 		while ( iter.hasNext() ) {
+@@ -101,7 +106,7 @@
+ 		if (userName!=null) result.setProperty( "user", userName );
+ 		return result;
+ 	}
+-	
++
+ 	private static final Set specialProperties;
+ 	static {
+ 		specialProperties = new HashSet();
+@@ -112,9 +117,9 @@
+ 		specialProperties.add(Environment.ISOLATION);
+ 		specialProperties.add(Environment.DRIVER);
+ 		specialProperties.add(Environment.USER);
+-		
++
+ 	}
+-	
++
+ }
+ 
+ 

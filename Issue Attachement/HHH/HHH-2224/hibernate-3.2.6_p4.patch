@@ -1,0 +1,123 @@
+diff -Nur hibernate-3.2.ori/src/org/hibernate/action/BulkOperationCleanupAction.java hibernate-3.2/src/org/hibernate/action/BulkOperationCleanupAction.java
+--- hibernate-3.2.ori/src/org/hibernate/action/BulkOperationCleanupAction.java	2007-03-29 21:36:33.000000000 +0200
++++ hibernate-3.2/src/org/hibernate/action/BulkOperationCleanupAction.java	2009-05-21 12:51:12.481030000 +0200
+@@ -55,30 +55,35 @@
+ 	public BulkOperationCleanupAction(SessionImplementor session, Set querySpaces) {
+ 		this.session = session;
+ 
+-		Set tmpSpaces = new HashSet(querySpaces);
+-		SessionFactoryImplementor factory = session.getFactory();
+-		Iterator iterator = factory.getAllClassMetadata().entrySet().iterator();
+-		while ( iterator.hasNext() ) {
+-			Map.Entry entry = (Map.Entry) iterator.next();
+-			String entityName = (String) entry.getKey();
+-			EntityPersister persister = factory.getEntityPersister( entityName );
+-			Serializable[] entitySpaces = persister.getQuerySpaces();
+-
+-			if (affectedEntity( querySpaces, entitySpaces )) {
+-				if ( persister.hasCache() ) {
+-					affectedEntityNames.add( persister.getEntityName() );
+-				}
+-				Set roles = session.getFactory().getCollectionRolesByEntityParticipant( persister.getEntityName() );
+-				if ( roles != null ) {
+-					affectedCollectionRoles.addAll( roles );
+-				}
+-				for ( int y = 0; y < entitySpaces.length; y++ ) {
+-					tmpSpaces.add( entitySpaces[y] );
++		if (session.getFactory().getSettings()
++				.isExecuteUpdateClearSecondLevelCache()
++				|| (querySpaces != null && !querySpaces.isEmpty())) {
++			Set tmpSpaces = new HashSet(querySpaces);
++			SessionFactoryImplementor factory = session.getFactory();
++			Iterator iterator = factory.getAllClassMetadata().entrySet().iterator();
++			while ( iterator.hasNext() ) {
++				Map.Entry entry = (Map.Entry) iterator.next();
++				String entityName = (String) entry.getKey();
++				EntityPersister persister = factory.getEntityPersister( entityName );
++				Serializable[] entitySpaces = persister.getQuerySpaces();
++
++				if (affectedEntity( querySpaces, entitySpaces )) {
++					if ( persister.hasCache() ) {
++						affectedEntityNames.add( persister.getEntityName() );
++					}
++					Set roles = session.getFactory().getCollectionRolesByEntityParticipant( persister.getEntityName() );
++					if ( roles != null ) {
++						affectedCollectionRoles.addAll( roles );
++					}
++					for ( int y = 0; y < entitySpaces.length; y++ ) {
++						tmpSpaces.add( entitySpaces[y] );
++					}
+ 				}
+ 			}
+-
++			this.spaces = (Serializable[]) tmpSpaces.toArray( new Serializable[tmpSpaces.size()] );		
++		} else {
++			this.spaces = new Serializable[] {};
+ 		}
+-		this.spaces = (Serializable[]) tmpSpaces.toArray( new Serializable[tmpSpaces.size()] );		
+ 	}
+ 
+ 
+diff -Nur hibernate-3.2.ori/src/org/hibernate/cfg/Environment.java hibernate-3.2/src/org/hibernate/cfg/Environment.java
+--- hibernate-3.2.ori/src/org/hibernate/cfg/Environment.java	2008-02-07 03:34:08.000000000 +0100
++++ hibernate-3.2/src/org/hibernate/cfg/Environment.java	2009-05-21 13:07:18.096233200 +0200
+@@ -385,6 +385,12 @@
+ 	 * Enable the second-level cache (enabled by default)
+ 	 */
+ 	public static final String USE_SECOND_LEVEL_CACHE = "hibernate.cache.use_second_level_cache";
++	
++	/**
++	 * method executeUpdate clear all second level caches (enabled by default)
++	 */
++	public static final String EXECUTE_UPDATE_CLEAR_SECOND_LEVEL_CACHE = "hibernate.cache.execute_update_clear_cache";
++	
+ 	/**
+ 	 * Optimize the cache for mimimal puts instead of minimal gets
+ 	 */
+diff -Nur hibernate-3.2.ori/src/org/hibernate/cfg/Settings.java hibernate-3.2/src/org/hibernate/cfg/Settings.java
+--- hibernate-3.2.ori/src/org/hibernate/cfg/Settings.java	2007-04-11 16:25:13.000000000 +0200
++++ hibernate-3.2/src/org/hibernate/cfg/Settings.java	2009-05-21 12:52:41.187561200 +0200
+@@ -68,6 +68,7 @@
+ 	private boolean strictJPAQLCompliance;
+ 	private boolean namedQueryStartupCheckingEnabled;
+ //	private BytecodeProvider bytecodeProvider;
++	private boolean executeUpdateClearSecondLevelCache = true;
+ 
+ 	/**
+ 	 * Package protected constructor
+@@ -440,6 +441,21 @@
+ 		this.namedQueryStartupCheckingEnabled = namedQueryStartupCheckingEnabled;
+ 	}
+ 
++	/**
++	 * @return the executeUpdateClearSecondLevelCache
++	 */
++	public boolean isExecuteUpdateClearSecondLevelCache() {
++		return executeUpdateClearSecondLevelCache;
++	}
++
++	/**
++	 * @param executeUpdateClearSecondLevelCache the executeUpdateClearSecondLevelCache to set
++	 */
++	void setExecuteUpdateClearSecondLevelCache(
++			boolean executeUpdateClearSecondLevelCache) {
++		this.executeUpdateClearSecondLevelCache = executeUpdateClearSecondLevelCache;
++	}
++
+ 
+ //	public BytecodeProvider getBytecodeProvider() {
+ //		return bytecodeProvider;
+diff -Nur hibernate-3.2.ori/src/org/hibernate/cfg/SettingsFactory.java hibernate-3.2/src/org/hibernate/cfg/SettingsFactory.java
+--- hibernate-3.2.ori/src/org/hibernate/cfg/SettingsFactory.java	2007-04-11 16:25:13.000000000 +0200
++++ hibernate-3.2/src/org/hibernate/cfg/SettingsFactory.java	2009-05-21 13:06:21.812822000 +0200
+@@ -234,6 +234,10 @@
+ 		boolean useSecondLevelCache = PropertiesHelper.getBoolean(Environment.USE_SECOND_LEVEL_CACHE, properties, true);
+ 		log.info( "Second-level cache: " + enabledDisabled(useSecondLevelCache) );
+ 		settings.setSecondLevelCacheEnabled(useSecondLevelCache);
++		
++		boolean euc2lc = PropertiesHelper.getBoolean(Environment.EXECUTE_UPDATE_CLEAR_SECOND_LEVEL_CACHE, properties, true);
++		log.info( "Execute update clear second level cache : " + enabledDisabled(euc2lc) );
++		settings.setExecuteUpdateClearSecondLevelCache(euc2lc);
+ 
+ 		boolean useQueryCache = PropertiesHelper.getBoolean(Environment.USE_QUERY_CACHE, properties);
+ 		log.info( "Query cache: " + enabledDisabled(useQueryCache) );

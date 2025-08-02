@@ -1,0 +1,55 @@
+Index: core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java	(revision 19116)
++++ core/src/main/java/org/hibernate/hql/ast/tree/BinaryLogicOperatorNode.java	(working copy)
+@@ -23,6 +23,7 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
++import org.hibernate.type.OneToOneType;
+ import org.hibernate.type.Type;
+ import org.hibernate.Hibernate;
+ import org.hibernate.TypeMismatchException;
+@@ -80,8 +81,8 @@
+ 		// resolve an expected type
+ 		SessionFactoryImplementor sessionFactory = getSessionFactoryHelper().getFactory();
+ 		if ( lhsType != null && rhsType != null ) {
+-			int lhsColumnSpan = lhsType.getColumnSpan( sessionFactory );
+-			if ( lhsColumnSpan != rhsType.getColumnSpan( sessionFactory ) ) {
++			int lhsColumnSpan = getColumnSpan( lhsType, sessionFactory );
++			if ( lhsColumnSpan != getColumnSpan( rhsType, sessionFactory ) ) {
+ 				throw new TypeMismatchException(
+ 						"left and right hand sides of a binary logic operator were incompatibile [" +
+ 						lhsType.getName() + " : "+ rhsType.getName() + "]"
+@@ -97,6 +98,14 @@
+ 		}
+ 	}
+ 
++	private int getColumnSpan(Type type, SessionFactoryImplementor sfi) {
++		int columnSpan = type.getColumnSpan( sfi );
++		if ( columnSpan == 0 && type instanceof OneToOneType ) {
++			columnSpan = ( ( OneToOneType ) type ).getIdentifierOrUniqueKeyType( sfi ).getColumnSpan( sfi );
++		}
++		return columnSpan;
++	}
++
+ 	/**
+ 	 * Mutate the subtree relating to a row-value-constructor to instead use
+ 	 * a series of ANDed predicates.  This allows multi-column type comparisons
+Index: testsuite/src/test/java/org/hibernate/test/orphan/one2one/pk/unidirectional/DeleteOneToOneOrphansTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/orphan/one2one/pk/unidirectional/DeleteOneToOneOrphansTest.java	(revision 19116)
++++ testsuite/src/test/java/org/hibernate/test/orphan/one2one/pk/unidirectional/DeleteOneToOneOrphansTest.java	(working copy)
+@@ -72,6 +72,12 @@
+ 		assertEquals( 1, results.size() );
+ 		Employee emp = ( Employee ) results.get( 0 );
+ 		assertNotNull( emp.getInfo() );
++		results = session.createQuery( "from Employee e, EmployeeInfo i where e.info = i" ).list();
++		assertEquals( 1, results.size() );
++		Object [] result = ( Object [] ) results.get( 0 );
++		emp = ( Employee ) result[ 0 ];
++		assertNotNull( result[ 1 ] );
++		assertSame( emp.getInfo(), result[ 1 ] );
+ 		emp.setInfo( null );
+ 		session.getTransaction().commit();
+ 		session.close();

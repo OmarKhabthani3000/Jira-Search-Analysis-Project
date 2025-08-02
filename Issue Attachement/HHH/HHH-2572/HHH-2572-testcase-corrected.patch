@@ -1,0 +1,149 @@
+Index: test/org/hibernate/test/component/basic/Employee.java
+===================================================================
+--- test/org/hibernate/test/component/basic/Employee.java	(revision 11419)
++++ test/org/hibernate/test/component/basic/Employee.java	(working copy)
+@@ -1,6 +1,8 @@
+ package org.hibernate.test.component.basic;
+ 
+ import java.util.Date;
++import java.util.Set;
++import java.util.HashSet;
+ 
+ /**
+  * todo: describe Employee
+@@ -10,7 +12,9 @@
+ public class Employee {
+ 	private Long id;
+ 	private Person person;
++	private OptionalComponent optionalComponent;
+ 	private Date hireDate;
++	private Set directReports = new HashSet();;
+ 
+ 	public Long getId() {
+ 		return id;
+@@ -28,6 +32,14 @@
+ 		this.person = person;
+ 	}
+ 
++	public OptionalComponent getOptionalComponent() {
++		return optionalComponent;
++	}
++
++	public void setOptionalComponent(OptionalComponent optionalComponent) {
++		this.optionalComponent = optionalComponent;
++	}
++
+ 	public Date getHireDate() {
+ 		return hireDate;
+ 	}
+@@ -35,4 +47,12 @@
+ 	public void setHireDate(Date hireDate) {
+ 		this.hireDate = hireDate;
+ 	}
++
++	public Set getDirectReports() {
++		return directReports;
++	}
++
++	public void setDirectReports(Set directReports) {
++		this.directReports = directReports;
++	}
+ }
+Index: test/org/hibernate/test/component/basic/ComponentTest.java
+===================================================================
+--- test/org/hibernate/test/component/basic/ComponentTest.java	(revision 11419)
++++ test/org/hibernate/test/component/basic/ComponentTest.java	(working copy)
+@@ -190,5 +190,46 @@
+ 		s.close();
+ 	}
+ 
++	public void testMergeComponent() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Employee emp = new Employee();
++		emp.setHireDate( new Date() );
++		emp.setPerson( new Person() );
++		emp.getPerson().setName( "steve" );
++		emp.getPerson().setDob( new Date() );
++		s.persist( emp );
++		t.commit();
++		s.close();
++
++		emp.setOptionalComponent( new OptionalComponent() );
++		emp.getOptionalComponent().setValue1( "value1" );
++		emp.getOptionalComponent().setValue2( "value2" );
++
++		s = openSession();
++		t = s.beginTransaction();
++		emp = (Employee)s.merge( emp );
++		t.commit();
++		s.close();
++
++		Employee emp1 = new Employee();
++		emp1.setHireDate( new Date() );
++		emp1.setPerson( new Person() );
++		emp1.getPerson().setName( "bozo" );
++		emp1.getPerson().setDob( new Date() );
++		emp.getDirectReports().add( emp1 );
++
++		s = openSession();
++		t = s.beginTransaction();
++		emp = (Employee)s.merge( emp );
++		t.commit();
++		s.close();
++
++		s = openSession();
++		t = s.beginTransaction();
++		s.delete( emp );
++		t.commit();
++		s.close();
++	}
+ }
+ 
+Index: test/org/hibernate/test/component/basic/User.hbm.xml
+===================================================================
+--- test/org/hibernate/test/component/basic/User.hbm.xml	(revision 11419)
++++ test/org/hibernate/test/component/basic/User.hbm.xml	(working copy)
+@@ -35,6 +35,14 @@
+ 			<property name="name" update="false" not-null="true"/>
+ 			<property name="dob" update="false" not-null="true"/>
+ 		</component>
++		<component name="optionalComponent">
++			<property name="value1" not-null="false"/>
++			<property name="value2" not-null="false"/>
++		</component>
++		<set name="directReports" cascade="all-delete-orphan,merge" lazy="true">
++			<key column="PARENT_ID" />
++			<one-to-many class="Employee"/>
++		</set>
+ 	</class>
+ 	
+ 	<query name="userNameIn"><![CDATA[from User where person.name in (:nameList) or userName in (:nameList)]]></query>
+Index: test/org/hibernate/test/component/basic/OptionalComponent.java
+===================================================================
+--- test/org/hibernate/test/component/basic/OptionalComponent.java	(revision 0)
++++ test/org/hibernate/test/component/basic/OptionalComponent.java	(revision 0)
+@@ -0,0 +1,23 @@
++package org.hibernate.test.component.basic;
++
++import java.util.Date;
++
++/**
++ * @author Gail Badner
++ */
++public class OptionalComponent {
++	private String value1;
++	private String value2;
++	public String getValue1() {
++		return value1;
++	}
++	public void setValue1(String value1) {
++		this.value1 = value1;
++	}
++	public String getValue2() {
++		return value2;
++	}
++	public void setValue2(String value2) {
++		this.value2 = value2;
++	}
++}

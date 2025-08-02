@@ -1,0 +1,262 @@
+Index: src/net/sf/hibernate/cache/OSCache.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cache/Attic/OSCache.java,v
+retrieving revision 1.1.2.2
+diff -u -r1.1.2.2 OSCache.java
+--- src/net/sf/hibernate/cache/OSCache.java	25 Oct 2003 20:57:29 -0000	1.1.2.2
++++ src/net/sf/hibernate/cache/OSCache.java	28 Oct 2003 16:14:32 -0000
+@@ -1,62 +1,70 @@
+-package net.sf.hibernate.cache;
+-
+-import com.opensymphony.oscache.base.NeedsRefreshException;
+-import com.opensymphony.oscache.general.GeneralCacheAdministrator;
+-
+-/**
+- * @author <a href="mailto:m.bogaert@intrasoft.be">Mathias Bogaert</a>
+- */
+-public class OSCache implements Cache {
+-    /** The OSCache 2.0 cache administrator. */
+-    private GeneralCacheAdministrator oscache = new GeneralCacheAdministrator();
+-
+-    private int refreshPeriod;
+-    private String cron;
+-
+-    public OSCache(int refreshPeriod, String cron) {
+-        this.refreshPeriod = refreshPeriod;
+-        this.cron = cron;
+-    }
+-
+-	public Object get(Object key) throws CacheException {
+-        try {
+-            return oscache.getFromCache( String.valueOf(key), refreshPeriod, cron );
+-        }
+-        catch (NeedsRefreshException e) {
+-			oscache.cancelUpdate( String.valueOf(key) );
+-            return null;
+-        }
+-    }
+-
+-	public void put(Object key, Object value) throws CacheException {
+-		oscache.putInCache( String.valueOf(key), value );
+-	}
+-
+-	public void remove(Object key) throws CacheException {
+-		oscache.flushEntry( String.valueOf(key) );
+-	}
+-
+-	public void clear() throws CacheException {
+-		oscache.flushAll();
+-	}
+-
+-	public void destroy() throws CacheException {
+-        oscache.destroy();
+-	}
+-
+-	public void lock(Object key) throws CacheException {
+-		// local cache, so we use synchronization
+-	}
+-
+-	public void unlock(Object key) throws CacheException {
+-		// local cache, so we use synchronization
+-	}
+-
+-	public long nextTimestamp() {
+-		return Timestamper.next();
+-	}
+-
+-	public int getTimeout() {
+-		return Timestamper.ONE_MS * 60000; //ie. 60 seconds
+-	}
++package net.sf.hibernate.cache;
++
++import com.opensymphony.oscache.base.NeedsRefreshException;
++import com.opensymphony.oscache.general.GeneralCacheAdministrator;
++import net.sf.hibernate.cache.Cache;
++import net.sf.hibernate.cache.CacheException;
++import net.sf.hibernate.cache.Timestamper;
++
++/**
++ * @author <a href="mailto:m.bogaert@intrasoft.be">Mathias Bogaert</a>
++ * @version $Revision: 1.2 $
++ */
++public class OSCache implements Cache {
++    /** The OSCache 2.0 cache administrator. */
++    private GeneralCacheAdministrator cache = new GeneralCacheAdministrator();
++
++    private int refreshPeriod;
++    private String cron;
++
++    public OSCache(int refreshPeriod, String cron) {
++        this.refreshPeriod = refreshPeriod;
++        this.cron = cron;
++    }
++
++    public void setCacheCapacity(int cacheCapacity) {
++        cache.setCacheCapacity(cacheCapacity);
++    }
++
++    public Object get(Object key) throws CacheException {
++        try {
++            return cache.getFromCache(String.valueOf(key), refreshPeriod, cron);
++        }
++        catch (NeedsRefreshException e) {
++            cache.cancelUpdate(String.valueOf(key));
++            return null;
++        }
++    }
++
++    public void put(Object key, Object value) throws CacheException {
++        cache.putInCache(String.valueOf(key), value);
++    }
++
++    public void remove(Object key) throws CacheException {
++        cache.flushEntry(String.valueOf(key));
++    }
++
++    public void clear() throws CacheException {
++        cache.flushAll();
++    }
++
++    public void destroy() throws CacheException {
++        cache.destroy();
++    }
++
++    public void lock(Object key) throws CacheException {
++        // local cache, so we use synchronization
++    }
++
++    public void unlock(Object key) throws CacheException {
++        // local cache, so we use synchronization
++    }
++
++    public long nextTimestamp() {
++        return Timestamper.next();
++    }
++
++    public int getTimeout() {
++        return Timestamper.ONE_MS * 60000; //ie. 60 seconds
++    }
+ }
+Index: src/net/sf/hibernate/cache/OSCacheProvider.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cache/Attic/OSCacheProvider.java,v
+retrieving revision 1.1.2.2
+diff -u -r1.1.2.2 OSCacheProvider.java
+--- src/net/sf/hibernate/cache/OSCacheProvider.java	25 Oct 2003 20:57:29 -0000	1.1.2.2
++++ src/net/sf/hibernate/cache/OSCacheProvider.java	28 Oct 2003 16:14:32 -0000
+@@ -1,24 +1,92 @@
+-package net.sf.hibernate.cache;
+-
+-import java.util.Properties;
+-
+-/**
+- * Support for OpenSymphony OSCache. This implementation assumes
+- * that identifiers have well-behaved <tt>toString()</tt> methods.
+- * @author <a href="mailto:m.bogaert@intrasoft.be">Mathias Bogaert</a>
+- */
+-public class OSCacheProvider implements CacheProvider {
+-    /** Default cache refresh period, defaults to 4800. */
+-    public static final int DEFAULT_REFRESH_PERIOD = 4800;
+-
+-    /** Default CRON expression, put cache to stale on Sundays. */
+-    public static final String DEFAULT_CRON = "* * * * Wednesday";
+-
+-    public Cache buildCache(String string, Properties properties) throws CacheException {
+-        return new OSCache(DEFAULT_REFRESH_PERIOD, DEFAULT_CRON);
+-    }
+-
+-    public long nextTimestamp() {
+-        return Timestamper.next();
+-    }
++package net.sf.hibernate.cache;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
++import net.sf.hibernate.cache.Cache;
++import net.sf.hibernate.cache.CacheException;
++import net.sf.hibernate.cache.CacheProvider;
++import net.sf.hibernate.cache.Timestamper;
++
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Properties;
++
++/**
++ * Support for OpenSymphony OSCache. This implementation assumes
++ * that identifiers have well-behaved <tt>toString()</tt> methods.
++ *
++ * @author <a href="mailto:m.bogaert@intrasoft.be">Mathias Bogaert</a>
++ * @version $Revision: 1.4 $
++ */
++public class OSCacheProvider implements CacheProvider {
++    private static final Log log = LogFactory.getLog(OSCacheProvider.class);
++
++    /** The <tt>OSCache</tt> refresh period. */
++    public static final String OSCACHE_REFRESH_PERIOD = "hibernate.cache.oscache.refresh_period";
++
++    /** The <tt>OSCache</tt> CRON expression. */
++    public static final String OSCACHE_CRON = "hibernate.cache.oscache.cron";
++
++    /** The <tt>OSCache</tt> cache capacity (can also be specified in <tt>oscache.properties</tt>). */
++    public static final String OSCACHE_CAPACITY = "hibernate.cache.oscache.capacity";
++
++    /** Default cache refresh period, defaults to 4800. */
++    public static final int DEFAULT_REFRESH_PERIOD = 4800;
++
++    /** Default CRON expression, put cache to stale on Sundays. */
++    public static final String DEFAULT_CRON = "* * * * Sunday";
++
++    /** List containing references to all constructed caches. */
++    private static final List CACHES = new ArrayList();
++
++    public Cache buildCache(String region, Properties properties) throws CacheException {
++        int refreshPeriod = DEFAULT_REFRESH_PERIOD;
++        String cron = DEFAULT_CRON;
++
++        if (properties.containsKey(OSCACHE_REFRESH_PERIOD)) {
++            try {
++                refreshPeriod = Integer.parseInt(properties.getProperty(OSCACHE_REFRESH_PERIOD));
++            }
++            catch (NumberFormatException e) {
++                log.warn("Exception reading " + OSCACHE_REFRESH_PERIOD + " property: " + e.getMessage(), e);
++            }
++        }
++
++        if (properties.containsKey(OSCACHE_CRON)) {
++            cron = properties.getProperty(OSCACHE_CRON);
++        }
++
++        // construct the cache
++        final OSCache cache = new OSCache(refreshPeriod, cron);
++
++        if (properties.containsKey(OSCACHE_CAPACITY)) {
++            try {
++                cache.setCacheCapacity(Integer.parseInt(properties.getProperty(OSCACHE_CAPACITY)));
++            }
++            catch (NumberFormatException e) {
++                log.warn("Exception reading " + OSCACHE_CAPACITY + " property: " + e.getMessage(), e);
++            }
++        }
++
++        CACHES.add(cache);
++        return cache;
++    }
++
++    public long nextTimestamp() {
++        return Timestamper.next();
++    }
++
++    public static void clearAllCaches() {
++        for (Iterator i = CACHES.iterator(); i.hasNext();) {
++            Cache cache = (Cache) i.next();
++            try {
++                cache.clear();
++            }
++            catch (CacheException e) {
++                log.warn("Exception clearing cache " + cache.toString() + ": " + e.getMessage(), e);
++            }
++        }
++    }
+ }

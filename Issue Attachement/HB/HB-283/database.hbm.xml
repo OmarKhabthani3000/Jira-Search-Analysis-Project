@@ -1,0 +1,219 @@
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping
+    PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN"
+    "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd">
+
+<hibernate-mapping>
+
+  <class name="com.some.path.db.Country" table="countries">
+    <id name="isoTwoLetterCode" type="string">
+      <column name="iso_two_letter_code" sql-type="char(2)"/>
+      <generator class="assigned"/>
+    </id>
+    <property name="name" type="string">
+      <column name="name" length="100" not-null="true" unique="true"/>
+    </property>
+  </class>
+
+  <class name="com.some.path.db.USState" table="us_states">
+    <id name="fipsTwoLetterCode" type="string" length="2">
+      <column name="fips_two_letter_code" sql-type="char(2)"/>
+      <generator class="assigned"/>
+    </id>
+    <property name="fipsTwoDigitCode" type="string">
+      <column name="fips_two_digit_code" sql-type="char(2)"
+              not-null="true" unique="true"/>
+    </property>
+    <property name="name" type="string" length="100" 
+              not-null="true" unique="true"/>
+  </class>
+
+  <class name="com.some.path.db.Language" table="languages">
+    <id name="isoThreeLetterCode" type="string">
+      <column name="iso_three_letter_code" sql-type="char(3)"/>
+      <generator class="assigned"/>
+    </id>
+    <property name="isoTwoLetterCode" type="string">
+      <column name="iso_two_letter_code" sql-type="char(2)" 
+              not-null="true" unique="true"/>
+    </property>
+    <property name="name" type="string" length="100" 
+                not-null="true" unique="true"/>
+  </class>
+
+  <class name="com.some.path.db.DatabaseObject" table="objects">
+
+    <id name="id" type="string" length="32">
+      <column name="object_id" sql-type="char(32)"/>
+      <generator class="uuid.hex"/>
+    </id>
+
+    <property name="dbCreationTs" 
+              column="db_creation_ts" 
+              type="calendar" 
+              not-null="true">
+      <meta attribute="field-description">
+        The timestamp the record was inserted into the database.
+      </meta>
+    </property> 
+
+
+    <joined-subclass name="com.some.path.db.EmailAddress" 
+                     table="email_addresses">
+      <key>
+        <column name="email_address_id" sql-type="char(32)"/>
+      </key>
+      
+      <property name="emailAddress" column="email_address" type="string" 
+                not-null="true" unique="true"/>
+      <property name="bouncing" column="is_bouncing" type="boolean"
+                not-null="true"/>
+      <property name="verified" column="is_verified" type="boolean"
+                not-null="true"/>
+      <property name="label" type="string">
+        <meta attribute="field-description">
+          For example, "work", "home", "business", etc.
+        </meta>
+      </property>
+    </joined-subclass>
+
+
+    <joined-subclass name="com.some.path.db.PostalAddress" 
+                     table="postal_addresses">
+      <key>
+        <column name="postal_address_id" sql-type="char(32)"/>
+      </key>
+      <property name="line1" column="line_1" type="string" 
+                not-null="true"/>
+      <property name="line2" column="line_2" type="string"/>
+      <property name="line3" column="line_3" type="string"/>
+      <property name="line4" column="line_4" type="string"/>
+      <property name="city"  type="string" not-null="true"/>
+      <property name="county" type="string"/>
+      <property name="state" type="string">
+        <meta attribute="field-description">
+          In international cases, this can be a province, region, 
+                district, etc.
+        </meta>
+      </property>
+      <property name="zip" type="string" length="10" not-null="true">
+        <meta attribute="field-description">
+          @todo zip code size needs to allow for international postal codes
+        </meta>
+      </property>
+      <property name="zipExtension" type="string" length="10"/>
+      <many-to-one name="country" 
+                  class="com.some.path.db.Country">
+        <column name="country_id" sql-type="char(32)"/>
+      </many-to-one>
+      <property name="label" type="string">
+        <meta attribute="field-description">
+          For example, "work", "home", "business", etc.
+        </meta>
+      </property>
+    </joined-subclass>
+
+
+    <joined-subclass name="com.some.path.db.PhoneNumber" 
+                     table="phone_numbers">
+      <key>
+        <column name="phone_number_id" sql-type="char(32)"/>
+      </key>
+      <property name="phoneNumber" column="phone_number" not-null="true"
+                type="string" length="50"/>
+      <property name="extension" type="string" length="10"/>
+      <many-to-one name="country" 
+                   class="com.some.path.db.Country">
+        <column name="country_id" sql-type="char(32)"/>
+      </many-to-one>
+      <property name="label" type="string">
+        <meta attribute="field-description">
+          For example, "work", "home", "business", etc.
+        </meta>
+      </property>
+    </joined-subclass>
+
+    <joined-subclass name="com.some.path.db.Party" table="parties">
+      <meta attribute="class-description">
+        A party is any "contactable" entity.  That is, a party can be a person,
+        a group of people (such as a business/company), or any other 
+        interactable entity.
+      </meta>
+      <key>
+        <column name="party_id" sql-type="char(32)"/>
+      </key>
+      <set name="emailAddresses" table="party_email_address_maps"
+           inverse="true" lazy="true">
+        <key>
+          <column name="party_id" sql-type="char(32)"/>
+        </key>
+        <one-to-many class="com.some.path.db.EmailAddress"/>
+      </set>
+      <set name="phoneNumbers" table="party_phone_number_maps"
+           inverse="true" lazy="true">
+        <key>
+          <column name="party_id" sql-type="char(32)"/>
+        </key>
+        <many-to-many class="com.some.path.db.PhoneNumber">
+          <column name="phone_number_id" sql-type="char(32)"/>
+        </many-to-many>
+      </set>
+      <set name="postalAddresses" table="party_postal_address_maps"
+           inverse="true" lazy="true">
+        <key>
+          <column name="party_id" sql-type="char(32)"/>
+        </key>
+        <many-to-many class="com.some.path.db.PostalAddress">
+          <column name="postal_address_id" sql-type="char(32)"/>
+        </many-to-many>
+      </set>
+
+      <joined-subclass name="com.some.path.db.Person" 
+                       table="people">
+        <key>
+          <column name="person_id" sql-type="char(32)"/>
+        </key>
+        <component name="name" class="com.some.path.db.PersonName"> 
+          <property name="salutation" type="string">
+            <column name="salutation" sql-type="char(5)"/>
+          </property>
+          <property name="givenName" type="string" length="100" 
+                    column="given_name" not-null="true"/>
+          <property name="middleNames" type="string" column="middle_names"/>
+          <property name="surname" type="string" length="100" not-null="true"/>
+          <property name="suffix" type="string" length="100"/>
+        </component>  
+        <property name="gender" type="string">
+          <column name="gender" sql-type="char(6)"/>
+        </property>
+
+
+        <joined-subclass name="com.some.path.db.User" table="users">
+          <key>
+            <column name="user_id" sql-type="char(32)"/>
+          </key>
+          <property name="username" type="string" length="100"
+                    not-null="true" unique="true"/>
+          <property name="encryptedPassword" type="string" length="100"
+                    column="encrypted_password"/>
+          <property name="passwordLastChangedTs" type="calendar" 
+                    column="password_last_changed_ts" not-null="true"/>
+          <property name="passwordExpirationTs" type="calendar"
+                    column="password_expiration_ts">
+            <meta attribute="field-description">
+              null value means it never expires.
+            </meta>
+          </property>
+          <property name="timeZone" type="float" column="time_zone"/>
+          <property name="locked" type="boolean" not-null="true"
+                    column="is_locked"/>
+
+        </joined-subclass> <!-- end User class definition -->
+
+      </joined-subclass> <!-- end Person class definition -->
+
+    </joined-subclass> <!-- end Party class definition -->
+
+  </class> <!-- end DatabaseObject class definition -->
+
+</hibernate-mapping>

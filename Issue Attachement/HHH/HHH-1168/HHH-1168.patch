@@ -1,0 +1,464 @@
+Index: hibernate-core/src/test/resources/hibernate.properties
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/test/resources/hibernate.properties	(revision fd8a45b2b246df9343adf2ec0df9acc298f69704)
++++ hibernate-core/src/test/resources/hibernate.properties	(revision )
+@@ -21,10 +21,17 @@
+ # 51 Franklin Street, Fifth Floor
+ # Boston, MA  02110-1301  USA
+ #
+-hibernate.dialect org.hibernate.dialect.H2Dialect
+-hibernate.connection.driver_class org.h2.Driver
+-hibernate.connection.url jdbc:h2:mem:db1;DB_CLOSE_DELAY=-1;MVCC=TRUE
+-hibernate.connection.username sa
++#hibernate.dialect org.hibernate.dialect.H2Dialect
++#hibernate.connection.driver_class org.h2.Driver
++#hibernate.connection.url jdbc:h2:mem:db1;DB_CLOSE_DELAY=-1;MVCC=TRUE
++#hibernate.connection.username sa
++
++hibernate.dialect org.hibernate.dialect.Oracle10gDialect
++hibernate.connection.driver_class=oracle.jdbc.OracleDriver
++hibernate.connection.url=jdbc\:oracle\:thin\:@vmg05.mw.lab.eng.bos.redhat.com\:1521\:qaora10
++hibernate.connection.schema=qaora10
++hibernate.connection.username=dballo01
++hibernate.connection.password=dballo01
+ 
+ hibernate.connection.pool_size 5
+ 
+\ No newline at end of file
+Index: hibernate-core/src/test/java/org/hibernate/test/pagination/PaginationTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/*\n * Hibernate, Relational Persistence for Idiomatic Java\n *\n * Copyright (c) 2009-2011, Red Hat Inc. or third-party contributors as\n * indicated by the @author tags or express copyright attribution\n * statements applied by the authors.  All third-party contributions are\n * distributed under license by Red Hat Inc.\n *\n * This copyrighted material is made available to anyone wishing to use, modify,\n * copy, or redistribute it subject to the terms and conditions of the GNU\n * Lesser General Public License, as published by the Free Software Foundation.\n *\n * This program is distributed in the hope that it will be useful,\n * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY\n * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License\n * for more details.\n *\n * You should have received a copy of the GNU Lesser General Public License\n * along with this distribution; if not, write to:\n * Free Software Foundation, Inc.\n * 51 Franklin Street, Fifth Floor\n * Boston, MA  02110-1301  USA\n */\npackage org.hibernate.test.pagination;\n\nimport java.math.BigDecimal;\nimport java.util.List;\n\nimport org.junit.Test;\n\nimport org.hibernate.Criteria;\nimport org.hibernate.Query;\nimport org.hibernate.SQLQuery;\nimport org.hibernate.Session;\nimport org.hibernate.criterion.Order;\nimport org.hibernate.testing.DialectChecks;\nimport org.hibernate.testing.RequiresDialectFeature;\nimport org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;\n\nimport static org.junit.Assert.assertEquals;\nimport static org.junit.Assert.assertTrue;\n\n/**\n * @author Gavin King\n */\npublic class PaginationTest extends BaseCoreFunctionalTestCase {\n\tpublic static final int NUMBER_OF_TEST_ROWS = 100;\n\n\t@Override\n\tpublic String[] getMappings() {\n\t\treturn new String[] { \"pagination/DataPoint.hbm.xml\" };\n\t}\n\n\t@Override\n\tpublic String getCacheConcurrencyStrategy() {\n\t\treturn null;\n\t}\n\n\t@Test\n\t@RequiresDialectFeature(\n\t\t\tvalue = DialectChecks.SupportLimitCheck.class,\n\t\t\tcomment = \"Dialect does not support limit\"\n\t)\n\tpublic void testLimit() {\n\t\tprepareTestData();\n\n\t\tSession session = openSession();\n\t\tsession.beginTransaction();\n\n\t\tint count;\n\n\t\tcount = generateBaseHQLQuery( session )\n\t\t\t\t.setMaxResults( 5 )\n\t\t\t\t.list()\n\t\t\t\t.size();\n\t\tassertEquals( 5, count );\n\n\t\tcount = generateBaseCriteria( session )\n\t\t\t\t.setMaxResults( 18 )\n\t\t\t\t.list()\n\t\t\t\t.size();\n\t\tassertEquals( 18, count );\n\n\t\tcount = generateBaseSQLQuery( session )\n\t\t\t\t.setMaxResults( 13 )\n\t\t\t\t.list()\n\t\t\t\t.size();\n\t\tassertEquals( 13, count );\n\n\t\tsession.getTransaction().commit();\n\t\tsession.close();\n\n\t\tcleanupTestData();\n\t}\n\n\t@Test\n\tpublic void testOffset() {\n\t\tprepareTestData();\n\t\tSession session = openSession();\n\t\tsession.beginTransaction();\n\t\tList result;\n\n\t\tresult = generateBaseHQLQuery( session )\n\t\t\t\t.setFirstResult( 3 )\n\t\t\t\t.list();\n\t\tDataPoint firstDataPointHQL = (DataPoint) result.get( 0 );\n\n\t\tresult = generateBaseCriteria( session )\n\t\t\t\t.setFirstResult( 3 )\n\t\t\t\t.list();\n\t\tDataPoint firstDataPointCriteria = (DataPoint) result.get( 0 );\n\n\t\tassertEquals( \"The first entry should be the same in HQL and Criteria\", firstDataPointHQL, firstDataPointHQL );\n\t\tassertEquals( \"Wrong first result\", 3, firstDataPointCriteria.getSequence() );\n\n\t\tsession.getTransaction().commit();\n\t\tsession.close();\n\t\tcleanupTestData();\n\t}\n\n\t@Test\n\t@RequiresDialectFeature(\n\t\t\tvalue = DialectChecks.SupportLimitAndOffsetCheck.class,\n\t\t\tcomment = \"Dialect does not support limit+offset\"\n\t)\n\tpublic void testLimitOffset() {\n\t\tprepareTestData();\n\n\t\tSession session = openSession();\n\t\tsession.beginTransaction();\n\n\t\tList result;\n\n\t\tresult = generateBaseHQLQuery( session )\n\t\t\t\t.setFirstResult( 0 )\n\t\t\t\t.setMaxResults( 20 )\n\t\t\t\t.list();\n\t\tassertEquals( 20, result.size() );\n\t\tassertEquals( 0, ( (DataPoint) result.get( 0 ) ).getSequence() );\n\t\tassertEquals( 1, ( (DataPoint) result.get( 1 ) ).getSequence() );\n\n\t\tresult = generateBaseCriteria( session )\n\t\t\t\t.setFirstResult( 1 )\n\t\t\t\t.setMaxResults( 20 )\n\t\t\t\t.list();\n\t\tassertEquals( 20, result.size() );\n\t\tassertEquals( 1, ( (DataPoint) result.get( 0 ) ).getSequence() );\n\t\tassertEquals( 2, ( (DataPoint) result.get( 1 ) ).getSequence() );\n\n\t\tresult = generateBaseCriteria( session )\n\t\t\t\t.setFirstResult( 99 )\n\t\t\t\t.setMaxResults( Integer.MAX_VALUE - 200 )\n\t\t\t\t.list();\n\t\tassertEquals( 1, result.size() );\n\t\tassertEquals( 99, ( (DataPoint) result.get( 0 ) ).getSequence() );\n\n\t\tresult = session.createQuery( \"select distinct description from DataPoint order by description\" )\n\t\t\t\t.setFirstResult( 2 )\n\t\t\t\t.setMaxResults( 3 )\n\t\t\t\t.list();\n\t\tassertEquals( 3, result.size() );\n\t\tassertEquals( \"Description: 2\", result.get( 0 ) );\n\t\tassertEquals( \"Description: 3\", result.get( 1 ) );\n\t\tassertEquals( \"Description: 4\", result.get( 2 ) );\n\n\t\tresult = session.createSQLQuery( \"select description, xval, yval from DataPoint order by xval, yval\" )\n\t\t\t\t.setFirstResult( 2 )\n\t\t\t\t.setMaxResults( 5 )\n\t\t\t\t.list();\n\t\tassertEquals( 5, result.size() );\n\t\tObject[] row = (Object[]) result.get( 0 );\n\t\tassertTrue( row[0] instanceof String );\n\n\t\tresult = session.createSQLQuery( \"select * from DataPoint order by xval, yval\" )\n\t\t\t\t.setFirstResult( 2 )\n\t\t\t\t.setMaxResults( 5 )\n\t\t\t\t.list();\n\t\tassertEquals( 5, result.size() );\n\n\n\t\tsession.getTransaction().commit();\n\t\tsession.close();\n\n\t\tcleanupTestData();\n\t}\n\n\tprivate Query generateBaseHQLQuery(Session session) {\n\t\treturn session.createQuery( \"select dp from DataPoint dp order by dp.sequence\" );\n\t}\n\n\tprivate Criteria generateBaseCriteria(Session session) {\n\t\treturn session.createCriteria( DataPoint.class )\n\t\t\t\t.addOrder( Order.asc( \"sequence\" ) );\n\t}\n\n\tprivate SQLQuery generateBaseSQLQuery(Session session) {\n\t\treturn session.createSQLQuery( \"select id, seqval, xval, yval, description from DataPoint order by seqval\" )\n\t\t\t\t.addEntity( DataPoint.class );\n\t}\n\n\tprivate void prepareTestData() {\n\t\tSession session = openSession();\n\t\tsession.beginTransaction();\n\t\tfor ( int i = 0; i < NUMBER_OF_TEST_ROWS; i++ ) {\n\t\t\tDataPoint dataPoint = new DataPoint();\n\t\t\tdataPoint.setSequence( i );\n\t\t\tdataPoint.setDescription( \"data point #\" + i );\n\t\t\tBigDecimal x = new BigDecimal( i * 0.1d ).setScale( 19, BigDecimal.ROUND_DOWN );\n\t\t\tdataPoint.setX( x );\n\t\t\tdataPoint.setY( new BigDecimal( Math.cos( x.doubleValue() ) ).setScale( 19, BigDecimal.ROUND_DOWN ) );\n\t\t\tdataPoint.setDescription( \"Description: \" + i % 5 );\n\t\t\tsession.save( dataPoint );\n\t\t}\n\t\tsession.getTransaction().commit();\n\t\tsession.close();\n\t}\n\n\tpublic void cleanupTestData() {\n\t\tSession session = openSession();\n\t\tsession.beginTransaction();\n\t\tsession.createQuery( \"delete DataPoint\" ).executeUpdate();\n\t\tsession.getTransaction().commit();\n\t\tsession.close();\n\t}\n}\n\n
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/pagination/PaginationTest.java	(revision fd8a45b2b246df9343adf2ec0df9acc298f69704)
++++ hibernate-core/src/test/java/org/hibernate/test/pagination/PaginationTest.java	(revision )
+@@ -29,6 +29,7 @@
+ import org.junit.Test;
+ 
+ import org.hibernate.Criteria;
++import org.hibernate.LockMode;
+ import org.hibernate.Query;
+ import org.hibernate.SQLQuery;
+ import org.hibernate.Session;
+@@ -111,7 +112,7 @@
+ 		DataPoint firstDataPointCriteria = (DataPoint) result.get( 0 );
+ 
+ 		assertEquals( "The first entry should be the same in HQL and Criteria", firstDataPointHQL, firstDataPointHQL );
+-		assertEquals( "Wrong first result", 3, firstDataPointCriteria.getSequence() );
++		assertEquals( "Wrong first result", 96, firstDataPointCriteria.getSequence() );
+ 
+ 		session.getTransaction().commit();
+ 		session.close();
+@@ -136,23 +137,23 @@
+ 				.setMaxResults( 20 )
+ 				.list();
+ 		assertEquals( 20, result.size() );
+-		assertEquals( 0, ( (DataPoint) result.get( 0 ) ).getSequence() );
+-		assertEquals( 1, ( (DataPoint) result.get( 1 ) ).getSequence() );
++		assertEquals( 99, ( (DataPoint) result.get( 0 ) ).getSequence() );
++		assertEquals( 98, ( (DataPoint) result.get( 1 ) ).getSequence() );
+ 
+ 		result = generateBaseCriteria( session )
+ 				.setFirstResult( 1 )
+ 				.setMaxResults( 20 )
+ 				.list();
+ 		assertEquals( 20, result.size() );
+-		assertEquals( 1, ( (DataPoint) result.get( 0 ) ).getSequence() );
+-		assertEquals( 2, ( (DataPoint) result.get( 1 ) ).getSequence() );
++		assertEquals( 98, ( (DataPoint) result.get( 0 ) ).getSequence() );
++		assertEquals( 97, ( (DataPoint) result.get( 1 ) ).getSequence() );
+ 
+ 		result = generateBaseCriteria( session )
+ 				.setFirstResult( 99 )
+ 				.setMaxResults( Integer.MAX_VALUE - 200 )
+ 				.list();
+ 		assertEquals( 1, result.size() );
+-		assertEquals( 99, ( (DataPoint) result.get( 0 ) ).getSequence() );
++		assertEquals( 0, ( (DataPoint) result.get( 0 ) ).getSequence() );
+ 
+ 		result = session.createQuery( "select distinct description from DataPoint order by description" )
+ 				.setFirstResult( 2 )
+@@ -184,17 +185,99 @@
+ 		cleanupTestData();
+ 	}
+ 
++	@Test
++	@RequiresDialectFeature(
++			value = DialectChecks.SupportLimitAndOffsetCheck.class,
++			comment = "Dialect does not support limit+offset"
++	)
++	public void testPagingWithLocking() {
++		prepareTestData();
++
++		Session session = openSession();
++		session.beginTransaction();
++
++		{
++			Query qry = generateBaseHQLQuery( session )
++					.setFirstResult( 0 )
++					.setMaxResults( 20 );
++			qry.getLockOptions().setLockMode( LockMode.UPGRADE );
++
++			List result = qry.list();
++			assertEquals( 20, result.size() );
++			assertEquals( 99, ( (DataPoint) result.get( 0 ) ).getSequence() );
++			assertEquals( 98, ( (DataPoint) result.get( 1 ) ).getSequence() );
++		}
++
++		{
++			List result = generateBaseCriteria( session )
++					.setFirstResult( 1 )
++					.setMaxResults( 20 )
++					.setLockMode( LockMode.UPGRADE )
++					.list();
++			assertEquals( 20, result.size() );
++			assertEquals( 98, ( (DataPoint) result.get( 0 ) ).getSequence() );
++			assertEquals( 97, ( (DataPoint) result.get( 1 ) ).getSequence() );
++		}
++
++		{
++			List result = generateBaseCriteria( session )
++					.setFirstResult( 99 )
++					.setMaxResults( Integer.MAX_VALUE - 200 )
++					.setLockMode( LockMode.UPGRADE )
++					.list();
++			assertEquals( 1, result.size() );
++			assertEquals( 0, ( (DataPoint) result.get( 0 ) ).getSequence() );
++		}
++
++		{
++			Query qry = session.createQuery( "select distinct description from DataPoint order by description" )
++					.setFirstResult( 2 )
++					.setMaxResults( 3 );
++			qry.getLockOptions().setLockMode( LockMode.UPGRADE );
++			List result = qry.list();
++			assertEquals( 3, result.size() );
++			assertEquals( "Description: 2", result.get( 0 ) );
++			assertEquals( "Description: 3", result.get( 1 ) );
++			assertEquals( "Description: 4", result.get( 2 ) );
++		}
++
++		{
++			Query query = session.createSQLQuery( "select description, xval, yval from DataPoint order by xval, yval" )
++					.setFirstResult( 2 )
++					.setMaxResults( 5 );
++			query.getLockOptions().setLockMode( LockMode.UPGRADE );
++			List result = query.list();
++			assertEquals( 5, result.size() );
++			Object[] row = (Object[]) result.get( 0 );
++			assertTrue( row[0] instanceof String );
++		}
++
++		{
++			Query query = session.createSQLQuery( "select * from DataPoint order by xval, yval" )
++					.setFirstResult( 2 )
++					.setMaxResults( 5 );
++			query.getLockOptions().setLockMode( LockMode.UPGRADE );
++			List result = query.list();
++			assertEquals( 5, result.size() );
++		}
++
++		session.getTransaction().commit();
++		session.close();
++
++		cleanupTestData();
++	}
++
+ 	private Query generateBaseHQLQuery(Session session) {
+-		return session.createQuery( "select dp from DataPoint dp order by dp.sequence" );
++		return session.createQuery( "select dp from DataPoint dp order by dp.sequence desc" );
+ 	}
+ 
+ 	private Criteria generateBaseCriteria(Session session) {
+ 		return session.createCriteria( DataPoint.class )
+-				.addOrder( Order.asc( "sequence" ) );
++				.addOrder( Order.desc( "sequence" ) );
+ 	}
+ 
+ 	private SQLQuery generateBaseSQLQuery(Session session) {
+-		return session.createSQLQuery( "select id, seqval, xval, yval, description from DataPoint order by seqval" )
++		return session.createSQLQuery( "select id, seqval, xval, yval, description from DataPoint order by seqval desc" )
+ 				.addEntity( DataPoint.class );
+ 	}
+ 
+Index: hibernate-core/src/main/java/org/hibernate/dialect/Oracle10gDialect.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>/*\n * Hibernate, Relational Persistence for Idiomatic Java\n *\n * Copyright (c) 2010, Red Hat Inc. or third-party contributors as\n * indicated by the @author tags or express copyright attribution\n * statements applied by the authors.  All third-party contributions are\n * distributed under license by Red Hat Inc.\n *\n * This copyrighted material is made available to anyone wishing to use, modify,\n * copy, or redistribute it subject to the terms and conditions of the GNU\n * Lesser General Public License, as published by the Free Software Foundation.\n *\n * This program is distributed in the hope that it will be useful,\n * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY\n * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License\n * for more details.\n *\n * You should have received a copy of the GNU Lesser General Public License\n * along with this distribution; if not, write to:\n * Free Software Foundation, Inc.\n * 51 Franklin Street, Fifth Floor\n * Boston, MA  02110-1301  USA\n */\npackage org.hibernate.dialect;\nimport org.hibernate.sql.ANSIJoinFragment;\nimport org.hibernate.sql.JoinFragment;\n\n\n/**\n * A dialect specifically for use with Oracle 10g.\n * <p/>\n * The main difference between this dialect and {@link Oracle9iDialect}\n * is the use of \"ANSI join syntax\".  This dialect also retires the use\n * of the <tt>oracle.jdbc.driver</tt> package in favor of \n * <tt>oracle.jdbc</tt>.\n *\n * @author Steve Ebersole\n */\npublic class Oracle10gDialect extends Oracle9iDialect {\n\n\tpublic Oracle10gDialect() {\n\t\tsuper();\n\t}\n\n\tpublic JoinFragment createOuterJoinFragment() {\n\t\treturn new ANSIJoinFragment();\n\t}\n}\n
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/dialect/Oracle10gDialect.java	(revision fd8a45b2b246df9343adf2ec0df9acc298f69704)
++++ hibernate-core/src/main/java/org/hibernate/dialect/Oracle10gDialect.java	(revision )
+@@ -22,8 +22,15 @@
+  * Boston, MA  02110-1301  USA
+  */
+ package org.hibernate.dialect;
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import org.hibernate.dialect.pagination.LimitHandler;
++import org.hibernate.dialect.pagination.LimitHelper;
++import org.hibernate.engine.spi.RowSelection;
+ import org.hibernate.sql.ANSIJoinFragment;
+ import org.hibernate.sql.JoinFragment;
++import org.hibernate.type.StandardBasicTypes;
+ 
+ 
+ /**
+@@ -45,4 +52,250 @@
+ 	public JoinFragment createOuterJoinFragment() {
+ 		return new ANSIJoinFragment();
+ 	}
++
++	@Override
++	public LimitHandler buildLimitHandler(String sql, RowSelection selection) {
++		return new OracleLimitHandler2( sql, selection );
++	}
++
++	public class OracleLimitHandler implements LimitHandler {
++		private final String processedSql;
++		private final int offset;
++		private final int limit;
++
++		public OracleLimitHandler(String sql, RowSelection selection) {
++			this.offset = selection.getFirstRow() == null ? -1 : selection.getFirstRow().intValue();
++			this.limit = selection.getMaxRows() == null ? -1 : selection.getMaxRows().intValue();
++
++			final boolean hasOffset = offset > 0;
++			final boolean hasLimit = limit > 0;
++
++			this.processedSql = hasOffset || hasLimit
++					? adjustSql( sql, hasOffset, hasLimit )
++					: sql;
++			}
++
++		private String adjustSql(String sql, boolean hasOffset, boolean hasLimit) {
++			// essentially we will:
++			//		1) harvest the select and from clauses for later use
++			//		2) build a new query selecting rowid and rownum but using the rest of the original query
++
++			// not terribly accurate because FROM can appear in value elements (like ansi sql trim function, etc).
++			// we have the same problem already with subselect fetching.  Yet another case for leveraging ASTs for
++			// SQL building rather than string manipulation.
++			final int fromPos = sql.indexOf( " from " );
++
++			// see where the FROM clause ends, again, not terribly accurate in all situations :(
++			final int wherePosition = sql.indexOf( " where " );
++			final int orderByPosition = sql.indexOf( " order by " );
++			final int forUpdatePosition = sql.indexOf( " for update " );
++			final int fromEndPos = wherePosition > 0
++					? wherePosition
++					: orderByPosition > 0
++							? orderByPosition
++							: forUpdatePosition > 0
++									? forUpdatePosition
++									: sql.length();
++
++
++			// build the inner-most sql...
++			final boolean hadForUpdate = forUpdatePosition > 0;
++			final int innerSqlHarvestingEndPos = hadForUpdate ? forUpdatePosition : sql.length();
++			final String innerSql = "select rowid rowId__"
++					+ sql.substring( fromPos, innerSqlHarvestingEndPos );
++
++			// build the limit restricting sql
++			String limitRestrictingSql = "select rowid__ from (" + innerSql + ") where ";
++			if ( hasOffset ) {
++				limitRestrictingSql += "rownum > ?";
++			}
++			if ( hasLimit ) {
++				if ( hasOffset ) {
++					limitRestrictingSql += " and ";
++				}
++				limitRestrictingSql += "rownum <= ?";
++			}
++
++			// build the outer sql
++			String outerSql = sql.substring( 0, fromEndPos )
++					+ " where rowid in (" + limitRestrictingSql + ")";
++			if ( hadForUpdate ) {
++				outerSql += " " + sql.substring( forUpdatePosition, sql.length()-1 );
++			}
++
++			// if the original SQL has an order-by, need to apply that to the outer query too.  ugh
++			if ( orderByPosition > 0 ) {
++				final int orderByEndPosition = forUpdatePosition > 0
++						? forUpdatePosition
++						: sql.length();
++				outerSql += " " + sql.substring( orderByPosition, orderByEndPosition );
++			}
++			return outerSql;
++		}
++
++		@Override
++		public boolean supportsLimit() {
++			return true;
++		}
++
++		@Override
++		public boolean supportsLimitOffset() {
++			return true;
++		}
++
++		@Override
++		public String getProcessedSql() {
++			return processedSql;
++		}
++
++		@Override
++		public int bindLimitParametersAtStartOfQuery(PreparedStatement statement, int index) throws SQLException {
++			return 0;
++		}
++
++		@Override
++		public int bindLimitParametersAtEndOfQuery(PreparedStatement statement, int index) throws SQLException {
++			int params = 0;
++			if ( offset > 0 ) {
++				statement.setInt( index + params++, offset );
++			}
++			if ( limit > 0 ) {
++				statement.setInt( index + params++, limit );
++			}
++			return params;
++		}
++
++		@Override
++		public void setMaxRows(PreparedStatement statement) throws SQLException {
++		}
++	}
++
++	public class OracleLimitHandler2 implements LimitHandler {
++		private final String processedSql;
++		private final int offset;
++		private final int limit;
++
++		public OracleLimitHandler2(String sql, RowSelection selection) {
++			this.offset = selection.getFirstRow() == null ? -1 : selection.getFirstRow().intValue();
++			this.limit = selection.getMaxRows() == null ? -1 : selection.getMaxRows().intValue();
++
++			final boolean hasOffset = offset > 0;
++			final boolean hasLimit = limit > 0;
++
++			this.processedSql = hasOffset || hasLimit
++					? adjustSql( sql, hasOffset, hasLimit )
++					: sql;
++		}
++
++		private String adjustSql(String sql, boolean hasOffset, boolean hasLimit) {
++			// essentially we will:
++			//		1) harvest the select and from clauses for later use
++			//		2) build a new query selecting rowid and rownum but using the rest of the original query
++
++			// not terribly accurate because FROM can appear in value elements (like ansi sql trim function, etc).
++			// we have the same problem already with subselect fetching.  Yet another case for leveraging ASTs for
++			// SQL building rather than string manipulation.
++			final int fromPos = sql.indexOf( " from " );
++
++			// see where the FROM clause ends, again, not terribly accurate in all situations :(
++			final int wherePosition = sql.indexOf( " where " );
++			final int orderByPosition = sql.indexOf( " order by " );
++			final int forUpdatePosition = sql.indexOf( " for update " );
++			final int fromEndPos = wherePosition > 0
++					? wherePosition
++					: orderByPosition > 0
++							? orderByPosition
++							: forUpdatePosition > 0
++									? forUpdatePosition
++									: sql.length();
++
++
++			final boolean hadForUpdate = forUpdatePosition > 0;
++			final int innerSqlHarvestingEndPos = hadForUpdate ? forUpdatePosition : sql.length();
++			final boolean hasOrderBy = orderByPosition > 0;
++			final String orderBy;
++			if ( hasOrderBy ) {
++				final int orderByEndPosition = forUpdatePosition > 0
++						? forUpdatePosition
++						: sql.length();
++				orderBy = sql.substring( orderByPosition, orderByEndPosition );
++			}
++			else {
++				orderBy = null;
++			}
++
++			// build the inner-most sql...
++			String innerSql = "select rowid rowid__, row_number() ";
++			if ( hasOrderBy ) {
++				innerSql += "over(" + orderBy + ") ";
++			}
++			innerSql += ( " rownum__" + sql.substring( fromPos, fromEndPos ) );
++
++			// build the limit restricting sql
++			String limitRestrictingSql = "select rowid__ from (" + innerSql + ") where ";
++			if ( hasOffset ) {
++				limitRestrictingSql += "rownum__ > ?";
++			}
++			if ( hasLimit ) {
++				if ( hasOffset ) {
++					limitRestrictingSql += " and ";
++				}
++				limitRestrictingSql += "rownum__ <= ?";
++			}
++
++			// build the outer sql
++			String outerSql = sql.substring( 0, fromEndPos )
++					+ " where rowid in (" + limitRestrictingSql + ")";
++
++			// if the original SQL has an order-by, need to apply that to the outer query too.  ugh
++			if ( hasOrderBy ) {
++				outerSql += " " + orderBy;
++			}
++
++			if ( hadForUpdate ) {
++				outerSql += " " + sql.substring( forUpdatePosition, sql.length()-1 );
++			}
++
++			return outerSql;
++		}
++
++		@Override
++		public boolean supportsLimit() {
++			return true;
++		}
++
++		@Override
++		public boolean supportsLimitOffset() {
++			return true;
++		}
++
++		@Override
++		public String getProcessedSql() {
++			return processedSql;
++		}
++
++		@Override
++		public int bindLimitParametersAtStartOfQuery(PreparedStatement statement, int index) throws SQLException {
++			return 0;
++		}
++
++		@Override
++		public int bindLimitParametersAtEndOfQuery(PreparedStatement statement, int index) throws SQLException {
++			int params = 0;
++			int limitBase = 0;
++			if ( offset > 0 ) {
++				statement.setInt( index + params++, offset );
++				limitBase = offset;
++			}
++			if ( limit > 0 ) {
++				statement.setInt( index + params++, limitBase+limit );
++			}
++			return params;
++		}
++
++		@Override
++		public void setMaxRows(PreparedStatement statement) throws SQLException {
++		}
++	}
++
+ }

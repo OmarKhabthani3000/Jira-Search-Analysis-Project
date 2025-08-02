@@ -1,0 +1,242 @@
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/JDBCReader.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/JDBCReader.java        (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/JDBCReader.java        (revision 343)
+@@ -568,7 +568,7 @@
+                                    continue;
+                             }
+                             
+-                            //String columnDefaultValue = columnRs.getString("COLUMN_DEF"); TODO: only read if have a way to avoid issues with clobs/lobs and similar
++                Object columnDefaultValue = columnRs.get("COLUMN_DEF"); //TODO: only read if have a way to avoid issues with clobs/lobs and similar
+                             int dbNullability = ((Integer)columnRs.get("NULLABLE")).intValue();
+                             boolean isNullable = true;
+                             switch (dbNullability) {
+@@ -587,6 +587,12 @@
+                             int decimalDigits = ((Integer)columnRs.get("DECIMAL_DIGITS")).intValue();
+                             
+                             Column column = new Column();
++
++                if (columnDefaultValue != null) {
++                    log.debug("Default value found for column " + columnName + " :" + columnDefaultValue.toString());
++                    column.setDefaultValue(columnDefaultValue.toString());
++                }
++
+                             column.setName(quote(columnName));
+                             Column existing = table.getColumn(column);
+                             if(existing!=null) {
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/dialect/JDBCMetaDataDialect.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/dialect/JDBCMetaDataDialect.java       (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/dialect/JDBCMetaDataDialect.java       (revision 343)
+@@ -136,7 +136,8 @@
+                                    element.put("COLUMN_SIZE", new Integer(rs.getInt("COLUMN_SIZE")));
+                                    element.put("DECIMAL_DIGITS", new Integer(rs.getInt("DECIMAL_DIGITS")));
+                                    element.put("REMARKS", rs.getString("REMARKS"));
+-                                   return element;                                    
++                    element.put("COLUMN_DEF", rs.getString("COLUMN_DEF"));
++                                   return element;
+                             }
+                             protected Throwable handleSQLException(SQLException e) {
+                                    throw getSQLExceptionConverter().convert(e, "Error while reading column meta data for " + Table.qualify(catalog, schema, table), null);
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java        (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java        (revision 343)
+@@ -181,6 +181,20 @@
+     public String foreignKeyToManyToManyName(ForeignKey fromKey, TableIdentifier middleTable, ForeignKey toKey, boolean uniqueReference);
+ 
+        
+-       
+-       
++    /**
++     * @param hibernateType The hibernate type that needs default values from DB if available
++     * @return True or false depending on type.
++     */
++    public boolean useDefaultValueOnHibernateType(String hibernateType);
++
++    /**
++     * @param table        Table identifier
++     * @param columnName   Tne name of the column in the database
++     * @param sqlType      The sql type of the column
++     * @param isForeignKey True if the column is a FK
++     * @param value        Value to be converted
++     * @return A string containing the converted value.
++     */
++    public String convertDefaultValueForColumn(TableIdentifier table, String columnName, String sqlTypeName, String hibernateTypeName, boolean isForeignKey, String value);
++
+ }
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java      (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java      (revision 343)
+@@ -128,6 +128,14 @@
+               return delegate==null?null:delegate.foreignKeyToManyToManyName( fromKey, middleTable, toKey, uniqueReference );
+        }
+ 
++    public boolean useDefaultValueOnHibernateType(String hibernateType) {
++        return false;
++    }
++
++    public String convertDefaultValueForColumn(TableIdentifier table, String columnName, String sqlTypeName, String hibernateTypeName, boolean isForeignKey, String value) {
++        return "";
++    }
++
+        public Map tableToMetaAttributes(TableIdentifier tableIdentifier) {
+               return delegate==null?null:delegate.tableToMetaAttributes( tableIdentifier );         
+        }
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java (revision 343)
+@@ -267,6 +267,14 @@
+         return propertyName;      
+        }
+ 
++    public boolean useDefaultValueOnHibernateType(String hibernateType) {
++        return false;
++    }
++
++    public String convertDefaultValueForColumn(TableIdentifier table, String columnName, String sqlTypeName, String hibernateTypeName, boolean isForeignKey, String value) {
++        return "";
++    }
++
+        public Map tableToMetaAttributes(TableIdentifier tableIdentifier) {
+               return null;
+        }
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/JDBCBinder.java       (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/cfg/JDBCBinder.java       (revision 343)
+@@ -20,6 +20,7 @@
+ import org.hibernate.DuplicateMappingException;
+ import org.hibernate.FetchMode;
+ import org.hibernate.MappingException;
++import org.hibernate.tool.hbm2x.visitor.JavaTypeFromValueVisitor;
+ import org.hibernate.cfg.reveng.DatabaseCollector;
+ import org.hibernate.cfg.reveng.JDBCReader;
+ import org.hibernate.cfg.reveng.JDBCToHibernateTypeHelper;
+@@ -41,7 +42,6 @@
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.RootClass;
+-import org.hibernate.mapping.Selectable;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.mapping.Value;
+@@ -827,13 +827,44 @@
+               return prop;
+        }
+     
++    private boolean isForeignKey(Column col) {
++        Table table = col.getValue().getTable();
++        Iterator fkIt = table.getForeignKeyIterator();
++        while (fkIt.hasNext()) {
++            ForeignKey fk = (ForeignKey) fkIt.next();
++            if (fk.getColumns().indexOf(col) >= 0) {
++                log.debug("found column " + col.getName() + " as FK");
++                return true;
++            }
++        }
++        return false;
++    }
++
+     private Property bindMeta(Property property, TableIdentifier identifier) {
+        Iterator columnIterator = property.getValue().getColumnIterator();
+               while(columnIterator.hasNext()) {
+                      Column col = (Column) columnIterator.next();
+-                     
+-                     Map map = revengStrategy.columnToMetaAttributes( identifier, col.getName() );
+-                     if(map!=null) { // TODO: merge from each column ?
++
++            Map map = safeMeta(revengStrategy.columnToMetaAttributes(identifier, col.getName()));
++            String preferredHibernateType = (String) col.getValue().accept(new JavaTypeFromValueVisitor());
++            if (preferredHibernateType == null) {
++                preferredHibernateType = "Object";
++            }
++            if (revengStrategy.useDefaultValueOnHibernateType(preferredHibernateType)) {
++                if ((!map.containsKey("default-value"))
++                        && (col.getDefaultValue() != null)
++                        && (!"".equals(col.getDefaultValue()))) {
++                    String defaultValue = revengStrategy.convertDefaultValueForColumn(
++                            identifier, col.getName(), col.getSqlType(),
++                            preferredHibernateType, isForeignKey(col), col.getDefaultValue());
++                    if (defaultValue != null) {
++                        MetaAttribute ma = new MetaAttribute("default-value");
++                        ma.addValue(defaultValue);
++                        map.put(ma.getName(), ma);
++                    }
++                }
++            }
++            if (!map.isEmpty()) { // TODO: merge from each column ?
+                             property.setMetaAttributes( map );
+                      }
+               }
+Index: /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java
+===================================================================
+--- /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java       (revision 341)
++++ /media/hdb5/home/sorin/Projects/hibernate-tools/trunk/src/main/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java       (revision 343)
+@@ -1,35 +1,30 @@
+ package org.hibernate.tool.hbm2x.pojo;
+ 
+-import java.util.ArrayList;
+-import java.util.HashMap;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.hibernate.cfg.reveng.ReverseEngineeringStrategyUtil;
+ import org.hibernate.mapping.Collection;
+-import org.hibernate.mapping.Column;
+-import org.hibernate.mapping.Component;
+-import org.hibernate.mapping.MetaAttributable;
+-import org.hibernate.mapping.MetaAttribute;
+-import org.hibernate.mapping.Property;
+-import org.hibernate.mapping.PropertyGeneration;
+-import org.hibernate.mapping.Selectable;
+-import org.hibernate.mapping.SimpleValue;
+-import org.hibernate.mapping.Value;
++import org.hibernate.mapping.*;
+ import org.hibernate.tool.hbm2x.Cfg2JavaTool;
+ import org.hibernate.tool.hbm2x.MetaAttributeConstants;
+ import org.hibernate.tool.hbm2x.MetaAttributeHelper;
+ import org.hibernate.util.StringHelper;
+ 
++import java.util.*;
++import java.util.List;
++import java.util.Map;
++
+ /**
+  * Abstract implementation of POJOClass. To be extended by ComponentPOJO and EntityPOJO
++ *
+  * @author max
+  * @author <a href="mailto:abhayani@jboss.org">Amit Bhayani</a>
+  *
+  */
+ abstract public class BasicPOJOClass implements POJOClass, MetaAttributeConstants {
+ 
++    private static final Log log = LogFactory.getLog(BasicPOJOClass.class);
++
+        protected ImportContext importContext;
+        protected MetaAttributable meta;
+        protected final Cfg2JavaTool c2j;
+@@ -840,6 +835,7 @@
+        }
+        
+        static Map defaultInitializors = new HashMap();
++
+        static {
+               defaultInitializors.put("java.util.List", "java.util.ArrayList");
+               defaultInitializors.put("java.util.Map", "java.util.HashMap");
+@@ -853,6 +849,10 @@
+        public String getFieldInitialization(Property p, boolean useGenerics) {
+               String javaTypeName = c2j.getJavaTypeName(p, false);
+               if(hasMetaAttribute(p, "default-value")) {
++            String defaultValue = MetaAttributeHelper.getMetaAsString(p.getMetaAttribute("default-value"));
++            if ("".equals(defaultValue)) {
++                return "new " + javaTypeName.substring(javaTypeName.lastIndexOf(".") + 1) + "()";
++            }
+                      return MetaAttributeHelper.getMetaAsString( p.getMetaAttribute( "default-value" ) );
+               }
+               if(javaTypeName==null) {

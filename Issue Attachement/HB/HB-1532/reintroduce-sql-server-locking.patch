@@ -1,0 +1,42 @@
+This patch allows MSSQL to use the correct locking hints in place of the
+default Sybase holdlock hint. On SQL Server the holdlock hint causes a
+Shared Read lock. This allows other reads of the data after a lock (only
+prevents updates of the row), this is not sufficient to simulate a
+FOR UPDATE clause.
+
+This is based on the 2.1.2 patch attached to the hibernate ticket HB-760
+(http://opensource.atlassian.com/projects/hibernate/browse/HB-760?page=history).
+The SQLServerDialect parts of that patch were lost between CVS Revisions 1.3
+and 1.5 (http://cvs.sourceforge.net/viewcvs.py/hibernate/Hibernate2/src/net/sf/hibernate/dialect/SQLServerDialect.java?r1=1.3&r2=1.5).
+
+diff -urN ./src/net/sf/hibernate/dialect/SQLServerDialect.java ../work/src/net/sf/hibernate/dialect/SQLServerDialect.java
+--- ./src/net/sf/hibernate/dialect/SQLServerDialect.java	2005-01-30 20:48:30.000000000 +1300
++++ ../work/src/net/sf/hibernate/dialect/SQLServerDialect.java	2005-10-10 15:49:04.194958260 +1300
+@@ -1,6 +1,8 @@
+ //$Id: SQLServerDialect.java,v 1.9 2004/08/06 09:50:42 oneovthafew Exp $
+ package net.sf.hibernate.dialect;
+ 
++import net.sf.hibernate.LockMode;
++
+ /**
+  * A dialect for Microsoft SQL Server 2000
+  * @author Gavin King
+@@ -52,4 +54,18 @@
+ 		return '[';
+ 	}
+ 
++	/*
++	 * @see net.sf.hibernate.dialect.Dialect#appendLockHint(net.sf.hibernate.LockMode, java.lang.String)
++	 * 
++	 * It is necessary to override the lock hint inherited from SybaseDialect as the
++	 * holdlock hint only generates a shared read lock, other reads are not blocked.
++	 */
++	public String appendLockHint(LockMode mode, String tableName) {
++		if (mode.greaterThan(LockMode.READ)) {
++			return tableName + " with (updlock, rowlock)";
++		} else {
++			return tableName;
++		}
++	}
++
+ }

@@ -1,0 +1,258 @@
+Index: search/src/java/org/hibernate/search/engine/DocumentExtractor.java
+===================================================================
+--- search/src/java/org/hibernate/search/engine/DocumentExtractor.java	(revision 14766)
++++ search/src/java/org/hibernate/search/engine/DocumentExtractor.java	Sat Jun 14 13:34:31 EDT 2008
+@@ -3,9 +3,17 @@
+ 
+ import java.io.IOException;
+ import java.io.Serializable;
++import java.util.Set;
++import java.util.Map;
++import java.util.HashMap;
++import java.util.Arrays;
+ 
+ import org.apache.lucene.document.Document;
++import org.apache.lucene.document.FieldSelector;
++import org.apache.lucene.document.MapFieldSelector;
++import org.apache.lucene.document.FieldSelectorResult;
+ import org.apache.lucene.search.Hits;
++import org.apache.lucene.search.IndexSearcher;
+ import org.hibernate.search.engine.EntityInfo;
+ import org.hibernate.search.ProjectionConstants;
+ 
+@@ -16,12 +24,44 @@
+ public class DocumentExtractor {
+ 	private final SearchFactoryImplementor searchFactoryImplementor;
+ 	private final String[] projection;
++	private FieldSelector fieldSelector;
+ 
+-	public DocumentExtractor(SearchFactoryImplementor searchFactoryImplementor, String... projection) {
++	public DocumentExtractor(SearchFactoryImplementor searchFactoryImplementor, String[] projection, Set<String> idFieldNames) {
+ 		this.searchFactoryImplementor = searchFactoryImplementor;
+ 		this.projection = projection;
++		/*
++		 * if we need to project DOCUMENT do not use fieldSelector as the user might want anything
++		 * otherwise filter by CLASS_FIELDNAME, id fields and projected fields
++		 */
++		boolean projectDocument = false;
++		int projectionSize = projection != null && projection.length != 0 ? projection.length : 0;
++		if ( projectionSize != 0 ) {
++			for (String property : projection) {
++				if ( ProjectionConstants.DOCUMENT.equals( property ) ) {
++					projectDocument = true;
++					break;
+-	}
++				}
++			}
++		}
++		if ( projectDocument ) {
++			fieldSelector = null;
++		}
++		else {
++			Map fields = new HashMap( 1 + idFieldNames.size() + projectionSize );
++			fields.put( DocumentBuilder.CLASS_FIELDNAME, FieldSelectorResult.LOAD );
++			for (String idFieldName : idFieldNames) {
++				fields.put( idFieldName, FieldSelectorResult.LOAD );
++			}
++			if ( projectionSize != 0 ) {
++				for ( String projectedField : projection ) {
++					fields.put( projectedField, FieldSelectorResult.LOAD );
++				}
++			}
++			this.fieldSelector = new MapFieldSelector(fields);
++		}
+ 
++	}
++
+ 	private EntityInfo extract(Document document) {
+ 		Class clazz = DocumentBuilder.getDocumentClass( document );
+ 		Serializable id = DocumentBuilder.getDocumentId( searchFactoryImplementor, clazz, document );
+@@ -33,8 +73,9 @@
+ 		return entityInfo;
+ 	}
+ 
+-	public EntityInfo extract(Hits hits, int index) throws IOException {
+-		Document doc = hits.doc( index );
++	public EntityInfo extract(Hits hits, IndexSearcher searcher, int index) throws IOException {
++		int id = hits.id( index );
++		Document doc = searcher.doc( id, fieldSelector );
+ 		//TODO if we are only looking for score (unlikely), avoid accessing doc (lazy load)
+ 		EntityInfo entityInfo = extract( doc );
+ 		Object[] eip = entityInfo.projection;
+Index: search/src/test/org/hibernate/search/test/query/ProjectionQueryTest.java
+===================================================================
+--- search/src/test/org/hibernate/search/test/query/ProjectionQueryTest.java	(revision 14766)
++++ search/src/test/org/hibernate/search/test/query/ProjectionQueryTest.java	Sat Jun 14 13:53:41 EDT 2008
+@@ -269,6 +269,48 @@
+ 		s.close();
+ 	}
+ 
++	public void testNonLoadedFieldOptmization() throws Exception {
++		FullTextSession s = Search.createFullTextSession( openSession() );
++		prepEmployeeIndex( s );
++
++		Transaction tx;
++		s.clear();
++		tx = s.beginTransaction();
++		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++
++		Query query = parser.parse( "dept:Accounting" );
++		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
++		hibQuery.setProjection( FullTextQuery.ID, FullTextQuery.DOCUMENT );
++
++		List result = hibQuery.list();
++		assertNotNull( result );
++
++		Object[] projection = (Object[]) result.get( 0 );
++		assertNotNull( projection );
++		assertEquals( "id field name not projected", 1001, projection[0] );
++		assertEquals( "Document fields should not be lazy on DOCUMENT projection",
++				"Jackson", ( (Document) projection[1]).getField( "lastname" ).stringValue() );
++		assertEquals( "DOCUMENT size incorrect", 5, ( (Document) projection[1] ).getFields().size() );
++
++		// Change the projection order and null one
++		hibQuery.setProjection( FullTextQuery.THIS, FullTextQuery.SCORE, null, "lastname" );
++
++		result = hibQuery.list();
++		assertNotNull( result );
++
++		projection = (Object[]) result.get( 0 );
++		assertNotNull( projection );
++
++		assertTrue( "THIS incorrect", projection[0] instanceof Employee);
++		assertEquals( "SCORE incorrect", 1.0F, projection[1] );
++		assertEquals( "last name incorrect", "Jackson", projection[3] );
++
++		//cleanup
++		for (Object element : s.createQuery( "from " + Employee.class.getName() ).list()) s.delete( element );
++		tx.commit();
++		s.close();
++	}
++
+ 	private void prepEmployeeIndex(FullTextSession s) {
+ 		Transaction tx = s.beginTransaction();
+ 		Employee e1 = new Employee( 1000, "Griffin", "ITech" );
+Index: search/src/java/org/hibernate/search/query/FullTextQueryImpl.java
+===================================================================
+--- search/src/java/org/hibernate/search/query/FullTextQueryImpl.java	(revision 14766)
++++ search/src/java/org/hibernate/search/query/FullTextQueryImpl.java	Sat Jun 14 13:43:36 EDT 2008
+@@ -23,6 +23,8 @@
+ import org.apache.lucene.search.Similarity;
+ import org.apache.lucene.search.Sort;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.document.FieldSelector;
++import org.apache.lucene.document.FieldSelectorResult;
+ import org.hibernate.Criteria;
+ import org.hibernate.HibernateException;
+ import org.hibernate.LockMode;
+@@ -65,6 +67,7 @@
+  */
+ //TODO implements setParameter()
+ public class FullTextQueryImpl extends AbstractQueryImpl implements FullTextQuery {
++
+ 	private final Logger log = LoggerFactory.getLogger( FullTextQueryImpl.class );
+ 	private final org.apache.lucene.search.Query luceneQuery;
+ 	private Class[] classes;
+@@ -78,6 +81,7 @@
+ 	private Filter filter;
+ 	private Criteria criteria;
+ 	private String[] indexProjection;
++	private Set<String> idFieldNames;
+ 	private ResultTransformer resultTransformer;
+ 	private SearchFactoryImplementor searchFactoryImplementor;
+ 	private Map<String, FullTextFilterImpl> filterDefinitions;
+@@ -134,10 +138,10 @@
+ 
+ 			int size = max - first + 1 < 0 ? 0 : max - first + 1;
+ 			List<EntityInfo> infos = new ArrayList<EntityInfo>( size );
+-			DocumentExtractor extractor = new DocumentExtractor( searchFactoryImplementor, indexProjection );
++			DocumentExtractor extractor = new DocumentExtractor( searchFactoryImplementor, indexProjection, idFieldNames );
+ 			for (int index = first; index <= max; index++) {
+ 				//TODO use indexSearcher.getIndexReader().document( hits.id(index), FieldSelector(indexProjection) );
+-				infos.add( extractor.extract( hits, index ) );
++				infos.add( extractor.extract( hits, searcher, index ) );
+ 			}
+ 			Loader loader = getLoader( sess, searchFactoryImplementor );
+ 			return new IteratorImpl( infos, loader );
+@@ -209,7 +213,7 @@
+ 			hits = getHits( searcher );
+ 			int first = first();
+ 			int max = max( first, hits );
+-			DocumentExtractor extractor = new DocumentExtractor( searchFactory, indexProjection );
++			DocumentExtractor extractor = new DocumentExtractor( searchFactory, indexProjection, idFieldNames );
+ 			Loader loader = getLoader( (Session) this.session, searchFactory );
+ 			return new ScrollableResultsImpl( searcher, hits, first, max, fetchSize, extractor, loader, searchFactory );
+ 		}
+@@ -244,9 +248,9 @@
+ 
+ 			int size = max - first + 1 < 0 ? 0 : max - first + 1;
+ 			List<EntityInfo> infos = new ArrayList<EntityInfo>( size );
+-			DocumentExtractor extractor = new DocumentExtractor( searchFactoryImplementor, indexProjection );
++			DocumentExtractor extractor = new DocumentExtractor( searchFactoryImplementor, indexProjection, idFieldNames );
+ 			for (int index = first; index <= max; index++) {
+-				infos.add( extractor.extract( hits, index ) );
++				infos.add( extractor.extract( hits, searcher, index ) );
+ 			}
+ 			Loader loader = getLoader( sess, searchFactoryImplementor );
+ 			List list = loader.load( infos.toArray( new EntityInfo[infos.size()] ) );
+@@ -429,6 +433,7 @@
+ 	private IndexSearcher buildSearcher(SearchFactoryImplementor searchFactoryImplementor) {
+ 		Map<Class, DocumentBuilder<Object>> builders = searchFactoryImplementor.getDocumentBuilders();
+ 		List<DirectoryProvider> directories = new ArrayList<DirectoryProvider>();
++		Set<String> idFieldNames = new HashSet<String>();
+ 
+ 		Similarity searcherSimilarity = null;
+ 		//TODO check if caching this work for the last n list of classes makes a perf boost
+@@ -436,6 +441,9 @@
+ 			//no class means all classes
+ 			for (DocumentBuilder builder : builders.values()) {
+ 				searcherSimilarity = checkSimilarity( searcherSimilarity, builder );
++				if ( builder.getIdKeywordName() != null ) {
++					idFieldNames.add( builder.getIdKeywordName() );
++				}
+ 				final DirectoryProvider[] directoryProviders = builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
+ 				populateDirectories( directories, directoryProviders, searchFactoryImplementor );
+ 			}
+@@ -454,13 +462,16 @@
+ 				//TODO should we rather choose a polymorphic path and allow non mapped entities
+ 				if ( builder == null )
+ 					throw new HibernateException( "Not a mapped entity (don't forget to add @Indexed): " + clazz );
+-
++				if ( builder.getIdKeywordName() != null ) {
++					idFieldNames.add( builder.getIdKeywordName() );
++				}
+ 				final DirectoryProvider[] directoryProviders = builder.getDirectoryProviderSelectionStrategy().getDirectoryProvidersForAllShards();
+ 				searcherSimilarity = checkSimilarity( searcherSimilarity, builder );
+ 				populateDirectories( directories, directoryProviders, searchFactoryImplementor );
+ 			}
+-			classesAndSubclasses = involvedClasses;
++			this.classesAndSubclasses = involvedClasses;
+ 		}
++		this.idFieldNames = idFieldNames;
+ 
+ 		//compute optimization needClassFilterClause
+ 		//if at least one DP contains one class that is not part of the targeted classesAndSubclasses we can't optimize
+Index: search/src/java/org/hibernate/search/ProjectionConstants.java
+===================================================================
+--- search/src/java/org/hibernate/search/ProjectionConstants.java	(revision 14765)
++++ search/src/java/org/hibernate/search/ProjectionConstants.java	Fri Jun 06 09:02:37 EDT 2008
+@@ -37,5 +37,5 @@
+ 	/**
+ 	 * Object class
+ 	 */
+-	//TODO OBJECT CLASS
++	//TODO OBJECT CLASS??
+ }
+Index: search/src/java/org/hibernate/search/query/ScrollableResultsImpl.java
+===================================================================
+--- search/src/java/org/hibernate/search/query/ScrollableResultsImpl.java	(revision 14766)
++++ search/src/java/org/hibernate/search/query/ScrollableResultsImpl.java	Sat Jun 14 13:36:45 EDT 2008
+@@ -105,7 +105,7 @@
+ 			try {
+ 				if ( entityInfos[x - first] == null ) {
+ 					//FIXME should check that clazz match classes but this complicates a lot the firstResult/maxResult
+-					entityInfos[x - first] = documentExtractor.extract( hits, x );
++					entityInfos[x - first] = documentExtractor.extract( hits, searcher, x );
+ 					entityInfosLoaded.add( entityInfos[x - first] );
+ 				}
+ 			}

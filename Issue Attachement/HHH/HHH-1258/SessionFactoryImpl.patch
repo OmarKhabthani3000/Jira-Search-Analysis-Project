@@ -1,0 +1,462 @@
+Index: C:/devel_new/lassen/emaxmc_tools/SessionFactoryImpl.java
+===================================================================
+--- C:/devel_new/lassen/emaxmc_tools/SessionFactoryImpl.java	(revision 3306)
++++ C:/devel_new/lassen/emaxmc_tools/SessionFactoryImpl.java	(working copy)
+@@ -116,10 +116,19 @@
+ 	private final String name;
+ 	private final String uuid;
+ 
+-	private final transient Map entityPersisters;
+-	private final transient Map classMetadata;
+-	private final transient Map collectionPersisters;
+-	private final transient Map collectionMetadata;
++	/**
++	 * Yep, we keep a reference to configuration and mappings when doing
++	 * on-demand configuration loading! THIS IS STRICTLY FOR A DEVELOPMENT
++	 * ENVIRONMENT!!
++	 */
++	private boolean onDemandConfiguration = true;
++	private Configuration configuration;
++	private Mapping mappings;
++	
++	private transient Map entityPersisters;
++	private transient Map classMetadata;
++	private transient Map collectionPersisters;
++	private transient Map collectionMetadata;
+ 	private final transient Map collectionRolesByEntityParticipant;
+ 	private final transient Map identifierGenerators;
+ 	private final transient Map namedQueries;
+@@ -200,83 +209,133 @@
+ 		}
+ 
+ 		//Persisters:
+-
++		
+ 		Map caches = new HashMap();
+ 		entityPersisters = new HashMap();
+ 		Map classMeta = new HashMap();
+ 		classes = cfg.getClassMappings();
++		if (onDemandConfiguration) {
++			configuration = cfg;
++			mappings = mapping;
++		}
+ 		while ( classes.hasNext() ) {
+-			PersistentClass model = (PersistentClass) classes.next();
+-			model.prepareTemporaryTables( mapping, settings.getDialect() );
+-			String cacheRegion = model.getRootClass().getCacheRegionName();
+-			CacheConcurrencyStrategy cache = (CacheConcurrencyStrategy) caches.get(cacheRegion);
+-			if (cache==null) {
+-				cache = CacheFactory.createCache(
+-						model.getCacheConcurrencyStrategy(),
+-				        cacheRegion,
+-				        model.isMutable(),
+-				        settings,
+-				        properties
+-					);
+-				if (cache!=null) {
+-					caches.put(cacheRegion, cache);
+-					allCacheRegions.put( cache.getRegionName(), cache.getCache() );
++			if (onDemandConfiguration) {
++				PersistentClass model = (PersistentClass) classes.next();
++				model.prepareTemporaryTables( mapping, settings.getDialect() );
++				String cacheRegion = model.getRootClass().getCacheRegionName();
++				CacheConcurrencyStrategy cache = (CacheConcurrencyStrategy) caches.get(cacheRegion);
++				if (cache==null) {
++					cache = CacheFactory.createCache(
++							model.getCacheConcurrencyStrategy(),
++					        cacheRegion,
++					        model.isMutable(),
++					        settings,
++					        properties
++						);
++					if (cache!=null) {
++						caches.put(cacheRegion, cache);
++						allCacheRegions.put( cache.getRegionName(), cache.getCache() );
++					}
+ 				}
++				//Add the persistent class rather than the persister!
++				entityPersisters.put( model.getEntityName(), model);					
++			} else {
++				PersistentClass model = (PersistentClass) classes.next();
++				model.prepareTemporaryTables( mapping, settings.getDialect() );
++				String cacheRegion = model.getRootClass().getCacheRegionName();
++				CacheConcurrencyStrategy cache = (CacheConcurrencyStrategy) caches.get(cacheRegion);
++				if (cache==null) {
++					cache = CacheFactory.createCache(
++							model.getCacheConcurrencyStrategy(),
++					        cacheRegion,
++					        model.isMutable(),
++					        settings,
++					        properties
++						);
++					if (cache!=null) {
++						caches.put(cacheRegion, cache);
++						allCacheRegions.put( cache.getRegionName(), cache.getCache() );
++					}
++				}
++				EntityPersister cp = PersisterFactory.createClassPersister(model, cache, this, mapping);
++				if ( cache != null && cache.getCache() instanceof OptimisticCache ) {
++					( ( OptimisticCache ) cache.getCache() ).setSource( cp );
++				}
++				entityPersisters.put( model.getEntityName(), cp );
++				classMeta.put( model.getEntityName(), cp.getClassMetadata() );
+ 			}
+-			EntityPersister cp = PersisterFactory.createClassPersister(model, cache, this, mapping);
+-			if ( cache != null && cache.getCache() instanceof OptimisticCache ) {
+-				( ( OptimisticCache ) cache.getCache() ).setSource( cp );
+-			}
+-			entityPersisters.put( model.getEntityName(), cp );
+-			classMeta.put( model.getEntityName(), cp.getClassMetadata() );
+ 		}
+-		classMetadata = Collections.unmodifiableMap(classMeta);
++		if (onDemandConfiguration) {
++			classMetadata = classMeta;
++		} else {
++			classMetadata = Collections.unmodifiableMap(classMeta);
++		}
+ 
+ 		Map tmpEntityToCollectionRoleMap = new HashMap();
+ 		collectionPersisters = new HashMap();
+ 		Iterator collections = cfg.getCollectionMappings();
+ 		while ( collections.hasNext() ) {
+-			Collection model = (Collection) collections.next();
+-			CacheConcurrencyStrategy cache = CacheFactory.createCache(
+-				model.getCacheConcurrencyStrategy(),
+-			    model.getCacheRegionName(),
+-			    true,
+-			    settings,
+-			    properties
+-			);
+-			if ( cache != null ) {
+-				allCacheRegions.put( cache.getRegionName(), cache.getCache() );
+-			}
+-			CollectionPersister persister = PersisterFactory.createCollectionPersister(cfg, model, cache, this);
+-			collectionPersisters.put( model.getRole(), persister.getCollectionMetadata() );
+-			Type indexType = persister.getIndexType();
+-			if ( indexType != null && indexType.isAssociationType() && !indexType.isAnyType() ) {
+-				String entityName = ( ( AssociationType ) indexType ).getAssociatedEntityName( this );
+-				Set roles = ( Set ) tmpEntityToCollectionRoleMap.get( entityName );
+-				if ( roles == null ) {
+-					roles = new HashSet();
+-					tmpEntityToCollectionRoleMap.put( entityName, roles );
++			if (onDemandConfiguration) {
++				Collection model = (Collection) collections.next();
++				CacheConcurrencyStrategy cache = CacheFactory.createCache(
++					model.getCacheConcurrencyStrategy(),
++				    model.getCacheRegionName(),
++				    true,
++				    settings,
++				    properties
++				);
++				if ( cache != null ) {
++					allCacheRegions.put( cache.getRegionName(), cache.getCache() );
+ 				}
+-				roles.add( persister.getRole() );
+-			}
+-			Type elementType = persister.getElementType();
+-			if ( elementType.isAssociationType() && !elementType.isAnyType() ) {
+-				String entityName = ( ( AssociationType ) elementType ).getAssociatedEntityName( this );
+-				Set roles = ( Set ) tmpEntityToCollectionRoleMap.get( entityName );
+-				if ( roles == null ) {
+-					roles = new HashSet();
+-					tmpEntityToCollectionRoleMap.put( entityName, roles );
++				collectionPersisters.put( model.getRole(), model);
++			} else {
++				Collection model = (Collection) collections.next();
++				CacheConcurrencyStrategy cache = CacheFactory.createCache(
++					model.getCacheConcurrencyStrategy(),
++				    model.getCacheRegionName(),
++				    true,
++				    settings,
++				    properties
++				);
++				if ( cache != null ) {
++					allCacheRegions.put( cache.getRegionName(), cache.getCache() );
+ 				}
+-				roles.add( persister.getRole() );
++				CollectionPersister persister = PersisterFactory.createCollectionPersister(cfg, model, cache, this);
++				collectionPersisters.put( model.getRole(), persister.getCollectionMetadata() );
++				Type indexType = persister.getIndexType();
++				if ( indexType != null && indexType.isAssociationType() && !indexType.isAnyType() ) {
++					String entityName = ( ( AssociationType ) indexType ).getAssociatedEntityName( this );
++					Set roles = ( Set ) tmpEntityToCollectionRoleMap.get( entityName );
++					if ( roles == null ) {
++						roles = new HashSet();
++						tmpEntityToCollectionRoleMap.put( entityName, roles );
++					}
++					roles.add( persister.getRole() );
++				}
++				Type elementType = persister.getElementType();
++				if ( elementType.isAssociationType() && !elementType.isAnyType() ) {
++					String entityName = ( ( AssociationType ) elementType ).getAssociatedEntityName( this );
++					Set roles = ( Set ) tmpEntityToCollectionRoleMap.get( entityName );
++					if ( roles == null ) {
++						roles = new HashSet();
++						tmpEntityToCollectionRoleMap.put( entityName, roles );
++					}
++					roles.add( persister.getRole() );
++				}
+ 			}
+ 		}
+-		collectionMetadata = Collections.unmodifiableMap(collectionPersisters);
+-		Iterator itr = tmpEntityToCollectionRoleMap.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			final Map.Entry entry = ( Map.Entry ) itr.next();
+-			entry.setValue( Collections.unmodifiableSet( ( Set ) entry.getValue() ) );
++		if (onDemandConfiguration) {
++			collectionMetadata = collectionPersisters;
++			collectionRolesByEntityParticipant = new HashMap();
++		} else {
++			collectionMetadata = Collections.unmodifiableMap(collectionPersisters);
++			Iterator itr = tmpEntityToCollectionRoleMap.entrySet().iterator();
++			while ( itr.hasNext() ) {
++				final Map.Entry entry = ( Map.Entry ) itr.next();
++				entry.setValue( Collections.unmodifiableSet( ( Set ) entry.getValue() ) );
++			}
++			collectionRolesByEntityParticipant = Collections.unmodifiableMap(tmpEntityToCollectionRoleMap );
+ 		}
+-		collectionRolesByEntityParticipant = Collections.unmodifiableMap( tmpEntityToCollectionRoleMap );
+ 
+ 		//Named Queries:
+ 		namedQueries = new HashMap( cfg.getNamedQueries() );
+@@ -285,15 +344,18 @@
+ 		imports = new HashMap( cfg.getImports() );
+ 
+ 		// after *all* persisters and named queries are registered
+-		Iterator iter = entityPersisters.values().iterator();
+-		while ( iter.hasNext() ) {
+-			( (EntityPersister) iter.next() ).postInstantiate();
++		if (!onDemandConfiguration) {
++			Iterator iter = entityPersisters.values().iterator();
++			while ( iter.hasNext() ) {
++				( (EntityPersister) iter.next() ).postInstantiate();
++			}
+ 		}
+-		iter = collectionPersisters.values().iterator();
+-		while ( iter.hasNext() ) {
+-			( (CollectionPersister) iter.next() ).postInstantiate();
++		if (!onDemandConfiguration) {
++			Iterator iter = collectionPersisters.values().iterator();
++			while ( iter.hasNext() ) {
++				( (CollectionPersister) iter.next() ).postInstantiate();
++			}
+ 		}
+-
+ 		//JNDI + Serialization:
+ 
+ 		name = settings.getSessionFactoryName();
+@@ -543,19 +605,27 @@
+ 	}
+ 
+ 	public EntityPersister getEntityPersister(String entityName) throws MappingException {
+-		EntityPersister result = (EntityPersister) entityPersisters.get(entityName);
+-		if (result==null) {
++		Object lResult = entityPersisters.get(entityName);
++		if (lResult==null) {
+ 			throw new MappingException( "Unknown entity: " + entityName );
+ 		}
+-		return result;
++		if (lResult instanceof EntityPersister) {
++			return (EntityPersister)lResult;
++		}
++		
++		return loadPersister((PersistentClass)lResult);		
+ 	}
+ 
+ 	public CollectionPersister getCollectionPersister(String role) throws MappingException {
+-		CollectionPersister result = (CollectionPersister) collectionPersisters.get(role);
+-		if (result==null) {
++		Object lResult = collectionPersisters.get(role);
++		if (lResult==null) {
+ 			throw new MappingException( "Unknown collection role: " + role );
+ 		}
+-		return result;
++		if (lResult instanceof CollectionPersister) {
++			return (CollectionPersister)lResult;
++		}
++		
++		return loadCollectionPersister((Collection)lResult);		
+ 	}
+ 
+ 	public Settings getSettings() {
+@@ -662,6 +732,8 @@
+ 	}
+ 
+ 	public CollectionMetadata getCollectionMetadata(String roleName) throws HibernateException {
++
++		
+ 		return (CollectionMetadata) collectionMetadata.get(roleName);
+ 	}
+ 
+@@ -687,27 +759,61 @@
+ 		ArrayList results = new ArrayList();
+ 		Iterator iter = entityPersisters.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			//test this entity to see if we must query it
+-			EntityPersister testPersister = (EntityPersister) iter.next();
+-			if ( testPersister instanceof Queryable ) {
+-				Queryable testQueryable = (Queryable) testPersister;
+-				String testClassName = testQueryable.getEntityName();
++			Object lResult = iter.next();
++			if (lResult instanceof EntityPersister) {
++				//test this entity to see if we must query it
++				EntityPersister testPersister = (EntityPersister) lResult;
++				if ( testPersister instanceof Queryable ) {
++					Queryable testQueryable = (Queryable) testPersister;
++					String testClassName = testQueryable.getEntityName();
++					boolean isMappedClass = className.equals(testClassName);
++					if ( testQueryable.isExplicitPolymorphism() ) {
++						if ( isMappedClass ) {
++							return new String[] {className}; //NOTE EARLY EXIT
++						}
++					}
++					else {
++						if (isMappedClass) {
++							results.add(testClassName);
++						}
++						else {
++							final Class mappedClass = testQueryable.getMappedClass( EntityMode.POJO );
++							if ( mappedClass!=null && clazz.isAssignableFrom( mappedClass ) ) {
++								final boolean assignableSuperclass;
++								if ( testQueryable.isInherited() ) {
++									Class mappedSuperclass = getEntityPersister( testQueryable.getMappedSuperclass() ).getMappedClass( EntityMode.POJO);
++									assignableSuperclass = clazz.isAssignableFrom(mappedSuperclass);
++								}
++								else {
++									assignableSuperclass = false;
++								}
++								if ( !assignableSuperclass ) {
++									results.add( testClassName );
++								}
++							}
++						}
++					}
++				}
++			} else {
++				//test this entity to see if we must query it
++				PersistentClass testPersister = (PersistentClass) lResult;
++				String testClassName = testPersister.getEntityName();
+ 				boolean isMappedClass = className.equals(testClassName);
+-				if ( testQueryable.isExplicitPolymorphism() ) {
++				if (testPersister.isExplicitPolymorphism() ) {
+ 					if ( isMappedClass ) {
+ 						return new String[] {className}; //NOTE EARLY EXIT
+ 					}
+ 				}
+ 				else {
+ 					if (isMappedClass) {
++						loadPersister(testPersister);
+ 						results.add(testClassName);
+-					}
+-					else {
+-						final Class mappedClass = testQueryable.getMappedClass( EntityMode.POJO );
++					} else {
++						final Class mappedClass = testPersister.getMappedClass();
+ 						if ( mappedClass!=null && clazz.isAssignableFrom( mappedClass ) ) {
+ 							final boolean assignableSuperclass;
+-							if ( testQueryable.isInherited() ) {
+-								Class mappedSuperclass = getEntityPersister( testQueryable.getMappedSuperclass() ).getMappedClass( EntityMode.POJO);
++							if ( testPersister.isInherited() ) {
++								Class mappedSuperclass = getEntityPersister( testPersister.getSuperclass().getEntityName()).getMappedClass( EntityMode.POJO);
+ 								assignableSuperclass = clazz.isAssignableFrom(mappedSuperclass);
+ 							}
+ 							else {
+@@ -715,6 +821,7 @@
+ 							}
+ 							if ( !assignableSuperclass ) {
+ 								results.add( testClassName );
++								loadPersister(testPersister);
+ 							}
+ 						}
+ 					}
+@@ -770,7 +877,11 @@
+ 
+ 		Iterator iter = entityPersisters.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			EntityPersister p = (EntityPersister) iter.next();
++			Object lResult = iter.next();
++			if (!(lResult instanceof EntityPersister)) {
++				continue;
++			}
++			EntityPersister p = (EntityPersister) lResult;
+ 			if ( p.hasCache() ) {
+ 				p.getCache().destroy();
+ 			}
+@@ -778,7 +889,11 @@
+ 
+ 		iter = collectionPersisters.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			CollectionPersister p = (CollectionPersister) iter.next();
++			Object lResult = iter.next();
++			if (!(lResult instanceof CollectionPersister)) {
++				continue;
++			}
++			CollectionPersister p = (CollectionPersister)lResult;
+ 			if ( p.hasCache() ) {
+ 				p.getCache().destroy();
+ 			}
+@@ -1062,4 +1177,64 @@
+ 	public SQLFunctionRegistry getSqlFunctionRegistry() {
+ 		return sqlFunctionRegistry;
+ 	}
++
++	public EntityPersister loadPersister(PersistentClass pModel) throws MappingException {
++		try {
++			if (entityPersisters.get(pModel.getEntityName()) instanceof EntityPersister) {
++				return (EntityPersister)entityPersisters.get(pModel.getEntityName());
++			}
++			synchronized (entityPersisters) {
++				pModel.prepareTemporaryTables(mappings, settings.getDialect() );
++				String cacheRegion = pModel.getRootClass().getCacheRegionName();
++				CacheConcurrencyStrategy cache =
++					(CacheConcurrencyStrategy) allCacheRegions.get(cacheRegion);
++				EntityPersister cp = PersisterFactory.createClassPersister(
++					pModel, cache, this, mappings);
++				if ( cache != null && cache.getCache() instanceof OptimisticCache ) {
++					( ( OptimisticCache ) cache.getCache() ).setSource( cp );
++				}
++				entityPersisters.put(pModel.getEntityName(), cp );
++				classMetadata.put(pModel.getEntityName(), cp.getClassMetadata());
++				cp.postInstantiate();
++				return cp;
++			}
++		} catch (HibernateException e) {
++			throw new MappingException(e);
++		}
++	}
++	public CollectionPersister loadCollectionPersister(Collection pModel) throws MappingException {
++		try {
++			synchronized (collectionPersisters) {
++				CacheConcurrencyStrategy cache = (CacheConcurrencyStrategy)
++					allCacheRegions.get(pModel.getCacheRegionName());
++				CollectionPersister persister =
++					PersisterFactory.createCollectionPersister(configuration, pModel, cache, this);
++				collectionPersisters.put(pModel.getRole(), persister.getCollectionMetadata());
++				Type indexType = persister.getIndexType();
++				if ( indexType != null && indexType.isAssociationType() && !indexType.isAnyType() ) {
++					String entityName = ( ( AssociationType ) indexType ).getAssociatedEntityName( this );
++					Set roles = ( Set ) collectionRolesByEntityParticipant.get( entityName );
++					if ( roles == null ) {
++						roles = new HashSet();
++						collectionRolesByEntityParticipant.put( entityName, roles );
++					}
++					roles.add(persister.getRole());
++				}
++				Type elementType = persister.getElementType();
++				if ( elementType.isAssociationType() && !elementType.isAnyType() ) {
++					String entityName = ( ( AssociationType ) elementType ).getAssociatedEntityName( this );
++					Set roles = ( Set ) collectionRolesByEntityParticipant.get( entityName );
++					if ( roles == null ) {
++						roles = new HashSet();
++						collectionRolesByEntityParticipant.put( entityName, roles );
++					}
++					roles.add( persister.getRole() );
++				}
++				((CollectionPersister)persister.getCollectionMetadata()).postInstantiate();
++				return (CollectionPersister)persister.getCollectionMetadata();
++			}
++		} catch (HibernateException e) {
++			throw new MappingException(e);
++		}
++	}
+ }

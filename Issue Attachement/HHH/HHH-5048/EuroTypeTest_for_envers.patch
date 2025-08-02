@@ -1,0 +1,359 @@
+Index: envers/src/test/java/org/hibernate/envers/test/entities/customtype/Euro.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/entities/customtype/Euro.java	Tue Mar 30 12:28:06 CEST 2010
++++ envers/src/test/java/org/hibernate/envers/test/entities/customtype/Euro.java	Tue Mar 30 12:28:06 CEST 2010
+@@ -0,0 +1,165 @@
++package org.hibernate.envers.test.entities.customtype;
++
++import java.io.Serializable;
++import java.math.BigDecimal;
++import java.math.MathContext;
++import java.math.RoundingMode;
++import java.text.NumberFormat;
++
++/**
++ * @author debeuckelaer.d
++ */
++public class Euro extends Number implements Serializable, Comparable<Number> {
++    private static final MathContext mathContext = new MathContext(32,
++            RoundingMode.HALF_UP);
++
++    private final String value;
++
++    public Euro(double value) {
++        this(new BigDecimal(value));
++    }
++
++    public Euro(BigDecimal bigDecimal) {
++        this.value = bigDecimal.setScale(mathContext.getPrecision(),
++                mathContext.getRoundingMode()).toString();
++    }
++
++    public Euro() {
++        this(0);
++    }
++
++    public static Euro newInstance() {
++        return new Euro();
++    }
++
++    public Euro(String xml) {
++        throw new UnsupportedOperationException("TODO");
++    }
++
++    public Euro(Euro value) {
++        this(value == null ? .0 : value.getValue());
++    }
++
++    public Euro add(Euro euro) {
++        return add(new BigDecimal(euro.value));
++    }
++
++    public Euro add(double value) {
++        return add(new BigDecimal(value, mathContext));
++    }
++
++    public Euro add(BigDecimal bigDecimal) {
++        return new Euro(new BigDecimal(value).add(bigDecimal));
++    }
++
++    public Euro subtract(Euro euro) {
++        return subtract(new BigDecimal(euro.value));
++    }
++
++    public Euro subtract(double value) {
++        return subtract(new BigDecimal(value, mathContext));
++    }
++
++    public Euro subtract(BigDecimal bigDecimal) {
++        return new Euro(new BigDecimal(value).subtract(bigDecimal));
++    }
++
++    public Euro multiply(Euro euro) {
++        return multiply(new BigDecimal(euro.value));
++    }
++
++    public Euro multiply(double value) {
++        return multiply(new BigDecimal(value, mathContext));
++    }
++
++    public Euro multiply(BigDecimal decimal) {
++        return new Euro(new BigDecimal(value).multiply(decimal));
++    }
++
++    public Euro divide(Euro euro) {
++        return divide(new BigDecimal(euro.value));
++    }
++
++    public Euro divide(double value) {
++        return divide(new BigDecimal(value, mathContext));
++    }
++
++    public Euro divide(BigDecimal decimal) {
++        return new Euro(new BigDecimal(value).divide(decimal));
++    }
++
++    public double getValue() {
++        return getValue(mathContext);
++    }
++
++    public double getPreciceValue() {
++        return new BigDecimal(value, mathContext).doubleValue();
++    }
++
++    public double getValue(MathContext context) {
++        return (((int) (100d * (new BigDecimal(value, context).doubleValue() + getRounding()))) / 100d);
++    }
++
++    private double getRounding() {
++        if (isPositive()) {
++            return .005;
++        } else {
++            return -(.005);
++        }
++    }
++
++    public String toString() {
++        return NumberFormat.getCurrencyInstance().format(getValue());
++    }
++
++    public boolean isNul() {
++        return getValue() == 0.0;
++    }
++
++    public boolean isPositive() {
++        return new BigDecimal(value).doubleValue() > 0.0;
++    }
++
++    public boolean greaterThan(double value) {
++        return getValue() > value;
++    }
++
++    public Euro invert() {
++        return new Euro(-new BigDecimal(value, mathContext).doubleValue());
++    }
++
++    @Override
++    public double doubleValue() {
++        return getValue();
++    }
++
++    @Override
++    public float floatValue() {
++        return new Float(getValue()).floatValue();
++    }
++
++    @Override
++    public int intValue() {
++        return new Double(getValue()).intValue();
++    }
++
++    @Override
++    public long longValue() {
++        return new Double(getValue()).longValue();
++    }
++
++    public int compareTo(Number o) {
++        return new Double(getValue()).compareTo(new Double(o.doubleValue()));
++    }
++
++    @Override
++    public boolean equals(Object obj) {
++        return this.hashCode() == (obj != null ? obj.hashCode() : 0);
++    }
++
++    @Override
++    public int hashCode() {
++        return value.hashCode();
++    }
++
++}
+Index: envers/src/test/java/org/hibernate/envers/test/integration/customtype/EuroTypeTest.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/integration/customtype/EuroTypeTest.java	Tue Mar 30 12:28:06 CEST 2010
++++ envers/src/test/java/org/hibernate/envers/test/integration/customtype/EuroTypeTest.java	Tue Mar 30 12:28:06 CEST 2010
+@@ -0,0 +1,57 @@
++package org.hibernate.envers.test.integration.customtype;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.entities.customtype.Euro;
++import org.hibernate.envers.test.entities.customtype.EuroTypeHolder;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++import javax.persistence.EntityManager;
++
++/**
++ * Created by IntelliJ IDEA.
++ * User: debeuckelaer.d
++ * Date: Mar 30, 2010
++ * Time: 11:02:32 AM
++ * To change this template use File | Settings | File Templates.
++ */
++public class EuroTypeTest extends AbstractEntityTest {
++    private Integer chId;
++
++
++    @Override
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(EuroTypeHolder.class);
++    }
++
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        EntityManager em = getEntityManager();
++        EuroTypeHolder euroTypeHolder = new EuroTypeHolder();
++        euroTypeHolder.setComponent(new Euro(12));
++        em.getTransaction().begin();
++        em.persist(euroTypeHolder);
++        em.getTransaction().commit();
++        chId = euroTypeHolder.getId();
++    }
++
++    @Test
++    public void test() {
++        assert chId != null;
++        EntityManager em = getEntityManager();
++        em.getTransaction().begin();
++        EuroTypeHolder euroTypeHolder = em.find(EuroTypeHolder.class, chId);
++        assert euroTypeHolder != null;
++        euroTypeHolder.setComponent(new Euro(20));
++        em.merge(euroTypeHolder);
++        em.getTransaction().commit();
++        em.getTransaction().begin();
++        euroTypeHolder = em.find(EuroTypeHolder.class, chId);
++        assert euroTypeHolder != null;
++        em.getTransaction().commit();
++        assert new Euro(20).equals(euroTypeHolder.getComponent());
++        assert 20.0 == euroTypeHolder.getComp2();
++
++    }
++}
+Index: envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroType.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroType.java	Tue Mar 30 12:28:06 CEST 2010
++++ envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroType.java	Tue Mar 30 12:28:06 CEST 2010
+@@ -0,0 +1,36 @@
++package org.hibernate.envers.test.entities.customtype;
++
++import org.hibernate.type.DoubleType;
++
++import java.io.Serializable;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++
++public class EuroType extends DoubleType {
++    @Override
++    public Serializable getDefaultValue() {
++        return new Euro();
++    }
++
++    @Override
++    public Object get(ResultSet rs, String name) throws SQLException {
++        return new Euro(rs.getDouble(name));
++    }
++
++    @Override
++    public Class<?> getReturnedClass() {
++        return Euro.class;
++    }
++
++    public void set(PreparedStatement st, Object value, int index)
++            throws SQLException {
++        st.setDouble(index, ((Euro) value).getPreciceValue());
++    }
++
++    public Object fromStringValue(String xml) {
++        return new Euro((Double) super.fromStringValue(xml));
++    }
++
++
++}
+Index: envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroTypeHolder.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroTypeHolder.java	Tue Mar 30 12:28:06 CEST 2010
++++ envers/src/test/java/org/hibernate/envers/test/entities/customtype/EuroTypeHolder.java	Tue Mar 30 12:28:06 CEST 2010
+@@ -0,0 +1,81 @@
++package org.hibernate.envers.test.entities.customtype;
++
++import org.hibernate.annotations.Type;
++import org.hibernate.annotations.TypeDef;
++import org.hibernate.envers.Audited;
++
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++/**
++ * Created by IntelliJ IDEA.
++ * User: debeuckelaer.d
++ * Date: Mar 30, 2010
++ * Time: 11:19:56 AM
++ */
++@Entity
++@TypeDef(name = "comp", typeClass = EuroType.class)
++@Audited
++public class EuroTypeHolder {
++
++    @Type(type = "comp")
++    @Column(precision = 6, scale = 2)
++    private Euro component;
++
++    @Column(precision = 6, scale = 2)
++    private Double comp2;
++
++    @Id
++    @GeneratedValue
++    private Integer id;
++
++
++    public Integer getId() {
++        return id;
++    }
++
++    public Euro getComponent() {
++        return component;
++    }
++
++    public void setComponent(Euro component) {
++        this.component = component;
++        setComp2(component.doubleValue());
++    }
++
++    public Double getComp2() {
++        return comp2;
++    }
++
++    public void setComp2(Double comp2) {
++        this.comp2 = comp2;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (o == null || getClass() != o.getClass()) return false;
++
++        EuroTypeHolder that = (EuroTypeHolder) o;
++
++        if (component != null ? !component.equals(that.component) : that.component != null) return false;
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++
++        return true;
++    }
++
++    @Override
++    public int hashCode() {
++        int result = id != null ? id.hashCode() : 0;
++        result = 31 * result + (component != null ? component.hashCode() : 0);
++        return result;
++    }
++
++
++}

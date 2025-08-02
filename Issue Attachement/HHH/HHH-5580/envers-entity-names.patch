@@ -1,0 +1,137 @@
+Index: envers/src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoGenerator.java
+===================================================================
+--- envers/src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoGenerator.java	(revision 20322)
++++ envers/src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoGenerator.java	(working copy)
+@@ -31,4 +31,6 @@
+ public interface RevisionInfoGenerator {
+ 	void saveRevisionData(Session session, Object revisionData);
+     Object generate();
++    void addEntityToRevisionInfo(String entityName, Object revisionInfo);
++    void removeEntityFromRevisionInfo(String entityName, Object revisionInfo);
+ }
+Index: envers/src/main/java/org/hibernate/envers/revisioninfo/DefaultRevisionInfoGenerator.java
+===================================================================
+--- envers/src/main/java/org/hibernate/envers/revisioninfo/DefaultRevisionInfoGenerator.java	(revision 20322)
++++ envers/src/main/java/org/hibernate/envers/revisioninfo/DefaultRevisionInfoGenerator.java	(working copy)
+@@ -88,4 +88,16 @@
+ 
+         return revisionInfo;
+     }
++
++    public void addEntityToRevisionInfo(String entityName, Object revisionInfo) {
++        if (listener != null) {
++            listener.addEntityToRevisionInfo(entityName, revisionInfo);
++        }
++    }
++
++    public void removeEntityFromRevisionInfo(String entityName, Object revisionInfo) {
++        if (listener != null) {
++            listener.removeEntityFromRevisionInfo(entityName, revisionInfo);
++        }
++    }
+ }
+Index: envers/src/main/java/org/hibernate/envers/synchronization/AuditProcess.java
+===================================================================
+--- envers/src/main/java/org/hibernate/envers/synchronization/AuditProcess.java	(revision 20322)
++++ envers/src/main/java/org/hibernate/envers/synchronization/AuditProcess.java	(working copy)
+@@ -103,17 +103,19 @@
+ 
+     private void executeInSession(Session session) {
+ 		// Making sure the revision data is persisted.
+-        getCurrentRevisionData(session, true);
++        Object currentRevisionData = getCurrentRevisionData(session, true);
+ 
+         AuditWorkUnit vwu;
+ 
+         // First undoing any performed work units
+         while ((vwu = undoQueue.poll()) != null) {
+             vwu.undo(session);
++	    revisionInfoGenerator.removeEntityFromRevisionInfo(vwu.getEntityName(), currentRevisionData);
+         }
+ 
+         while ((vwu = workUnits.poll()) != null) {
+             vwu.perform(session, revisionData);
++	    revisionInfoGenerator.addEntityToRevisionInfo(vwu.getEntityName(), currentRevisionData);
+         }
+     }
+ 
+Index: envers/src/test/java/org/hibernate/envers/test/integration/reventity/ListenerRevEntity.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/integration/reventity/ListenerRevEntity.java	(revision 20322)
++++ envers/src/test/java/org/hibernate/envers/test/integration/reventity/ListenerRevEntity.java	(working copy)
+@@ -26,11 +26,15 @@
+ import javax.persistence.Entity;
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.Id;
++import javax.persistence.ElementCollection;
+ 
+ import org.hibernate.envers.RevisionEntity;
+ import org.hibernate.envers.RevisionNumber;
+ import org.hibernate.envers.RevisionTimestamp;
+ 
++import java.util.Set;
++import java.util.HashSet;
++
+ /**
+  * @author Adam Warski (adam at warski dot org)
+  */
+@@ -47,6 +51,9 @@
+ 
+     private String data;
+ 
++    @ElementCollection
++    private Set<String> entityNames = new HashSet<String>();
++
+     public int getId() {
+         return id;
+     }
+@@ -71,6 +78,14 @@
+         this.data = data;
+     }
+ 
++    public Set<String> getEntityNames() {
++        return entityNames;
++    }
++
++    public void setEntityNames(Set<String> entityNames) {
++        this.entityNames = entityNames;
++    }
++
+     public boolean equals(Object o) {
+         if (this == o) return true;
+         if (!(o instanceof ListenerRevEntity)) return false;
+Index: envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestRevisionListener.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestRevisionListener.java	(revision 20322)
++++ envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestRevisionListener.java	(working copy)
+@@ -34,4 +34,12 @@
+     public void newRevision(Object revisionEntity) {
+         ((ListenerRevEntity) revisionEntity).setData(data);
+     }
++
++    public void addEntityToRevisionInfo(String entityName, Object revisionEntity) {
++        ((ListenerRevEntity) revisionEntity).getEntityNames().add(entityName);
++    }
++
++    public void removeEntityFromRevisionInfo(String entityName, Object revisionEntity) {
++        ((ListenerRevEntity) revisionEntity).getEntityNames().remove(entityName);
++    }
+ }
+Index: envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestExceptionRevisionListener.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestExceptionRevisionListener.java	(revision 20322)
++++ envers/src/test/java/org/hibernate/envers/test/integration/reventity/TestExceptionRevisionListener.java	(working copy)
+@@ -32,4 +32,12 @@
+     public void newRevision(Object revisionEntity) {
+         throw new RuntimeException();
+     }
++
++    public void addEntityToRevisionInfo(String entityName, Object revisionEntity) {
++        throw new RuntimeException();
++    }
++
++    public void removeEntityFromRevisionInfo(String entityName, Object revisionEntity) {
++        throw new RuntimeException();
++    }
+ }
+\ No newline at end of file

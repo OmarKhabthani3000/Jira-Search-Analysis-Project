@@ -1,0 +1,362 @@
+? Thumbs.db
+? patch.txt
+Index: src/org/hibernate/Criteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/Criteria.java,v
+retrieving revision 1.18
+diff -u -r1.18 Criteria.java
+--- src/org/hibernate/Criteria.java	29 Apr 2005 15:13:02 -0000	1.18
++++ src/org/hibernate/Criteria.java	15 Dec 2005 15:13:12 -0000
+@@ -61,7 +61,7 @@
+  * @see org.hibernate.criterion.Order
+  * @see org.hibernate.criterion.Criterion
+  * @see org.hibernate.criterion.Projection
+- * @see org.hibernate.DetachedCriteria a disconnected version of this API
++ * @see org.hibernate.criterion.DetachedCriteria a disconnected version of this API
+  * @author Gavin King
+  */
+ public interface Criteria extends CriteriaSpecification {
+@@ -98,18 +98,50 @@
+ 	 */
+ 	public Criteria createAlias(String associationPath, String alias) throws HibernateException;
+ 
+-	/**
++    /**
++     * Join an association with the specified join type and assigns the specified alias
++     * for the association.
++     *
++     * @param associationPath the association path for this join.
++     * @param alias the alias to be created for this association.
++     * @param joinType the join type as specified by the constants in {@link org.hibernate.sql.JoinFragment}
++     * @return this <tt>Criteria</tt> object.
++     */
++    Criteria createAlias(String associationPath, String alias, int joinType) throws HibernateException;
++
++    /**
+ 	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity
+ 	 */
+ 	public Criteria createCriteria(String associationPath) throws HibernateException;
+ 
+-	/**
++    /**
++	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity, joined using the
++     * specified join type.
++     *
++     * @param associationPath the association path for this join.
++     * @param joinType the join type as specified by the constants in {@link org.hibernate.sql.JoinFragment}
++     * @return this <tt>Criteria</tt> object.
++     */
++    Criteria createCriteria(String associationPath, int joinType) throws HibernateException;
++
++    /**
+ 	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity,
+ 	 * assigning the given alias
+ 	 */
+ 	public Criteria createCriteria(String associationPath, String alias) throws HibernateException;
+ 
+-	/**
++    /**
++	 * Create a new <tt>Criteria</tt>, "rooted" at the associated entity, using the specified join type,
++	 * and assigning the given alias.
++     *
++     * @param associationPath the association path for this join.
++     * @param alias the alias to be created for this association.
++     * @param joinType the join type as specified by the constants in {@link org.hibernate.sql.JoinFragment}
++     * @return this <tt>Criteria</tt> object.
++     */
++    Criteria createCriteria(String associationPath, String alias, int joinType) throws HibernateException;
++
++    /**
+ 	 * Set a projection of projection list, and select
+ 	 * the <tt>PROJECTION</tt> result transformer
+ 	 */
+@@ -234,5 +266,4 @@
+ 	 * Override the cache mode
+ 	 */
+ 	public Criteria setCacheMode(CacheMode cacheMode);
+-	
+ }
+\ No newline at end of file
+Index: src/org/hibernate/criterion/DetachedCriteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/criterion/DetachedCriteria.java,v
+retrieving revision 1.4
+diff -u -r1.4 DetachedCriteria.java
+--- src/org/hibernate/criterion/DetachedCriteria.java	6 Dec 2005 03:35:50 -0000	1.4
++++ src/org/hibernate/criterion/DetachedCriteria.java	14 Dec 2005 18:51:03 -0000
+@@ -85,7 +85,13 @@
+ 		return this;
+ 	}
+ 
+-	public DetachedCriteria createCriteria(String associationPath, String alias)
++	public DetachedCriteria createAlias(String associationPath, String alias, int joinType)
++	throws HibernateException {
++		criteria.createAlias(associationPath, alias, joinType);
++		return this;
++	}
++
++    public DetachedCriteria createCriteria(String associationPath, String alias)
+ 	throws HibernateException {
+ 		return new DetachedCriteria( impl, criteria.createCriteria(associationPath) );
+ 	}
+@@ -95,7 +101,17 @@
+ 		return new DetachedCriteria( impl, criteria.createCriteria(associationPath) );
+ 	}
+ 
+-	public String getAlias() {
++    public DetachedCriteria createCriteria(String associationPath, String alias, int joinType)
++	throws HibernateException {
++		return new DetachedCriteria( impl, criteria.createCriteria(associationPath, joinType) );
++	}
++
++	public DetachedCriteria createCriteria(String associationPath, int joinType)
++	throws HibernateException {
++		return new DetachedCriteria( impl, criteria.createCriteria(associationPath, joinType) );
++	}
++
++    public String getAlias() {
+ 		return criteria.getAlias();
+ 	}
+ 
+Index: src/org/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.31
+diff -u -r1.31 CriteriaImpl.java
+--- src/org/hibernate/impl/CriteriaImpl.java	6 Dec 2005 03:35:39 -0000	1.31
++++ src/org/hibernate/impl/CriteriaImpl.java	15 Dec 2005 14:37:18 -0000
+@@ -1,29 +1,19 @@
+ //$Id: CriteriaImpl.java,v 1.31 2005/12/06 03:35:39 steveebersole Exp $
+ package org.hibernate.impl;
+ 
+-import java.io.Serializable;
+-import java.util.ArrayList;
+-import java.util.HashMap;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-
+-import org.hibernate.CacheMode;
+-import org.hibernate.Criteria;
+-import org.hibernate.FetchMode;
+-import org.hibernate.FlushMode;
+-import org.hibernate.HibernateException;
+-import org.hibernate.LockMode;
+-import org.hibernate.ScrollMode;
+-import org.hibernate.ScrollableResults;
++import org.hibernate.*;
+ import org.hibernate.criterion.Criterion;
+ import org.hibernate.criterion.NaturalIdentifier;
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.sql.JoinFragment;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.util.StringHelper;
+ 
++import java.io.Serializable;
++import java.util.*;
++
+ /**
+  * Implementation of the <tt>Criteria</tt> interface
+  * @author Gavin King
+@@ -72,16 +62,21 @@
+ 		private String path;
+ 		private Criteria parent;
+ 		private LockMode lockMode;
+-		
+-		public Criteria getParent() {
++        private int joinType;
++
++        public Criteria getParent() {
+ 			return parent;
+ 		}
+ 		
+ 		public String getPath() {
+ 			return path;
+ 		}
+-		
+-		public String toString() { 
++
++        public int getJoinType() {
++            return joinType;
++        }
++
++        public String toString() {
+ 			return "Subcriteria(" + 
+ 				path + ":" + 
+ 				(alias==null ? "" : alias) + 
+@@ -89,17 +84,27 @@
+ 		}
+ 
+ 		private Subcriteria(Criteria parent, String path, String alias) {
+-			this.alias = alias;
+-			this.path = path;
+-			this.parent = parent;
+-			CriteriaImpl.this.subcriteriaList.add(this);
++            this( parent, path, alias, JoinFragment.INNER_JOIN );
+ 		}
+ 
+ 		private Subcriteria(Criteria parent, String path) {
+-			this(parent, path, null);
++			this(parent, path, (String)null);
+ 		}
+ 
+-		public Criteria setAlias(String alias) {
++        public Subcriteria(Criteria parent, String path, int joinType) {
++            this(parent, path, null, joinType);
++        }
++
++        public Subcriteria(Criteria parent, String path, String alias, int joinType) {
++			this.alias = alias;
++			this.path = path;
++			this.parent = parent;
++            this.joinType = joinType;
++            CriteriaImpl.this.subcriteriaList.add(this);
++        }
++
++
++        public Criteria setAlias(String alias) {
+ 			this.alias = alias;
+ 			return this;
+ 		}
+@@ -119,7 +124,13 @@
+ 			return this;
+ 		}
+ 
+-		public Criteria addOrder(Order order) {
++		public Criteria createAlias(String associationPath, String alias, int joinType)
++			throws HibernateException {
++			new Subcriteria(this, associationPath, alias, joinType);
++			return this;
++		}
++
++        public Criteria addOrder(Order order) {
+ 			CriteriaImpl.this.orderEntries.add( new OrderEntry(order, this) );
+ 			return this;
+ 		}
+@@ -139,7 +150,12 @@
+ 			return new Subcriteria(Subcriteria.this, associationPath);
+ 		}
+ 
+-		public List list() throws HibernateException {
++		public Criteria createCriteria(String associationPath, int joinType)
++			throws HibernateException {
++			return new Subcriteria(Subcriteria.this, associationPath, joinType);
++		}
++
++        public List list() throws HibernateException {
+ 			return CriteriaImpl.this.list();
+ 		}
+ 
+@@ -195,11 +211,16 @@
+ 			throws HibernateException {
+ 			return new Subcriteria(Subcriteria.this, associationPath, alias);
+ 		}
+-		
+-		public Criteria setLockMode(LockMode lockMode) {
+-			this.lockMode = lockMode;
+-			return this;
+-		}
++
++        public Criteria createCriteria(String associationPath, String alias, int joinType)
++            throws HibernateException {
++            return new Subcriteria(Subcriteria.this, associationPath, alias, joinType);
++        }
++
++        public Criteria setLockMode(LockMode lockMode) {
++            this.lockMode = lockMode;
++            return this;
++        }
+ 		
+ 		public LockMode getLockMode() {
+ 			return lockMode;
+@@ -378,7 +399,13 @@
+ 		return this;
+ 	}
+ 
+-	public Criteria add(Criteria criteriaInst, Criterion expression) {
++	public Criteria createAlias(String associationPath, String alias, int joinType)
++	throws HibernateException {
++		new Subcriteria(this, associationPath, alias, joinType);
++		return this;
++	}
++
++    public Criteria add(Criteria criteriaInst, Criterion expression) {
+ 		criterionEntries.add( new CriterionEntry(expression, criteriaInst) );
+ 		return this;
+ 	}
+@@ -445,7 +472,17 @@
+ 		return new Subcriteria(this, associationPath);
+ 	}
+ 
+-	public Criteria setLockMode(LockMode lockMode) {
++	public Criteria createCriteria(String associationPath, String alias, int joinType)
++		throws HibernateException {
++		return new Subcriteria(this, associationPath, alias, joinType);
++	}
++
++	public Criteria createCriteria(String associationPath, int joinType)
++	throws HibernateException {
++		return new Subcriteria(this, associationPath, joinType);
++	}
++
++    public Criteria setLockMode(LockMode lockMode) {
+ 		return setLockMode( getAlias(), lockMode );
+ 	}
+ 
+Index: src/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java,v
+retrieving revision 1.5
+diff -u -r1.5 CriteriaJoinWalker.java
+--- src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	26 Jul 2005 05:51:46 -0000	1.5
++++ src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	15 Dec 2005 15:15:08 -0000
+@@ -102,8 +102,8 @@
+ 	throws MappingException {
+ 
+ 		if ( translator.isJoin(path) ) {
+-			return JoinFragment.INNER_JOIN;
+-		}
++            return getJoinTypeForAssociationPath(path);
++        }
+ 		else {
+ 			if ( translator.hasProjection() ) {
+ 				return -1;
+@@ -134,10 +134,32 @@
+ 			}
+ 		}
+ 	}
+-	
+-	private static boolean isDefaultFetchMode(FetchMode fetchMode) {
+-		return fetchMode==null || fetchMode==FetchMode.DEFAULT;
+-	}
++
++    /**
++     * Determines the join type for the given association path.  If
++     * the criteria associated with the path is an instance of
++     * {@link org.hibernate.impl.CriteriaImpl.Subcriteria} the join
++     * type specified by that subcriteria is returned. Otherwise,
++     * inner join is returned as the return type.
++     *
++     * @param path the path to get the join type for.
++     * @return the join type specified by the subcriteria, or inner
++     * join if the criteria is not an instance of
++     * {@link org.hibernate.impl.CriteriaImpl.Subcriteria}
++     */
++    private int getJoinTypeForAssociationPath(String path) {
++        Criteria criteria = translator.getCriteria( path );
++
++        if( criteria instanceof CriteriaImpl.Subcriteria ) {
++            return ((CriteriaImpl.Subcriteria) criteria).getJoinType();
++        } else {
++            return JoinFragment.INNER_JOIN;
++        }
++    }
++
++    private static boolean isDefaultFetchMode(FetchMode fetchMode) {
++        return fetchMode==null || fetchMode==FetchMode.DEFAULT;
++    }
+ 
+ 	/**
+ 	 * Use the discriminator, to narrow the select to instances

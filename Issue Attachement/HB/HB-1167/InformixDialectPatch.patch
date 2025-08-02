@@ -1,0 +1,144 @@
+Index: src/net/sf/hibernate/dialect/InformixDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/InformixDialect.java,v
+retrieving revision 1.14
+diff -u -r1.14 InformixDialect.java
+--- src/net/sf/hibernate/dialect/InformixDialect.java	7 Aug 2004 00:10:55 -0000	1.14
++++ src/net/sf/hibernate/dialect/InformixDialect.java	16 Aug 2004 09:58:01 -0000
+@@ -3,6 +3,7 @@
+ 
+ import java.sql.Types;
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.cfg.Environment;
+ import net.sf.hibernate.util.StringHelper;
+ 
+ /**
+@@ -11,7 +12,12 @@
+  * <br>
+  * Seems to work with Informix Dynamic Server Version 7.31.UD3,
+  * Informix JDBC driver version 2.21JC3.
++ *
++ * Changes & additions 16 Aug 2004: Tested with
++ * Informix version 9.4 (running on RedHat) and JDBC driver version 2.21JC5
++ *
+  * @author Steve Molitor
++ * @author Marko Balabanovic, Last Minute Network Ltd (lastminute.com)
+  */
+ public class InformixDialect extends Dialect {
+ 
+@@ -28,11 +34,13 @@
+ 		registerColumnType(Types.CHAR, "char($l)");
+ 		registerColumnType(Types.DATE, "date");
+ 		registerColumnType(Types.DECIMAL, "decimal");
+-		registerColumnType(Types.DOUBLE, "double");
++		registerColumnType(Types.DOUBLE, "double precision");
+ 		registerColumnType(Types.FLOAT, "float");
+ 		registerColumnType(Types.INTEGER, "integer");
+ 		registerColumnType(Types.LONGVARBINARY, "blob"); // or BYTE
++        registerColumnType(Types.BLOB, "blob");
+ 		registerColumnType(Types.LONGVARCHAR, "clob"); // or TEXT?
++        registerColumnType(Types.CLOB, "clob");
+ 		registerColumnType(Types.NUMERIC, "decimal"); // or MONEY
+ 		registerColumnType(Types.REAL, "smallfloat");
+ 		registerColumnType(Types.SMALLINT, "smallint");
+@@ -41,6 +49,15 @@
+ 		registerColumnType(Types.TINYINT, "smallint");
+ 		registerColumnType(Types.VARBINARY, "byte");
+ 		registerColumnType(Types.VARCHAR, "varchar($l)");
++
++        // Use streams to read/write BLOBs
++        getDefaultProperties().setProperty(Environment.USE_STREAMS_FOR_BINARY, "true");
++
++        // Don't use scrollable result sets
++        // (Note: they will work correctly unless there is a BLOB column in the
++        //  result set, but there doesn't seem to be an easy way to specify that
++        //  other than turning them off altogether)
++        getDefaultProperties().setProperty(Environment.USE_SCROLLABLE_RESULTSET, "false");
+ 	}
+ 
+ 	public String getAddColumnString() {
+@@ -51,14 +68,26 @@
+ 		return true;
+ 	}
+ 
+-	public String getIdentitySelectString() throws MappingException {
+-		return "select first 1 dbinfo('sqlca.sqlerrd1') from systables";
+-	}
++	  public String getIdentitySelectString() throws MappingException {
++        // Note: for more recent Informix identity column is of type
++        // "serial8", for older Informix the previous commented-out
++        // version may work
++        return "select first 1 dbinfo('serial8') from systables";
++        // Version for older Informix
++//		return "select first 1 dbinfo('sqlca.sqlerrd1') from systables";
++    }
+ 
+ 	public String getIdentityColumnString() throws MappingException {
+ 		return "serial8 not null";
+ 	}
+ 
++    /**
++     * The keyword used to insert a generated value into an identity column (or null)
++     */
++    public String getIdentityInsertString() {
++        return "0";
++    }
++
+ 	public boolean hasDataTypeInIdentityColumn() {
+ 		return false;
+ 	}
+@@ -104,7 +133,16 @@
+ 		return true;
+ 	}
+ 
+-	public boolean supportsLimit() {
++
++	/**
++	 * Does this <tt>Dialect</tt> have some kind of <tt>LIMIT</tt> syntax?
++     *
++     * Note from Marko: In tests with Informix 9.4 this setting causes various unit tests
++     * to fail.  Until further investigation we're going to set ours to "return false", but
++     * I am leaving this here as it was placed in cvs recently by someone else and I'm
++     * not sure if it works correctly in some other environment.
++	 */
++    public boolean supportsLimit() {
+ 		return true;
+ 	}
+ 
+@@ -128,4 +166,35 @@
+ 		return sql.startsWith("select distinct") ? 15 : 6;
+ 	}
+ 
++    /**
++     * Does this dialect support the <tt>FOR UPDATE</tt> syntax?
++     *
++     * Informix mostly does support it but there are specific cases
++     * where it doesn't.  I don't know how to distinguish these cases
++     * in Hibernate so I'm just returning false for everything.
++     */
++    public boolean supportsForUpdate() {
++
++        // This is the specific unit test that was failing when this
++        // returned true: ParentChildTest.testComplexCriteria
++        //
++        // From the Informix documentation:
++        //
++        //        -365 Cursor must be on simple SELECT for FOR UPDATE.
++        //
++        //The cursor named in this statement (probably an OPEN statement)
++        // was declared with the FOR UPDATE clause. However, it has been
++        // associated with a SELECT statement that joins two or more tables
++        // or that uses UNIQUE, DISTINCT, GROUP BY, or UNION. Such a SELECT
++        // statement cannot be used in an update; there is no way to distribute
++        // the new data back into the multiple tables.
++        //
++        //Review the declaration of the cursor. If it is declared FOR statement id,
++        // also review the PREPARE statement that set up that statement. You might
++        // need two cursors, one for general queries and another specifically for updating.
++
++        return false;
++    }
++
++
+ }
+\ No newline at end of file

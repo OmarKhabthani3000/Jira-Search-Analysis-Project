@@ -1,0 +1,90 @@
+Index: core/src/main/java/org/hibernate/loader/BasicLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/BasicLoader.java	(revision 16608)
++++ core/src/main/java/org/hibernate/loader/BasicLoader.java	(working copy)
+@@ -108,7 +108,7 @@
+ 
+ 		String[] suffixes = new String[length];
+ 		for ( int i = 0; i < length; i++ ) {
+-			suffixes[i] = Integer.toString( i + seed ) + "_";
++			suffixes[i] = (Integer.toString( i + seed ) + "_").intern();
+ 		}
+ 		return suffixes;
+ 	}
+Index: core/src/main/java/org/hibernate/loader/DefaultEntityAliases.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/DefaultEntityAliases.java	(revision 16608)
++++ core/src/main/java/org/hibernate/loader/DefaultEntityAliases.java	(working copy)
+@@ -38,6 +38,8 @@
+  */
+ public class DefaultEntityAliases implements EntityAliases {
+ 
++    private static final String[][] EMPTY_ARRAY_OF_ARRAY_OF_STRINGS = new String[0][];
++    
+ 	private final String[] suffixedKeyColumns;
+ 	private final String[] suffixedVersionColumn;
+ 	private final String[][] suffixedPropertyColumns;
+@@ -55,7 +57,8 @@
+ 	 * @param map 
+ 	 */
+ 	public DefaultEntityAliases(Map userProvidedAliases, Loadable persister, String suffix) {
+-		this.suffix = suffix;
++		
++	    this.suffix = suffix.intern();
+ 		this.userProvidedAliases = userProvidedAliases;
+ 		
+ 		String[] keyColumnsCandidates = getUserProvidedAliases(
+@@ -84,7 +87,7 @@
+ 		else {
+ 			suffixedVersionColumn = null;
+ 		}
+-		rowIdAlias = Loadable.ROWID_ALIAS + suffix; // TODO: not visible to the user!
++		rowIdAlias = (Loadable.ROWID_ALIAS + suffix).intern(); // TODO: not visible to the user!
+ 	}
+ 
+ 	protected String getDiscriminatorAlias(Loadable persister, String suffix) {
+@@ -121,14 +124,23 @@
+ 	
+ 	public String[][] getSuffixedPropertyAliases(Loadable persister) {
+ 		int size = persister.getPropertyNames().length;
+-		String[][] suffixedPropertyAliases = new String[size][];
+-		for ( int j = 0; j < size; j++ ) {
+-			suffixedPropertyAliases[j] = getUserProvidedAliases(
+-					persister.getPropertyNames()[j],
+-					getPropertyAliases(persister, j)
+-				);
+-			intern( suffixedPropertyAliases[j] );
+-		}			
++		
++		String[][] suffixedPropertyAliases;
++		if (size != 0)
++		{
++    		suffixedPropertyAliases = new String[size][];
++    		for ( int j = 0; j < size; j++ ) {
++    			suffixedPropertyAliases[j] = getUserProvidedAliases(
++    					persister.getPropertyNames()[j],
++    					getPropertyAliases(persister, j)
++    				);
++    			intern( suffixedPropertyAliases[j] );
++    		}
++		}
++		else
++		{
++		    suffixedPropertyAliases = EMPTY_ARRAY_OF_ARRAY_OF_STRINGS;
++		}
+ 		return suffixedPropertyAliases;
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/hql/QueryLoader.java	(revision 16608)
++++ core/src/main/java/org/hibernate/loader/hql/QueryLoader.java	(working copy)
+@@ -173,7 +173,7 @@
+ 			entityAliases[i] = element.getClassAlias();
+ 			sqlAliasByEntityAlias.put( entityAliases[i], sqlAliases[i] );
+ 			// TODO should we just collect these like with the collections above?
+-			sqlAliasSuffixes[i] = ( size == 1 ) ? "" : Integer.toString( i ) + "_";
++			sqlAliasSuffixes[i] = ( size == 1 ) ? "" : (Integer.toString( i ) + "_").intern();
+ //			sqlAliasSuffixes[i] = element.getColumnAliasSuffix();
+ 			includeInSelect[i] = !element.isFetch();
+ 			if ( includeInSelect[i] ) {

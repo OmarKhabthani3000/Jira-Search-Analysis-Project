@@ -1,0 +1,93 @@
+From a9e97db3ed75a0b2dca3cf827aa268e68bbe42ad Mon Sep 17 00:00:00 2001
+From: yves.galante
+Date: Wed, 12 Jan 2011 11:25:28 +0100
+Subject: [PATCH] fix  HHH-5280
+
+---
+ .../engine/StatefulPersistenceContext.java         |   63 +++++++++++---------
+ 1 files changed, 34 insertions(+), 29 deletions(-)
+
+diff --git a/hibernate-core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java b/hibernate-core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java
+index 5291639..907935f 100644
+--- a/hibernate-core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java
++++ b/hibernate-core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java
+@@ -1140,18 +1140,19 @@ public class StatefulPersistenceContext implements PersistenceContext {
+ 		final EntityPersister persister = session.getFactory().getEntityPersister( entityName );
+ 		final CollectionPersister collectionPersister = session.getFactory().getCollectionPersister( collectionRole );
+ 
+-	    // try cache lookup first
+-	    Object parent = parentsByChild.get(childEntity);
+-		if (parent != null) {
+-	       if (isFoundInParent(propertyName, childEntity, persister, collectionPersister, parent)) {
+-		       return getEntry(parent).getId();
+-		   }
+-		   else {
+-			  parentsByChild.remove(childEntity); // remove wrong entry
+-		   }
+-		}
+-		// iterate all the entities currently associated with the persistence context.
+-		Iterator entities = IdentityMap.entries(entityEntries).iterator();
++        // try cache lookup first
++        final Object parent = parentsByChild.get(childEntity);
++        if (parent != null) {
++            final EntityEntry entityEntry = (EntityEntry) entityEntries.get(parent);
++            // Check if it is the true parent on case the child have more than one parent
++            if (persister.isSubclassEntityName(entityEntry.getEntityName()) &&
++			    isFoundInParent(propertyName, childEntity, persister, collectionPersister, parent)) {
++                return getEntry(parent).getId();
++            }
++            parentsByChild.remove(childEntity); // remove wrong entry
++        }
++        // iterate all the entities currently associated with the persistence context.
++        Iterator entities = IdentityMap.entries(entityEntries).iterator();
+ 		while ( entities.hasNext() ) {
+ 			final Map.Entry me = ( Map.Entry ) entities.next();
+ 			final EntityEntry entityEntry = ( EntityEntry ) me.getValue();
+@@ -1254,23 +1255,27 @@ public class StatefulPersistenceContext implements PersistenceContext {
+ 		CollectionPersister cp = session.getFactory()
+ 				.getCollectionPersister(entity + '.' + property);
+ 		
+-	    // try cache lookup first
+-	    Object parent = parentsByChild.get(childEntity);
+-		if (parent != null) {
+-			Object index = getIndexInParent(property, childEntity, persister, cp, parent);
+-			
+-			if (index==null && mergeMap!=null) {
+-				Object unmergedInstance = mergeMap.get(parent);
+-				Object unmergedChild = mergeMap.get(childEntity);
+-				if ( unmergedInstance!=null && unmergedChild!=null ) {
+-					index = getIndexInParent(property, unmergedChild, persister, cp, unmergedInstance);
+-				}
+-			}
+-			if (index!=null) {
+-				return index;
+-			}
+-			parentsByChild.remove(childEntity); // remove wrong entry
+-		}
++        // try cache lookup first
++        Object parent = parentsByChild.get(childEntity);
++        if (parent != null) {
++            final EntityEntry entityEntry = (EntityEntry) entityEntries.get(parent);
++            // Check if it is the true parent on case the child have more than one parent
++            if (persister.isSubclassEntityName(entityEntry.getEntityName())) {
++                Object index = getIndexInParent(property, childEntity, persister, cp, parent);
++    
++                if (index == null && mergeMap != null) {
++                    Object unmergedInstance = mergeMap.get(parent);
++                    Object unmergedChild = mergeMap.get(childEntity);
++                    if (unmergedInstance != null && unmergedChild != null) {
++                        index = getIndexInParent(property, unmergedChild, persister, cp, unmergedInstance);
++                    }
++                }
++                if (index != null) {
++                    return index;
++                }
++            }
++            parentsByChild.remove(childEntity); // remove wrong entry
++        }
+ 		
+ 		Iterator entities = IdentityMap.entries(entityEntries).iterator();
+ 		while ( entities.hasNext() ) {
+-- 
+1.7.3.3
+

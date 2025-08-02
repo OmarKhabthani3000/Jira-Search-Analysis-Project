@@ -1,0 +1,170 @@
+Index: search/src/main/java/org/hibernate/search/cfg/SearchConfigurationFromHibernateCore.java
+===================================================================
+--- search/src/main/java/org/hibernate/search/cfg/SearchConfigurationFromHibernateCore.java	(revision 18157)
++++ search/src/main/java/org/hibernate/search/cfg/SearchConfigurationFromHibernateCore.java	Wed Feb 17 20:20:50 CET 2010
+@@ -51,8 +51,22 @@
+ 	}
+ 
+ 	public Class<?> getClassMapping(String name) {
+-		return cfg.getClassMapping( name ).getMappedClass();
++		final PersistentClass classMapping = cfg.getClassMapping(name);
++		if ( classMapping != null ) {
++			return classMapping.getMappedClass();
+-	}
++		}
++		else {
++			Iterator<PersistentClass> mappings = cfg.getClassMappings();
++			while ( mappings.hasNext() ) {
++				final PersistentClass persistentClass = mappings.next();
++				final Class mappedClass = persistentClass.getMappedClass();
++				if ( mappedClass.getName().equals( name ) || persistentClass.getEntityName().equals( name ) ) {
++					return mappedClass;
++				}
++			}
++			return null;
++		}
++	}
+ 
+ 	public String getProperty(String propertyName) {
+ 		return cfg.getProperty( propertyName );
+Index: search/src/test/java/org/hibernate/search/test/classloading/NoAnnotationsTest.java
+===================================================================
+--- search/src/test/java/org/hibernate/search/test/classloading/NoAnnotationsTest.java	(revision 17630)
++++ search/src/test/java/org/hibernate/search/test/classloading/NoAnnotationsTest.java	Wed Feb 17 20:17:15 CET 2010
+@@ -38,11 +38,6 @@
+  */
+ public class NoAnnotationsTest extends org.hibernate.search.test.TestCase {
+ 
+-	/**
+-	 * Tests that @DocumentId is optional. See HSEARCH-104.
+-	 *
+-	 * @throws Exception in case the test fails.
+-	 */
+ 	public void testConfigurationWithoutAnnotations() throws Exception {
+ 		Animal dog = new Animal();
+ 		dog.setName( "Dog" );
+@@ -61,7 +56,26 @@
+ 		tx.commit();
+ 		s.close();
+ 	}
+-	
++
++	public void testConfigurationWithEntityNameInXML() throws Exception {
++		Table table = new Table();
++		table.setName( "delmachio" );
++
++		Session s = openSession();
++		Transaction tx = s.beginTransaction();
++		s.save( "woodTable", table );
++		tx.commit();
++		s.clear();
++
++		tx = s.beginTransaction();
++		List results = Search.getFullTextSession( s ).createFullTextQuery(
++				new TermQuery( new Term( "name", "delmachio" ) )
++		).list();
++		assertEquals( 1, results.size() );
++		tx.commit();
++		s.close();
++	}
++	
+ 	public void testFlushListenerRegistrationWithoutAnnotations() throws Exception {
+ 		// This test should pass even if the flushListener is not registered,
+ 		// as a workaround is done in code (you'll see a warning in logs).
+@@ -85,7 +99,8 @@
+ 
+ 	protected String[] getXmlFiles() {
+ 		return new String[] {
+-				"org/hibernate/search/test/classloading/Animal.hbm.xml"
++				"org/hibernate/search/test/classloading/Animal.hbm.xml",
++				"org/hibernate/search/test/classloading/Table.hbm.xml"
+ 		};
+ 	}
+ }
+Index: search/src/test/resources/org/hibernate/search/test/classloading/Table.hbm.xml
+===================================================================
+--- search/src/test/resources/org/hibernate/search/test/classloading/Table.hbm.xml	Wed Feb 17 20:16:47 CET 2010
++++ search/src/test/resources/org/hibernate/search/test/classloading/Table.hbm.xml	Wed Feb 17 20:16:47 CET 2010
+@@ -0,0 +1,14 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping package="org.hibernate.search.test.classloading">
++    <!-- entity-name should work -->
++    <class name="Table" entity-name="woodTable">
++        <id name="id" type="java.lang.Long">
++            <generator class="increment"/>
++        </id>
++        <property name="name"/>
++    </class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: search/src/test/java/org/hibernate/search/test/classloading/Table.java
+===================================================================
+--- search/src/test/java/org/hibernate/search/test/classloading/Table.java	Wed Feb 17 20:02:30 CET 2010
++++ search/src/test/java/org/hibernate/search/test/classloading/Table.java	Wed Feb 17 20:02:30 CET 2010
+@@ -0,0 +1,61 @@
++/* $Id: Animal.java 17630 2009-10-06 13:38:43Z sannegrinovero $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.classloading;
++
++import org.hibernate.search.annotations.DocumentId;
++import org.hibernate.search.annotations.Field;
++import org.hibernate.search.annotations.Index;
++import org.hibernate.search.annotations.Indexed;
++
++/**
++ * Test class which is configured via XML and use entity-name
++ *
++ * @author Hardy Ferentschik
++ */
++@Indexed
++public class Table {
++	@DocumentId
++	private Long id;
++
++	@Field(index = Index.TOKENIZED)
++	private String name;
++
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++}
+\ No newline at end of file

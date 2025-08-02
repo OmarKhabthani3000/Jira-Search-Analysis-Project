@@ -1,0 +1,234 @@
+Index: test/org/hibernate/tool/ant/AntHibernateToolTest.java
+===================================================================
+--- test/org/hibernate/tool/ant/AntHibernateToolTest.java	(revision 14689)
++++ test/org/hibernate/tool/ant/AntHibernateToolTest.java	(working copy)
+@@ -10,6 +10,9 @@
+ import junit.framework.TestSuite;
+ 
+ import org.apache.tools.ant.BuildException;
++import org.hibernate.SessionFactory;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.Session;
+ import org.hibernate.tool.test.TestHelper;
+ 
+ /**
+@@ -34,36 +37,98 @@
+ 	}
+ 	
+ 	public void testHbm2DDLLogic() {
++		
+ 		File baseDir = new File(project.getProperty("build.dir"), "topdown");
+ 		File onlyCreate = new File(baseDir, "onlycreate.sql");
+ 		File onlyDrop = new File(baseDir, "onlydrop.sql");
+ 		File dropAndCreate = new File(baseDir, "dropandcreate.sql");
++		File update = new File(baseDir, "update.sql");
+ 		
+ 		assertFalse(onlyCreate.exists());
+ 		assertFalse(onlyDrop.exists());
+ 		assertFalse(dropAndCreate.exists());
++		assertFalse(update.exists());
+ 		
+-		executeTarget("testantcfg");
++		// allow to test creation of script file + delimiter 
++		// + non execution (test will fail if executed because of crappy delimiter)
++		executeTarget("testScriptCreattion");
+ 		
+ 		assertTrue(onlyCreate.exists());
+ 		assertTrue(onlyDrop.exists());
+ 		assertTrue(dropAndCreate.exists());
++		assertTrue(update.exists());
+ 		
+ 		assertNotNull(TestHelper.findFirstString("drop", dropAndCreate));
+ 		assertNotNull(TestHelper.findFirstString("create", dropAndCreate));
+-		
++		assertNotNull(TestHelper.findFirstString("---", dropAndCreate));
++	
+ 		assertEquals(null, TestHelper.findFirstString("create", onlyDrop));
+ 		assertNotNull(TestHelper.findFirstString("drop", onlyDrop));
+-		
++				
+ 		assertEquals(null, TestHelper.findFirstString("drop", onlyCreate));
+ 		assertNotNull(TestHelper.findFirstString("create", onlyCreate));
++		assertNotNull(TestHelper.findFirstString("---", onlyCreate));
++
++		assertNotNull(TestHelper.findFirstString("create", update));
++		assertNotNull(TestHelper.findFirstString("---", update));
+ 		
+ 		onlyCreate.delete();
+ 		onlyDrop.delete();
+ 		dropAndCreate.delete();
++		update.delete();
+ 		
+ 	}
++	
++	public void testHbm2DDLUpdateExecution() {
++		File baseDir = new File(project.getProperty("build.dir"), "topdown");
++		File update1 = new File(baseDir, "update1.sql");
++		File update2 = new File(baseDir, "update2.sql");
++		File onlydrop = new File(baseDir, "onlydrop.sql");
++		
++		assertFalse(update1.exists());
++		assertFalse(update2.exists());
++		assertFalse(onlydrop.exists());
+ 
++		
++		executeTarget("testantcfgUpdateExecuted");
++		
++		assertTrue(update1.exists());
++		assertTrue(update2.exists());
++		
++		assertNotNull(TestHelper.findFirstString("create", update1));
++		// if first update is executed, the second should be empty
++		assertEquals(0, update2.length());
++		
++		update1.delete();
++		update2.delete();
++		onlydrop.delete();
++	}
++	
++	public void testHbm2DDLExportExecution() {
++		File baseDir = new File(project.getProperty("build.dir"), "topdown");
++		File export = new File(baseDir, "export.sql");
++		File update = new File(baseDir, "update.sql");
++		File onlydrop = new File(baseDir, "onlydrop.sql");
++		
++		assertFalse(export.exists());
++		assertFalse(update.exists());
++		assertFalse(onlydrop.exists());
++
++		
++		executeTarget("testantcfgExportExecuted");
++		
++		assertTrue(export.exists());
++		assertTrue(update.exists());
++		
++		assertNotNull(TestHelper.findFirstString("create", export));
++		// if export is executed, update should be empty
++		assertEquals(0, update.length());
++		
++		export.delete();
++		update.delete();
++		onlydrop.delete();
++	}
++	
+ 	public void testJDBCConfiguration() {
+ 		executeTarget("testantjdbccfg");
+ 	}
+Index: test/org/hibernate/tool/test/TestHelper.java
+===================================================================
+--- test/org/hibernate/tool/test/TestHelper.java	(revision 14689)
++++ test/org/hibernate/tool/test/TestHelper.java	(working copy)
+@@ -255,21 +255,20 @@
+ 	}
+ 	
+ 	static public String findFirstString(String string, File file) {
++		String str;
+ 		try {
+ 	        BufferedReader in = new BufferedReader(new FileReader(file) );
+-	        String str;
+ 	        while ( (str = in.readLine() ) != null ) {
+ 	            if(str.indexOf(string)>=0) {
+-					return str;
++					break;
+ 	            }
+ 	        }
+-	        in.close();
+-	        
++	        in.close();	        
+ 	    } 
+ 		catch (IOException e) {
+ 			throw new RuntimeException("trouble with searching in " + file,e);
+ 	    }
+-		return null;
++		return str;
+ 	}
+ 
+ }
+Index: testsupport/anttest-build.xml
+===================================================================
+--- testsupport/anttest-build.xml	(revision 14689)
++++ testsupport/anttest-build.xml	(working copy)
+@@ -23,7 +23,7 @@
+ 
+ 	<target name="cleanup" description="task used for ensuring cleanup to be done even in the case of test failure" depends="afterCfg2hbm"/>
+ 
+-	<target name="testantcfg">
++	<target name="testScriptCreattion">
+ 
+ 		<mkdir dir="build/testsupport" />
+ 		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" />
+@@ -39,14 +39,72 @@
+ 			</configuration>
+ 
+ 			<hbm2java />
+-			<hbm2ddl drop="false" create="true" export="false" outputfilename="onlycreate.sql" format="true" />
++			<!-- this one is executed, security clean up-->
++			<hbm2ddl drop="true" create="false" export="true" outputfilename="onlydrop.sql" format="true" />
++			
++			<!-- allow to test creation of script file + delimiter + non execution (test will fail if executed because of crappy delimiter) -->
++			<hbm2ddl drop="false" create="true" export="false" outputfilename="onlycreate.sql" format="true" delimiter="---"/>
+ 			<hbm2ddl drop="true" create="false" export="false" outputfilename="onlydrop.sql" format="true" />
+-			<hbm2ddl drop="true" create="true" export="false" outputfilename="dropandcreate.sql" format="true" />
++			<hbm2ddl drop="true" create="true" export="false" outputfilename="dropandcreate.sql" format="true" delimiter="---"/>
++			<hbm2ddl export="false" update="true" outputfilename="update.sql" format="true" delimiter="---"/>
++			
++			<!-- this one is executed, security clean up, could be easily removed-->
++			<hbm2ddl drop="true" create="false" export="true" outputfilename="onlydrop.sql" format="true" />
+ 			<hbm2doc />
+ 		</hibernatetool>
+ 
+ 	</target>
++	
++	<target name="testantcfgUpdateExecuted">
+ 
++		<mkdir dir="build/testsupport" />
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" />
++		<hibernatetool destdir="${build.dir}/topdown">
++			<classpath>
++				<path location="../../build/testsupport" />
++			</classpath>
++
++			<configuration namingstrategy="org.hibernate.cfg.ImprovedNamingStrategy" entityresolver="DummyEntityResolver">
++				<fileset dir="../test" id="id">
++					<include name="**/*TopDown.hbm.xml" />
++				</fileset>
++			</configuration>
++
++			<hbm2java />
++			<hbm2ddl drop="true" create="false" export="true" outputfilename="onlydrop.sql" format="true" />
++			<hbm2ddl export="true" update="true" outputfilename="update1.sql" format="true" />
++			<hbm2ddl export="false" update="true" outputfilename="update2.sql" format="true" />
++			<hbm2ddl drop="true" create="false" export="true" />
++			<hbm2doc />
++		</hibernatetool>
++
++	</target>
++	
++	<target name="testantcfgExportExecuted">
++
++		<mkdir dir="build/testsupport" />
++		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" />
++		<hibernatetool destdir="${build.dir}/topdown">
++			<classpath>
++				<path location="../../build/testsupport" />
++			</classpath>
++
++			<configuration namingstrategy="org.hibernate.cfg.ImprovedNamingStrategy" entityresolver="DummyEntityResolver">
++				<fileset dir="../test" id="id">
++					<include name="**/*TopDown.hbm.xml" />
++				</fileset>
++			</configuration>
++
++			<hbm2java />
++			<hbm2ddl drop="true" create="false" export="true" outputfilename="onlydrop.sql" format="true" />
++			<hbm2ddl export="true" update="false" outputfilename="export.sql" format="true" />
++			<hbm2ddl export="false" update="true" outputfilename="update.sql" format="true" />
++			<hbm2ddl drop="true" create="false" export="true" />
++			<hbm2doc />
++		</hibernatetool>
++
++	</target>
++
+ 	<target name="testantjdbccfg">
+ 		<taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath" />
+ 		<property file="../etc/hibernate.properties" prefix="tools" />

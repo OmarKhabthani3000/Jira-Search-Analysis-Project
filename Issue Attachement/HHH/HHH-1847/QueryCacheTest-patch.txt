@@ -1,0 +1,61 @@
+Index: test/org/hibernate/test/querycache/QueryCacheTest.java
+===================================================================
+--- test/org/hibernate/test/querycache/QueryCacheTest.java	(revision 10008)
++++ test/org/hibernate/test/querycache/QueryCacheTest.java	(working copy)
+@@ -7,6 +7,8 @@
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ 
++import org.hibernate.criterion.Example;
++import org.hibernate.dialect.MySQLDialect;
+ import org.hibernate.Hibernate;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+@@ -258,6 +260,47 @@
+ 
+ 	}
+ 
++	public void testQueryCacheQBEBackSlash() throws Exception {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Item i = new Item();
++		i.setName("qbe\\");
++                //i.setPreferenceData ("<root>some long text for pref data</root>");
++		i.setDescription("Query by example test.");
++		Item i2 = new Item();
++		i2.setName("qbe test\\xxx");
++		i2.setDescription("Another qbe test.");
++		s.persist(i);
++		s.persist(i2);
++		t.commit();
++		s.close();
++
++		s = openSession();
++		t = s.beginTransaction();
++                Item i3 = new Item();
++                i3.setName("qbe test\\xxx");
++
++                List result;
++               if ( getDialect() instanceof MySQLDialect )
++                    result = s.createCriteria(Item.class)
++                   .add( Example.create(i3).ignoreCase().enableLike().setEscapeCharacter(new Character('\0')))
++                   .list();
++               else
++                    result = s.createCriteria(Item.class)
++                   .add( Example.create(i3).ignoreCase().enableLike())
++                   .list();
++                    
++		assertEquals( result.size(), 1 );
++		assertTrue( Hibernate.isInitialized( result.get(0) ) );
++		t.commit();
++		s.close();
++	
++		s = openSession();
++		t = s.beginTransaction();
++		s.createQuery("delete Item").executeUpdate();
++		t.commit();
++		s.close();
++	}
+ 	protected String[] getMappings() {
+ 		return new String[] { "querycache/Item.hbm.xml" };
+ 	}

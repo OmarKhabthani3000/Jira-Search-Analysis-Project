@@ -1,0 +1,130 @@
+? patch.txt
+Index: org/hibernate/cfg/Ejb3Column.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/Ejb3Column.java,v
+retrieving revision 1.8
+diff -u -r1.8 Ejb3Column.java
+--- org/hibernate/cfg/Ejb3Column.java	24 Dec 2004 11:32:35 -0000	1.8
++++ org/hibernate/cfg/Ejb3Column.java	25 Jan 2005 17:13:16 -0000
+@@ -30,18 +30,28 @@
+ 	protected PropertyHolder propertyHolder;
+ 
+     public Ejb3Column(String sqlType, int length,
+-					  String name, boolean nullable,
+-					  boolean unique, boolean insertable, boolean updatable,
+-					  String secondaryTableName,
+-					  Map<String, Join> joins,
+-					  PropertyHolder propertyHolder, Mappings mappings) {
++                      int precision, int scale, String name, boolean nullable,
++                      boolean unique, boolean insertable, boolean updatable,
++                      String secondaryTableName,
++                      Map<String, Join> joins,
++                      PropertyHolder propertyHolder, Mappings mappings) {
+ 		log.debug("Binding column " + name + " unique " + unique);
+ 		org.hibernate.mapping.Column hibColumn = new org.hibernate.mapping.Column();
++
+ 		hibColumn.setName( mappings.getNamingStrategy().columnName( name ) );
+ 		hibColumn.setLength(length);
++
++        if (precision > 0)
++            hibColumn.setPrecision(precision);
++
++        // as in HbmBinder#bindColumn
++        if (scale > 0)
++            hibColumn.setLength(scale);
++
+ 		hibColumn.setNullable(nullable);
+ 		hibColumn.setSqlType(sqlType);
+ 		hibColumn.setUnique(unique);
++
+ 		this.mappingColumn = hibColumn;
+ 		this.insertable = insertable;
+ 		this.updatable = updatable;
+@@ -152,7 +162,7 @@
+ 		}
+ 		if (actualCol == null) {
+ 			columns = new Ejb3Column[1];
+-			columns[0] = new Ejb3Column( (String) null, 255, inferredData.getPropertyName(),
++			columns[0] = new Ejb3Column( (String) null, Column.DEFAULT_LENGTH, 0, 0, inferredData.getPropertyName(),
+ 				true, false, true, true, (String) null, secondaryTables,
+ 					propertyHolder, mappings );
+ 		}
+@@ -161,7 +171,7 @@
+ 			String name = actualCol.name().equals("") ? inferredData.getPropertyName() : actualCol.name();
+ 			columns = new Ejb3Column[1];
+ 			columns[0] = new Ejb3Column(sqlType, actualCol.length(),
+-				name, actualCol.nullable(), actualCol.unique(),
++                    actualCol.precision(), actualCol.scale(), name, actualCol.nullable(), actualCol.unique(),
+ 				actualCol.insertable(), actualCol.updatable(), actualCol.secondaryTable(),
+ 				secondaryTables, propertyHolder, mappings);
+ 		}
+Index: org/hibernate/cfg/Ejb3DiscriminatorColumn.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/Ejb3DiscriminatorColumn.java,v
+retrieving revision 1.1
+diff -u -r1.1 Ejb3DiscriminatorColumn.java
+--- org/hibernate/cfg/Ejb3DiscriminatorColumn.java	24 Dec 2004 11:32:35 -0000	1.1
++++ org/hibernate/cfg/Ejb3DiscriminatorColumn.java	25 Jan 2005 17:13:16 -0000
+@@ -20,10 +20,10 @@
+ 
+ 	private String discriminatorTypeName;
+ 
+-	public Ejb3DiscriminatorColumn(String sqlType, int length, String name, boolean nullable, boolean unique, boolean insertable,
+-								   boolean updatable, String secondaryTableName, Map<String, Join> joins, PropertyHolder propertyHolder,
+-								   String discriminatorTypeName, Mappings mappings) {
+-		super(sqlType, length, name, nullable, unique, insertable, updatable, secondaryTableName, joins, propertyHolder, mappings);
++	public Ejb3DiscriminatorColumn(String sqlType, int length, int precision, int scale, String name, boolean nullable, boolean unique, boolean insertable,
++                                   boolean updatable, String secondaryTableName, Map<String, Join> joins, PropertyHolder propertyHolder,
++                                   String discriminatorTypeName, Mappings mappings) {
++		super(sqlType, length, precision, scale, name, nullable, unique, insertable, updatable, secondaryTableName, joins, propertyHolder, mappings);
+ 		this.discriminatorTypeName = discriminatorTypeName;
+ 	}
+ 
+@@ -39,6 +39,8 @@
+ 		String discrSqlType = null;
+ 		String discrColumnName = DEFAULT_DISCRIMINATOR_COLUMN_NAME;
+ 		int discrLength = 255;
++        int discrPrecision = 0;
++		int discrScale = 0;
+ 		boolean discrNullable = false;
+ 		String discrTypeName = "string";
+ 
+@@ -61,7 +63,7 @@
+ 				throw new AssertionFailure("Unknown discriminator type: " + type);
+ 			}
+ 		}
+-		Ejb3DiscriminatorColumn discriminatorColumn = new Ejb3DiscriminatorColumn(discrSqlType, discrLength, discrColumnName, discrNullable,
++		Ejb3DiscriminatorColumn discriminatorColumn = new Ejb3DiscriminatorColumn(discrSqlType, discrLength, discrPrecision, discrScale, discrColumnName, discrNullable,
+ 			false, false, false, (String) null, null, null, discrTypeName, mappings);
+ 		return discriminatorColumn;
+ 	}
+Index: org/hibernate/cfg/Ejb3JoinColumn.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/Ejb3JoinColumn.java,v
+retrieving revision 1.6
+diff -u -r1.6 Ejb3JoinColumn.java
+--- org/hibernate/cfg/Ejb3JoinColumn.java	28 Dec 2004 22:19:25 -0000	1.6
++++ org/hibernate/cfg/Ejb3JoinColumn.java	25 Jan 2005 17:13:16 -0000
+@@ -17,8 +17,7 @@
+  * @author Emmanuel Bernard
+  */
+ public class Ejb3JoinColumn extends Ejb3Column {
+-	private static final int DEFAULT_COLUMN_LENGTH = 255;
+-	
++
+ 	private String referencedColumn;
+ 	
+ 	public Ejb3JoinColumn(String sqlType,
+@@ -33,8 +32,10 @@
+ 						  PropertyHolder propertyHolder, Mappings mappings) {
+ 		super(
+ 			sqlType,
+-			DEFAULT_COLUMN_LENGTH,
+-			name,
++			Column.DEFAULT_LENGTH,
++            0,
++            0,
++            name,
+ 			nullable,
+ 			unique,
+ 			insertable,

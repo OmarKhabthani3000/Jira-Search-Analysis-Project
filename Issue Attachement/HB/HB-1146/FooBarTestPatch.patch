@@ -1,0 +1,152 @@
+Index: test/org/hibernate/test/FooBarTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/FooBarTest.java,v
+retrieving revision 1.4
+diff -u -r1.4 FooBarTest.java
+--- test/org/hibernate/test/FooBarTest.java	4 Jun 2004 01:27:35 -0000	1.4
++++ test/org/hibernate/test/FooBarTest.java	30 Jul 2004 15:52:33 -0000
+@@ -52,6 +52,7 @@
+ import net.sf.hibernate.dialect.SAPDBDialect;
+ import net.sf.hibernate.dialect.SQLServerDialect;
+ import net.sf.hibernate.dialect.SybaseDialect;
++import net.sf.hibernate.dialect.InformixDialect;
+ import net.sf.hibernate.engine.SessionFactoryImplementor;
+ import net.sf.hibernate.expression.Example;
+ import net.sf.hibernate.expression.Expression;
+@@ -1523,27 +1524,31 @@
+ 			count++;
+ 		}
+ 		assertTrue(count==4);
+-		iter = s.createQuery("select distinct foo from Foo foo")
+-			.setMaxResults(2)
+-			.setFirstResult(2)
+-			.list()
+-			.iterator();
+-		count=0;
+-		while ( iter.hasNext() ) {
+-			iter.next();
+-			count++;
+-		}
+-		assertTrue(count==2);
+-		iter = s.createQuery("select distinct foo from Foo foo")
+-		.setMaxResults(3)
+-		.list()
+-		.iterator();
+-		count=0;
+-		while ( iter.hasNext() ) {
+-			iter.next();
+-			count++;
+-		}
+-		assertTrue(count==3);
++
++        // Informix cannot do a distinct with blob columns
++        if (!(getDialect() instanceof InformixDialect)) {
++            iter = s.createQuery("select distinct foo from Foo foo")
++                .setMaxResults(2)
++                .setFirstResult(2)
++                .list()
++                .iterator();
++            count=0;
++            while ( iter.hasNext() ) {
++                iter.next();
++                count++;
++            }
++            assertTrue(count==2);
++            iter = s.createQuery("select distinct foo from Foo foo")
++            .setMaxResults(3)
++            .list()
++            .iterator();
++            count=0;
++            while ( iter.hasNext() ) {
++                iter.next();
++                count++;
++            }
++            assertTrue(count==3);
++        }
+ 		assertTrue( s.delete("from Foo foo")==10 );
+ 		s.flush();
+ 		s.connection().commit();
+@@ -1643,7 +1648,8 @@
+ 			!( getDialect() instanceof HSQLDialect) &&
+ 			!( getDialect() instanceof SQLServerDialect) &&
+ 			!( getDialect() instanceof SybaseDialect) &&
+-			!( getDialect() instanceof PostgreSQLDialect)
++			!( getDialect() instanceof PostgreSQLDialect) &&
++            !( getDialect() instanceof InformixDialect)
+ 		) { // oracle barfs on "x in ()"
+ 			q.setParameterList("nameList", Collections.EMPTY_LIST);
+ 			list = q.list();
+@@ -1951,8 +1957,10 @@
+ 		//assertTrue( s.delete("from java.lang.Object o")==9 );
+ 		s.delete("from Foo foo");
+ 		s.delete(baz);
++        // Get the correct name for the fooArray table given the NamingStrategy in use
++        String fooArrayTableName = getCfg().getNamingStrategy().propertyToTableName("org.hibernate.test.Baz","fooArray");
+ 		int rows=s.connection().createStatement().executeUpdate(
+-			"delete from fooArray where id_='" + baz.getCode() + "' and i>=8"
++			"delete from " + fooArrayTableName + " where id_='" + baz.getCode() + "' and i>=8"
+ 		);
+ 		assertTrue(rows==1);
+ 		s.flush();
+@@ -2130,7 +2138,8 @@
+ 			s.find("select count(*) from Baz as baz where 1 in indices(baz.fooArray)");
+ 			s.find("select count(*) from Bar as bar where 'abc' in elements(bar.baz.fooArray)");
+ 			s.find("select count(*) from Bar as bar where 1 in indices(bar.baz.fooArray)");
+-			if ( !(getDialect() instanceof DB2Dialect) ) {
++            // For Informix skipping this test due to character/numeric conversion error
++			if ( !(getDialect() instanceof DB2Dialect) && !(getDialect() instanceof InformixDialect)) {
+ 				s.find("select count(*) from Bar as bar, bar.component.glarch.proxyArray as g where g.id in indices(bar.baz.fooArray)");
+ 				s.find("select max( elements(bar.baz.fooArray) ) from Bar as bar, bar.component.glarch.proxyArray as g where g.id in indices(bar.baz.fooArray)");
+ 			}
+@@ -2315,7 +2324,7 @@
+ 			List list = s.find("select foo from foo in class Foo, baz in class Baz where foo in baz.fooArray.elements and 3 = some baz.intArray.elements and 4 > all baz.intArray.indices");
+ 			assertTrue( "collection.elements find", list.size()==2 );
+ 		}
+-		if (!(getDialect() instanceof SAPDBDialect) ) { // SAPDB doesn't like distinct with binary type
++		if (!(getDialect() instanceof SAPDBDialect) && !(getDialect() instanceof InformixDialect)) { // SAPDB and Informix don't like distinct with binary type
+ 			List list = s.find("select distinct foo from baz in class Baz, foo in baz.fooArray.elements");
+ 			assertTrue( "collection.elements find", list.size()==2 );
+ 		}
+@@ -3378,12 +3387,17 @@
+ 		foo.setFoo(foo1);
+ 		List l = s.find("select parent, child from parent in class Foo, child in class Foo where parent.foo = child");
+ 		assertTrue( "multi-column find", l.size()==1 );
++        Iterator rs;
++        Object[] row;
+ 
+-		Iterator rs = s.iterate("select count(distinct child.id), count(distinct parent.id) from parent in class Foo, child in class Foo where parent.foo = child");
+-		Object[] row = (Object[]) rs.next();
+-		assertTrue( "multi-column count", ( (Integer) row[0] ).intValue()==1 );
+-		assertTrue( "multi-column count", ( (Integer) row[1] ).intValue()==1 );
+-		assertTrue( !rs.hasNext() );
++        // Informix cannot have two distincts in one select
++        if (!(getDialect() instanceof InformixDialect)) {
++            rs = s.iterate("select count(distinct child.id), count(distinct parent.id) from parent in class Foo, child in class Foo where parent.foo = child");
++            row = (Object[]) rs.next();
++            assertTrue("multi-column count", ((Integer) row[0]).intValue() == 1);
++            assertTrue("multi-column count", ((Integer) row[1]).intValue() == 1);
++            assertTrue(!rs.hasNext());
++        }
+ 
+ 		rs = s.iterate("select child.id, parent.id, child.long from parent in class Foo, child in class Foo where parent.foo = child");
+ 		row = (Object[]) rs.next();
+@@ -4694,9 +4708,9 @@
+ 	}
+ 
+ 
+-	public static Test suite() {
+-		return new TestSuite(FooBarTest.class);
+-	}
++    public static Test suite() {
++        return new TestSuite(FooBarTest.class);
++    }
+ 
+ 	public static void main(String[] args) throws Exception {
+ 		TestRunner.run( suite() );
+@@ -4725,4 +4739,4 @@
+ 		};
+ 	}
+ 
+-}
++}
+\ No newline at end of file

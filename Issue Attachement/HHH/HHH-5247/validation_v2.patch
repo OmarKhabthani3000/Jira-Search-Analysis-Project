@@ -1,0 +1,128 @@
+Index: src/main/java/org/hibernate/cfg/Configuration.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Configuration.java	(revision 19569)
++++ src/main/java/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -1176,6 +1176,8 @@
+ 				}
+ 				else {
+ 					table.validateColumns( dialect, mapping, tableInfo );
++					table.validateIndices( tableInfo );
++					table.validateUniqueKeys( tableInfo );
+ 				}
+ 
+ 			}
+Index: src/main/java/org/hibernate/mapping/Table.java
+===================================================================
+--- src/main/java/org/hibernate/mapping/Table.java	(revision 19569)
++++ src/main/java/org/hibernate/mapping/Table.java	(working copy)
+@@ -26,6 +26,7 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+@@ -36,6 +37,7 @@
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.tool.hbm2ddl.ColumnMetadata;
++import org.hibernate.tool.hbm2ddl.IndexMetadata;
+ import org.hibernate.tool.hbm2ddl.TableMetadata;
+ import org.hibernate.util.CollectionHelper;
+ 
+@@ -292,6 +294,94 @@
+ 		}
+ 
+ 	}
++	
++	public void validateIndices(TableMetadata tableInfo) {
++	    Iterator indexIter = getIndexIterator();
++	    while ( indexIter.hasNext() ) {
++	        Index idx = (Index) indexIter.next();
++	        IndexMetadata idxInfo = tableInfo.getIndexMetadata(idx.getName());
++	        
++	        if ( idxInfo == null ) {
++	            throw new HibernateException(
++	                    "Missing index " + idx.getName() + " in " +
++	                    Table.qualify( tableInfo.getCatalog(), tableInfo.getSchema(), tableInfo.getName())
++                );
++	        }
++	        
++	        boolean indicesMatch = true;
++	        if ( idx.getColumnSpan() != idxInfo.getColumns().length ) {
++	            indicesMatch = false;
++	        } else {
++	            
++	            HashSet idxColumnNames = new HashSet();
++	            for (ColumnMetadata column : idxInfo.getColumns()) {
++	                idxColumnNames.add(column.getName());
++	            }
++	        
++	            Iterator columnIter = idx.getColumnIterator();
++	            while ( columnIter.hasNext() )
++	            {
++	                Column column = (Column) columnIter.next();
++	                
++	                if ( !idxColumnNames.contains(column.getName()) ) {
++	                    indicesMatch = false;
++	                    break;
++	                }
++	            }
++	        }
++	        
++	        if ( !indicesMatch ) {
++	            throw new HibernateException(
++                        "Index mismatch " + idx.getName() + " in " +
++                        Table.qualify( tableInfo.getCatalog(), tableInfo.getSchema(), tableInfo.getName())
++                );
++	        }
++	    }
++	}
++	
++	public void validateUniqueKeys(TableMetadata tableInfo) {
++        Iterator uniqueKeyIter = this.getUniqueKeyIterator();
++        while ( uniqueKeyIter.hasNext() ) {
++            UniqueKey unqKey = (UniqueKey) uniqueKeyIter.next();
++            IndexMetadata unqKeyInfo = tableInfo.getIndexMetadata(unqKey.getName());
++            
++            if ( unqKeyInfo == null ) {
++                throw new HibernateException(
++                        "Missing unique key " + unqKey.getName() + " in " +
++                        Table.qualify( tableInfo.getCatalog(), tableInfo.getSchema(), tableInfo.getName())
++                );
++            }
++            
++            boolean unqKeysMatch = true;
++            if ( unqKey.getColumnSpan() != unqKeyInfo.getColumns().length ) {
++                unqKeysMatch = false;
++            } else {
++                
++                HashSet unqKeyColumnNames = new HashSet();
++                for (ColumnMetadata column : unqKeyInfo.getColumns()) {
++                    unqKeyColumnNames.add(column.getName());
++                }
++            
++                Iterator columnIter = unqKey.getColumnIterator();
++                while ( columnIter.hasNext() )
++                {
++                    Column column = (Column) columnIter.next();
++                    
++                    if ( !unqKeyColumnNames.contains(column.getName()) ) {
++                        unqKeysMatch = false;
++                        break;
++                    }
++                }
++            }
++            
++            if ( !unqKeysMatch ) {
++                throw new HibernateException(
++                        "Unique Key mismatch " + unqKey.getName() + " in " +
++                        Table.qualify( tableInfo.getCatalog(), tableInfo.getSchema(), tableInfo.getName())
++                );
++            }
++        }
++    }
+ 
+ 	public Iterator sqlAlterStrings(Dialect dialect, Mapping p, TableMetadata tableInfo, String defaultCatalog,
+ 									String defaultSchema)

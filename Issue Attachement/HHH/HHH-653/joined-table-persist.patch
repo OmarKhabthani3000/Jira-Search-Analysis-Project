@@ -1,0 +1,86 @@
+Index: src/org/hibernate/persister/entity/BasicEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/persister/entity/BasicEntityPersister.java,v
+retrieving revision 1.42
+diff -u -r1.42 BasicEntityPersister.java
+--- src/org/hibernate/persister/entity/BasicEntityPersister.java	20 Jun 2005 09:16:58 -0000	1.42
++++ src/org/hibernate/persister/entity/BasicEntityPersister.java	21 Jun 2005 14:49:19 -0000
+@@ -1821,10 +1821,10 @@
+ 			throws HibernateException {
+ 
+ 		if ( isInverseTable( j ) ) return;
+		
+ 		//note: it is conceptually possible that a UserType could map null to
+ 		//      a non-null value, so the following is arguable:
+-		if ( isNullableTable( j ) && isAllNull( fields, j ) ) return;
++		if ( isNullableTable( j ) && (isAllNull( fields, j ) || !hasInsertableProperties( j )) ) return;
+ 
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace( "Inserting entity: " + MessageHelper.infoString( this, id, getFactory() ) );
+@@ -1937,6 +1937,8 @@
+ 							 final SessionImplementor session)
+ 			throws HibernateException {
+ 
++        if (!hasUpdateableProperties(j)) return false;
++
+ 		final boolean useVersion = j == 0 && isVersioned();
+ 		final boolean callable = isUpdateCallable( j );
+ 		final boolean useBatch = j == 0 && !callable && isBatchable(); //note: updates to joined tables can't be batched...
+@@ -2024,6 +2026,8 @@
+ 		
+ 		if ( isInverseTable( j ) ) return;
+ 
++        if (!hasUpdateableProperties(j)) return;
++
+ 		final boolean useVersion = j == 0 && isVersioned();
+ 		final boolean callable = isDeleteCallable( j );
+ 		final boolean useBatch = j == 0 && isBatchable() && !callable;
+@@ -2071,7 +2075,7 @@
+ 				}
+ 
+ 				if ( useBatch ) {
+-					session.getBatcher().addToBatch( 1 );
++					session.getBatcher().addToBatch( 0 );
+ 				}
+ 				else {
+ 					check( delete.executeUpdate(), id, j );
+@@ -2494,7 +2498,39 @@
+ 		}
+ 		return true;
+ 	}
+	
++    /**
++     * Check if the specified table contains at least one field that is insertable.
++     *
++     * @param tableNumber the number of the table
++     * @return
++     */
++    private boolean hasInsertableProperties(int tableNumber) {
++        boolean[] insertability = getPropertyInsertability();
++
++        for (int i = 0; i < insertability.length; i++) {
++            if ( isPropertyOfTable( i, tableNumber ) && insertability[i] ) return true;
++        }
++
++        return false;
++    }
++
++    /**
++     * Check if the specified table contains at least one field that is updateable.
++     *
++     * @param tableNumber the number of the table
++     * @return
++     */
++    private boolean hasUpdateableProperties(int tableNumber) {
++        boolean[] updatability = getPropertyUpdateability();
++
++        for (int i = 0; i < updatability.length; i++) {
++            if ( isPropertyOfTable( i, tableNumber ) && updatability[i] ) return true;
++        }
++
++        return false;
++    }
++
+ 	public boolean isSubclassPropertyNullable(int i) {
+ 		return subclassPropertyNullabilityClosure[i];
+ 	}

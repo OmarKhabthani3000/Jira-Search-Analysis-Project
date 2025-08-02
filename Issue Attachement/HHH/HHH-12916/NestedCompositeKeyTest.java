@@ -1,0 +1,4 @@
+Panasonic-Ku
+
+
+Inmarsat-GX

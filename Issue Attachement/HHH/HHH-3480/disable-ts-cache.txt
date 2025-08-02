@@ -1,0 +1,345 @@
+Index: src/main/java/org/hibernate/cache/StandardQueryCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/StandardQueryCache.java	(revision 15194)
++++ src/main/java/org/hibernate/cache/StandardQueryCache.java	(working copy)
+@@ -55,6 +55,14 @@
+ 
+ 	private QueryResultsRegion cacheRegion;
+ 	private UpdateTimestampsCache updateTimestampsCache;
++	private static Class entityNotFoundExceptionClass = Void.class;
++	static {
++	    try {
++	        entityNotFoundExceptionClass = Class.forName("javax.persistence.EntityNotFoundException");
++	    } 
++	    catch (Exception e) {
++	    }
++	}
+ 
+ 	public void clear() throws CacheException {
+ 		cacheRegion.evictAll();
+@@ -139,18 +147,18 @@
+ 			return null;
+ 		}
+ 
+-		log.debug( "returning cached query results" );
+-		for ( int i = 1; i < cacheable.size(); i++ ) {
+-			if ( returnTypes.length == 1 ) {
+-				returnTypes[0].beforeAssemble( ( Serializable ) cacheable.get( i ), session );
+-			}
+-			else {
+-				TypeFactory.beforeAssemble( ( Serializable[] ) cacheable.get( i ), returnTypes, session );
+-			}
+-		}
+-		List result = new ArrayList( cacheable.size() - 1 );
+-		for ( int i = 1; i < cacheable.size(); i++ ) {
+-			try {
++		try {
++    		log.debug( "returning cached query results" );
++    		for ( int i = 1; i < cacheable.size(); i++ ) {
++    			if ( returnTypes.length == 1 ) {
++    				returnTypes[0].beforeAssemble( ( Serializable ) cacheable.get( i ), session );
++    			}
++    			else {
++    				TypeFactory.beforeAssemble( ( Serializable[] ) cacheable.get( i ), returnTypes, session );
++    			}
++    		}
++    		List result = new ArrayList( cacheable.size() - 1 );
++    		for ( int i = 1; i < cacheable.size(); i++ ) {
+ 				if ( returnTypes.length == 1 ) {
+ 					result.add( returnTypes[0].assemble( ( Serializable ) cacheable.get( i ), session, null ) );
+ 				}
+@@ -162,22 +170,22 @@
+ 					);
+ 				}
+ 			}
+-			catch ( UnresolvableObjectException uoe ) {
+-				if ( isNaturalKeyLookup ) {
+-					//TODO: not really completely correct, since
+-					//      the uoe could occur while resolving
+-					//      associations, leaving the PC in an
+-					//      inconsistent state
+-					log.debug( "could not reassemble cached result set" );
+-					cacheRegion.evict( key );
+-					return null;
+-				}
+-				else {
+-					throw uoe;
+-				}
++    		return result;
++		} 
++		catch ( RuntimeException e ) {
++			if ( isNaturalKeyLookup && (e instanceof UnresolvableObjectException || entityNotFoundExceptionClass.isInstance(e))) {
++				//TODO: not really completely correct, since
++				//      the uoe could occur while resolving
++				//      associations, leaving the PC in an
++				//      inconsistent state
++				log.debug( "could not reassemble cached result set" );
++				cacheRegion.evict( key );
++				return null;
+ 			}
++			else {
++				throw e;
++			}
+ 		}
+-		return result;
+ 	}
+ 
+ 	protected boolean isUpToDate(Set spaces, Long timestamp) {
+Index: src/main/java/org/hibernate/cache/NoUpdateTimestampsCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/NoUpdateTimestampsCache.java	(revision 0)
++++ src/main/java/org/hibernate/cache/NoUpdateTimestampsCache.java	(revision 0)
+@@ -0,0 +1,86 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.cache;
++
++import java.io.Serializable;
++import java.util.Set;
++
++/**
++ * Overrides the public methods of {@link UpdateTimestampsCache} to no
++ * longer store timestamps.
++ *
++ * @author Elias Ross
++ */
++public class NoUpdateTimestampsCache extends UpdateTimestampsCache {
++
++    /**
++     * Constructs a new NoUpdateTimestampsCache.
++     */
++	public NoUpdateTimestampsCache() {
++	}
++
++	/**
++	 * Does nothing.
++	 */
++	public void preinvalidate(Serializable[] spaces) {
++	}
++
++	/**
++	 * Does nothing.
++	 */
++	public void invalidate(Serializable[] spaces) {
++	}
++
++	/**
++	 * Always returns false.
++	 */
++	public boolean isUpToDate(Set spaces, Long timestamp) {
++	    return false;
++	}
++
++	/**
++	 * Does nothing.
++	 */
++	public void clear() {
++	}
++
++	/**
++	 * Does nothing.
++	 */
++	public void destroy() {
++	}
++
++	/**
++	 * Throws {@link UnsupportedOperationException}.
++	 */
++	public TimestampsRegion getRegion() {
++	    throw new UnsupportedOperationException();
++	}
++	
++	public String toString() {
++		return getClass().getName();
++	}
++
++}
+Index: src/main/java/org/hibernate/cache/UpdateTimestampsCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(revision 15194)
++++ src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(working copy)
+@@ -51,6 +51,10 @@
+ 
+ 	private final TimestampsRegion region;
+ 
++	protected UpdateTimestampsCache() {
++	    this.region = null;
++	}
++	
+ 	public UpdateTimestampsCache(Settings settings, Properties props) throws HibernateException {
+ 		String prefix = settings.getCacheRegionPrefix();
+ 		String regionName = prefix == null ? REGION_NAME : prefix + '.' + REGION_NAME;
+Index: src/main/java/org/hibernate/cfg/Settings.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Settings.java	(revision 15194)
++++ src/main/java/org/hibernate/cfg/Settings.java	(working copy)
+@@ -65,6 +65,7 @@
+ 	private boolean autoUpdateSchema;
+ 	private boolean autoValidateSchema;
+ 	private boolean queryCacheEnabled;
++	private boolean timestampsCacheEnabled;
+ 	private boolean structuredCacheEntriesEnabled;
+ 	private boolean secondLevelCacheEnabled;
+ 	private String cacheRegionPrefix;
+@@ -198,6 +199,10 @@
+ 		return queryCacheEnabled;
+ 	}
+ 
++	public boolean isTimestampsCacheEnabled() {
++		return timestampsCacheEnabled;
++	}
++
+ 	public boolean isCommentsEnabled() {
+ 		return commentsEnabled;
+ 	}
+@@ -385,6 +390,10 @@
+ 		queryCacheEnabled = b;
+ 	}
+ 
++	void setTimestampsCacheEnabled(boolean b) {
++		timestampsCacheEnabled = b;
++	}
++
+ 	void setCommentsEnabled(boolean commentsEnabled) {
+ 		this.commentsEnabled = commentsEnabled;
+ 	}
+Index: src/main/java/org/hibernate/cfg/Environment.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Environment.java	(revision 15194)
++++ src/main/java/org/hibernate/cfg/Environment.java	(working copy)
+@@ -407,6 +407,10 @@
+ 	 */
+ 	public static final String USE_QUERY_CACHE = "hibernate.cache.use_query_cache";
+ 	/**
++	 * Enable the timestamps cache (disabled by default; enabled by default if query cache is enabled)
++	 */
++	public static final String USE_TIMESTAMPS_CACHE = "hibernate.cache.use_timestamps_cache";
++	/**
+ 	 * The <tt>QueryCacheFactory</tt> implementation class.
+ 	 */
+ 	public static final String QUERY_CACHE_FACTORY = "hibernate.cache.query_cache_factory";
+Index: src/main/java/org/hibernate/cfg/SettingsFactory.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/SettingsFactory.java	(revision 15194)
++++ src/main/java/org/hibernate/cfg/SettingsFactory.java	(working copy)
+@@ -266,6 +266,10 @@
+ 		log.info( "Query cache: " + enabledDisabled(useQueryCache) );
+ 		settings.setQueryCacheEnabled(useQueryCache);
+ 
++		boolean useTimestampsCache = PropertiesHelper.getBoolean(Environment.USE_TIMESTAMPS_CACHE, properties, useQueryCache);
++		log.info( "Timestamps cache: " + enabledDisabled(useTimestampsCache) );
++		settings.setTimestampsCacheEnabled(useTimestampsCache);
++		
+ 		// The cache provider is needed when we either have second-level cache enabled
+ 		// or query cache enabled.  Note that useSecondLevelCache is enabled by default
+ 		settings.setRegionFactory( createRegionFactory( properties, ( useSecondLevelCache || useQueryCache ) ) );
+Index: src/main/java/org/hibernate/engine/ActionQueue.java
+===================================================================
+--- src/main/java/org/hibernate/engine/ActionQueue.java	(revision 15194)
++++ src/main/java/org/hibernate/engine/ActionQueue.java	(working copy)
+@@ -190,7 +190,7 @@
+ 	 */
+ 	public void afterTransactionCompletion(boolean success) {
+ 		int size = executions.size();
+-		final boolean invalidateQueryCache = session.getFactory().getSettings().isQueryCacheEnabled();
++		final boolean invalidateTimestampsCache = session.getFactory().getSettings().isTimestampsCacheEnabled();
+ 		for ( int i = 0; i < size; i++ ) {
+ 			try {
+ 				Executable exec = ( Executable ) executions.get( i );
+@@ -198,7 +198,7 @@
+ 					exec.afterTransactionCompletion( success );
+ 				}
+ 				finally {
+-					if ( invalidateQueryCache ) {
++					if ( invalidateTimestampsCache ) {
+ 						session.getFactory().getUpdateTimestampsCache().invalidate( exec.getPropertySpaces() );
+ 					}
+ 				}
+@@ -267,11 +267,11 @@
+ 	}
+ 
+ 	public void execute(Executable executable) {
+-		final boolean lockQueryCache = session.getFactory().getSettings().isQueryCacheEnabled();
+-		if ( executable.hasAfterTransactionCompletion() || lockQueryCache ) {
++		final boolean updateTimestamps = session.getFactory().getSettings().isTimestampsCacheEnabled();
++		if ( executable.hasAfterTransactionCompletion() || updateTimestamps ) {
+ 			executions.add( executable );
+ 		}
+-		if ( lockQueryCache ) {
++		if ( updateTimestamps ) {
+ 			session.getFactory()
+ 					.getUpdateTimestampsCache()
+ 					.preinvalidate( executable.getPropertySpaces() );
+Index: src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(revision 15194)
++++ src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -61,6 +61,7 @@
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.CollectionRegion;
+ import org.hibernate.cache.EntityRegion;
++import org.hibernate.cache.NoUpdateTimestampsCache;
+ import org.hibernate.cache.QueryCache;
+ import org.hibernate.cache.Region;
+ import org.hibernate.cache.UpdateTimestampsCache;
+@@ -366,11 +367,16 @@
+ 		currentSessionContext = buildCurrentSessionContext();
+ 
+ 		if ( settings.isQueryCacheEnabled() ) {
+-			updateTimestampsCache = new UpdateTimestampsCache(settings, properties);
++		    if ( settings.isTimestampsCacheEnabled() ) {
++    			updateTimestampsCache = new UpdateTimestampsCache(settings, properties);
++    			allCacheRegions.put( updateTimestampsCache.getRegion().getName(), updateTimestampsCache.getRegion() );
++		    }
++		    else {
++		        updateTimestampsCache = new NoUpdateTimestampsCache();
++		    }
+ 			queryCache = settings.getQueryCacheFactory()
+ 			        .getQueryCache(null, updateTimestampsCache, settings, properties);
+ 			queryCaches = new HashMap();
+-			allCacheRegions.put( updateTimestampsCache.getRegion().getName(), updateTimestampsCache.getRegion() );
+ 			allCacheRegions.put( queryCache.getRegion().getName(), queryCache.getRegion() );
+ 		}
+ 		else {
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 15194)
++++ pom.xml	(working copy)
+@@ -5,7 +5,7 @@
+     <parent>
+         <groupId>org.hibernate</groupId>
+         <artifactId>hibernate-parent</artifactId>
+-        <version>3.3.2-SNAPSHOT</version>
++        <version>3.4.0-SNAPSHOT</version>
+         <relativePath>../parent/pom.xml</relativePath>
+     </parent>
+ 
+@@ -135,4 +135,4 @@
+     <properties>
+         <antlrPluginVersion>2.1</antlrPluginVersion>
+     </properties>
+-</project>
+\ No newline at end of file
++</project>

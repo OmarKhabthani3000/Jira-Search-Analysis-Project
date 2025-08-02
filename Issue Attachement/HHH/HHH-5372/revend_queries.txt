@@ -1,0 +1,266 @@
+### Eclipse Workspace Patch 1.0
+#P envers-trunk
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(working copy)
+@@ -100,15 +100,15 @@
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+         // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
++        QueryGeneratorTools.addEntityAtRevision(verEntCfg, globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+                 originalIdPropertyName, "e", "e2");
+ 
+         // f.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, indexIdData, revisionPropertyPath,
++        QueryGeneratorTools.addEntityAtRevision(verEntCfg, globalCfg, qb, rootParameters, indexIdData, revisionPropertyPath,
+                 originalIdPropertyName, "f", "f2");
+ 
+         // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
++        QueryGeneratorTools.addAssociationAtRevision(verEntCfg, qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+                 eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+Index: src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java
+===================================================================
+--- src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(working copy)
+@@ -31,6 +31,8 @@
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.query.criteria.AuditCriterion;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.ValidTimeAuditStrategy;
++import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+ /**
+@@ -81,12 +83,27 @@
+ 
+         // e.revision_type != DEL AND
+         qb.getRootParameters().addWhereWithParam(verEntCfg.getRevisionTypePropName(), "<>", RevisionType.DEL);
+-        // e.revision = (SELECT max(...) ...)
+-        qb.getRootParameters().addWhere(revisionPropertyPath, verCfg.getGlobalCfg().getCorrelatedSubqueryOperator(), maxRevQb);
++        
++        // Use faster version of query, if the appropriate strategy is used.
++        if (ValidTimeAuditStrategy.class.getName().equals(verEntCfg.getAuditStrategyName())) {
++        	// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++        	Parameters subParm = qb.getRootParameters().addSubParameters("or");
++        	qb.getRootParameters().addWhereWithParam(revisionPropertyPath, "<=", revision);
++        	subParm.addWhereWithParam(verEntCfg.getRevisionEndFieldName()+".id", ">", revision);
++        	subParm.addWhere(verEntCfg.getRevisionEndFieldName(), true, "is", "null", false);
++        } else {
++        	// e.revision = (SELECT max(...) ...)
++        	qb.getRootParameters().addWhere(revisionPropertyPath, verCfg.getGlobalCfg().getCorrelatedSubqueryOperator(), maxRevQb);
++        }
++        
++        
+         // all specified conditions
+         for (AuditCriterion criterion : criterions) {
+             criterion.addToQuery(verCfg, entityName, qb, qb.getRootParameters());
+         }
++        
++        
++        
+ 
+         List queryResult = buildAndExecuteQuery();
+ 
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(working copy)
+@@ -89,11 +89,11 @@
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+         // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
++        QueryGeneratorTools.addEntityAtRevision(verEntCfg, globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+                 originalIdPropertyName, "e", "e2");
+ 
+         // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
++        QueryGeneratorTools.addAssociationAtRevision(verEntCfg, qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+                 eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java	(working copy)
+@@ -23,9 +23,11 @@
+  */
+ package org.hibernate.envers.entities.mapper.relation.query;
+ 
++import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.strategy.ValidTimeAuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+@@ -33,7 +35,8 @@
+  * @author Adam Warski (adam at warski dot org)
+  */
+ public class QueryGeneratorTools {
+-    public static void addEntityAtRevision(GlobalConfiguration globalCfg, QueryBuilder qb, Parameters rootParameters,
++    public static void addEntityAtRevision(AuditEntitiesConfiguration verEntCfg,
++    		                               GlobalConfiguration globalCfg, QueryBuilder qb, Parameters rootParameters,
+                                            MiddleIdData idData, String revisionPropertyPath, String originalIdPropertyName,
+                                            String alias1, String alias2) {
+         // SELECT max(e.revision) FROM versionsReferencedEntity e2
+@@ -47,11 +50,21 @@
+         idData.getOriginalMapper().addIdsEqualToQuery(maxERevQbParameters,
+                 alias1 + "." + originalIdPropertyName, alias2 +"." + originalIdPropertyName);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere("e." + revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
++        // Use faster version of query, if the appropriate strategy is used.
++        if (ValidTimeAuditStrategy.class.getName().equals(verEntCfg.getAuditStrategyName())) {
++        	// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++        	Parameters subParm = qb.getRootParameters().addSubParameters("or");
++        	qb.getRootParameters().addWhereWithNamedParam("e."+revisionPropertyPath,false, "<=", "revision");
++        	subParm.addWhereWithNamedParam("e."+verEntCfg.getRevisionEndFieldName()+".id",false, ">", "revision");
++        	subParm.addWhere("e."+verEntCfg.getRevisionEndFieldName(), false, "is", "null", false);
++        } else {
++        	// e.revision = (SELECT max(...) ...)
++        	rootParameters.addWhere("e." + revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
++        }
+     }
+ 
+-    public static void addAssociationAtRevision(QueryBuilder qb, Parameters rootParameters,
++    public static void addAssociationAtRevision(AuditEntitiesConfiguration verEntCfg,
++    		                                    QueryBuilder qb, Parameters rootParameters,
+                                                 MiddleIdData referencingIdData, String versionsMiddleEntityName,
+                                                 String eeOriginalIdPropertyPath, String revisionPropertyPath,
+                                                 String originalIdPropertyName, MiddleComponentData... componentDatas) {
+@@ -69,7 +82,19 @@
+             componentData.getComponentMapper().addMiddleEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+         }
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, "=", maxEeRevQb);
++        
++        
++        
++        // Use faster version of query, if the appropriate strategy is used.
++        if (ValidTimeAuditStrategy.class.getName().equals(verEntCfg.getAuditStrategyName())) {
++        	// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++        	Parameters subParm = qb.getRootParameters().addSubParameters("or");
++        	qb.getRootParameters().addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        	subParm.addWhereWithNamedParam(verEntCfg.getRevisionEndFieldName()+".id", ">", "revision");
++        	subParm.addWhere(verEntCfg.getRevisionEndFieldName(), true, "is", "null", false);
++        } else {
++        	// ee.revision = (SELECT max(...) ...)
++            rootParameters.addWhere(revisionPropertyPath, "=", maxEeRevQb);
++        }
+     }
+ }
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(working copy)
+@@ -25,18 +25,18 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
++import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+-import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.IdMapper;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.ValidTimeAuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from an audit entity.
+  * @author Adam Warski (adam at warski dot org)
+@@ -86,8 +86,19 @@
+         referencedIdMapper.addIdsEqualToQuery(maxERevQbParameters,
+                 "e." + originalIdPropertyName, "e2." + originalIdPropertyName);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
++        
++        
++        // Use faster version of query, if the appropriate strategy is used.
++        if (ValidTimeAuditStrategy.class.getName().equals(verEntCfg.getAuditStrategyName())) {
++        	// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++        	Parameters subParm = qb.getRootParameters().addSubParameters("or");
++        	qb.getRootParameters().addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        	subParm.addWhereWithNamedParam(verEntCfg.getRevisionEndFieldName()+".id", ">", "revision");
++        	subParm.addWhere(verEntCfg.getRevisionEndFieldName(), true, "is", "null", false);
++        } else {
++        	// e.revision = (SELECT max(...) ...)
++            rootParameters.addWhere(revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
++        }
+ 
+         // e.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), false, "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(working copy)
+@@ -84,7 +84,7 @@
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+         // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
++        QueryGeneratorTools.addAssociationAtRevision(verEntCfg, qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+                 eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(revision 19920)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(working copy)
+@@ -25,17 +25,17 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.ValidTimeAuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from a relation middle-table only.
+  * @author Adam Warski (adam at warski dot org)
+@@ -85,8 +85,19 @@
+         for (MiddleComponentData componentData : componentDatas) {
+             componentData.getComponentMapper().addMiddleEqualToQuery(maxRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+         }
+-        // ee.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, "=", maxRevQb);       
++        
++        // Use faster version of query, if the appropriate strategy is used.
++        if (ValidTimeAuditStrategy.class.getName().equals(verEntCfg.getAuditStrategyName())) {
++        	// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++        	Parameters subParm = qb.getRootParameters().addSubParameters("or");
++        	qb.getRootParameters().addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        	subParm.addWhereWithNamedParam(verEntCfg.getRevisionEndFieldName()+".id", ">", "revision");
++        	subParm.addWhere(verEntCfg.getRevisionEndFieldName(), true, "is", "null", false);
++        } else {
++        	// ee.revision = (SELECT max(...) ...)
++            rootParameters.addWhere(revisionPropertyPath, "=", maxRevQb);  
++        }
++             
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+ 

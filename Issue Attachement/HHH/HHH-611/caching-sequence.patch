@@ -1,0 +1,86 @@
+diff -Naur src.old/org/hibernate/id/CachingSequenceGenerator.java src/org/hibernate/id/CachingSequenceGenerator.java
+--- src.old/org/hibernate/id/CachingSequenceGenerator.java	1969-12-31 16:00:00.000000000 -0800
++++ src/org/hibernate/id/CachingSequenceGenerator.java	2005-06-13 00:41:24.000000000 -0700
+@@ -0,0 +1,82 @@
++/*
++ *   Copyright (c)2000 Tavant Technologies
++ *   All Rights Reserved.
++ *
++ *   This software is furnished under a license and may be used and copied
++ *   only  in  accordance  with  the  terms  of such  license and with the
++ *   inclusion of the above copyright notice. This software or  any  other
++ *   copies thereof may not be provided or otherwise made available to any
++ *   other person. No title to and ownership of  the  software  is  hereby
++ *   transferred.
++ *
++ *   The information in this software is subject to change without  notice
++ *   and  should  not be  construed as a commitment  by Tavant Technologies.
++ */
++
++package org.hibernate.id;
++
++import org.hibernate.type.Type;
++import org.hibernate.dialect.Dialect;
++import org.hibernate.MappingException;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.util.PropertiesHelper;
++
++import java.util.Properties;
++import java.io.Serializable;
++
++/**
++ * Generates <tt>long</tt> values using an oracle-style sequence with increment.
++ * If <i>n</i> is the value specified for <i>increment</i>, this generator hits
++ * the DB only once in <i>n</i> times. Note that the increment specified should
++ * be same as that in DB.
++ *
++ * <br>
++ * Mapping parameters supported: sequence, parameters, increment
++ *
++ * @see SequenceGenerator
++ * @see TableHiLoGenerator
++ * @author Binil Thomas
++ */
++
++public class CachingSequenceGenerator extends SequenceGenerator {
++
++    /**
++     * The increment parameters
++     */
++    public static final String SEQ_INCREMENT = "increment";
++
++    private int increment;
++    private Class returnClass;
++    private long offset;
++    private long base;
++
++    public void configure(Type type, Properties params, Dialect d)
++            throws MappingException {
++        super.configure(type, params, d);
++        increment = PropertiesHelper.getInt(SEQ_INCREMENT, params, 50);
++        offset = increment + 1;
++        returnClass = type.getReturnedClass();
++    }
++
++    public synchronized Serializable generate(SessionImplementor session, Object obj) {
++        offset++;
++        if (offset >= increment)
++        {
++            base = getNextValueFromSequence(session, obj);
++            offset = 0;
++        }
++
++        return IdentifierGeneratorFactory.createNumber(base + offset, returnClass);
++    }
++
++    /**
++     * Gets the next value from the database sequence.
++     *
++     * @param session
++     * @param obj
++     * @return
++     */
++    protected long getNextValueFromSequence(SessionImplementor session, Object obj) {
++        return ((Number) super.generate(session, obj)).longValue();
++    }
++}

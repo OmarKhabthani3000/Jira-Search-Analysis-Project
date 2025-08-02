@@ -1,0 +1,313 @@
+Index: src/net/sf/hibernate/xml/XMLDatabinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/xml/XMLDatabinder.java,v
+retrieving revision 1.10.2.10
+diff -u -r1.10.2.10 XMLDatabinder.java
+--- src/net/sf/hibernate/xml/XMLDatabinder.java	2 Nov 2003 04:26:44 -0000	1.10.2.10
++++ src/net/sf/hibernate/xml/XMLDatabinder.java	23 Nov 2003 20:44:21 -0000
+@@ -6,15 +6,7 @@
+ import java.io.InputStream;
+ import java.io.StringWriter;
+ import java.lang.reflect.Array;
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.Date;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Properties;
+-import java.util.Set;
++import java.util.*;
+ 
+ import javax.xml.transform.ErrorListener;
+ import javax.xml.transform.Result;
+@@ -68,41 +60,47 @@
+  */
+ public class XMLDatabinder implements Databinder {
+ 	private SessionFactoryImplementor factory;
+-	private List objects = new ArrayList();
++    private List objects = new ArrayList();
++    private Map excludedObjects = new HashMap();
+ 	private Set associatedObjects;
+ 	private Set processedObjects;
+ 	private Transformer transform;
+ 	private boolean initializeLazy = false;
+-	
++
+ 	private static final Log log = LogFactory.getLog(XMLDatabinder.class);
+-	
++
+ 	public XMLDatabinder(SessionFactoryImplementor factory, Transformer transform) {
+ 		this.factory = factory;
+ 		this.transform = transform;
+ 	}
+-	
++
+ 	private ClassPersister getPersister(Class clazz) throws MappingException {
+ 		return factory.getPersister(clazz);
+ 	}
+-	
++
+ 	public void setInitializeLazy(boolean initializeLazy) {
+ 		this.initializeLazy = initializeLazy;
+ 	}
+-	
++
+ 	private Document toDocument() throws HibernateException {
+ 		this.associatedObjects = new HashSet();
+ 		this.processedObjects = new HashSet();
+-		
++
+ 		Document doc = DocumentHelper.createDocument();
+ 		Element root = doc.addElement("hibernate-generic");
+ 		root.setAttributeValue("datetime", Hibernate.TIMESTAMP.toString( new Date(), factory) );
+ 		Iterator iter;
+-		
++
+ 		// keep going until we run out of bound objects and their associated objects
+ 		while ( objects.size()>0 ) {
+ 			iter = objects.iterator();
+ 			while ( iter.hasNext() ) {
+ 				Object object = iter.next();
++
++                if (excludedObjects.containsKey(object)) {
++                    continue;
++                }
++
+ 				Element objectElem = root.addElement("object");
+ 				object = maybeInitializeIfProxy(object, objectElem);
+ 				if ( object!=null ) {
+@@ -121,29 +119,33 @@
+ 					String[] names = persister.getPropertyNames();
+ 					//This approach wont work for components + collections
+ 					for ( int i=0; i<types.length; i++ ) {
++                        if (excludedObjects.containsKey(values[i])) {
++                            continue;
++                        }
++
+ 						objectElem.add( renderProperty( names[i], types[i], values[i], "component", "property", "collection", true ) );
+ 					}
+ 				}
+ 			}
+-			
++
+ 			processedObjects.addAll(objects);
+ 			objects = new ArrayList(associatedObjects);
+ 			associatedObjects = new HashSet();
+ 		}
+ 		return doc;
+ 	}
+-	
++
+ 	private void addClass(Element element, Class clazz) {
+ 		String className = clazz.getName();
+ 		element.setAttributeValue( "class", StringHelper.unqualify(className) );
+ 		element.setAttributeValue( "package", StringHelper.qualifier(className) );
+ 	}
+-	
++
+ 	private Object maybeInitializeIfProxy(Object object, Element element) throws HibernateException {
+ 		if ( !(object instanceof HibernateProxy) ) return object;
+-		
++
+ 		LazyInitializer li = HibernateProxyHelper.getLazyInitializer( (HibernateProxy) object );
+-		
++
+ 		if (li.isUninitialized() && !initializeLazy) {
+ 			Class clazz = li.getPersistentClass();
+ 			ClassPersister persister = getPersister(clazz);
+@@ -154,7 +156,7 @@
+ 				element.add(elemElement);
+ 			}
+ 			addClass(element, clazz);
+-		
++
+ 			element.setAttributeValue("proxy", "uninitialized");
+ 			return null;
+ 		}
+@@ -164,10 +166,10 @@
+ 		else {
+ 			element.setAttributeValue("proxy", "initialized");
+ 		}
+-		
++
+ 		return li.getImplementation();
+ 	}
+-	
++
+ 	public String toGenericXML() throws HibernateException {
+ 		StringWriter writer = new StringWriter();
+ 		XMLWriter outputter = new XMLWriter( writer, OutputFormat.createPrettyPrint() );
+@@ -180,22 +182,22 @@
+ 		}
+ 		return writer.toString();
+ 	}
+-	
++
+ 	public String toXML() throws HibernateException, TransformerException {
+ 
+ 		Source source = new DocumentSource( toDocument() );
+ 		StringWriter writer = new StringWriter();
+ 		Result result = new StreamResult(writer);
+-		
++
+ 		transform.setErrorListener( new ErrorListener() {
+ 			public void warning(TransformerException te)
+ 			throws TransformerException {
+-				
++
+ 				log.warn("problem transforming to Custom XML: " + te.getMessageAndLocation(), te);
+ 			}
+ 			public void error(TransformerException te)
+ 			throws TransformerException {
+-				
++
+ 				log.error("problem transforming to Custom XML: " + te.getMessageAndLocation(), te);
+ 			}
+ 			public void fatalError(TransformerException te)
+@@ -203,28 +205,41 @@
+ 				error(te);
+ 			}
+ 		} );
+-		
++
+ 		transform.transform(source, result);
+ 		return writer.toString();
+ 	}
+-	
++
+ 	public org.w3c.dom.Document toDOM() throws HibernateException, TransformerException {
+ 		Source source = new DocumentSource( toDocument() );
+ 		DOMResult result = new DOMResult();
+ 		transform.transform(source, result);
+ 		return (org.w3c.dom.Document) result.getNode();
+ 	}
+-	
++
+ 	public Databinder bind(Object object) {
+ 		objects.add(object);
+ 		return this;
+ 	}
+-	
+-	public Databinder bindAll(Collection collection) {
+-		this.objects.addAll(collection);
+-		return this;
+-	}
+-	
++
++    public Databinder unbind(Object object) {
++        excludedObjects.put(object, object);
++        return this;
++    }
++
++    public Databinder bindAll(Collection objects) {
++        this.objects.addAll(objects);
++        return this;
++    }
++
++    public Databinder unbindAll(Collection objects) {
++        for (Iterator iterator = objects.iterator(); iterator.hasNext();) {
++            Object object =  iterator.next();
++            this.excludedObjects.put(object, object);
++        }
++        return this;
++    }
++
+ 	public org.w3c.dom.Document toGenericDOM() throws HibernateException {
+ 		DOMWriter outputter = new DOMWriter();
+ 		try {
+@@ -261,9 +276,9 @@
+ 			log.warn("no XSLT implementation found - databinding disabled");
+ 		}
+ 		return templates;
+-		
++
+ 	}
+-	
++
+ 	private Element renderProperty(String name, Type type, Object value, String componentName, String propertyName, String collectionName, boolean doType) throws HibernateException {
+ 		if ( type.isComponentType() ) {
+ 			return renderComponentType(name, type, value, componentName, doType);
+@@ -278,10 +293,10 @@
+ 			return renderOtherType(name, type, value, propertyName, doType);
+ 		}
+ 	}
+-	
++
+ 	private Element renderOtherType(String name, Type type, Object value, String propertyName, boolean doType)
+ 	throws HibernateException {
+-		
++
+ 		Element propertyElem = DocumentHelper.createElement(propertyName);
+ 		if ( name!=null) propertyElem.setAttributeValue( "name", name );
+ 		//propertyElem.setAttributeValue( "value", types[i].toXML( values[i] ) );
+@@ -300,7 +315,7 @@
+ 
+ 	private Element renderEntityType(String name, Type type, Object value, String propertyName, boolean doType)
+ 	throws HibernateException {
+-		
++
+ 		Element referenceElem = DocumentHelper.createElement(propertyName);
+ 		if ( name!=null) referenceElem.setAttributeValue( "name", name );
+ 		//propertyElem.setAttributeValue( "value", types[i].toXML( values[i] ) );
+@@ -324,7 +339,7 @@
+ 
+ 	private Element renderCollectionType(String name, Type type, Object value, String collectionName, boolean doType)
+ 	throws HibernateException {
+-		
++
+ 		PersistentCollectionType collectiontype = (PersistentCollectionType) type;
+ 		String role = collectiontype.getRole();
+ 		CollectionPersister persister = factory.getCollectionPersister(role);
+@@ -371,7 +386,12 @@
+ 						Iterator iter = ( (List) value ).iterator();
+ 						int i=0;
+ 						while ( iter.hasNext() ) {
+-							Element elemElement = renderProperty(null, elemType, iter.next(), "composite-element", "element", "subcollection", false);
++                            Object collectionItem = iter.next();
++                            if (excludedObjects.containsKey(collectionItem)) {
++                                continue;
++                            }
++
++                            Element elemElement = renderProperty(null, elemType, collectionItem, "composite-element", "element", "subcollection", false);
+ 							elemElement.setAttributeValue( "index", Integer.toString(i++) );
+ 							collectionElem.add(elemElement);
+ 						}
+@@ -379,7 +399,12 @@
+ 					else if ( (type instanceof SetType) || (type instanceof BagType) ) {
+ 						Iterator iter = ( (Collection) value ).iterator();
+ 						while ( iter.hasNext() ) {
+-							Element elemElement = renderProperty(null, elemType, iter.next(), "composite-element", "element", "subcollection", false);
++                            Object collectionItem = iter.next();
++                            if (excludedObjects.containsKey(collectionItem)) {
++                                continue;
++                            }
++
++							Element elemElement = renderProperty(null, elemType, collectionItem, "composite-element", "element", "subcollection", false);
+ 							collectionElem.add(elemElement);
+ 						}
+ 					}
+@@ -390,7 +415,12 @@
+ 						while ( iter.hasNext() ) {
+ 							Map.Entry e = (Map.Entry) iter.next();
+ 							Object idx = e.getKey();
+-							Element elemElement = renderProperty(null, elemType, e.getValue(), "composite-element", "element", "subcollection", false);
++                            Object collectionItem = e.getValue();
++                            if (excludedObjects.containsKey(collectionItem)) {
++                                continue;
++                            }
++
++							Element elemElement = renderProperty(null, elemType, collectionItem, "composite-element", "element", "subcollection", false);
+ 							elemElement.setAttributeValue( "index", indexType.toString(idx, factory) ); //index not allowed to be null currently
+ 							collectionElem.add(elemElement);
+ 						}
+@@ -417,7 +447,7 @@
+ 		}
+ 		return componentElem;
+ 	}
+-	
++
+ }
+ 
+ 

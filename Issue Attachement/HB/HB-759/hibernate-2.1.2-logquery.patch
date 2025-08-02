@@ -1,0 +1,66 @@
+diff -ruN hibernate-2.1/src/net/sf/hibernate/hql/QueryTranslator.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/hql/QueryTranslator.java
+--- hibernate-2.1/src/net/sf/hibernate/hql/QueryTranslator.java	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/hql/QueryTranslator.java	Sun Feb 29 19:06:05 2004
+@@ -835,19 +835,38 @@
+ 	}
+ 
+ 	/**
++	 * The Method <code>prepareQueryStatement</code> prepares a query
++	 * statement with given query parameters and session.
++	 * 
++	 * @param queryParameters query parameter for this query
++	 * @param session         session implementor
++	 * 
++	 * @return PreparedStatement
++	 * 
++	 * @throws HibernateException on Hibernate specific errors
++	 * @throws SQLException       on database errors
++	 */
++	protected PreparedStatement prepareQueryStatement(
++		QueryParameters    queryParameters,
++		SessionImplementor session)
++		throws HibernateException, SQLException {
++			
++		String sql = applyLocks(getSQLString(),
++			queryParameters.getLockModes(),
++			session.getFactory().getDialect());
++		 
++		logQuery(queryString, sql);
++		return prepareQueryStatement(sql, queryParameters, false, session);			
++	}
++
++	/**
+ 	 * Return the query results as an iterator
+ 	 */
+ 	public Iterator iterate(QueryParameters queryParameters, SessionImplementor session) 
+ 	throws HibernateException, SQLException {
+-		logQuery(queryString, sqlString);
+-		
+-		PreparedStatement st = prepareQueryStatement( 
+-			applyLocks( getSQLString(), queryParameters.getLockModes(), session.getFactory().getDialect() ), 
+-			queryParameters, false, session 
+-		);
++		PreparedStatement st = prepareQueryStatement(queryParameters, session);
+ 		ResultSet rs = getResultSet(st, queryParameters.getRowSelection(), session);
+ 		return new IteratorImpl( rs, st, session, returnTypes, getScalarColumnNames() );
+-
+ 	}
+ 	
+ 	/**
+@@ -855,15 +874,9 @@
+ 	 */
+ 	public ScrollableResults scroll(QueryParameters queryParameters, SessionImplementor session) 
+ 	throws HibernateException, SQLException {
+-		logQuery(queryString, sqlString);
+-		
+-		PreparedStatement st = prepareQueryStatement( 
+-			applyLocks( getSQLString(), queryParameters.getLockModes(), session.getFactory().getDialect() ), 
+-			queryParameters, true, session 
+-		);
++		PreparedStatement st = prepareQueryStatement(queryParameters, session);
+ 		ResultSet rs = getResultSet(st, queryParameters.getRowSelection(), session);
+ 		return new ScrollableResultsImpl( rs, st, session, returnTypes, getScalarColumnNames() );
+-
+ 	}
+ 	
+ 	/**

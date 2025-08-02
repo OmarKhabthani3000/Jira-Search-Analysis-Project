@@ -1,0 +1,170 @@
+JPA (with an EntityManager em):
+
+does not work:
+
+
+            em.createNativeQuery("SELECT pg_notify(:channel, :payload);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .getSingleResult();
+-> org.hibernate.MappingException: No Dialect mapping for JDBC type: 1111
+
+
+            em.createNativeQuery("SELECT pg_notify(:channel, :payload);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .executeUpdate();
+-> org.postgresql.util.PSQLException: A result was returned when none was expected.
+
+
+            em.createNativeQuery("SELECT cast(pg_notify(:channel, :payload) AS TEXT);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .executeUpdate();
+-> org.postgresql.util.PSQLException: A result was returned when none was expected.
+
+
+            StoredProcedureQuery q = em.createStoredProcedureQuery("pg_notify")
+                    .registerStoredProcedureParameter("channel", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("payload", String.class, ParameterMode.IN)
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload);
+            q.execute();
+-> org.hibernate.MappingException: No Dialect mapping for JDBC type: 1111
+
+
+            StoredProcedureQuery q = em.createStoredProcedureQuery("pg_notify")
+                    .registerStoredProcedureParameter("channel", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("payload", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("void", Void.class, ParameterMode.OUT)
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload);
+            q.execute();
+            q.getOutputParameterValue("void");
+-> java.lang.IllegalArgumentException: Type cannot be null
+
+
+            StoredProcedureQuery q = em.createStoredProcedureQuery("pg_notify")
+                    .registerStoredProcedureParameter("channel", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("payload", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("object", Object.class, ParameterMode.OUT)
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload);
+            q.execute();
+            q.getOutputParameterValue("object");
+-> java.lang.UnsupportedOperationException: Type [org.hibernate.type.ObjectType@4d8539de] does support multi-parameter value extraction
+
+
+            StoredProcedureQuery q = em.createStoredProcedureQuery("pg_notify")
+                    .registerStoredProcedureParameter("channel", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("payload", String.class, ParameterMode.IN)
+                    .registerStoredProcedureParameter("object", PGobject.class, ParameterMode.OUT)
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload);
+            q.execute();
+            q.getOutputParameterValue("object");
+-> org.postgresql.util.PSQLException: A CallableStatement function was executed and the out parameter 1 was of type java.sql.Types=1111 however type java.sql.Types=-2 was registered.
+
+
+            em.createNativeQuery("DO $$ BEGIN EXECUTE pg_notify(:channel, :payload); END; $$ LANGUAGE 'plpgsql';")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .executeUpdate(); //or .getSingleResult();
+-> org.postgresql.util.PSQLException: The column index is out of range: 2, number of columns: 0.
+
+
+
+works:
+
+            em.createNativeQuery("SELECT cast(pg_notify(:channel, :payload) AS TEXT);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .getSingleResult();
+empty String is returned
+
+
+
+
+Hibernate (with a Session session):
+
+does not work:
+
+
+            session.createNativeQuery("SELECT pg_notify(:channel, :payload);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .getSingleResult();
+-> org.hibernate.MappingException: No Dialect mapping for JDBC type: 1111
+
+
+            session.createNativeQuery("SELECT pg_notify(:channel, :payload);")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .getSingleResult();
+-> org.postgresql.util.PSQLException: A result was returned when none was expected.
+
+
+
+            ProcedureCall pg_notify = session.createStoredProcedureCall("pg_notify");
+            pg_notify.registerParameter(1, String.class, ParameterMode.IN);
+            pg_notify.registerParameter(2, String.class, ParameterMode.IN);
+            pg_notify.setParameter(1, channel)
+                    .setParameter(2, channel)
+                    .executeUpdate(); //or .execute();
+-> org.hibernate.MappingException: No Dialect mapping for JDBC type: 1111
+
+
+ProcedureCall pg_notify = session.createStoredProcedureCall("pg_notify", Void.class); //or Object.class, or PGobject.class
+            pg_notify.registerParameter(1, String.class, ParameterMode.IN);
+            pg_notify.registerParameter(2, String.class, ParameterMode.IN);
+            pg_notify.setParameter(1, channel)
+                    .setParameter(2, channel)
+                    .executeUpdate(); //or .execute()
+-> org.hibernate.MappingException: Unknown entity: java.lang.Void / java.lang.Object / org.postgresql.util.PGobject
+
+
+@SqlResultSetMapping(name = "void")
+...
+            ProcedureCall pg_notify = session.createStoredProcedureCall("pg_notify", "void");
+            pg_notify.registerParameter(1, String.class, ParameterMode.IN);
+            pg_notify.registerParameter(2, String.class, ParameterMode.IN);
+            pg_notify.setParameter(1, channel)
+                    .setParameter(2, channel)
+                    .executeUpdate(); // or .execute();
+-> org.hibernate.MappingException: No Dialect mapping for JDBC type: 1111
+
+
+
+
+            session.createNativeQuery("DO $$ BEGIN EXECUTE pg_notify(:channel, :payload); END; $$ LANGUAGE 'plpgsql';")
+                    .setParameter("channel", channel)
+                    .setParameter("payload", payload)
+                    .executeUpdate(); //or .getSingleResult();
+-> org.postgresql.util.PSQLException: The column index is out of range: 2, number of columns: 0.
+
+
+
+
+works:
+
+            session.doWork(connection -> {
+                try (CallableStatement procedure = connection.prepareCall(
+                        "{ call pg_notify(?, ?) }")) {
+                    procedure.setString(1, channel);
+                    procedure.setString(2, payload);
+                    procedure.execute();
+                }
+            });
+
+
+
+            PGobject voidResult = (PGobject) session.doReturningWork(connection -> {
+                try (CallableStatement function = connection.prepareCall(
+                        "{ ? = call pg_notify(?, ?) }")) {
+                    function.registerOutParameter(1, Types.OTHER);
+                    function.setString(2, channel);
+                    function.setString(3, payload);
+                    function.execute();
+                    return function.getObject(1);
+                }
+            });

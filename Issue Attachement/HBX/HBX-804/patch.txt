@@ -1,0 +1,103 @@
+Index: tools/src/test/org/hibernate/tool/hbm2x/DocExporterTest.java
+===================================================================
+--- tools/src/test/org/hibernate/tool/hbm2x/DocExporterTest.java	(revision 10685)
++++ tools/src/test/org/hibernate/tool/hbm2x/DocExporterTest.java	(working copy)
+@@ -95,7 +95,14 @@
+ 		assertEquals("Generics syntax should not occur verbatim in html",null,findFirstString("List<", tableFile));
+ 		assertNotNull("Generics syntax occur verbatim in html",findFirstString("List&lt;", tableFile));
+     }
++    
++	public void testInheritedProperties()
++	{
++		File entityFile = new File(getOutputDir(), "entities/org/hibernate/tool/hbm2x/UUser.html");
++		assertFileAndExists(entityFile);
+ 
++		assertNotNull("Missing inherited property", findFirstString("firstName", entityFile));
++	}
+ 
+ 	private void testHtml(final Tidy tidy, File dir) {
+ 		try {
+Index: tools/src/templates/doc/entities/entity.ftl
+===================================================================
+--- tools/src/templates/doc/entities/entity.ftl	(revision 10685)
++++ tools/src/templates/doc/entities/entity.ftl	(working copy)
+@@ -77,7 +77,7 @@
+ 							<#assign rowspan = property.getValue().getColumnSpan()>
+ 							<tr>
+ 								<td <#if (rowspan>0)>rowspan="${rowspan}"</#if>>
+-									<a href="#field_summary">
++									<a href="#identifier_detail_${property.name}">
+ 										${property.name}
+ 									</a>
+ 								</td>
+@@ -135,7 +135,7 @@
+ 					<#else>
+ 						<tr>
+ 							<td>
+-								<a href="#field_summary">
++								<a href="#identifier_detail_${propertyIdentifier.name}">
+ 									${propertyIdentifier.name}
+ 								</a>
+ 							</td>
+@@ -192,7 +192,7 @@
+ 						<#assign rowspan = property.getValue().getColumnSpan()>
+ 						<tr>
+ 							<td <#if (rowspan > 0)>rowspan="${rowspan}"</#if>>
+-								<a href="#field_summary">
++								<a href="#property_detail_${property.name}">
+ 									${property.name}
+ 								</a>
+ 							</td>
+@@ -255,5 +255,52 @@
+ 			</table>
+ 		</#if>
+ 
++		<#list superClasses as superClass>
++			<#assign properties = dochelper.getOrderedProperties(superClass)>
++			<#if !properties.empty>
++				<#assign superClassRef = docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(superClass))>
++				<table id="properties_inherited_from_entity_${superClass.shortName}">
++					<tr>
++						<th>
++							Properties inherited from entity <a href="${superClassRef}">${superClass.shortName}</a>
++						</th>
++					</tr>
++					<tr>
++						<td>
++							<#list properties as property>
++								<a href="${superClassRef}#property_detail_${property.name}">${property.name}</a><#if property_has_next>, </#if>
++							</#list>
++						</td>
++					</tr>
++				</table>
++			</#if>
++		</#list>
++
++		<#if class.hasIdentifierProperty()>
++			<#assign identifier = class.getIdentifierProperty()>
++			<p id="identifier_detail" class="MainTableHeading">
++				Identifier Detail
++			</p>
++			<#if dochelper.getComponentPOJO(identifier)?exists>
++				<#assign identifierClass = dochelper.getComponentPOJO(identifier)>
++				<#foreach property in identifierClass.allPropertiesIterator>
++					<h3 id="identifier_detail_${property.name}">${property.name}</h3>
++				</#foreach>
++			<#else>
++				<h3 id="identifier_detail_${identifier.name}">${identifier.name}</h3>
++			</#if>
++		</#if>
++
++		<#assign properties = class.allPropertiesIterator>
++		<#if properties.hasNext()>
++			<p id="property_detail" class="MainTableHeading">
++				Property Detail
++			</p>
++			<#list properties as property>
++				<h3 id="property_detail_${property.name}">${property.name}</h3>
++				<hr/>
++			</#list>
++		</#if>
++
+ 	</body>
+ </html>

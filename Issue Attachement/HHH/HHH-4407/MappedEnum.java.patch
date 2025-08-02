@@ -1,0 +1,152 @@
+Index: src/java/org/hibernate/type/MappedEnum.java
+===================================================================
+--- src/java/org/hibernate/type/MappedEnum.java	(revision 0)
++++ src/java/org/hibernate/type/MappedEnum.java	(revision 0)
+@@ -0,0 +1,40 @@
++//$Id: MappedEnum.java finomosec $
++package org.hibernate.type;
++
++/**
++ * Interface that can be implemented by Enum classes to provide a different DB-Mapping from the fixed ordinal mapping.<br>
++ * 
++ * Usage Example:
++ * 
++ * <pre>
++ * import org.hibernate.type.MappedEnum;
++ * 
++ *  public enum ExampleEnum implements MappedEnum {
++ * 
++ *      BLACK(100), //
++ *      BLUE(200),
++ *      RED(300),
++ *      GREEN(400);
++ * 
++ *      private final int dbValue;
++ * 
++ *      private ExampleEnum(int dbValue) {
++ *          this.dbValue = dbValue;
++ *      }
++ * 
++ *      public int getDbValue() {
++ *          return dbValue;
++ *      }
++ * 
++ *  }
++ * </pre>
++ * 
++ * If this interface is implemented the {@link EnumType}-class uses the {@link #getDbValue()} function to build the mapping for this Enum.<br>
++ * The {@link javax.persistence.Enumerated}-Annotation needs to be set to {@link javax.persistence.EnumType#ORDINAL}.
++ * 
++ * @author finomosec
++ */
++public interface MappedEnum {
++
++    public int getDbValue();
++
+\ No newline at end of file
+Index: src/java/org/hibernate/type/EnumType.java
+===================================================================
+--- src/java/org/hibernate/type/EnumType.java	(revision 14676)
++++ src/java/org/hibernate/type/EnumType.java	(working copy)
+@@ -55,7 +55,7 @@
+ 	public static final String COLUMN = "column";
+ 	public static final String TYPE = "type";
+ 
+-	private static Map<Class, Object[]> enumValues = new HashMap<Class, Object[]>();
++	private static Map<Class, Map<Integer, Object>> enumValues = new HashMap<Class, Map<Integer, Object>>();
+ 
+ 	private Class<? extends Enum> enumClass;
+ 	private String column;
+@@ -90,11 +90,11 @@
+ 			return null;
+ 		}
+ 		if ( object instanceof Number ) {
+-			Object[] values = enumValues.get( enumClass );
++			Map<Integer, Object> values = enumValues.get(enumClass);
+ 			if ( values == null ) throw new AssertionFailure( "enumValues not preprocessed: " + enumClass );
+ 			int ordinal = ( (Number) object ).intValue();
+-			if ( ordinal < 0 || ordinal >= values.length ) {
+-				throw new IllegalArgumentException( "Unknown ordinal value for enum " + enumClass + ": " + ordinal );
++			if (!values.containsKey(ordinal)) {
++                throw new IllegalArgumentException("Unknown ordinal/dbValue value for enum " + enumClass + ": " + ordinal);
+ 			}
+ 			if ( IS_VALUE_TRACING_ENABLED ) {
+ 				log().debug( "Returning '{}' as column {}", ordinal, names[0] );
+@@ -99,7 +99,7 @@
+ 			if ( IS_VALUE_TRACING_ENABLED ) {
+ 				log().debug( "Returning '{}' as column {}", ordinal, names[0] );
+ 			}
+-			return values[ordinal];
++			return values.get(ordinal);
+ 		}
+ 		else {
+ 			String name = (String) object;
+@@ -124,11 +124,16 @@
+ 		else {
+ 			boolean isOrdinal = isOrdinal( sqlType );
+ 			if ( isOrdinal ) {
+-				int ordinal = ( (Enum) value ).ordinal();
++                int dbValue;
++                if (MappedEnum.class.isAssignableFrom(enumClass)) {
++                    dbValue = ( (MappedEnum) value ).getDbValue();
++                } else {
++                    dbValue = ( (Enum) value ).ordinal();
++                }
+ 				if ( IS_VALUE_TRACING_ENABLED ) {
+-					log().debug( "Binding '{}' to parameter: {}", ordinal, index );
++					log().debug( "Binding '{}' to parameter: {}", dbValue, index );
+ 				}
+-				st.setObject( index, Integer.valueOf( ordinal ), sqlType );
++				st.setObject( index, Integer.valueOf( dbValue ), sqlType );
+ 			}
+ 			else {
+ 				String enumString = ( (Enum) value ).name();
+@@ -205,13 +210,24 @@
+ 	}
+ 
+ 	private void initEnumValue() {
+-		Object[] values = enumValues.get( enumClass );
+-		if ( values == null ) {
++		Map<Integer, Object> valueMap = enumValues.get(enumClass);
++		if ( valueMap == null ) {
+ 			try {
+ 				Method method = null;
+ 				method = enumClass.getDeclaredMethod( "values", new Class[0] );
+-				values = (Object[]) method.invoke( null, new Object[0] );
+-				enumValues.put( enumClass, values );
++				Object[] values = (Object[])method.invoke( null, new Object[0] );
++				valueMap = new HashMap<Integer, Object>();
++				for (int i = 0; i < values.length; i++) {
++					int dbValue;
++					if (MappedEnum.class.isAssignableFrom(enumClass)) {
++						dbValue = ((MappedEnum)values[i]).getDbValue();
++					} else {
++						dbValue = i;
++					}
++					if (valueMap.containsKey(dbValue)) throw new IllegalArgumentException("Duplicate dbValue: " + dbValue);
++					valueMap.put(dbValue, values[i]);
++				}
++				enumValues.put(enumClass, valueMap);
+ 			}
+ 			catch (Exception e) {
+ 				throw new HibernateException( "Error while accessing enum.values(): " + enumClass, e );
+@@ -250,14 +266,14 @@
+ 	public Object fromXMLString(String xmlValue) {
+ 		try {
+ 			int ordinal = Integer.parseInt( xmlValue );
+-			Object[] values = enumValues.get( enumClass );
++			Map<Integer, Object> values = enumValues.get(enumClass);
+ 			if ( values == null ) throw new AssertionFailure( "enumValues not preprocessed: " + enumClass );
+-			if ( ordinal < 0 || ordinal >= values.length ) {
+-				throw new IllegalArgumentException( "Unknown ordinal value for enum " + enumClass + ": " + ordinal );
++			if (!values.containsKey(ordinal)) {
++				throw new IllegalArgumentException("Unknown ordinal/dbValue value for enum " + enumClass + ": " + ordinal);
+ 			}
+-			return values[ordinal];
++			return values.get(ordinal);
+ 		}
+-		catch(NumberFormatException e) {
++		catch (NumberFormatException e) {
+ 			try {
+ 				return Enum.valueOf( enumClass, xmlValue );
+ 			}

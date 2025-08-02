@@ -1,0 +1,154 @@
+From 845164006ee210d3bfa005d8896d513f8e758837 Mon Sep 17 00:00:00 2001
+From: Alejandro Revilla <apr@jpos.org>
+Date: Fri, 29 Jul 2016 23:12:02 -0300
+Subject: [PATCH] HHH-10982 test case
+
+Can be run with:
+
+  ./gradlew hibernate-core:matrix_derby -Dmatrix_derby.single=propertiesconstraint/PropertiesConstraintTest
+---
+ .../test/hbm/propertiesconstraint/Account.java     | 29 +++++++++
+ .../PropertiesConstraintTest.java                  | 69 ++++++++++++++++++++++
+ .../test/hbm/propertiesconstraint/Account.hbm.xml  | 18 ++++++
+ 3 files changed, 116 insertions(+)
+ create mode 100644 hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/Account.java
+ create mode 100644 hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/PropertiesConstraintTest.java
+ create mode 100644 hibernate-core/src/test/resources/org/hibernate/test/hbm/propertiesconstraint/Account.hbm.xml
+
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/Account.java b/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/Account.java
+new file mode 100644
+index 0000000..65438aa
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/Account.java
+@@ -0,0 +1,29 @@
++package org.hibernate.test.hbm.propertiesconstraint;
++
++public class Account {
++    private long id;
++    String code;
++    Account root;
++
++    public Account () {
++        super ();
++    }
++    public long getId() {
++        return id;
++    }
++    public void setId (long id) {
++        this.id = id;
++    }
++    public void setCode (String code) {
++        this.code = code;
++    }
++    public String getCode() {
++        return code;
++    }
++    public Account getRoot () {
++        return root;
++    }
++    public void setRoot (Account root) {
++        this.root = root;
++    }
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/PropertiesConstraintTest.java b/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/PropertiesConstraintTest.java
+new file mode 100644
+index 0000000..3e135f5
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/hbm/propertiesconstraint/PropertiesConstraintTest.java
+@@ -0,0 +1,69 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.test.hbm.propertiesconstraint;
++
++import org.hibernate.boot.Metadata;
++import org.hibernate.boot.MetadataSources;
++import org.hibernate.boot.registry.StandardServiceRegistry;
++import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
++import org.hibernate.test.hbm.index.JournalingSchemaToolingTarget;
++import org.hibernate.testing.FailureExpected;
++import org.hibernate.tool.schema.internal.SchemaCreatorImpl;
++
++import org.hibernate.testing.TestForIssue;
++import org.hibernate.testing.junit4.BaseUnitTestCase;
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++
++import static org.junit.Assert.assertTrue;
++
++/**
++ * Based on Steve Ebersole's IndexTest
++ */
++@TestForIssue(jiraKey = "HHH-10982")
++public class PropertiesConstraintTest extends BaseUnitTestCase {
++    private StandardServiceRegistry ssr;
++
++    @Before
++    public void before() {
++        ssr = new StandardServiceRegistryBuilder().build();
++    }
++
++    @After
++    public void after() {
++        if (ssr != null) {
++            StandardServiceRegistryBuilder.destroy(ssr);
++        }
++    }
++
++    @Test
++	// @FailureExpected( jiraKey = "HHH-10982" )
++    public void testConstraint() throws Exception {
++        verifyConstraintCreated(
++          "org/hibernate/test/hbm/propertiesconstraint/Account.hbm.xml",
++          "unique (root, code)"
++        );
++    }
++
++    private void verifyConstraintCreated(String mappingResource, String expectedConstraint) {
++        final Metadata metadata = new MetadataSources(ssr)
++          .addResource(mappingResource)
++          .buildMetadata();
++
++        final JournalingSchemaToolingTarget target = new JournalingSchemaToolingTarget();
++        new SchemaCreatorImpl(ssr).doCreation(metadata, false, target);
++
++        for (String s : target.getActions())
++            System.out.println(s);
++
++        assertTrue(
++          "Expected constraint [" + expectedConstraint + "] not seen in schema creation output",
++          target.containedText(expectedConstraint)
++        );
++    }
++}
+diff --git a/hibernate-core/src/test/resources/org/hibernate/test/hbm/propertiesconstraint/Account.hbm.xml b/hibernate-core/src/test/resources/org/hibernate/test/hbm/propertiesconstraint/Account.hbm.xml
+new file mode 100644
+index 0000000..086bdb1
+--- /dev/null
++++ b/hibernate-core/src/test/resources/org/hibernate/test/hbm/propertiesconstraint/Account.hbm.xml
+@@ -0,0 +1,18 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping>
++  <class name="org.hibernate.test.hbm.propertiesconstraint.Account">
++    <id name="id" column="id" type="long">
++      <generator class="native" />
++    </id>
++    <properties name="uniqueCode" unique="true">
++      <many-to-one name="root"  not-null="false" foreign-key="FKAccountRoot" />
++      <property name="code">
++        <column name="code" sql-type="varchar(255)" not-null="true" />
++      </property>
++    </properties>
++  </class>
++</hibernate-mapping>
+-- 
+2.9.2
+

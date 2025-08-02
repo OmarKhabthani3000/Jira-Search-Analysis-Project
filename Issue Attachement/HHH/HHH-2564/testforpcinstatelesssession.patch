@@ -1,0 +1,330 @@
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/dynamicentity/interceptor/InterceptorDynamicEntityTest.java
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/dynamicentity/interceptor/InterceptorDynamicEntityTest.java	(revision 11396)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/dynamicentity/interceptor/InterceptorDynamicEntityTest.java	(working copy)
+@@ -4,6 +4,7 @@
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.Session;
++import org.hibernate.StatelessSession;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+@@ -109,4 +110,71 @@
+ 		session.close();
+ 	}
+ 
++	/** 
++     public void testStatelessInterceptor() {
++		// Test saving these dyna-proxies
++		StatelessSession session = getSessions().openStatelessSession();
++		
++		session.beginTransaction();
++		Company company = ProxyHelper.newCompanyProxy();
++		company.setName( "acme" );
++		session.insert( company );
++		Customer customer = ProxyHelper.newCustomerProxy();
++		customer.setName( "Steve" );
++		customer.setCompany( company );
++		session.insert( customer );
++		session.getTransaction().commit();
++		session.close();
++
++		assertNotNull( "company id not assigned", company.getId() );
++		assertNotNull( "customer id not assigned", customer.getId() );
++
++		// Test loading these dyna-proxies, along with flush processing
++		session = getSessions().openStatelessSession();
++		session.beginTransaction();
++		customer = ( Customer ) session.get( Customer.class, customer.getId() );
++		assertFalse( "should-be-proxy was initialized", Hibernate.isInitialized( customer ) );
++
++		customer.setName( "other" );
++		assertFalse( "should-be-proxy was initialized", Hibernate.isInitialized( customer.getCompany() ) );
++
++		session.refresh( customer );
++		assertEquals( "name not updated", "other", customer.getName() );
++		assertEquals( "company association not correct", "acme", customer.getCompany().getName() );
++
++		session.getTransaction().commit();
++		session.close();
++
++		// Test detached entity re-attachment with these dyna-proxies
++		customer.setName( "Steve" );
++		session = getSessions().openStatelessSession();
++		session.beginTransaction();
++		session.update( customer );
++		
++		session.refresh( customer );
++		assertEquals( "name not updated", "Steve", customer.getName() );
++		session.getTransaction().commit();
++		session.close();
++
++		// Test querying
++		session = getSessions().openStatelessSession();
++		session.beginTransaction();
++		int count = session.createQuery( "from Customer" ).list().size();
++		assertEquals( "querying dynamic entity", 1, count );
++		//session.clear();
++		count = session.createQuery( "from Person" ).list().size();
++		assertEquals( "querying dynamic entity", 1, count );
++		session.getTransaction().commit();
++		session.close();
++
++		// test deleteing
++		session = getSessions().openStatelessSession();
++		session.beginTransaction();
++		session.delete( company );
++		session.delete( customer );
++		session.getTransaction().commit();
++		session.close();
++	}
++ **/
++
+ }
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.hbm.xml
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.hbm.xml	(revision 11396)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.hbm.xml	(working copy)
+@@ -15,6 +15,10 @@
+ 		<id name="name"/>
+ 		<timestamp name="lastModified"/>
+ 		<property name="text"/>
++ 		<bag name="chapters">
++		  <key column="document_ref"></key>
++		  <one-to-many class="Chapter"/>
++		</bag> 
+ 	</class>
+ 
+     <class name="Paper">
+@@ -24,4 +28,13 @@
+         <property name="color"/>
+ 	</class>
+ 
++    <class name="Chapter">
++        <id name="id">
++        	<generator class="native"/>
++        </id>
++        <property name="name"/>
++        <many-to-one name="document" column="document_ref"/>
++        <many-to-one name="ref" column="chapter_ref"/>
++    </class>
++    
+ </hibernate-mapping>
+\ No newline at end of file
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Chapter.java
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Chapter.java	(revision 0)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Chapter.java	(revision 0)
+@@ -0,0 +1,41 @@
++//$Id: Document.java 8057 2005-08-31 23:19:53Z oneovthafew $
++package org.hibernate.test.stateless;
++
++import java.util.Date;
++
++/**
++ * @author Gavin King
++ */
++public class Chapter {
++	
++	private long id;
++	private String name;
++	private Chapter ref;
++	private Document document;
++	public Document getDocument() {
++		return document;
++	}
++	public void setDocument(Document document) {
++		this.document = document;
++	}
++	public long getId() {
++		return id;
++	}
++	public void setId(long id) {
++		this.id = id;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++	public Chapter getRef() {
++		return ref;
++	}
++	public void setRef(Chapter ref) {
++		this.ref = ref;
++	}
++
++
++}
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/StatelessSessionTest.java
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/StatelessSessionTest.java	(revision 11396)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/StatelessSessionTest.java	(working copy)
+@@ -2,9 +2,12 @@
+ package org.hibernate.test.stateless;
+ 
+ import java.util.Date;
++import java.util.Iterator;
++import java.util.List;
+ 
+ import junit.framework.Test;
+ 
++import org.hibernate.Query;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.StatelessSession;
+@@ -91,6 +94,115 @@
+ 
+ 	}
+ 
++	public void testQueryLevelPersistentContext() {
++		StatelessSession ss = getSessions().openStatelessSession();
++		Transaction tx;
++		
++		tx = ss.beginTransaction();
++		Document doc = new Document("blah blah blah", "Blahs");		
++		ss.insert(doc);
++		assertNotNull( doc.getName() );
++		Date initVersion = doc.getLastModified();
++		assertNotNull( initVersion );
++		
++		Chapter chapter = new Chapter();
++		chapter.setName( "First chapter" );
++		//chapter.setRef( chapter );		
++		ss.insert( chapter );
++		chapter.setDocument( doc );		
++		chapter.setRef(chapter);
++		ss.update( chapter );
++		
++		Chapter chapter2 = new Chapter();
++		chapter2.setDocument( doc );
++		chapter2.setName( "Second chapter" );
++		//chapter.setRef( chapter );		
++		ss.insert( chapter2 );
++		chapter.setRef(chapter2);
++		ss.update( chapter2 );
++		
++		tx.commit();
++
++		tx = ss.beginTransaction();
++		List list = ss.createQuery( "select d from Document d").list(); //left join fetch d.chapters c left join fetch c.document" ).list();;;
++		assertEquals(1, list.size()); 
++		Document firstQueriedDoc = (Document) list.get(0);
++		assertEquals(firstQueriedDoc.getName(), "Blahs");
++		
++		list = ss.createQuery( "select d from Document d").list(); //left join fetch d.chapters c left join fetch c.document" ).list();;;
++		assertEquals(1, list.size()); 
++		Document secondQueriedDoc = (Document) list.get(0);
++		assertNotSame(firstQueriedDoc, secondQueriedDoc);
++		
++		list = ss.createQuery( "select d from Document d left join fetch d.chapters c" ).list();
++		assertEquals(2, list.size()); // statefull session would unique this...shouldn't stateless too ?
++		firstQueriedDoc = (Document) list.get(0);
++		secondQueriedDoc = (Document) list.get(1);
++		assertSame(firstQueriedDoc, secondQueriedDoc);
++		
++		assertEquals(2,firstQueriedDoc.getChapters().size());
++		assertSame(firstQueriedDoc.getChapters(), secondQueriedDoc.getChapters());
++		
++		Chapter c1 = (Chapter) firstQueriedDoc.getChapters().get(0);
++		Chapter c2 = (Chapter) firstQueriedDoc.getChapters().get(1);
++		
++		assertSame(c1.getDocument(), firstQueriedDoc);
++		assertSame(c2.getDocument(), secondQueriedDoc);
++		
++		list = ss.createQuery( "select d from Document d left join fetch d.chapters c left join fetch c.document" ).list();
++		assertEquals(2, list.size()); // statefull session would unique this...shouldn't stateless too ?
++		firstQueriedDoc = (Document) list.get(0);
++		secondQueriedDoc = (Document) list.get(1);
++		assertSame(firstQueriedDoc, secondQueriedDoc);
++		
++		assertEquals(2,firstQueriedDoc.getChapters().size());
++		assertSame(firstQueriedDoc.getChapters(), secondQueriedDoc.getChapters());
++		
++		c1 = (Chapter) firstQueriedDoc.getChapters().get(0);
++		c2 = (Chapter) firstQueriedDoc.getChapters().get(1);
++		
++		assertSame(c1.getDocument(), firstQueriedDoc);
++		assertSame(c2.getDocument(), secondQueriedDoc);
++		
++		
++		/*
++		List list = ss.createQuery( "select d from Document d left join fetch d.chapters c left join fetch c.document" ).list();
++		for (Iterator iter = list.iterator(); iter.hasNext();) {
++			Document qdoc = (Document) iter.next();
++			System.out.println("******");
++			System.out.println(qdoc.getName());
++			System.out.println(System.identityHashCode( qdoc ));
++			dumpDoc( qdoc, 0);
++			dumpDoc( qdoc, 1);
++			System.out.println("******DONE*******");
++		}
++		*/
++		tx.commit();
++		
++		tx = ss.beginTransaction();
++		chapter2.setRef(null);
++		chapter2.setDocument( null );
++		ss.update( chapter2 );		
++		
++		chapter.setRef(null);
++		chapter.setDocument( null );
++		ss.update( chapter );		
++		ss.delete(doc);
++		ss.delete(chapter);
++		ss.delete(chapter2);
++		tx.commit();
++		ss.close();
++
++	}
++
++	private void dumpDoc(Document qdoc, int pos) {
++		Chapter c1 = ((Chapter)(qdoc.getChapters().get(pos)));
++		System.out.println(c1.getId());			
++		System.out.println(System.identityHashCode( c1 ));
++//		System.out.println("chap doc: " + c1.getDocument());
++		//System.out.println("chap doc: " + c1.getRef());
++	}
++
+ 	public void testHqlBulk() {
+ 		StatelessSession ss = getSessions().openStatelessSession();
+ 		Transaction tx = ss.beginTransaction();
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.java
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.java	(revision 11396)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/test/org/hibernate/test/stateless/Document.java	(working copy)
+@@ -2,7 +2,10 @@
+ package org.hibernate.test.stateless;
+ 
+ import java.util.Date;
++import java.util.List;
+ 
++import org.h2.command.ddl.SetComment;
++
+ /**
+  * @author Gavin King
+  */
+@@ -11,7 +14,8 @@
+ 	private String text;
+ 	private String name;
+ 	private Date lastModified;
+-
++	List chapters;
++	
+ 	Document() {}
+ 	
+ 	public Document(String text, String name) {
+@@ -43,4 +47,11 @@
+ 		this.lastModified = lastModified;
+ 	}
+ 
++	public List getChapters() {
++		return chapters;
++	}
++	
++	public void setChapters(List chapters) {
++		this.chapters = chapters;
++	}
+ }

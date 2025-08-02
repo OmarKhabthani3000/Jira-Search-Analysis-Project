@@ -1,0 +1,277 @@
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentEntity.java	(revision )
+@@ -0,0 +1,41 @@
++package org.hibernate.envers.test.integration.inheritance.baseclassesnotauditednotmapped;
++
++public class ParentEntity extends AbstractEntity {
++    private String name;
++
++    public ParentEntity() {
++    }
++
++    public ParentEntity(Integer id, String name) {
++        super(id);
++        this.name = name;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public void setName(String name) {
++        this.name = name;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof ParentEntity)) return false;
++        if (!super.equals(o)) return false;
++
++        ParentEntity that = (ParentEntity) o;
++
++        if (name != null ? !name.equals(that.name) : that.name != null) return false;
++
++        return true;
++    }
++
++    @Override
++    public int hashCode() {
++        int result = super.hashCode();
++        result = 31 * result + (name != null ? name.hashCode() : 0);
++        return result;
++    }
++}
+Index: hibernate-envers/src/test/resources/mappings/baseclassesnotauditednotmapped/mappings.hbm.xml
+===================================================================
+--- hibernate-envers/src/test/resources/mappings/baseclassesnotauditednotmapped/mappings.hbm.xml	(revision )
++++ hibernate-envers/src/test/resources/mappings/baseclassesnotauditednotmapped/mappings.hbm.xml	(revision )
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="UTF-8"?>
++
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping>
++    <class name="org.hibernate.envers.test.integration.inheritance.baseclassesnotauditednotmapped.ChildEntity">
++        <id name="id" type="integer">
++            <generator class="assigned"/>
++        </id>
++
++        <property name="name" type="string" not-null="false"/>
++        <property name="surname" type="string" not-null="false"/>
++        <property name="theString" type="string" not-null="false"/>
++    </class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentNotAuditedNotMappedTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentNotAuditedNotMappedTest.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ParentNotAuditedNotMappedTest.java	(revision )
+@@ -0,0 +1,100 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.inheritance.baseclassesnotauditednotmapped;
++
++import org.hibernate.MappingException;
++import org.hibernate.envers.test.AbstractOneSessionTest;
++import org.hibernate.envers.test.Priority;
++import org.hibernate.testing.FailureExpected;
++import org.junit.Test;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++import java.util.Arrays;
++
++import static junit.framework.Assert.assertEquals;
++
++/**
++ * @author Michal Skowronek (mskowr at o2 dot pl)
++ */
++public class ParentNotAuditedNotMappedTest extends AbstractOneSessionTest {
++    private Integer id1;
++
++    @Override
++    protected void initMappings() throws MappingException, URISyntaxException {
++        URL url = Thread.currentThread().getContextClassLoader().getResource("mappings/baseclassesnotauditednotmapped/mappings.hbm.xml");
++        config.addFile(new File(url.toURI()));
++    }
++
++    @Test
++    @Priority(10)
++    public void initData() {
++        // Rev 1
++        getSession().getTransaction().begin();
++        ChildEntity ce = new ChildEntity(1, "John", "Smith");
++        ce.setTheString("string");
++        getSession().persist(ce);
++        id1 = ce.getId();
++        getSession().getTransaction().commit();
++
++        // Rev 2
++        getSession().getTransaction().begin();
++        ce = (ChildEntity) getSession().get(ChildEntity.class, id1);
++        ce.setTheString("string2");
++        ce.setName("James");
++        getSession().getTransaction().commit();
++    }
++
++    @Test
++    public void testRevisionsCounts() {
++        assert Arrays.asList(1, 2).equals(getAuditReader().getRevisions(ChildEntity.class, id1));
++    }
++
++    @Test
++    public void testCurrentStateOfEntity() throws Exception {
++        final ChildEntity childEntity = (ChildEntity) getSession().get(ChildEntity.class, id1);
++
++        assertEquals(id1, childEntity.getId());
++        assertEquals("string2", childEntity.getTheString());
++        assertEquals("James", childEntity.getName());
++        assertEquals("Smith", childEntity.getSurname());
++    }
++
++    @Test
++    @FailureExpected(jiraKey = "HHH-5917")
++    public void testHistoryOfChildId1() {
++        ChildEntity childEntity = getAuditReader().find(ChildEntity.class, id1, 1);
++        assertEquals(id1, childEntity.getId());
++        assertEquals("string", childEntity.getTheString());
++        assertEquals("John", childEntity.getName());
++        assertEquals("Smith", childEntity.getSurname());
++
++        childEntity = getAuditReader().find(ChildEntity.class, id1, 2);
++        assertEquals(id1, childEntity.getId());
++        assertEquals("string2", childEntity.getTheString());
++        assertEquals("James", childEntity.getName());
++        assertEquals("Smith", childEntity.getSurname());
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/AbstractEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/AbstractEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/AbstractEntity.java	(revision )
+@@ -0,0 +1,49 @@
++package org.hibernate.envers.test.integration.inheritance.baseclassesnotauditednotmapped;
++
++public class AbstractEntity {
++    private Integer id;
++    private String theString;
++
++    public AbstractEntity() {
++    }
++
++    public AbstractEntity(Integer id) {
++        this.id = id;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getTheString() {
++        return theString;
++    }
++
++    public void setTheString(String theString) {
++        this.theString = theString;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof AbstractEntity)) return false;
++
++        AbstractEntity that = (AbstractEntity) o;
++
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++        if (theString != null ? !theString.equals(that.theString) : that.theString != null) return false;
++
++        return true;
++    }
++
++    @Override
++    public int hashCode() {
++        int result = id != null ? id.hashCode() : 0;
++        result = 31 * result + (theString != null ? theString.hashCode() : 0);
++        return result;
++    }
++}
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ChildEntity.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ChildEntity.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/inheritance/baseclassesnotauditednotmapped/ChildEntity.java	(revision )
+@@ -0,0 +1,44 @@
++package org.hibernate.envers.test.integration.inheritance.baseclassesnotauditednotmapped;
++
++import org.hibernate.envers.Audited;
++
++@Audited
++public class ChildEntity extends ParentEntity {
++    public String surname;
++
++    public ChildEntity() {
++    }
++
++    public ChildEntity(Integer id, String name, String surname) {
++        super(id, name);
++        this.surname = surname;
++    }
++
++    public String getSurname() {
++        return surname;
++    }
++
++    public void setSurname(String surname) {
++        this.surname = surname;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof ChildEntity)) return false;
++        if (!super.equals(o)) return false;
++
++        ChildEntity that = (ChildEntity) o;
++
++        if (surname != null ? !surname.equals(that.surname) : that.surname != null) return false;
++
++        return true;
++    }
++
++    @Override
++    public int hashCode() {
++        int result = super.hashCode();
++        result = 31 * result + (surname != null ? surname.hashCode() : 0);
++        return result;
++    }
++}

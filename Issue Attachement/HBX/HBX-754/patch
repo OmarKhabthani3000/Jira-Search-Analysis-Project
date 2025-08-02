@@ -1,0 +1,70 @@
+Index: HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java
+diff -ru --exclude .svn --exclude '*.pdf' HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java HibernateExt.new/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java
+--- HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	2006-09-12 21:07:27.000000000 -0400
++++ HibernateExt.new/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	2006-09-11 17:14:29.000000000 -0400
+@@ -276,4 +276,19 @@
+ 	public boolean isImportData(Configuration cfg) {
+ 		return !(cfg.getImports().isEmpty());
+ 	}
++
++	public boolean needsDiscriminator(PersistentClass clazz) {
++		return clazz instanceof org.hibernate.mapping.Subclass 
++		  && !(clazz instanceof org.hibernate.mapping.UnionSubclass);
++	}
++
++
++	public boolean needsTable(PersistentClass clazz) {
++		return !(clazz instanceof org.hibernate.mapping.Subclass
++				 && clazz instanceof org.hibernate.mapping.SingleTableSubclass);
++	}
++
++	public boolean isSubclass(PersistentClass clazz) {
++		return clazz instanceof org.hibernate.mapping.Subclass;
++	}
+ }
+Index: HibernateExt/tools/src/templates/hbm/persistentclass.hbm.ftl
+diff -ru --exclude .svn --exclude '*.pdf' HibernateExt/tools/src/templates/hbm/persistentclass.hbm.ftl HibernateExt.new/tools/src/templates/hbm/persistentclass.hbm.ftl
+--- HibernateExt/tools/src/templates/hbm/persistentclass.hbm.ftl	2006-09-12 21:07:28.000000000 -0400
++++ HibernateExt.new/tools/src/templates/hbm/persistentclass.hbm.ftl	2006-09-11 17:13:59.000000000 -0400
+@@ -6,7 +6,9 @@
+ <#if clazz.superclass?exists>
+     extends="${clazz.getSuperclass().className}"
+ </#if>
++<#if c2h.needsTable(clazz)>
+     table="${clazz.table.quotedName}"
++</#if>
+ <#if clazz.table.schema?exists>
+     schema="${clazz.table.quotedSchema}"
+ </#if>
+@@ -25,7 +27,7 @@
+ <#if clazz.hasSelectBeforeUpdate()>
+     select-before-update="true"
+ </#if>
+-<#if !c2h.getClassName(clazz).equals(clazz.discriminatorValue)>
++<#if c2h.needsDiscriminator(clazz)>
+     discriminator-value="${clazz.discriminatorValue}"
+ </#if>
+ <#if clazz.isExplicitPolymorphism()>
+@@ -61,6 +63,7 @@
+  <comment>${clazz.table.comment}</comment>
+ </#if>
+ <#-- TODO: move this to id.hbm.ftl -->
++<#if !c2h.isSubclass(clazz)>
+ <#if clazz.hasIdentifierProperty()>
+ <#assign property=clazz.getIdentifierProperty()/>
+ <#include "id.hbm.ftl"/>
+@@ -68,6 +71,7 @@
+ <#assign embeddedid=clazz.key/>
+ <#include "id.hbm.ftl"/>
+ </#if>
++</#if>
+ 
+ <#-- version has to be done explicitly since Annotation's does not list version first -->
+ <#if pojo.hasVersionProperty()>
+@@ -81,4 +85,4 @@
+ </#if>
+ </#foreach>
+ 
+-</${c2h.getTag(clazz)}>
+\ No newline at end of file
++</${c2h.getTag(clazz)}>

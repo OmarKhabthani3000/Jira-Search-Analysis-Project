@@ -1,0 +1,412 @@
+Subject: [PATCH] UMSRELEASE-0000 testcase and fix?
+---
+Index: hibernate-core/src/main/java/org/hibernate/proxy/pojo/bytebuddy/ByteBuddyProxyHelper.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/main/java/org/hibernate/proxy/pojo/bytebuddy/ByteBuddyProxyHelper.java b/hibernate-core/src/main/java/org/hibernate/proxy/pojo/bytebuddy/ByteBuddyProxyHelper.java
+--- a/hibernate-core/src/main/java/org/hibernate/proxy/pojo/bytebuddy/ByteBuddyProxyHelper.java	(revision d25fb203a16e9ec601a3297abdcc8f85a68da5e0)
++++ b/hibernate-core/src/main/java/org/hibernate/proxy/pojo/bytebuddy/ByteBuddyProxyHelper.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -85,7 +85,7 @@
+ 		return byteBuddy -> helpers.appendIgnoreAlsoAtEnd( byteBuddy
+ 				.ignore( helpers.getGroovyGetMetaClassFilter() )
+ 				.with( new NamingStrategy.SuffixingRandom( PROXY_NAMING_SUFFIX, new NamingStrategy.SuffixingRandom.BaseNameResolver.ForFixedValue( persistentClass.getTypeName() ) ) )
+-				.subclass( interfaces.size() == 1 ? persistentClass : TypeDescription.OBJECT, ConstructorStrategy.Default.IMITATE_SUPER_CLASS_OPENING )
++				.subclass( true ? persistentClass : TypeDescription.OBJECT, ConstructorStrategy.Default.IMITATE_SUPER_CLASS_OPENING )
+ 				.implement( interfaces )
+ 				.method( helpers.getVirtualNotFinalizerFilter() )
+ 						.intercept( helpers.getDelegateToInterceptorDispatcherMethodDelegation() )
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.hbm.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.hbm.xml b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.hbm.xml
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.hbm.xml	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,17 @@
++<?xml version="1.0"?>
++
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.orm.test.proxyquery">
++
++    <class name="Product" table="Product" lazy="true" >
++        <id name="id" column="ID" type="int"/>
++        <many-to-one name="vendor" class="Vendor" />
++
++    </class>
++
++
++</hibernate-mapping>
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Product.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,35 @@
++package org.hibernate.orm.test.proxyquery;
++
++import jakarta.persistence.*;
++
++public final class Product {
++    private Integer id;
++
++    private VendorAPI vendor;
++
++    public Product() {
++    }
++
++    public Product(Integer id, Vendor vendor) {
++        this.id = id;
++        this.vendor = vendor;
++    }
++
++
++    @Id
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public VendorAPI getVendor() {
++        return vendor;
++    }
++
++    public void setVendor(VendorAPI vendor) {
++        this.vendor = vendor;
++    }
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyAnnotationTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyAnnotationTest.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyAnnotationTest.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyAnnotationTest.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,137 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.orm.test.proxyquery;
++
++import jakarta.persistence.*;
++import org.hibernate.Hibernate;
++import org.hibernate.testing.orm.junit.DomainModel;
++import org.hibernate.testing.orm.junit.SessionFactory;
++import org.hibernate.testing.orm.junit.SessionFactoryScope;
++import org.junit.jupiter.api.Assertions;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++@DomainModel( annotatedClasses = {ProxyAnnotationTest.Product.class,ProxyAnnotationTest.Vendor.class})
++@SessionFactory
++public class ProxyAnnotationTest {
++
++	@Test
++	public void testAsWhereClause(SessionFactoryScope scope) {
++		scope.inTransaction(
++				session -> {
++					final var selectPFromProductP = session.createQuery("select p from Product p", Product.class).uniqueResult();
++					Assertions.assertFalse(Hibernate.isInitialized(selectPFromProductP.getVendor()));
++					final var query = session.createQuery("select p from Product p where p.vendor=:v", Product.class);
++					query.setParameter("v", selectPFromProductP.getVendor());
++				}
++		);
++	}
++
++
++
++	@BeforeEach
++	public void fillUp(SessionFactoryScope scope) {
++		scope.inTransaction(sessionImplementor -> {
++			final var vendor = new Vendor(1, "vendor1", "billing1");
++			sessionImplementor.getSession().persist(vendor);
++			final var product = new Product(1, vendor);
++			sessionImplementor.getSession().persist(product);
++		});
++	}
++
++	@Entity(name = "Vendor")
++	public static   class Vendor extends Support  {
++		private Integer id;
++		private String name;
++		private String billingEntity;
++		private String supplementalDetail;
++
++		public Vendor() {
++		}
++
++		public Vendor(Integer id, String name, String billingEntity) {
++			this.id = id;
++			this.name = name;
++			this.billingEntity = billingEntity;
++		}
++
++		public Vendor(Integer id, String name, String billingEntity, String supplementalDetail) {
++			this.id = id;
++			this.name = name;
++			this.billingEntity = billingEntity;
++			this.supplementalDetail = supplementalDetail;
++		}
++
++		@Id
++		public Integer getId() {
++			return id;
++		}
++
++		public void setId(Integer id) {
++			this.id = id;
++		}
++
++		public String getName() {
++			return name;
++		}
++
++		public void setName(String name) {
++			this.name = name;
++		}
++	}
++
++
++
++	@Entity(name = "Product")
++	public static  final class Product {
++		private Integer id;
++
++		private Vendor vendor;
++
++		public Product() {
++		}
++
++		public Product(Integer id, Vendor vendor) {
++			this.id = id;
++			this.vendor = vendor;
++		}
++
++
++		@Id
++		public Integer getId() {
++			return id;
++		}
++
++		public void setId(Integer id) {
++			this.id = id;
++		}
++
++		@ManyToOne(fetch = FetchType.LAZY)
++		@JoinColumn
++		public Vendor getVendor() {
++			return vendor;
++		}
++
++		public void setVendor(Vendor vendor) {
++			this.vendor = vendor;
++		}
++	}
++
++	public static abstract class Support{
++
++		private String x;
++
++		public String getSupport() {
++			return x;
++		}
++
++		public void setSupport(String x) {
++			this.x = x;
++		}
++
++	}
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyHbmTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyHbmTest.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyHbmTest.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/ProxyHbmTest.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,45 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.orm.test.proxyquery;
++
++import org.hibernate.Hibernate;
++import org.hibernate.testing.orm.junit.DomainModel;
++import org.hibernate.testing.orm.junit.SessionFactory;
++import org.hibernate.testing.orm.junit.SessionFactoryScope;
++import org.junit.jupiter.api.Assertions;
++import org.junit.jupiter.api.BeforeEach;
++import org.junit.jupiter.api.Test;
++
++@DomainModel(xmlMappings = {"org/hibernate/orm/test/proxyquery/Vendor.hbm.xml",
++        "org/hibernate/orm/test/proxyquery/Product.hbm.xml"})
++@SessionFactory
++public class ProxyHbmTest {
++
++	@Test
++	public void testAsWhereClause(SessionFactoryScope scope) {
++		scope.inTransaction(
++				session -> {
++					final var selectPFromProductP = session.createQuery("select p from Product p", Product.class).uniqueResult();
++					Assertions.assertFalse(Hibernate.isInitialized(selectPFromProductP.getVendor()));
++					final var query = session.createQuery("select p from Product p where p.vendor=:v", Product.class);
++					query.setParameter("v", selectPFromProductP.getVendor());
++				}
++		);
++	}
++
++
++
++	@BeforeEach
++	public void fillUp(SessionFactoryScope scope) {
++		scope.inTransaction(sessionImplementor -> {
++			final var vendor = new Vendor(1, "vendor1", "billing1");
++			sessionImplementor.getSession().persist(vendor);
++			final var product = new Product(1, vendor);
++			sessionImplementor.getSession().persist(product);
++		});
++	}
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Support.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Support.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Support.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Support.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,14 @@
++package org.hibernate.orm.test.proxyquery;
++
++public abstract class Support {
++
++    private String x;
++
++    public String getSupport() {
++        return x;
++    }
++
++    public void setSupport(String x) {
++        this.x = x;
++    }
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.hbm.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.hbm.xml b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.hbm.xml
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.hbm.xml	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,18 @@
++<?xml version="1.0"?>
++
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.orm.test.proxyquery">
++
++    <class name="Vendor" table="Vendor" lazy="true" proxy="VendorAPI">
++        <id name="id" column="ID" type="int">
++
++        </id>
++        <property name="name" type="string"/>
++    </class>
++
++
++</hibernate-mapping>
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/Vendor.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,43 @@
++package org.hibernate.orm.test.proxyquery;
++
++import jakarta.persistence.Entity;
++import jakarta.persistence.Id;
++
++public class Vendor extends Support implements VendorAPI{
++    private Integer id;
++    private String name;
++    private String billingEntity;
++    private String supplementalDetail;
++
++    public Vendor() {
++    }
++
++    public Vendor(Integer id, String name, String billingEntity) {
++        this.id = id;
++        this.name = name;
++        this.billingEntity = billingEntity;
++    }
++
++    public Vendor(Integer id, String name, String billingEntity, String supplementalDetail) {
++        this.id = id;
++        this.name = name;
++        this.billingEntity = billingEntity;
++        this.supplementalDetail = supplementalDetail;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public void setName(String name) {
++        this.name = name;
++    }
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/VendorAPI.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/VendorAPI.java b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/VendorAPI.java
+new file mode 100644
+--- /dev/null	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/proxyquery/VendorAPI.java	(revision ab36ea6361dca9e587263fb1566957674b6d9b3b)
+@@ -0,0 +1,4 @@
++package org.hibernate.orm.test.proxyquery;
++
++public interface VendorAPI {
++}

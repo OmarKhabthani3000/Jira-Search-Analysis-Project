@@ -1,0 +1,101 @@
+diff -Naur orig/tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java new/tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java
+--- orig/tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java	2009-08-19 09:09:49.828125000 +0200
++++ new/tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java	2009-08-19 09:10:48.015625000 +0200
+@@ -16,6 +16,8 @@
+ 	boolean ejb3 = false;
+ 
+ 	boolean jdk5 = false;
++	
++	String jpaAccessMode = "property";
+ 
+ 	public Hbm2JavaExporterTask(HibernateToolTask parent) {
+ 		super( parent );
+@@ -28,12 +30,17 @@
+ 	public void setJdk5(boolean b) {
+ 		jdk5 = b;
+ 	}
++	
++	public void setJpaAccessMode(String jpaAccessMode) {
++		this.jpaAccessMode = jpaAccessMode;
++	}
+ 
+ 	protected Exporter configureExporter(Exporter exp) {
+ 		POJOExporter exporter = (POJOExporter) exp;
+ 		super.configureExporter( exp );
+         exporter.getProperties().setProperty("ejb3", ""+ejb3);
+         exporter.getProperties().setProperty("jdk5", ""+jdk5);
++        exporter.getProperties().setProperty("jpaAccessMode", jpaAccessMode);
+ 		return exporter;
+ 	}
+ 
+diff -Naur orig/tools/src/templates/pojo/PojoFields.ftl new/tools/src/templates/pojo/PojoFields.ftl
+--- orig/tools/src/templates/pojo/PojoFields.ftl	2008-03-06 09:53:00.000000000 +0100
++++ new/tools/src/templates/pojo/PojoFields.ftl	2009-08-19 08:34:21.515625000 +0200
+@@ -3,6 +3,10 @@
+ <#foreach field in pojo.getAllPropertiesIterator()><#if pojo.getMetaAttribAsBool(field, "gen-property", true)> <#if pojo.hasMetaAttribute(field, "field-description")>    /**
+      ${pojo.getFieldJavaDoc(field, 0)}
+      */
++ </#if>
++ <#if exporter.properties.containsKey('jpaAccessMode') && jpaAccessMode.equals('field')>
++ <#assign property = field/>
++ <#include "GetPropertyAnnotation.ftl"/>
+  </#if>    ${pojo.getFieldModifiers(field)} ${pojo.getJavaTypeName(field, jdk5)} ${field.name}<#if pojo.hasFieldInitializor(field, jdk5)> = ${pojo.getFieldInitialization(field, jdk5)}</#if>;
+ </#if>
+ </#foreach>
+diff -Naur orig/tools/src/templates/pojo/PojoPropertyAccessors.ftl new/tools/src/templates/pojo/PojoPropertyAccessors.ftl
+--- orig/tools/src/templates/pojo/PojoPropertyAccessors.ftl	2008-03-06 09:53:00.000000000 +0100
++++ new/tools/src/templates/pojo/PojoPropertyAccessors.ftl	2009-08-18 16:06:15.500000000 +0200
+@@ -6,7 +6,9 @@
+      * ${pojo.getFieldJavaDoc(property, 4)}
+      */
+ </#if>
++	<#if !exporter.properties.containsKey('jpaAccessMode') || !jpaAccessMode.equals('field')>
+     <#include "GetPropertyAnnotation.ftl"/>
++	</#if>
+     ${pojo.getPropertyGetModifiers(property)} ${pojo.getJavaTypeName(property, jdk5)} ${pojo.getGetterSignature(property)}() {
+         return this.${property.name};
+     }
+diff -Naur orig/trunk/HibernateExt/tools/doc/reference/en/modules/ant.xml new/trunk/HibernateExt/tools/doc/reference/en/modules/ant.xml
+--- orig/trunk/HibernateExt/tools/doc/reference/en/modules/ant.xml	2009-08-19 09:36:35.828125000 +0200
++++ new/trunk/HibernateExt/tools/doc/reference/en/modules/ant.xml	2009-08-19 09:45:09.609375000 +0200
+@@ -557,11 +557,14 @@
+               <area coords="2 55" id="zcfg1" />
+ 
+               <area coords="3 55" id="zcfg2" />
++
++              <area coords="4 55" id="zcfg3" />
+             </areaspec>
+ 
+             <programlisting><![CDATA[<hbm2java
+  jdk5="true|false"
+  ejb3="true|false"
++ jpaAccessMode="field|property"
+ >]]></programlisting>
+ 
+             <calloutlist>
+@@ -575,6 +578,11 @@
+                 e.g. using annotations from javax.persistence and
+                 org.hibernate.annotations</para>
+               </callout>
++			  
++		      <callout arearefs="zcfg3">
++                <para>jpaAccessMode (default: property): Select if the annotations
++				are put on the fields ("field") or on the getters ("property").</para>
++              </callout>
+             </calloutlist>
+           </programlistingco></para>
+ 
+@@ -582,11 +590,11 @@
+           <title>Example</title>
+ 
+           <para>Basic example of using &lt;hbm2java&gt; to generate POJO's
+-          that utilize jdk5 constructs.</para>
++          that utilize jdk5 constructs with annotations on the fields.</para>
+ 
+           <programlisting><![CDATA[<hibernatetool destdir="${build.dir}/generated">
+  <configuration configurationfile="hibernate.cfg.xml"/>
+- <hbm2java jdk5="true"/>
++ <hbm2java jdk5="true" jpaAccessMode="field"/>
+ </hibernatetool>]]></programlisting>
+         </section>
+       </section>

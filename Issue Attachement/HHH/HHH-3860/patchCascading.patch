@@ -1,0 +1,263 @@
+Index: src/main/java/org/hibernate/engine/Cascade.java
+===================================================================
+--- src/main/java/org/hibernate/engine/Cascade.java	(revision 14365)
++++ src/main/java/org/hibernate/engine/Cascade.java	(working copy)
+@@ -128,6 +128,7 @@
+ 
+ 				if ( style.doCascade( action ) ) {
+ 					cascadeProperty(
++						    parent,
+ 					        persister.getPropertyValue( parent, i, entityMode ),
+ 					        types[i],
+ 					        style,
+@@ -156,6 +157,7 @@
+ 	 * Cascade an action to the child or children
+ 	 */
+ 	private void cascadeProperty(
++			final Object parent,
+ 			final Object child,
+ 			final Type type,
+ 			final CascadeStyle style,
+@@ -167,6 +169,7 @@
+ 				AssociationType associationType = (AssociationType) type;
+ 				if ( cascadeAssociationNow( associationType ) ) {
+ 					cascadeAssociation(
++							parent,
+ 							child,
+ 							type,
+ 							style,
+@@ -176,7 +179,7 @@
+ 				}
+ 			}
+ 			else if ( type.isComponentType() ) {
+-				cascadeComponent( child, (AbstractComponentType) type, anything );
++				cascadeComponent( parent, child, (AbstractComponentType) type, anything );
+ 			}
+ 		}
+ 	}
+@@ -187,6 +190,7 @@
+ 	}
+ 
+ 	private void cascadeComponent(
++			final Object parent,
+ 			final Object child,
+ 			final AbstractComponentType componentType,
+ 			final Object anything) {
+@@ -196,6 +200,7 @@
+ 			CascadeStyle componentPropertyStyle = componentType.getCascadeStyle(i);
+ 			if ( componentPropertyStyle.doCascade(action) ) {
+ 				cascadeProperty(
++						parent,
+ 						children[i],
+ 						types[i],
+ 						componentPropertyStyle,
+@@ -207,6 +212,7 @@
+ 	}
+ 
+ 	private void cascadeAssociation(
++			final Object parent,
+ 			final Object child,
+ 			final Type type,
+ 			final CascadeStyle style,
+@@ -213,10 +219,10 @@
+ 			final Object anything,
+ 			final boolean isCascadeDeleteEnabled) {
+ 		if ( type.isEntityType() || type.isAnyType() ) {
+-			cascadeToOne( child, type, style, anything, isCascadeDeleteEnabled );
++			cascadeToOne( parent, child, type, style, anything, isCascadeDeleteEnabled );
+ 		}
+ 		else if ( type.isCollectionType() ) {
+-			cascadeCollection( child, style, anything, (CollectionType) type );
++			cascadeCollection( parent, child, style, anything, (CollectionType) type );
+ 		}
+ 	}
+ 
+@@ -224,6 +230,7 @@
+ 	 * Cascade an action to a collection
+ 	 */
+ 	private void cascadeCollection(
++			final Object parent,
+ 			final Object child,
+ 			final CascadeStyle style,
+ 			final Object anything,
+@@ -240,6 +247,7 @@
+ 		//cascade to current collection elements
+ 		if ( elemType.isEntityType() || elemType.isAnyType() || elemType.isComponentType() ) {
+ 			cascadeCollectionElements(
++				parent,
+ 				child,
+ 				type,
+ 				style,
+@@ -256,6 +264,7 @@
+ 	 * Cascade an action to a to-one association or any type
+ 	 */
+ 	private void cascadeToOne(
++			final Object parent,
+ 			final Object child,
+ 			final Type type,
+ 			final CascadeStyle style,
+@@ -265,7 +274,9 @@
+ 				? ( (EntityType) type ).getAssociatedEntityName()
+ 				: null;
+ 		if ( style.reallyDoCascade(action) ) { //not really necessary, but good for consistency...
++			eventSource.getPersistenceContext().addChildParent(child, parent);
+ 			action.cascade(eventSource, child, entityName, anything, isCascadeDeleteEnabled);
++			eventSource.getPersistenceContext().removeChildParent(child);
+ 		}
+ 	}
+ 
+@@ -273,6 +284,7 @@
+ 	 * Cascade to the collection elements
+ 	 */
+ 	private void cascadeCollectionElements(
++			final Object parent,
+ 			final Object child,
+ 			final CollectionType collectionType,
+ 			final CascadeStyle style,
+@@ -294,6 +306,7 @@
+ 			Iterator iter = action.getCascadableChildrenIterator(eventSource, collectionType, child);
+ 			while ( iter.hasNext() ) {
+ 				cascadeProperty(
++						parent,
+ 						iter.next(), 
+ 						elemType,
+ 						style, 
+Index: src/main/java/org/hibernate/engine/PersistenceContext.java
+===================================================================
+--- src/main/java/org/hibernate/engine/PersistenceContext.java	(revision 14365)
++++ src/main/java/org/hibernate/engine/PersistenceContext.java	(working copy)
+@@ -459,4 +459,17 @@
+ 	public void setReadOnly(Object entity, boolean readOnly);
+ 
+ 	void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId);
++
++	/**
++	 * Put child/parent relation to cache for cascading op
++	 * @param parent
++	 * @param child
++	 */
++	public void addChildParent(Object parent, Object child);
++
++	/**
++	 * Remove child/parent relation from cache 
++	 * @param parent
++	 */
++	public void removeChildParent(Object child);
+ }
+Index: src/main/java/org/hibernate/engine/StatefulPersistenceContext.java
+===================================================================
+--- src/main/java/org/hibernate/engine/StatefulPersistenceContext.java	(revision 14365)
++++ src/main/java/org/hibernate/engine/StatefulPersistenceContext.java	(working copy)
+@@ -96,6 +96,10 @@
+ 	// yet loaded ... for now, this is purely transient!
+ 	private Map unownedCollections;
+ 	
++	// Parent entities cache by their child for cascading
++	// May be empty or not contains all relation 
++	private Map parentsByChild;
++	
+ 	private int cascading = 0;
+ 	private int loadCounter = 0;
+ 	private boolean flushing = false;
+@@ -124,7 +128,8 @@
+ 		collectionEntries = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
+ 		collectionsByKey = new HashMap( INIT_COLL_SIZE );
+ 		arrayHolders = IdentityMap.instantiate( INIT_COLL_SIZE );
+-
++		parentsByChild = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
++		
+ 		nullifiableEntityKeys = new HashSet();
+ 
+ 		initTransientState();
+@@ -191,6 +196,7 @@
+ 		entitiesByKey.clear();
+ 		entitiesByUniqueKey.clear();
+ 		entityEntries.clear();
++		parentsByChild.clear();
+ 		entitySnapshotsByKey.clear();
+ 		collectionsByKey.clear();
+ 		collectionEntries.clear();
+@@ -337,6 +343,8 @@
+ 		while ( iter.hasNext() ) {
+ 			if ( iter.next()==entity ) iter.remove();
+ 		}
++		// Clear all parent cache
++		parentsByChild.clear();
+ 		entitySnapshotsByKey.remove(key);
+ 		nullifiableEntityKeys.remove(key);
+ 		getBatchFetchQueue().removeBatchLoadableEntityKey(key);
+@@ -1077,8 +1085,18 @@
+ 		final EntityPersister persister = session.getFactory().getEntityPersister( entityName );
+ 		final CollectionPersister collectionPersister = session.getFactory().getCollectionPersister( collectionRole );
+ 
++	    // try cache lookup first
++	    Object parent = parentsByChild.get(childEntity);
++		if (parent != null) {
++	       if (isFoundInParent(propertyName, childEntity, persister, collectionPersister, parent)) {
++		       return getEntry(parent).getId();
++		   }
++		   else {
++			  parentsByChild.remove(childEntity); // remove wrong entry
++		   }
++		}
+ 		// iterate all the entities currently associated with the persistence context.
+-		Iterator entities = entityEntries.entrySet().iterator();
++		Iterator entities = IdentityMap.entries(entityEntries).iterator();
+ 		while ( entities.hasNext() ) {
+ 			final Map.Entry me = ( Map.Entry ) entities.next();
+ 			final EntityEntry entityEntry = ( EntityEntry ) me.getValue();
+@@ -1180,7 +1198,26 @@
+ 				.getEntityPersister(entity);
+ 		CollectionPersister cp = session.getFactory()
+ 				.getCollectionPersister(entity + '.' + property);
+-		Iterator entities = entityEntries.entrySet().iterator();
++		
++	    // try cache lookup first
++	    Object parent = parentsByChild.get(childEntity);
++		if (parent != null) {
++			Object index = getIndexInParent(property, childEntity, persister, cp, parent);
++			
++			if (index==null && mergeMap!=null) {
++				Object unmergedInstance = mergeMap.get(parent);
++				Object unmergedChild = mergeMap.get(childEntity);
++				if ( unmergedInstance!=null && unmergedChild!=null ) {
++					index = getIndexInParent(property, unmergedChild, persister, cp, unmergedInstance);
++				}
++			}
++			if (index!=null) {
++				return index;
++			}
++			parentsByChild.remove(childEntity); // remove wrong entry
++		}
++		
++		Iterator entities = IdentityMap.entries(entityEntries).iterator();
+ 		while ( entities.hasNext() ) {
+ 			Map.Entry me = (Map.Entry) entities.next();
+ 			EntityEntry ee = (EntityEntry) me.getValue();
+@@ -1250,6 +1287,7 @@
+ 	public void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId) {
+ 		Object entity = entitiesByKey.remove( oldKey );
+ 		EntityEntry oldEntry = ( EntityEntry ) entityEntries.remove( entity );
++		parentsByChild.clear();
+ 
+ 		EntityKey newKey = new EntityKey( generatedId, oldEntry.getPersister(), getSession().getEntityMode() );
+ 		addEntity( newKey, entity );
+@@ -1460,4 +1498,18 @@
+ 
+ 		return rtn;
+ 	}
++
++	/**
++	 * @see org.hibernate.engine.PersistenceContext#addChildParent(java.lang.Object, java.lang.Object)
++	 */
++	public void addChildParent(Object child, Object parent) {
++		parentsByChild.put(child, parent);
++	}
++	
++	/**
++	 * @see org.hibernate.engine.PersistenceContext#removeChildParent(java.lang.Object)
++	 */
++	public void removeChildParent(Object child) {
++	   parentsByChild.remove(child);
++	}
+ }

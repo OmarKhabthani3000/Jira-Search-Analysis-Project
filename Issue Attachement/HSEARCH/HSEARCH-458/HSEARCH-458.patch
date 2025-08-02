@@ -1,0 +1,3212 @@
+Index: src/test/java/org/hibernate/search/test/directoryProvider/DirectoryProviderHelperTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/directoryProvider/DirectoryProviderHelperTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/directoryProvider/DirectoryProviderHelperTest.java	(working copy)
+@@ -37,7 +37,7 @@
+  */
+ public class DirectoryProviderHelperTest extends TestCase {
+ 
+-	public void testMkdirsDetermineIndex() throws Exception {
++	public void testMkdirsDetermineIndex() {
+ 		String root = "./testDir/dir1/dir2";
+ 		String relative = "dir3";
+ 
+@@ -45,14 +45,14 @@
+ 		properties.put( "indexBase", root );
+ 		properties.put( "indexName", relative );
+ 
+-		File f = DirectoryProviderHelper.getVerifiedIndexDir( "name", properties, true );
++		DirectoryProviderHelper.getVerifiedIndexDir( "name", properties, true );
+ 
+ 		assertTrue( new File( root ).exists() );
+ 
+ 		FileHelper.delete( new File( "./testDir" ) );
+ 	}
+ 	
+-	public void testMkdirsGetSource() throws Exception {
++	public void testMkdirsGetSource() {
+ 		String root = "./testDir";
+ 		String relative = "dir1/dir2/dir3";
+ 
+Index: src/test/java/org/hibernate/search/test/directoryProvider/FSSlaveAndMasterDPTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/directoryProvider/FSSlaveAndMasterDPTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/directoryProvider/FSSlaveAndMasterDPTest.java	(working copy)
+@@ -28,8 +28,8 @@
+ import java.util.Date;
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Session;
+@@ -38,6 +38,7 @@
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
++import org.hibernate.search.test.SearchTestCase;
+ import org.hibernate.search.util.FileHelper;
+ import org.hibernate.search.util.LoggerFactory;
+ 
+@@ -87,7 +88,7 @@
+ 		// assert that the salve index is empty
+ 		FullTextSession fullTextSession = Search.getFullTextSession( getSlaveSession() );
+ 		Transaction tx = fullTextSession.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		List result = fullTextSession.createFullTextQuery( parser.parse( "location:texas" ) ).list();
+ 		assertEquals( "No copy yet, fresh index expected", 0, result.size() );
+ 		tx.commit();
+@@ -212,7 +213,7 @@
+ 		return 2;
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				SnowStorm.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/SearchTestCase.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/SearchTestCase.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/SearchTestCase.java	(working copy)
+@@ -27,8 +27,13 @@
+ import java.io.File;
+ import java.io.InputStream;
+ 
++import org.apache.lucene.analysis.Analyzer;
++import org.apache.lucene.analysis.KeywordAnalyzer;
++import org.apache.lucene.analysis.SimpleAnalyzer;
+ import org.apache.lucene.analysis.StopAnalyzer;
++import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.store.Directory;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.HibernateException;
+@@ -56,6 +61,11 @@
+ public abstract class SearchTestCase extends TestCase {
+ 
+ 	private static final Logger log = org.hibernate.search.util.LoggerFactory.make();
++	
++	public static Analyzer standardAnalyzer = new StandardAnalyzer( Version.LUCENE_CURRENT );
++	public static Analyzer stopAnalyzer = new StopAnalyzer( Version.LUCENE_CURRENT );
++	public static Analyzer simpleAnalyzer = new SimpleAnalyzer();
++	public static Analyzer keywordAnalyzer = new KeywordAnalyzer();
+ 
+ 	private static File indexDir;
+ 	
+Index: src/test/java/org/hibernate/search/test/optimizer/OptimizerPerfTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/optimizer/OptimizerPerfTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/optimizer/OptimizerPerfTest.java	(working copy)
+@@ -32,6 +32,7 @@
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.SessionFactory;
+ import org.hibernate.Transaction;
+@@ -123,7 +124,7 @@
+ 				s = sf.openSession();
+ 				tx = s.beginTransaction();
+ 				FullTextSession fts = new FullTextSessionImpl( s );
+-				QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++				QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 				Query query;
+ 				try {
+ 					query = parser.parse( "name:Gavin" );
+@@ -201,7 +202,7 @@
+ 		cfg.setProperty( Environment.ANALYZER_CLASS, StopAnalyzer.class.getName() );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Worker.class,
+ 				Construction.class
+Index: src/test/java/org/hibernate/search/test/shards/CustomerShardingStrategyTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/shards/CustomerShardingStrategyTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/shards/CustomerShardingStrategyTest.java	(working copy)
+@@ -70,7 +70,7 @@
+ 		// create a dummy document for the same customerID, and make sure the shard it would be
+ 		// indexed on matches the shard returned by getDirectoryProvidersForQuery()
+ 		Document document = new Document();
+-		document.add(new Field("customerID", "5", Field.Store.NO, Field.Index.UN_TOKENIZED));
++		document.add(new Field("customerID", "5", Field.Store.NO, Field.Index.NOT_ANALYZED));
+ 		
+ 		assertTrue(providers[0].equals(
+ 			shardStrategy.getDirectoryProviderForAddition(null, null, null, document)
+Index: src/test/java/org/hibernate/search/test/shards/ShardsTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/shards/ShardsTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/shards/ShardsTest.java	(working copy)
+@@ -41,6 +41,8 @@
+ import org.hibernate.Transaction;
+ import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.store.FSDirectory;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.index.TermDocs;
+ import org.apache.lucene.index.Term;
+@@ -50,7 +52,6 @@
+  */
+ public class ShardsTest extends SearchTestCase {
+ 
+-
+ 	protected void configure(Configuration cfg) {
+ 		super.configure( cfg );
+ 		cfg.setProperty( "hibernate.search.default.directory_provider", FSDirectoryProvider.class.getName() );
+@@ -98,7 +99,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession fts = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser("id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 
+ 		List results = fts.createFullTextQuery( parser.parse( "name:mouse OR name:bear" ) ).list();
+ 		assertEquals( "Either double insert, single update, or query fails with shards", 2, results.size() );
+@@ -127,24 +128,36 @@
+ 
+ 		s.clear();
+ 
+-		IndexReader reader = IndexReader.open( new File( getBaseIndexDir(), "Animal00" ) );
++		FSDirectory animal00Directory = FSDirectory.open( new File( getBaseIndexDir(), "Animal00" ) );
+ 		try {
+-			int num = reader.numDocs();
+-			assertEquals( 1, num );
++			IndexReader reader = IndexReader.open( animal00Directory );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 1, num );
++			}
++			finally {
++				reader.close();
++			}
+ 		}
+ 		finally {
+-			reader.close();
++			animal00Directory.close();
+ 		}
+-		reader = IndexReader.open( new File( getBaseIndexDir(), "Animal.1" ) );
++		
++		FSDirectory animal01Directory = FSDirectory.open( new File( getBaseIndexDir(), "Animal.1" ) );
+ 		try {
+-			int num = reader.numDocs();
+-			assertEquals( 1, num );
++			IndexReader reader = IndexReader.open( animal01Directory );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 1, num );
++			}
++			finally {
++				reader.close();
++			}
+ 		}
+ 		finally {
+-			reader.close();
++			animal01Directory.close();
+ 		}
+ 
+-
+ 		tx = s.beginTransaction();
+ 		a = (Animal) s.get(Animal.class, 1);
+ 		a.setName( "Mouse" );
+@@ -152,22 +165,28 @@
+ 
+ 		s.clear();
+ 
+-		reader = IndexReader.open( new File( getBaseIndexDir(), "Animal.1" ) );
++		animal01Directory = FSDirectory.open( new File( getBaseIndexDir(), "Animal.1" ) );
+ 		try {
+-			int num = reader.numDocs();
+-			assertEquals( 1, num );
+-			TermDocs docs = reader.termDocs( new Term( "name", "mouse" ) );
+-			assertTrue( docs.next() );
+-			org.apache.lucene.document.Document doc = reader.document( docs.doc() );
+-			assertFalse( docs.next() );
++			IndexReader reader = IndexReader.open( animal01Directory );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 1, num );
++				TermDocs docs = reader.termDocs( new Term( "name", "mouse" ) );
++				assertTrue( docs.next() );
++				org.apache.lucene.document.Document doc = reader.document( docs.doc() );
++				assertFalse( docs.next() );
++			}
++			finally {
++				reader.close();
++			}
+ 		}
+ 		finally {
+-			reader.close();
++			animal01Directory.close();
+ 		}
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession fts = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser("id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 
+ 		List results = fts.createFullTextQuery( parser.parse( "name:mouse OR name:bear" ) ).list();
+ 		assertEquals( "Either double insert, single update, or query fails with shards", 2, results.size() );
+@@ -196,7 +215,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Animal.class,
+ 				Furniture.class
+Index: src/test/java/org/hibernate/search/test/shards/DirectoryProviderForQueryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/shards/DirectoryProviderForQueryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/shards/DirectoryProviderForQueryTest.java	(working copy)
+@@ -26,8 +26,8 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.hibernate.cfg.Configuration;
+@@ -72,7 +72,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession fts = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser("id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 
+ 		FullTextQuery fullTextQuery = fts.createFullTextQuery( parser.parse( "body:message" ) );
+ 		List results = fullTextQuery.list();
+@@ -88,7 +88,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Email.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/similarity/SimilarityTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/similarity/SimilarityTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/similarity/SimilarityTest.java	(working copy)
+@@ -80,7 +80,7 @@
+ 
+ 	}
+ 	
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Trash.class,
+ 				Can.class
+Index: src/test/java/org/hibernate/search/test/indexingStrategy/ManualIndexingStrategyTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/indexingStrategy/ManualIndexingStrategyTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/indexingStrategy/ManualIndexingStrategyTest.java	(working copy)
+@@ -77,7 +77,7 @@
+ 		}
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Document.class,
+ 				AlternateDocument.class
+Index: src/test/java/org/hibernate/search/test/jgroups/common/JGroupsCommonTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jgroups/common/JGroupsCommonTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jgroups/common/JGroupsCommonTest.java	(working copy)
+@@ -26,9 +26,9 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.Session;
+@@ -38,6 +38,7 @@
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
+ import org.hibernate.search.backend.impl.jgroups.JGroupsBackendQueueProcessorFactory;
++import org.hibernate.search.test.SearchTestCase;
+ import org.hibernate.search.test.jgroups.master.TShirt;
+ 
+ /**
+@@ -73,7 +74,7 @@
+ 
+ 		FullTextSession ftSess = Search.getFullTextSession( openSession() );
+ 		ftSess.getTransaction().begin();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		Query luceneQuery = parser.parse( "logo:Boston or logo:Mapple leaves" );
+ 		org.hibernate.Query query = ftSess.createFullTextQuery( luceneQuery );
+ 		List result = query.list();
+@@ -89,7 +90,7 @@
+ 		//need to sleep for the message consumption
+ 		Thread.sleep( 3000 );
+ 
+-		parser = new QueryParser( "id", new StopAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		luceneQuery = parser.parse( "logo:Peter pan" );
+ 		query = ftSess.createFullTextQuery( luceneQuery );
+ 		result = query.list();
+@@ -104,7 +105,7 @@
+ 		//Need to sleep for the message consumption
+ 		Thread.sleep( 3000 );
+ 
+-		parser = new QueryParser( "id", new StopAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		luceneQuery = parser.parse( "logo:Boston or logo:Mapple leaves" );
+ 		query = ftSess.createFullTextQuery( luceneQuery );
+ 		result = query.list();
+Index: src/test/java/org/hibernate/search/test/jgroups/slave/JGroupsSlaveTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jgroups/slave/JGroupsSlaveTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jgroups/slave/JGroupsSlaveTest.java	(working copy)
+@@ -118,7 +118,7 @@
+ 		super.tearDown();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				TShirt.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/jgroups/master/JGroupsMasterTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jgroups/master/JGroupsMasterTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jgroups/master/JGroupsMasterTest.java	(working copy)
+@@ -30,11 +30,11 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.document.Document;
+ import org.apache.lucene.document.Field;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.jgroups.JChannel;
+ import org.jgroups.Message;
+ 
+@@ -82,7 +82,7 @@
+ 
+ 		FullTextSession ftSess = Search.getFullTextSession( openSession() );
+ 		ftSess.getTransaction().begin();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		Query luceneQuery = parser.parse( "logo:jboss" );
+ 		org.hibernate.Query query = ftSess.createFullTextQuery( luceneQuery );
+ 		List result = query.list();
+@@ -186,7 +186,7 @@
+ 				"shun=false;print_local_addr=true)";
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				TShirt.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/inheritance/InheritanceTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/inheritance/InheritanceTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/inheritance/InheritanceTest.java	(working copy)
+@@ -27,12 +27,12 @@
+ import java.util.List;
+ import java.io.Serializable;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+-import org.apache.lucene.search.RangeQuery;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.search.TermRangeQuery;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Transaction;
+@@ -55,7 +55,7 @@
+ 	public void testSearchUnindexClass() throws Exception {
+ 		createTestData();
+ 
+-		QueryParser parser = new QueryParser( "name", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse( "Elephant" );
+ 
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+@@ -84,7 +84,7 @@
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+ 		Transaction tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "name", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse( "Elephant" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Mammal.class );
+ 		assertItsTheElephant( hibQuery.list() );
+@@ -103,7 +103,7 @@
+ 		assertNotNull( result );
+ 		assertEquals( "Query filtering on superclass return mapped subclasses", 2, result.size() );
+ 
+-		query = new RangeQuery( new Term( "weight", "04000" ), new Term( "weight", "05000" ), true );
++		query = new TermRangeQuery( "weight", "04000", "05000", true, true );
+ 		hibQuery = s.createFullTextQuery( query, Animal.class );
+ 		assertItsTheElephant( hibQuery.list() );
+ 
+@@ -121,7 +121,7 @@
+ 
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "name", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse( "Elephant" );
+ 
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Mammal.class );
+@@ -252,7 +252,7 @@
+ 	}
+ 
+ 	private void assertNumberOfAnimals(FullTextSession s, int count) throws Exception {
+-		QueryParser parser = new QueryParser( "name", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse( "Elephant OR White Pointer OR Chimpanzee OR Dove or Eagle" );
+ 		List result = s.createFullTextQuery( query, Animal.class ).list();
+ 		assertNotNull( result );
+@@ -304,7 +304,7 @@
+ 		assertEquals( "Wrong animal name", "Elephant", mammal.getName() );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Animal.class,
+ 				Mammal.class,
+Index: src/test/java/org/hibernate/search/test/query/LuceneQueryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/LuceneQueryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/LuceneQueryTest.java	(working copy)
+@@ -27,10 +27,9 @@
+ import java.util.Iterator;
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.FetchMode;
+ import org.hibernate.Hibernate;
+ import org.hibernate.ScrollableResults;
+@@ -62,7 +61,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:noword" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -117,7 +116,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:Festina Or brand:Seiko" );
+ 		Statistics stats = s.getSessionFactory().getStatistics();
+@@ -153,7 +152,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:Festina Or brand:Seiko" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -199,7 +198,7 @@
+ 		tx.commit();//post commit events for lucene
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:noword" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -245,7 +244,7 @@
+ 		tx.commit();//post commit events for lucene
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:noword" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -281,7 +280,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -307,7 +306,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -332,7 +331,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -368,7 +367,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -412,7 +411,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:XXX" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -438,7 +437,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -496,7 +495,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:Festina" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -552,7 +551,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:Festina" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Book.class );
+@@ -585,7 +584,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:XXX" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -616,7 +615,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:XXX" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -639,7 +638,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:XXX" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -673,7 +672,7 @@
+ 	}
+ 
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+ 				AlternateBook.class,
+Index: src/test/java/org/hibernate/search/test/query/ProjectionQueryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/ProjectionQueryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/ProjectionQueryTest.java	(working copy)
+@@ -30,11 +30,10 @@
+ import java.util.Map;
+ import java.util.Date;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.document.Document;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.Session;
+@@ -65,7 +64,7 @@
+ 
+ 		s.clear();
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+ 		hibQuery.setProjection( FullTextQuery.OBJECT_CLASS );
+@@ -88,7 +87,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -154,7 +153,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -181,7 +180,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -254,7 +253,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:ITech" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -292,7 +291,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:Accounting" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -356,7 +355,7 @@
+ 		Transaction tx;
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "dept", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "dept", SearchTestCase.standardAnalyzer );
+ 
+ 		Query query = parser.parse( "dept:Accounting" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Employee.class );
+@@ -430,7 +429,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:Festina" );
+ 		org.hibernate.search.FullTextQuery hibQuery = s.createFullTextQuery( query, Book.class );
+@@ -489,7 +488,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+ 				Author.class,
+Index: src/test/java/org/hibernate/search/test/query/ScrollableResultsTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/ScrollableResultsTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/ScrollableResultsTest.java	(working copy)
+@@ -80,7 +80,7 @@
+ 	public void testScrollingForward() {
+ 		Transaction tx = sess.beginTransaction();
+ 		TermQuery tq = new TermQuery( new Term( "summary", "number") );
+-		Sort sort = new Sort( new SortField( "summary" ) );
++		Sort sort = new Sort( new SortField( "summary", SortField.STRING ) );
+ 		ScrollableResults scrollableResults = sess
+ 			.createFullTextQuery( tq, AlternateBook.class )
+ 			.setSort( sort )
+@@ -115,7 +115,7 @@
+ 	public void testScrollingBackwards() {
+ 		Transaction tx = sess.beginTransaction();
+ 		TermQuery tq = new TermQuery( new Term( "summary", "number") );
+-		Sort sort = new Sort( new SortField( "summary" ) );
++		Sort sort = new Sort( new SortField( "summary", SortField.STRING ) );
+ 		ScrollableResults scrollableResults = sess
+ 			.createFullTextQuery( tq, AlternateBook.class )
+ 			.setSort( sort )
+@@ -145,7 +145,7 @@
+ 	public void testResultsAreManaged() {
+ 		Transaction tx = sess.beginTransaction();
+ 		TermQuery tq = new TermQuery( new Term( "summary", "number") );
+-		Sort sort = new Sort( new SortField( "summary" ) );
++		Sort sort = new Sort( new SortField( "summary", SortField.STRING ) );
+ 		ScrollableResults scrollableResults = sess
+ 			.createFullTextQuery( tq, AlternateBook.class )
+ 			.setSort( sort )
+Index: src/test/java/org/hibernate/search/test/query/QueryUnindexedEntityTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/QueryUnindexedEntityTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/QueryUnindexedEntityTest.java	(working copy)
+@@ -24,9 +24,9 @@
+  */
+ package org.hibernate.search.test.query;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.Transaction;
+@@ -53,7 +53,7 @@
+ 		tx.commit();
+ 
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "name", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.standardAnalyzer );
+ 		Query query = parser.parse( "name:foo" );
+ 		FullTextQuery hibQuery = s.createFullTextQuery( query );
+ 		try {
+@@ -68,7 +68,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Person.class,
+ 		};
+Index: src/test/java/org/hibernate/search/test/query/boost/DynamicBoostingTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/boost/DynamicBoostingTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/boost/DynamicBoostingTest.java	(working copy)
+@@ -124,7 +124,7 @@
+ 		return score;
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				DynamicBoostedDescriptionLibrary.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/query/boost/FieldBoostTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/boost/FieldBoostTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/boost/FieldBoostTest.java	(working copy)
+@@ -26,11 +26,11 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.BooleanClause;
+ import org.apache.lucene.search.BooleanQuery;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Transaction;
+@@ -53,8 +53,8 @@
+ 		fullTextSession.clear();
+ 		Transaction tx = fullTextSession.beginTransaction();
+ 
+-		QueryParser authorParser = new QueryParser( "author", new StandardAnalyzer() );
+-		QueryParser descParser = new QueryParser( "description", new StandardAnalyzer() );
++		QueryParser authorParser = new QueryParser( Version.LUCENE_CURRENT, "author", SearchTestCase.standardAnalyzer );
++		QueryParser descParser = new QueryParser( Version.LUCENE_CURRENT, "description", SearchTestCase.standardAnalyzer );
+ 		Query author = authorParser.parse( "Wells" );
+ 		Query desc = descParser.parse( "martians" );
+ 
+@@ -91,8 +91,8 @@
+ 		fullTextSession.clear();
+ 		Transaction tx = fullTextSession.beginTransaction();
+ 
+-		QueryParser authorParser = new QueryParser( "author", new StandardAnalyzer() );
+-		QueryParser descParser = new QueryParser( "description", new StandardAnalyzer() );
++		QueryParser authorParser = new QueryParser( Version.LUCENE_CURRENT, "author", SearchTestCase.standardAnalyzer );
++		QueryParser descParser = new QueryParser( Version.LUCENE_CURRENT, "description", SearchTestCase.standardAnalyzer );
+ 		Query author = authorParser.parse( "Wells" );
+ 		Query desc = descParser.parse( "martians" );
+ 
+@@ -129,8 +129,8 @@
+ 		fullTextSession.clear();
+ 		Transaction tx = fullTextSession.beginTransaction();
+ 
+-		QueryParser authorParser = new QueryParser( "author", new StandardAnalyzer() );
+-		QueryParser descParser = new QueryParser( "description", new StandardAnalyzer() );
++		QueryParser authorParser = new QueryParser( Version.LUCENE_CURRENT, "author", SearchTestCase.standardAnalyzer );
++		QueryParser descParser = new QueryParser( Version.LUCENE_CURRENT, "description", SearchTestCase.standardAnalyzer );
+ 		Query author = authorParser.parse( "Wells" );
+ 		Query desc = descParser.parse( "martians" );
+ 
+@@ -211,7 +211,7 @@
+ 		tx.commit();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				BoostedDescriptionLibrary.class,
+ 				BoostedFieldDescriptionLibrary.class,
+Index: src/test/java/org/hibernate/search/test/query/boost/DynamicBoostedDescriptionLibrary.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/boost/DynamicBoostedDescriptionLibrary.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/boost/DynamicBoostedDescriptionLibrary.java	(working copy)
+@@ -28,7 +28,6 @@
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.Id;
+ 
+-import org.hibernate.search.annotations.Boost;
+ import org.hibernate.search.annotations.DocumentId;
+ import org.hibernate.search.annotations.Field;
+ import org.hibernate.search.annotations.Indexed;
+Index: src/test/java/org/hibernate/search/test/query/LuceneQuerySortTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/LuceneQuerySortTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/LuceneQuerySortTest.java	(working copy)
+@@ -27,11 +27,11 @@
+ import java.util.List;
+ import java.util.Calendar;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.Sort;
+ import org.apache.lucene.search.SortField;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
+@@ -53,7 +53,7 @@
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+ 		createTestBooks(s);
+ 		Transaction tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser("title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "summary:lucene" );
+ 		FullTextQuery hibQuery = s.createFullTextQuery( query, Book.class );
+@@ -71,21 +71,21 @@
+ 		// now the same query, but with a lucene sort specified.
+ 		query = parser.parse( "summary:lucene" );
+ 		hibQuery = s.createFullTextQuery( query, Book.class );
+-		Sort sort = new Sort(new SortField("id", true));
++		Sort sort = new Sort( new SortField( "id", SortField.STRING, true ) );
+ 		hibQuery.setSort(sort);
+ 		result = hibQuery.list();
+ 		assertNotNull( result );
+ 		assertEquals( "Wrong number of test results.", 3, result.size() );
+ 		id = 3;
+-		for(Book b : result) {
+-			assertEquals("Expected another id", Integer.valueOf( id ), b.getId());
++		for (Book b : result) {
++			assertEquals( "Expected another id", Integer.valueOf( id ), b.getId() );
+ 			id--;
+ 		}
+ 
+ 		// order by summary
+ 		query = parser.parse( "summary:lucene OR summary:action" );
+ 		hibQuery = s.createFullTextQuery( query, Book.class );
+-		sort = new Sort( new SortField( "summary_forSort", false ) ); //ASC
++		sort = new Sort( new SortField( "summary_forSort", SortField.STRING ) ); //ASC
+ 		hibQuery.setSort( sort );
+ 		result = hibQuery.list();
+ 		assertNotNull( result );
+@@ -95,7 +95,7 @@
+ 		// order by summary backwards
+ 		query = parser.parse( "summary:lucene OR summary:action" );
+ 		hibQuery = s.createFullTextQuery( query, Book.class );
+-		sort = new Sort( new SortField( "summary_forSort", true ) ); //DESC
++		sort = new Sort( new SortField( "summary_forSort", SortField.STRING, true ) ); //DESC
+ 		hibQuery.setSort( sort );
+ 		result = hibQuery.list();
+ 		assertNotNull( result );
+@@ -158,7 +158,7 @@
+ 		s.clear();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+ 				Author.class
+Index: src/test/java/org/hibernate/search/test/query/explain/ExplanationTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/explain/ExplanationTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/explain/ExplanationTest.java	(working copy)
+@@ -34,8 +34,8 @@
+ import org.hibernate.search.FullTextQuery;
+ import org.hibernate.Transaction;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.queryParser.MultiFieldQueryParser;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -55,7 +55,8 @@
+ 		Map<String, Float> boosts = new HashMap<String, Float>(2);
+ 		boosts.put( "title", new Float(4) );
+ 		boosts.put( "description", new Float(1) );
+-		MultiFieldQueryParser parser = new MultiFieldQueryParser(new String[] {"title", "description"}, new StandardAnalyzer(), boosts);
++		MultiFieldQueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT, new String[] {"title", "description"},
++				SearchTestCase.standardAnalyzer, boosts );
+ 		Query luceneQuery = parser.parse( "dark" );
+ 		FullTextQuery ftQuery = s.createFullTextQuery( luceneQuery, Dvd.class )
+ 				.setProjection( FullTextQuery.DOCUMENT_ID, FullTextQuery.EXPLANATION, FullTextQuery.THIS );
+@@ -69,7 +70,7 @@
+ 		s.close();
+ 
+ 	}
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Dvd.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/query/criteria/MixedCriteriaTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/criteria/MixedCriteriaTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/criteria/MixedCriteriaTest.java	(working copy)
+@@ -26,9 +26,9 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.MultiFieldQueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Criteria;
+ import org.hibernate.Session;
+@@ -54,8 +54,8 @@
+ 		Transaction tx = session.beginTransaction();
+ 		FullTextSession fullTextSession = Search.getFullTextSession( session );
+ 
+-		MultiFieldQueryParser parser = new MultiFieldQueryParser(
+-				new String[] { "kurztext" }, new StandardAnalyzer()
++		MultiFieldQueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT, 
++				new String[] { "kurztext" }, SearchTestCase.standardAnalyzer
+ 		);
+ 		Query query = parser.parse( "combi OR sport" );
+ 
+@@ -78,8 +78,8 @@
+ 		Transaction tx = session.beginTransaction();
+ 		FullTextSession fullTextSession = Search.getFullTextSession( session );
+ 
+-		MultiFieldQueryParser parser = new MultiFieldQueryParser(
+-				new String[] { "kurztext" }, new StandardAnalyzer()
++		MultiFieldQueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT,
++				new String[] { "kurztext" }, SearchTestCase.standardAnalyzer
+ 		);
+ 		Query query = parser.parse( "combi OR sport" );
+ 
+@@ -102,8 +102,8 @@
+ 		Transaction tx = session.beginTransaction();
+ 		FullTextSession fullTextSession = Search.getFullTextSession( session );
+ 
+-		MultiFieldQueryParser parser = new MultiFieldQueryParser(
+-				new String[] { "kurztext" }, new StandardAnalyzer()
++		MultiFieldQueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT,
++				new String[] { "kurztext" }, SearchTestCase.standardAnalyzer
+ 		);
+ 		Query query = parser.parse( "combi OR sport" );
+ 
+@@ -143,7 +143,7 @@
+ 	}
+ 
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				AbstractCar.class, CombiCar.class, SportCar.class, Bike.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/query/MultiClassesQueryLoaderTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/MultiClassesQueryLoaderTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/MultiClassesQueryLoaderTest.java	(working copy)
+@@ -34,8 +34,8 @@
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.apache.lucene.queryParser.QueryParser;
+-import org.apache.lucene.analysis.KeywordAnalyzer;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -56,7 +56,7 @@
+ 		statement.close();
+ 		FullTextSession s = Search.getFullTextSession( sess );
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new KeywordAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.keywordAnalyzer );
+ 		Query query = parser.parse( "name:moo" );
+ 		FullTextQuery hibQuery = s.createFullTextQuery( query, Author.class, Music.class );
+ 		List result = hibQuery.list();
+@@ -70,7 +70,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Author.class,
+ 				Music.class
+Index: src/test/java/org/hibernate/search/test/query/TermVectorTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/TermVectorTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/TermVectorTest.java	(working copy)
+@@ -120,7 +120,7 @@
+       tx.commit();
+    }
+ 
+-   protected Class[] getMappings() {
++   protected Class<?>[] getMappings() {
+       return new Class[]{
+          ElectricalProperties.class,
+          Employee.class
+Index: src/test/java/org/hibernate/search/test/query/QueryLoaderTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/query/QueryLoaderTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/query/QueryLoaderTest.java	(working copy)
+@@ -26,9 +26,9 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.KeywordAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextQuery;
+@@ -88,7 +88,7 @@
+ 
+ 		FullTextSession s = Search.getFullTextSession( sess );
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "title", new KeywordAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.keywordAnalyzer );
+ 		Query query = parser.parse( "title:moo" );
+ 		FullTextQuery hibQuery = s.createFullTextQuery( query, Music.class );
+ 		List result = hibQuery.list();
+@@ -110,7 +110,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Author.class,
+ 				Music.class
+Index: src/test/java/org/hibernate/search/test/fieldAccess/FieldAccessTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/fieldAccess/FieldAccessTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/fieldAccess/FieldAccessTest.java	(working copy)
+@@ -32,7 +32,7 @@
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.apache.lucene.queryParser.QueryParser;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
++import org.apache.lucene.util.Version;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -50,7 +50,7 @@
+ 
+         FullTextSession session = Search.getFullTextSession(s);
+         tx = session.beginTransaction();
+-        QueryParser p = new QueryParser("id", new StandardAnalyzer( ) );
++        QueryParser p = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+         List result = session.createFullTextQuery( p.parse( "Abstract:Hibernate" ) ).list();
+         assertEquals( "Query by field", 1, result.size() );
+         s.delete( result.get( 0 ) );
+@@ -74,7 +74,7 @@
+ 
+         FullTextSession session = Search.getFullTextSession(s);
+         tx = session.beginTransaction();
+-        QueryParser p = new QueryParser("id", new StandardAnalyzer( ) );
++        QueryParser p = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+         List result = session.createFullTextQuery( p.parse( "title:Action OR Abstract:Action" ) ).list();
+         assertEquals( "Query by field", 2, result.size() );
+         assertEquals( "@Boost fails", "Hibernate in Action", ( (Document) result.get( 0 ) ).getTitle() );
+@@ -84,7 +84,7 @@
+ 
+     }
+ 
+-    protected Class[] getMappings() {
++    protected Class<?>[] getMappings() {
+         return new Class[] {
+                 Document.class
+         };
+Index: src/test/java/org/hibernate/search/test/TransactionTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/TransactionTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/TransactionTest.java	(working copy)
+@@ -89,7 +89,8 @@
+ 		}
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { Document.class };
+ 	}
++	
+ }
+Index: src/test/java/org/hibernate/search/test/configuration/ProgrammaticMappingTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/configuration/ProgrammaticMappingTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/configuration/ProgrammaticMappingTest.java	(working copy)
+@@ -32,7 +32,6 @@
+ import java.util.TimeZone;
+ 
+ import org.apache.lucene.analysis.SimpleAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+@@ -40,6 +39,7 @@
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
+ import org.apache.lucene.search.TopDocs;
++import org.apache.lucene.util.Version;
+ import org.apache.solr.analysis.LowerCaseFilterFactory;
+ import org.apache.solr.analysis.NGramFilterFactory;
+ import org.apache.solr.analysis.SnowballPorterFilterFactory;
+@@ -71,7 +71,6 @@
+ public class ProgrammaticMappingTest extends SearchTestCase {
+ 	
+ 	private static final Logger log = LoggerFactory.make();
+-
+ 	
+ 	public void testMapping() throws Exception{
+ 		Address address = new Address();
+@@ -87,7 +86,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "" + address.getAddressId() );
+ 		System.out.println(luceneQuery.toString(  ));
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery );
+@@ -118,7 +117,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery =  parser.parse( "street1_ngram:pea" );
+ 
+ 		final FullTextQuery query = s.createFullTextQuery( luceneQuery );
+@@ -127,7 +126,6 @@
+ 		s.delete( query.list().get( 0 ));
+ 		tx.commit();
+ 		s.close();
+-
+ 	}
+ 
+ 	public void testBridgeMapping() throws Exception{
+@@ -144,7 +142,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "street1:peac" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery );
+ 		assertEquals( "PrefixQuery should not be on", 0, query.getResultSize() );
+@@ -178,7 +176,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "street1:peachtree OR idx_street2:peachtree" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting two results", 2, query.getResultSize() );
+@@ -194,10 +192,7 @@
+ 		tx.commit();
+ 		s.close();
+ 	}
+-
+ 	
+-	
+-	
+ 	public void testAnalyzerDiscriminator() throws Exception{
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+ 		Transaction tx = s.beginTransaction();
+@@ -233,7 +228,6 @@
+ 		tx.commit();
+ 		s.close();
+ 	}
+-
+ 	
+ 	public void testDateBridgeMapping() throws Exception{
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+@@ -269,7 +263,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "date-created:20091115 OR blog-entry-created:20091115" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 3 results", 3, query.getResultSize() );
+@@ -310,7 +304,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "last-updated:20091115" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 2 results", 2, query.getResultSize() );
+@@ -325,7 +319,6 @@
+ 		s.close();
+ 	}
+ 	
+-	
+ 	public void testProvidedIdMapping() throws Exception{
+ 		FullTextSession fullTextSession = Search.getFullTextSession( openSession() );
+ 		SearchFactoryImplementor sf = (SearchFactoryImplementor) fullTextSession.getSearchFactory();
+@@ -355,7 +348,7 @@
+ 		
+ 		Transaction transaction = fullTextSession.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "providedidentry.name", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "providedidentry.name", SearchTestCase.standardAnalyzer );
+ 		Query luceneQuery = parser.parse( "Goat" );
+ 
+ 		//we cannot use FTQuery because @ProvidedId does not provide the getter id and Hibernate Hsearch Query extension
+@@ -364,7 +357,7 @@
+ 		//we know there is only one DP
+ 		DirectoryProvider<?> provider = fullTextSession.getSearchFactory()
+ 				.getDirectoryProviders( ProvidedIdEntry.class )[0];
+-		IndexSearcher searcher = new IndexSearcher( provider.getDirectory() );
++		IndexSearcher searcher = new IndexSearcher( provider.getDirectory(), true );
+ 		TopDocs hits = searcher.search( luceneQuery, 1000 );
+ 		searcher.close();
+ 		transaction.commit();
+@@ -373,8 +366,6 @@
+ 		assertEquals( 3, hits.totalHits );
+ 	}
+ 	
+-	
+-	
+ 	public void testFullTextFilterDefAtMappingLevel() throws Exception{
+ 		FullTextSession s = Search.getFullTextSession( openSession() );
+ 		Transaction tx = s.beginTransaction();
+@@ -403,7 +394,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "street1:Peachtnot" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		query.enableFullTextFilter("security").setParameter("ownerName", "test");
+@@ -438,7 +429,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "items.description:Ferrari" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 1 results", 1, query.getResultSize() );
+@@ -472,7 +463,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "items.description:test" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 1 results", 1, query.getResultSize() );
+@@ -489,12 +480,12 @@
+ 		
+ 		tx = s.beginTransaction();
+ 
+-		parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		luceneQuery = parser.parse( "items.description:test" );
+ 		query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 0 results", 0, query.getResultSize() );
+ 
+-		parser = new QueryParser( "id", new StandardAnalyzer( ) );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		luceneQuery = parser.parse( "items.description:Ferrari" );
+ 		query = s.createFullTextQuery( luceneQuery ).setProjection( FullTextQuery.THIS, FullTextQuery.SCORE );
+ 		assertEquals( "expecting 1 results", 1, query.getResultSize() );
+@@ -529,7 +520,7 @@
+ 		// Departments entity after being massaged by passing it
+ 		// through the EquipmentType class. This field is in
+ 		// the Lucene document but not in the Department entity itself.
+-		QueryParser parser = new QueryParser( "equipment", new SimpleAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "equipment", new SimpleAnalyzer() );
+ 
+ 		// Check the second ClassBridge annotation
+ 		Query query = parser.parse( "equiptype:Cisco" );
+@@ -549,7 +540,7 @@
+ 		assertTrue( "problem with field cross-ups", result.size() == 0 );
+ 
+ 		// Non-ClassBridge field.
+-		parser = new QueryParser( "branchHead", new SimpleAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "branchHead", new SimpleAnalyzer() );
+ 		query = parser.parse( "branchHead:Kent Lewin" );
+ 		hibQuery = session.createFullTextQuery( query, Departments.class );
+ 		result = hibQuery.list();
+@@ -558,7 +549,7 @@
+ 		assertEquals("incorrect entity returned", "Kent Lewin", ( result.get( 0 ) ).getBranchHead());
+ 
+ 		// Check other ClassBridge annotation.
+-		parser = new QueryParser( "branchnetwork", new SimpleAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "branchnetwork", new SimpleAnalyzer() );
+ 		query = parser.parse( "branchnetwork:st. george 1D" );
+ 		hibQuery = session.createFullTextQuery( query, Departments.class );
+ 		result = hibQuery.list();
+@@ -573,7 +564,6 @@
+ 		s.close();
+ 	}
+ 	
+-	
+ 	public void testDynamicBoosts() throws Exception {
+ 
+ 		Session session = openSession();
+@@ -657,7 +647,7 @@
+ 	}
+ 	
+ 	private int nbrOfMatchingResults(String field, String token, FullTextSession s) throws ParseException {
+-		QueryParser parser = new QueryParser( field, new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, field, SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( token );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery );
+ 		return query.getResultSize();
+@@ -750,9 +740,6 @@
+ 				.analyzerDef( "minimal", StandardTokenizerFactory.class  );
+ 
+ 	}
+-	
+-	
+-	
+ 
+ 	protected Class<?>[] getMappings() {
+ 		return new Class<?>[] {
+Index: src/test/java/org/hibernate/search/test/configuration/Country.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/configuration/Country.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/configuration/Country.java	(working copy)
+@@ -51,7 +51,7 @@
+ 	private String name;
+ 	
+ 	@OneToMany(mappedBy = "country")
+-	private Set<Address> addresses = new HashSet<Address>();;
++	private Set<Address> addresses = new HashSet<Address>();
+ 
+ 	public String getName() {
+ 		return name;
+Index: src/test/java/org/hibernate/search/test/configuration/SecurityFilterFactory.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/configuration/SecurityFilterFactory.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/configuration/SecurityFilterFactory.java	(working copy)
+@@ -61,7 +61,7 @@
+ 		return key;
+ 	}
+ 	
+-	private final class SecurityFilter extends Filter {
++	private static final class SecurityFilter extends Filter {
+ 		private static final long serialVersionUID = -5105989141875576599L;
+ 		private final String ownerName;
+ 		
+Index: src/test/java/org/hibernate/search/test/configuration/ShardsConfigurationTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/configuration/ShardsConfigurationTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/configuration/ShardsConfigurationTest.java	(working copy)
+@@ -28,7 +28,6 @@
+ import static org.hibernate.search.backend.configuration.IndexWriterSetting.MAX_MERGE_DOCS;
+ import static org.hibernate.search.backend.configuration.IndexWriterSetting.MERGE_FACTOR;
+ import static org.hibernate.search.backend.configuration.IndexWriterSetting.RAM_BUFFER_SIZE;
+-import static org.hibernate.search.backend.configuration.IndexWriterSetting.TERM_INDEX_INTERVAL;
+ import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.TRANSACTION;
+ import static org.hibernate.search.test.configuration.ConfigurationReadTestCase.TransactionType.BATCH;
+ import org.hibernate.search.store.DirectoryProvider;
+@@ -67,7 +66,7 @@
+ 		cfg.setProperty( "hibernate.search.Documents.1.transaction.term_index_interval", "12" );
+ 	}
+ 	
+-	public void testCorrectNumberOfShardsDetected() throws Exception {
++	public void testCorrectNumberOfShardsDetected() {
+ 		DirectoryProvider[] docDirProviders = getSearchFactory()
+ 			.getDirectoryProviders( Document.class );
+ 		assertNotNull( docDirProviders);
+@@ -78,14 +77,14 @@
+ 		assertEquals( 2, bookDirProviders.length );
+ 	}
+ 	
+-	public void testSelectionOfShardingStrategy() throws Exception {
++	public void testSelectionOfShardingStrategy() {
+ 		IndexShardingStrategy shardingStrategy = getSearchFactory().getDocumentBuilderIndexedEntity( Document.class )
+ 				.getDirectoryProviderSelectionStrategy();
+ 		assertNotNull( shardingStrategy );
+ 		assertEquals( shardingStrategy.getClass(), UselessShardingStrategy.class );
+ 	}
+ 	
+-	public void testShardingSettingsInherited() throws Exception {
++	public void testShardingSettingsInherited() {
+ 		DirectoryProvider[] docDirProviders = getSearchFactory().getDirectoryProviders( Document.class );
+ 		assertTrue( docDirProviders[0] instanceof RAMDirectoryProvider );
+ 		assertTrue( docDirProviders[1] instanceof FSDirectoryProvider );
+@@ -93,7 +92,7 @@
+ 		assertValueIsSet( Document.class, 0, BATCH, MAX_BUFFERED_DOCS, 4 );
+ 	}
+ 	
+-	public void testShardN2UsesDefaults() throws Exception {
++	public void testShardN2UsesDefaults() {
+ 		assertValueIsSet( Document.class, 2, TRANSACTION, MAX_BUFFERED_DOCS, 6 );
+ 		assertValueIsDefault( Document.class, 2, TRANSACTION, MAX_MERGE_DOCS );
+ 		assertValueIsSet( Document.class, 2, TRANSACTION, MERGE_FACTOR, 100 );
+@@ -104,7 +103,7 @@
+ 		assertValueIsDefault( Document.class, 2, BATCH, RAM_BUFFER_SIZE );
+ 	}
+ 	
+-	public void testShardN1_ExplicitParams() throws Exception {
++	public void testShardN1_ExplicitParams() {
+ 		assertValueIsSet( Document.class, 1, TRANSACTION, MAX_BUFFERED_DOCS, 12 );
+ 		assertValueIsSet( Document.class, 1, BATCH, MAX_MERGE_DOCS, 11 );
+ 	}
+@@ -114,7 +113,7 @@
+ 		// skips index emptying to prevent a problem with UselessShardingStrategy
+ 	}
+ 	
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+ 				Author.class,
+Index: src/test/java/org/hibernate/search/test/worker/WorkerTestCase.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/worker/WorkerTestCase.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/worker/WorkerTestCase.java	(working copy)
+@@ -32,6 +32,7 @@
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.SessionFactory;
+ import org.hibernate.Transaction;
+@@ -124,7 +125,7 @@
+ 			s = sf.openSession();
+ 			tx = s.beginTransaction();
+ 			FullTextSession fts = new FullTextSessionImpl( s );
+-			QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++			QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 			Query query;
+ 			try {
+ 				query = parser.parse( "name:emmanuel2" );
+@@ -198,7 +199,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[]{
+ 				Employee.class,
+ 				Employer.class
+Index: src/test/java/org/hibernate/search/test/worker/ConcurrencyTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/worker/ConcurrencyTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/worker/ConcurrencyTest.java	(working copy)
+@@ -69,7 +69,7 @@
+ 
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Drink.class,
+ 				Food.class
+Index: src/test/java/org/hibernate/search/test/worker/duplication/WorkDuplicationTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/worker/duplication/WorkDuplicationTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/worker/duplication/WorkDuplicationTest.java	(working copy)
+@@ -27,12 +27,12 @@
+ import java.util.List;
+ import java.util.ArrayList;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.IndexSearcher;
+ import org.apache.lucene.search.TopDocs;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextQuery;
+@@ -81,7 +81,7 @@
+ 		// search if the record made it into the index
+ 		tx = s.beginTransaction();
+ 		String searchQuery = "Joe";
+-		QueryParser parser = new QueryParser( "Content", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "Content", SearchTestCase.standardAnalyzer );
+ 		Query luceneQuery = parser.parse( searchQuery );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery );
+ 		List results = query.list();
+@@ -154,7 +154,7 @@
+ 	}	
+ 
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { Person.class, EmailAddress.class, SpecialPerson.class };
+ 	}
+ }
+Index: src/test/java/org/hibernate/search/test/session/OptimizeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/session/OptimizeTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/session/OptimizeTest.java	(working copy)
+@@ -28,6 +28,7 @@
+ 
+ import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.Environment;
+ import org.hibernate.search.FullTextSession;
+@@ -65,7 +66,7 @@
+ 		//check non indexed object get indexed by s.index
+ 		s = new FullTextSessionImpl( openSession() );
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		int result = s.createFullTextQuery( parser.parse( "body:wrote" ) ).getResultSize();
+ 		assertEquals( 2000, result );
+ 		s.createQuery( "delete " + Email.class.getName() ).executeUpdate();
+@@ -101,7 +102,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Email.class,
+ 				Domain.class
+Index: src/test/java/org/hibernate/search/test/session/MassIndexUsingManualFlushTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/session/MassIndexUsingManualFlushTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/session/MassIndexUsingManualFlushTest.java	(working copy)
+@@ -36,6 +36,7 @@
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.ScrollMode;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.analysis.StopAnalyzer;
+ 
+ /**
+@@ -74,7 +75,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		List result = s.createFullTextQuery( parser.parse( "body:create" ) ).list();
+ 		assertEquals( 14, result.size() );
+ 		for (Object object : result) {
+@@ -89,7 +90,7 @@
+ 		cfg.setProperty( Environment.ANALYZER_CLASS, StopAnalyzer.class.getName() );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Email.class,
+ 				Domain.class
+Index: src/test/java/org/hibernate/search/test/session/SessionTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/session/SessionTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/session/SessionTest.java	(working copy)
+@@ -91,7 +91,7 @@
+ 		}
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Email.class,
+ 				Domain.class
+Index: src/test/java/org/hibernate/search/test/session/MassIndexTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/session/MassIndexTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/session/MassIndexTest.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.util.Version;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
+ import org.hibernate.Session;
+@@ -77,7 +78,7 @@
+ 		tx.commit();
+ 		s.clear();
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		List result = s.createFullTextQuery( parser.parse( "body:create" ) ).list();
+ 		assertEquals( 14, result.size() );
+ 		for (Object object : result) {
+@@ -105,7 +106,7 @@
+ 		//check non created object does get found!!1
+ 		s = new FullTextSessionImpl( openSession() );
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		List result = s.createFullTextQuery( parser.parse( "body:create" ) ).list();
+ 		assertEquals( 0, result.size() );
+ 		tx.commit();
+@@ -126,7 +127,7 @@
+ 
+ 		s = new FullTextSessionImpl( openSession() );
+ 		tx = s.beginTransaction();
+-		parser = new QueryParser( "id", new StopAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		result = s.createFullTextQuery( parser.parse( "body:write" ) ).list();
+ 		assertEquals( 0, result.size() );
+ 		result = s.createCriteria( Email.class ).list();
+@@ -217,7 +218,7 @@
+ 		cfg.setProperty( Environment.ANALYZER_CLASS, StopAnalyzer.class.getName() );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Email.class,
+ 				Entite.class,
+Index: src/test/java/org/hibernate/search/test/RamDirectoryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/RamDirectoryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/RamDirectoryTest.java	(working copy)
+@@ -82,7 +82,7 @@
+ 		}
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[]{
+ 				Document.class,
+ 				AlternateDocument.class
+Index: src/test/java/org/hibernate/search/test/filter/FiltersOptimizationTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/filter/FiltersOptimizationTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/filter/FiltersOptimizationTest.java	(working copy)
+@@ -126,17 +126,16 @@
+ 	private boolean isIdSetSequenceSameTo(DocIdSet docIdSet, int...expectedIds) throws IOException {
+ 		DocIdSetIterator idSetIterator = docIdSet.iterator();
+ 		for ( int setBit : expectedIds ) {
+-			if ( ! idSetIterator.next() ) {
++			int currentId = idSetIterator.nextDoc();
++			if ( currentId == DocIdSetIterator.NO_MORE_DOCS ) {
+ 				return false;
+ 			}
+-			if ( idSetIterator.doc() != setBit ) {
++			if ( currentId != setBit ) {
+ 				return false;
+ 			}
+ 		}
+-		if ( idSetIterator.next() ){
+-			return false;
+-		}
+-		return true;
++		// and now test both sequences are at the end:
++		return idSetIterator.nextDoc() == DocIdSetIterator.NO_MORE_DOCS;
+ 	}
+ 
+ 	/**
+@@ -185,7 +184,7 @@
+ 	 * Implementation for testing: wraps a DocIdSet with a new type
+ 	 * to make it not possible to cast/detect to the original type.
+ 	 */
+-	private class DocIdSetHiddenType extends DocIdSet {
++	private static class DocIdSetHiddenType extends DocIdSet {
+ 
+ 		private final DocIdSet bitSet;
+ 
+Index: src/test/java/org/hibernate/search/test/filter/ExcludeAllFilterFactory.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/filter/ExcludeAllFilterFactory.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/filter/ExcludeAllFilterFactory.java	(working copy)
+@@ -31,8 +31,10 @@
+  * @author Emmanuel Bernard
+  */
+ public class ExcludeAllFilterFactory {
++	
+ 	@Factory
+ 	public Filter getFilter() {
+ 		return new ExcludeAllFilter();
+ 	}
++	
+ }
+Index: src/test/java/org/hibernate/search/test/filter/FilterTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/filter/FilterTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/filter/FilterTest.java	(working copy)
+@@ -30,8 +30,8 @@
+ import org.apache.lucene.search.BooleanClause;
+ import org.apache.lucene.search.BooleanQuery;
+ import org.apache.lucene.search.Filter;
+-import org.apache.lucene.search.RangeFilter;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.search.TermRangeFilter;
+ import org.hibernate.Session;
+ import org.hibernate.search.FullTextQuery;
+ import org.hibernate.search.FullTextSession;
+@@ -137,8 +137,7 @@
+ 
+ 		ftQuery = s.createFullTextQuery( query, Driver.class );
+ 		ftQuery.enableFullTextFilter( "bestDriver");
+-		Filter dateFilter = new RangeFilter("delivery", "2001", "2005",
+-				true, true);
++		Filter dateFilter = new TermRangeFilter("delivery", "2001", "2005", true, true);
+ 		ftQuery.setFilter( dateFilter );
+ 		assertEquals("Should select only liz", 1, ftQuery.getResultSize() );
+ 
+@@ -200,7 +199,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Driver.class,
+ 				Soap.class
+Index: src/test/java/org/hibernate/search/test/filter/ExcludeAllFilter.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/filter/ExcludeAllFilter.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/filter/ExcludeAllFilter.java	(working copy)
+@@ -24,8 +24,8 @@
+  */
+ package org.hibernate.search.test.filter;
+ 
+-import java.util.BitSet;
+ import java.io.IOException;
++import java.io.Serializable;
+ 
+ import org.apache.lucene.search.DocIdSet;
+ import org.apache.lucene.search.Filter;
+@@ -34,23 +34,12 @@
+ /**
+  * @author Emmanuel Bernard
+  */
+-@SuppressWarnings("serial")
+-public class ExcludeAllFilter extends Filter {
++public class ExcludeAllFilter extends Filter implements Serializable {
+ 
+ 	// ugly but useful for test purposes
+ 	private static volatile boolean done = false;
+ 
+ 	@Override
+-	public BitSet bits(IndexReader reader) throws IOException {
+-		if ( done ) {
+-			throw new IllegalStateException( "Called twice" );
+-		}
+-		BitSet bitSet = new BitSet( reader.maxDoc() );
+-		done = true;
+-		return bitSet;
+-	}
+-
+-	@Override
+ 	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
+ 		if ( done ) {
+ 			throw new IllegalStateException( "Called twice" );
+@@ -58,4 +47,5 @@
+ 		done = true;
+ 		return DocIdSet.EMPTY_DOCIDSET;
+ 	}
++	
+ }
+Index: src/test/java/org/hibernate/search/test/filter/InstanceBasedExcludeAllFilter.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/filter/InstanceBasedExcludeAllFilter.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/filter/InstanceBasedExcludeAllFilter.java	(working copy)
+@@ -24,8 +24,8 @@
+  */
+ package org.hibernate.search.test.filter;
+ 
+-import java.util.BitSet;
+ import java.io.IOException;
++import java.io.Serializable;
+ 
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.search.Filter;
+@@ -34,20 +34,11 @@
+ /**
+  * @author Emmanuel Bernard
+  */
+-public class InstanceBasedExcludeAllFilter extends Filter {
++public class InstanceBasedExcludeAllFilter extends Filter implements Serializable {
++	
+ 	private volatile boolean done = false;
+ 
+ 	@Override
+-	public BitSet bits(IndexReader reader) throws IOException {
+-		if ( done ) {
+-			throw new IllegalStateException( "Called twice" );
+-		}
+-		BitSet bitSet = new BitSet( reader.maxDoc() );
+-		done = true;
+-		return bitSet;
+-	}
+-
+-	@Override
+ 	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
+ 		if ( done ) {
+ 			throw new IllegalStateException( "Called twice" );
+@@ -55,4 +46,5 @@
+ 		done = true;
+ 		return DocIdSet.EMPTY_DOCIDSET;
+ 	}
++	
+ }
+Index: src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java	(working copy)
+@@ -177,7 +177,7 @@
+ 		fts.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Team.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/analyzer/solr/InsertWhitespaceFilter.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/solr/InsertWhitespaceFilter.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/solr/InsertWhitespaceFilter.java	(working copy)
+@@ -26,29 +26,36 @@
+ 
+ import java.io.IOException;
+ 
+-import org.apache.lucene.analysis.Token;
+ import org.apache.lucene.analysis.TokenFilter;
+ import org.apache.lucene.analysis.TokenStream;
++import org.apache.lucene.analysis.tokenattributes.TermAttribute;
+ 
+ /**
+  * A filter which will actually insert spaces. Most filters/tokenizers remove them, but for testing it is
+  * sometimes better to insert them again ;-)
+  *
+  * @author Hardy Ferentschik
++ * @author Sanne Grinovero
+  */
+ public class InsertWhitespaceFilter extends TokenFilter {
++	
++	private TermAttribute termAtt;
++
+ 	public InsertWhitespaceFilter(TokenStream in) {
+ 		super( in );
++		termAtt = (TermAttribute) addAttribute(TermAttribute.class);
+ 	}
+ 
+-	public Token next(final Token reusableToken) throws IOException {
+-		Token nextToken = input.next( reusableToken );
+-		if ( nextToken != null ) {
+-			nextToken.setTermBuffer( " " + nextToken.term() + " " );
+-			return nextToken;
++	@Override
++	public boolean incrementToken() throws IOException {
++		if ( input.incrementToken() ) {
++			String value = " " + termAtt.term() + " ";
++			termAtt.setTermBuffer( value );
++			return true;
+ 		}
+ 		else {
+-			return null;
++			return false;
+ 		}
+ 	}
++	
+ }
+Index: src/test/java/org/hibernate/search/test/analyzer/inheritance/AnalyzerInheritanceTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/inheritance/AnalyzerInheritanceTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/inheritance/AnalyzerInheritanceTest.java	(working copy)
+@@ -27,6 +27,7 @@
+ import org.apache.lucene.analysis.Analyzer;
+ import org.apache.lucene.analysis.Token;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Transaction;
+@@ -65,7 +66,7 @@
+ 		tx = s.beginTransaction();
+ 
+ 
+-		QueryParser parser = new QueryParser( "name", s.getSearchFactory().getAnalyzer( SubClass.class ) );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", s.getSearchFactory().getAnalyzer( SubClass.class ) );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "name:Proca\u00EFne" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery, SubClass.class );
+ 		assertEquals( 1, query.getResultSize() );
+@@ -100,7 +101,7 @@
+ 	}
+ 
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { SubClass.class };
+ 	}
+ }
+Index: src/test/java/org/hibernate/search/test/analyzer/inheritance/ISOLatin1Analyzer.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/inheritance/ISOLatin1Analyzer.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/inheritance/ISOLatin1Analyzer.java	(working copy)
+@@ -27,16 +27,19 @@
+ import java.io.Reader;
+ 
+ import org.apache.lucene.analysis.TokenStream;
+-import org.apache.lucene.analysis.ISOLatin1AccentFilter;
++import org.apache.lucene.analysis.ASCIIFoldingFilter;
+ import org.apache.lucene.analysis.Analyzer;
+ import org.apache.lucene.analysis.standard.StandardTokenizer;
++import org.apache.lucene.util.Version;
+ 
+ /**
+  * @author Hardy Ferentschik
+  */
+-	public class ISOLatin1Analyzer extends Analyzer {
+-		public TokenStream tokenStream(String s, Reader reader) {
+-			TokenStream result = new StandardTokenizer( reader );
+-			return new ISOLatin1AccentFilter( result );
+-		}
++public class ISOLatin1Analyzer extends Analyzer {
++	
++	public TokenStream tokenStream(String s, Reader reader) {
++		TokenStream result = new StandardTokenizer( Version.LUCENE_CURRENT, reader );
++		return new ASCIIFoldingFilter(result);
+ 	}
++	
++}
+Index: src/test/java/org/hibernate/search/test/analyzer/DoubleAnalyzerTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/DoubleAnalyzerTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/DoubleAnalyzerTest.java	(working copy)
+@@ -24,10 +24,10 @@
+  */
+ package org.hibernate.search.test.analyzer;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.MatchAllDocsQuery;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Transaction;
+@@ -45,7 +45,7 @@
+ 
+ 	public static final Logger log = LoggerFactory.make();
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { MyEntity.class, AlarmEntity.class };
+ 	}
+ 
+@@ -61,7 +61,7 @@
+ 		tx.commit();
+ 
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		{
+ 			Query luceneQuery =  new MatchAllDocsQuery();
+ 			FullTextQuery query = s.createFullTextQuery( luceneQuery );
+Index: src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java	(working copy)
+@@ -29,8 +29,8 @@
+ 
+ import org.apache.lucene.analysis.Analyzer;
+ import org.apache.lucene.analysis.Token;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Transaction;
+@@ -78,12 +78,12 @@
+ 
+ 		// at query time we use a standard analyzer. We explicitly search for tokens which can only be found if the
+ 		// right language specific stemmer was used at index time
+-		QueryParser parser = new QueryParser( "references.text", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "references.text", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "aufeinanderschlug" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery );
+ 		assertEquals( 1, query.getResultSize() );
+ 
+-		parser = new QueryParser( "text", new StandardAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "text", SearchTestCase.standardAnalyzer );
+ 		luceneQuery = parser.parse( "acknowledg" );
+ 		query = s.createFullTextQuery( luceneQuery );
+ 		assertEquals( 1, query.getResultSize() );
+@@ -92,7 +92,7 @@
+ 		s.close();
+ 	}
+ 
+-	public void testMultipleAnalyzerDiscriminatorDefinitions() throws Exception {
++	public void testMultipleAnalyzerDiscriminatorDefinitions() {
+ 		SearchConfigurationFromHibernateCore searchConfig = new SearchConfigurationFromHibernateCore( cfg );
+ 		ReflectionManager reflectionManager = searchConfig.getReflectionManager();
+ 		XClass xclass = reflectionManager.toXClass( BlogEntry.class );
+@@ -119,7 +119,7 @@
+ 		tx.commit();
+ 
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		org.apache.lucene.search.Query luceneQuery = parser.parse( "entity:alarm" );
+ 		FullTextQuery query = s.createFullTextQuery( luceneQuery, MyEntity.class );
+ 		assertEquals( 1, query.getResultSize() );
+Index: src/test/java/org/hibernate/search/test/jms/slave/JMSSlaveTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jms/slave/JMSSlaveTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jms/slave/JMSSlaveTest.java	(working copy)
+@@ -160,7 +160,7 @@
+ 		cfg.setProperty( JMSBackendQueueProcessorFactory.JMS_QUEUE, QUEUE_NAME );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				TShirt.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/jms/master/JMSMasterTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jms/master/JMSMasterTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jms/master/JMSMasterTest.java	(working copy)
+@@ -39,11 +39,11 @@
+ import javax.naming.Context;
+ 
+ import org.apache.activemq.broker.BrokerService;
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.document.Document;
+ import org.apache.lucene.document.Field;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Session;
+ import org.hibernate.cfg.Configuration;
+@@ -93,7 +93,7 @@
+ 
+ 		FullTextSession ftSess = Search.getFullTextSession( openSession() );
+ 		ftSess.getTransaction().begin();
+-		QueryParser parser = new QueryParser( "id", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.stopAnalyzer );
+ 		Query luceneQuery = parser.parse( "logo:jboss" );
+ 		org.hibernate.Query query = ftSess.createFullTextQuery( luceneQuery );
+ 		List result = query.list();
+@@ -200,7 +200,7 @@
+ 		cfg.setProperty( Environment.WORKER_BACKEND, "lucene" );
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				TShirt.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/embedded/doubleinsert/DoubleInsertEmbeddedTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/embedded/doubleinsert/DoubleInsertEmbeddedTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/embedded/doubleinsert/DoubleInsertEmbeddedTest.java	(working copy)
+@@ -93,7 +93,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Address.class,
+ 				Contact.class,
+Index: src/test/java/org/hibernate/search/test/embedded/nested/NestedEmbeddedTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/embedded/nested/NestedEmbeddedTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/embedded/nested/NestedEmbeddedTest.java	(working copy)
+@@ -26,9 +26,9 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+@@ -61,7 +61,7 @@
+ 		tx.commit();
+ 
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "attributes.values.value", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "attributes.values.value", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+@@ -115,7 +115,7 @@
+ 		tx.commit();
+ 
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "placesVisited.address.city", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "placesVisited.address.city", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+Index: src/test/java/org/hibernate/search/test/embedded/EmbeddedTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/embedded/EmbeddedTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/embedded/EmbeddedTest.java	(working copy)
+@@ -27,12 +27,12 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.queryParser.MultiFieldQueryParser;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextSession;
+@@ -66,7 +66,7 @@
+ 		tx.commit();
+ 
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+@@ -132,7 +132,7 @@
+ 		tx.commit();
+ 
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+@@ -169,7 +169,7 @@
+ 		s.clear();
+ 
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+@@ -246,7 +246,7 @@
+ 		FullTextSession session = Search.getFullTextSession( s );
+ 		tx = session.beginTransaction();
+ 
+-		QueryParser parser = new MultiFieldQueryParser( new String[] { "name", "authors.name" }, new StandardAnalyzer() );
++		QueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT, new String[] { "name", "authors.name" }, SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+@@ -306,7 +306,7 @@
+ 		FullTextSession session = Search.getFullTextSession( s );
+ 		tx = session.beginTransaction();
+ 
+-		QueryParser parser = new MultiFieldQueryParser( new String[] { "name", "state.name" }, new StandardAnalyzer() );
++		QueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT, new String[] { "name", "state.name" }, SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List<?> result;
+ 
+Index: src/test/java/org/hibernate/search/test/perf/IndexTestDontRun.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/perf/IndexTestDontRun.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/perf/IndexTestDontRun.java	(working copy)
+@@ -104,11 +104,11 @@
+ 	private IndexSearcher getNewSearcher() throws IOException {
+ 		final org.hibernate.classic.Session session = getSessions().openSession();
+ 		Directory d = Search.getFullTextSession( session ).getSearchFactory().getDirectoryProviders( Boat.class )[0].getDirectory();
+-		IndexSearcher indexsearcher = new IndexSearcher( d );
++		IndexSearcher indexsearcher = new IndexSearcher( d, true );
+ 		return indexsearcher;
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Boat.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/perf/SearcherThread.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/perf/SearcherThread.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/perf/SearcherThread.java	(working copy)
+@@ -29,7 +29,6 @@
+ import java.util.List;
+ import java.util.concurrent.CountDownLatch;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.BooleanQuery;
+@@ -37,6 +36,7 @@
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TopDocs;
+ import org.apache.lucene.search.Searcher;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.document.Document;
+ import org.slf4j.Logger;
+ 
+@@ -45,6 +45,7 @@
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
+ import org.hibernate.search.SearchException;
++import org.hibernate.search.test.SearchTestCase;
+ import org.hibernate.search.util.LoggerFactory;
+ 
+ /**
+@@ -128,7 +129,7 @@
+ 	}
+ 
+ 	private Query getQuery() throws ParseException {
+-		QueryParser qp = new QueryParser( "t", new StandardAnalyzer() );
++		QueryParser qp = new QueryParser( Version.LUCENE_CURRENT, "t", SearchTestCase.standardAnalyzer );
+ 		qp.setLowercaseExpandedTerms( true );
+ 		// Parse the query
+ 		Query q = qp.parse( queryString );
+Index: src/test/java/org/hibernate/search/test/id/EmbeddedIdTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/id/EmbeddedIdTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/id/EmbeddedIdTest.java	(working copy)
+@@ -112,7 +112,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Person.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/id/ImplicitIdTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/id/ImplicitIdTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/id/ImplicitIdTest.java	(working copy)
+@@ -63,7 +63,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Animal.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPerson.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPerson.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPerson.java	(working copy)
+@@ -32,9 +32,6 @@
+ import org.hibernate.search.annotations.FieldBridge;
+ import org.hibernate.search.bridge.builtin.LongBridge;
+ 
+-import javax.persistence.Entity;
+-import javax.persistence.GeneratedValue;
+-import javax.persistence.Id;
+ import java.io.Serializable;
+ 
+ 
+Index: src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdTest.java	(working copy)
+@@ -24,16 +24,17 @@
+  */
+ package org.hibernate.search.test.id.providedId;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.IndexSearcher;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TopDocs;
++import org.apache.lucene.util.Version;
+ import org.hibernate.search.backend.Work;
+ import org.hibernate.search.backend.WorkType;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
+ import org.hibernate.search.impl.SearchFactoryImpl;
+ import org.hibernate.search.store.DirectoryProvider;
++import org.hibernate.search.test.SearchTestCase;
+ 
+ /**
+  * @author Navin Surtani
+@@ -66,7 +67,7 @@
+ 
+ 		tc.end();
+ 
+-		QueryParser parser = new QueryParser( "name", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "name", SearchTestCase.standardAnalyzer );
+ 		Query luceneQuery = parser.parse( "Goat" );
+ 
+ 		//we cannot use FTQuery because @ProvidedId does not provide the getter id and Hibernate Hsearch Query extension
+@@ -75,7 +76,7 @@
+ 		//we know there is only one DP
+ 		DirectoryProvider provider = sf
+ 				.getDirectoryProviders( ProvidedIdPerson.class )[0];
+-		IndexSearcher searcher = new IndexSearcher( provider.getDirectory() );
++		IndexSearcher searcher = new IndexSearcher( provider.getDirectory(), true );
+ 		TopDocs hits = searcher.search( luceneQuery, 1000 );
+ 		assertEquals( 3, hits.totalHits );
+ 		searcher.close();
+Index: src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPersonSub.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPersonSub.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/id/providedId/ProvidedIdPersonSub.java	(working copy)
+@@ -24,8 +24,6 @@
+  */
+ package org.hibernate.search.test.id.providedId;
+ 
+-import javax.persistence.Entity;
+-
+ import org.hibernate.search.annotations.Indexed;
+ 
+ /**
+Index: src/test/java/org/hibernate/search/test/bridge/UnresolvedBridgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/UnresolvedBridgeTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/bridge/UnresolvedBridgeTest.java	(working copy)
+@@ -62,7 +62,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Gangster.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/bridge/Cloud.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/Cloud.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/bridge/Cloud.java	(working copy)
+@@ -40,6 +40,7 @@
+ @Entity
+ @Indexed
+ public class Cloud {
++	
+     private int id;
+     private Long long1;
+     private long long2;
+@@ -76,9 +77,6 @@
+     private Calendar calendarHour;
+     private Calendar calendarMillisecond;
+ 
+-
+-
+-
+ 	@Field(index=Index.UN_TOKENIZED, store=Store.YES)
+ 	public URL getUrl() {
+ 		return url;
+@@ -266,7 +264,6 @@
+         this.dateHour = dateHour;
+     }
+ 
+-
+     @Field(index=Index.UN_TOKENIZED, store=Store.YES)
+     @DateBridge( resolution = Resolution.MINUTE )
+     public Date getDateMinute() {
+@@ -333,7 +330,6 @@
+ 		this.char2 = char2;
+ 	}
+ 
+-
+     @Field(index=Index.UN_TOKENIZED, store=Store.YES)
+     public Calendar getMyCalendar() {
+         return myCalendar;
+@@ -373,8 +369,6 @@
+         this.calendarDay = calendarDay;
+     }
+ 
+-
+-
+     @Field(index=Index.UN_TOKENIZED, store=Store.YES)
+     @CalendarBridge( resolution = Resolution.MINUTE )
+     public Calendar getCalendarMinute() {
+@@ -385,7 +379,6 @@
+         this.calendarMinute = calendarMinute;
+     }
+ 
+-
+     @Field(index=Index.UN_TOKENIZED, store=Store.YES)
+     @CalendarBridge( resolution = Resolution.HOUR )
+     public Calendar getCalendarHour() {
+@@ -396,7 +389,6 @@
+         this.calendarHour = calendarHour;
+     }
+ 
+-
+     @Field(index=Index.UN_TOKENIZED, store=Store.YES)
+     @CalendarBridge( resolution = Resolution.MILLISECOND )
+     public Calendar getCalendarMillisecond() {
+Index: src/test/java/org/hibernate/search/test/bridge/ClassBridgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/ClassBridgeTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/bridge/ClassBridgeTest.java	(working copy)
+@@ -29,6 +29,7 @@
+ import org.apache.lucene.analysis.SimpleAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.document.Document;
+ import org.hibernate.Transaction;
+ import org.hibernate.ScrollableResults;
+@@ -67,7 +68,7 @@
+ 		// Departments entity after being massaged by passing it
+ 		// through the EquipmentType class. This field is in
+ 		// the Lucene document but not in the Department entity itself.
+-		QueryParser parser = new QueryParser( "equipment", new SimpleAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "equipment", SearchTestCase.simpleAnalyzer );
+ 
+ 		// Check the second ClassBridge annotation
+ 		Query query = parser.parse( "equiptype:Cisco" );
+@@ -87,7 +88,7 @@
+ 		assertTrue( "problem with field cross-ups", result.size() == 0 );
+ 
+ 		// Non-ClassBridge field.
+-		parser = new QueryParser( "branchHead", new SimpleAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "branchHead", SearchTestCase.simpleAnalyzer );
+ 		query = parser.parse( "branchHead:Kent Lewin" );
+ 		hibQuery = session.createFullTextQuery( query, Departments.class );
+ 		result = hibQuery.list();
+@@ -96,7 +97,7 @@
+ 		assertEquals("incorrect entity returned", "Kent Lewin", ( result.get( 0 ) ).getBranchHead());
+ 
+ 		// Check other ClassBridge annotation.
+-		parser = new QueryParser( "branchnetwork", new SimpleAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "branchnetwork", SearchTestCase.simpleAnalyzer );
+ 		query = parser.parse( "branchnetwork:st. george 1D" );
+ 		hibQuery = session.createFullTextQuery( query, Departments.class );
+ 		result = hibQuery.list();
+@@ -135,7 +136,7 @@
+ 		// Departments entity after being massaged by passing it
+ 		// through the EquipmentType class. This field is in
+ 		// the Lucene document but not in the Department entity itself.
+-		QueryParser parser = new QueryParser( "equipment", new SimpleAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "equipment", SearchTestCase.simpleAnalyzer );
+ 
+ 		// Check the second ClassBridge annotation
+ 		Query query = parser.parse( "equiptype:Cisco" );
+@@ -201,7 +202,7 @@
+ 		// the branch field and the network field of the Department
+ 		// class. This is in the Lucene document but not in the
+ 		// Department entity itself.
+-		QueryParser parser = new QueryParser( "branchnetwork", new SimpleAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "branchnetwork", SearchTestCase.simpleAnalyzer );
+ 
+ 		Query query = parser.parse( "branchnetwork:layton 2B" );
+ 		org.hibernate.search.FullTextQuery hibQuery = session.createFullTextQuery( query, Department.class );
+@@ -228,7 +229,7 @@
+ 		assertTrue( "problem with field cross-ups", result.size() == 0 );
+ 
+ 		// Non-ClassBridge field.
+-		parser = new QueryParser( "branchHead", new SimpleAnalyzer() );
++		parser = new QueryParser( Version.LUCENE_CURRENT, "branchHead", SearchTestCase.simpleAnalyzer );
+ 		query = parser.parse( "branchHead:Kent Lewin" );
+ 		hibQuery = session.createFullTextQuery( query, Department.class );
+ 		result = hibQuery.list();
+@@ -321,7 +322,7 @@
+ 		return depts;
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Department.class,
+ 				Departments.class
+Index: src/test/java/org/hibernate/search/test/bridge/BridgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(revision 18711)
++++ src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(working copy)
+@@ -34,13 +34,13 @@
+ import java.util.TimeZone;
+ 
+ import org.apache.lucene.analysis.SimpleAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.BooleanClause;
+ import org.apache.lucene.search.BooleanQuery;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Transaction;
+ import org.hibernate.cfg.Configuration;
+@@ -82,7 +82,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List result;
+ 
+@@ -145,7 +145,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new SimpleAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.simpleAnalyzer );
+ 		Query query;
+ 		List result;
+ 
+@@ -187,7 +187,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List result;
+ 
+@@ -235,7 +235,7 @@
+ 
+ 		tx = s.beginTransaction();
+ 		FullTextSession session = Search.getFullTextSession( s );
+-		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 		Query query;
+ 		List result;
+ 
+@@ -270,7 +270,7 @@
+ 	}
+ 
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Cloud.class
+ 		};
+Index: src/test/java/org/hibernate/search/test/reader/performance/AbstractActivity.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/reader/performance/AbstractActivity.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/reader/performance/AbstractActivity.java	(working copy)
+@@ -27,17 +27,18 @@
+ import java.util.concurrent.CountDownLatch;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.MultiFieldQueryParser;
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Session;
+ import org.hibernate.SessionFactory;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextQuery;
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
++import org.hibernate.search.test.SearchTestCase;
+ 
+ /**
+  * @author Sanne Grinovero
+@@ -47,9 +48,9 @@
+ 	private final ThreadLocal<QueryParser> parsers = new ThreadLocal<QueryParser>(){
+ 		@Override
+ 		protected QueryParser initialValue(){
+-			return new MultiFieldQueryParser(
++			return new MultiFieldQueryParser( Version.LUCENE_CURRENT,
+ 					new String[] {"name", "physicalDescription", "suspectCharge"},
+-					new StandardAnalyzer() );
++					SearchTestCase.standardAnalyzer );
+ 			}
+ 		};
+ 	
+Index: src/test/java/org/hibernate/search/test/reader/performance/ReaderPerformance.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/reader/performance/ReaderPerformance.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/reader/performance/ReaderPerformance.java	(working copy)
+@@ -73,7 +73,7 @@
+ 	
+ 	private void buildBigIndex() throws InterruptedException, CorruptIndexException, LockObtainFailedException, IOException {
+ 		System.out.println( "Going to create fake index..." );
+-		FSDirectory directory = FSDirectory.getDirectory(new File(getBaseIndexDir(), Detective.class.getCanonicalName()));
++		FSDirectory directory = FSDirectory.open(new File(getBaseIndexDir(), Detective.class.getCanonicalName()));
+ 		IndexWriter.MaxFieldLength fieldLength = new IndexWriter.MaxFieldLength( IndexWriter.DEFAULT_MAX_FIELD_LENGTH );
+ 		IndexWriter iw = new IndexWriter( directory, new SimpleAnalyzer(), true, fieldLength );
+ 		IndexFillRunnable filler = new IndexFillRunnable( iw );
+@@ -90,7 +90,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Detective.class,
+ 				Suspect.class
+Index: src/test/java/org/hibernate/search/test/reader/functionality/FilterOnDirectoryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/reader/functionality/FilterOnDirectoryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/reader/functionality/FilterOnDirectoryTest.java	(working copy)
+@@ -84,7 +84,7 @@
+ 		cfg.setProperty( Environment.READER_STRATEGY,  SharingBufferReaderProvider.class.getName() );
+ 	}
+ 	
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Detective.class,
+ 				Suspect.class
+Index: src/test/java/org/hibernate/search/test/reader/functionality/TestableSharingBufferReaderProvider.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/reader/functionality/TestableSharingBufferReaderProvider.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/reader/functionality/TestableSharingBufferReaderProvider.java	(working copy)
+@@ -189,11 +189,6 @@
+ 		}
+ 
+ 		@Override
+-		protected void doCommit() {
+-			throw new UnsupportedOperationException();
+-		}
+-
+-		@Override
+ 		protected void doDelete(int docNum) {
+ 			throw new UnsupportedOperationException();
+ 		}
+@@ -293,6 +288,16 @@
+ 			throw new UnsupportedOperationException();
+ 		}
+ 
++//		@Override not defined in Lucene 2.9, added in 3.0
++		protected void doCommit(Map<String, String> commitUserData) {
++			throw new UnsupportedOperationException();
++		}
++
++//		@Override not defined in Lucene 3.0, existed before
++		protected void doCommit() throws IOException {
++			throw new UnsupportedOperationException();
++		}
++
+ 	}
+ 
+ }
+Index: src/test/java/org/hibernate/search/test/reader/ReaderPerfTestCase.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/reader/ReaderPerfTestCase.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/reader/ReaderPerfTestCase.java	(working copy)
+@@ -31,11 +31,11 @@
+ import java.util.concurrent.Executors;
+ 
+ import org.apache.lucene.analysis.StopAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.queryParser.MultiFieldQueryParser;
+ import org.apache.lucene.queryParser.ParseException;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.slf4j.Logger;
+ 
+ import org.hibernate.Session;
+@@ -70,7 +70,7 @@
+ 	}
+ 
+ 	@SuppressWarnings("unchecked")
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Detective.class,
+ 				Suspect.class
+@@ -144,9 +144,9 @@
+ 		public void run() {
+ 			Session s = sf.openSession();
+ 			Transaction tx = s.beginTransaction();
+-			QueryParser parser = new MultiFieldQueryParser(
++			QueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT,
+ 					new String[] { "name", "physicalDescription", "suspectCharge" },
+-					new StandardAnalyzer()
++					SearchTestCase.standardAnalyzer
+ 			);
+ 			FullTextQuery query = getQuery( "John Doe", parser, s );
+ 			assertTrue( query.getResultSize() != 0 );
+@@ -207,9 +207,9 @@
+ 		public void run() {
+ 			Session s = sf.openSession();
+ 			Transaction tx = s.beginTransaction();
+-			QueryParser parser = new MultiFieldQueryParser(
++			QueryParser parser = new MultiFieldQueryParser( Version.LUCENE_CURRENT, 
+ 					new String[] { "name", "physicalDescription", "suspectCharge" },
+-					new StandardAnalyzer()
++					SearchTestCase.standardAnalyzer
+ 			);
+ 			FullTextQuery query = getQuery( "John Doe", parser, s );
+ 			assertTrue( query.getResultSize() != 0 );
+Index: src/test/java/org/hibernate/search/test/PurgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/PurgeTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/PurgeTest.java	(working copy)
+@@ -26,9 +26,9 @@
+ 
+ import java.util.List;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
++import org.apache.lucene.util.Version;
+ import org.hibernate.Transaction;
+ import org.hibernate.search.FullTextSession;
+ import org.hibernate.search.Search;
+@@ -60,7 +60,7 @@
+ 		s.clear();
+ 
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "brand", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "brand", SearchTestCase.stopAnalyzer );
+ 
+ 		Query query = parser.parse( "brand:Seiko" );
+ 		org.hibernate.Query hibQuery = s.createFullTextQuery( query, Clock.class, Book.class );
+@@ -104,8 +104,8 @@
+ 		s.clear();
+ 
+ 		tx = s.beginTransaction();
+-		QueryParser parser = new QueryParser( "brand", new StopAnalyzer() );
+-		                     tx = s.beginTransaction();
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "brand", SearchTestCase.stopAnalyzer );
++		tx = s.beginTransaction();
+ 		s.purgeAll( Clock.class);
+ 
+ 		tx.commit();
+@@ -127,7 +127,7 @@
+ 		s.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Book.class,
+ 				AlternateBook.class,
+Index: src/test/java/org/hibernate/search/test/engine/RollbackTransactionTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/engine/RollbackTransactionTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/engine/RollbackTransactionTest.java	(working copy)
+@@ -98,7 +98,7 @@
+ 	
+ 	// Test setup options - Entities
+ 	@Override
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { BusLine.class, BusStop.class };
+ 	}
+ 	
+Index: src/test/java/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java	(working copy)
+@@ -133,7 +133,7 @@
+ 
+ 	// Test setup options - Entities
+ 	@Override
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] { BusLine.class, BusStop.class };
+ 	}
+ 	
+Index: src/test/java/org/hibernate/search/test/jpa/EntityManagerSerializationTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jpa/EntityManagerSerializationTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jpa/EntityManagerSerializationTest.java	(working copy)
+@@ -31,13 +31,14 @@
+ import java.io.ObjectInputStream;
+ import java.io.ObjectOutputStream;
+ 
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.queryParser.QueryParser;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.util.Version;
+ import org.hibernate.search.jpa.FullTextEntityManager;
+ import org.hibernate.search.jpa.Search;
++import org.hibernate.search.test.SearchTestCase;
+ 
+ /**
+  * Serialization test for entity manager. HSEARCH-117.
+@@ -120,7 +121,7 @@
+ 		em.getTransaction().commit();
+ 		em.clear();
+ 		em.getTransaction().begin();
+-		QueryParser parser = new QueryParser("title", new StopAnalyzer());
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse("saltQty:noword");
+ 		assertEquals(0, em.createFullTextQuery(query).getResultList().size());
+ 		query = new TermQuery(new Term("saltQty", "23.0"));
+Index: src/test/java/org/hibernate/search/test/jpa/EntityManagerTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/jpa/EntityManagerTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/jpa/EntityManagerTest.java	(working copy)
+@@ -26,10 +26,11 @@
+ 
+ import org.hibernate.search.jpa.Search;
+ import org.hibernate.search.jpa.FullTextEntityManager;
++import org.hibernate.search.test.SearchTestCase;
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
++import org.apache.lucene.util.Version;
+ import org.apache.lucene.queryParser.QueryParser;
+-import org.apache.lucene.analysis.StopAnalyzer;
+ import org.apache.lucene.index.Term;
+ 
+ /**
+@@ -45,7 +46,7 @@
+ 		em.getTransaction().commit();
+ 		em.clear();
+ 		em.getTransaction().begin();
+-		QueryParser parser = new QueryParser( "title", new StopAnalyzer() );
++		QueryParser parser = new QueryParser( Version.LUCENE_CURRENT, "title", SearchTestCase.stopAnalyzer );
+ 		Query query = parser.parse( "saltQty:noword" );
+ 		assertEquals( 0, em.createFullTextQuery( query ).getResultList().size() );
+ 		query = new TermQuery( new Term("saltQty", "23.0") );
+@@ -56,14 +57,14 @@
+ 		em.getTransaction().commit();
+ 
+ 		em.clear();
+-
++		
+ 		em.getTransaction().begin();
+ 		em.remove( em.find( Bretzel.class, bretzel.getId() ) );
+ 		em.getTransaction().commit();
+ 		em.close();
+ 	}
+ 
+-	public void testIndex() throws Exception {
++	public void testIndex() {
+ 		FullTextEntityManager em = Search.getFullTextEntityManager( factory.createEntityManager() );
+ 		em.getTransaction().begin();
+ 		Bretzel bretzel = new Bretzel( 23, 34 );
+Index: src/test/java/org/hibernate/search/test/FSDirectoryTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/FSDirectoryTest.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/FSDirectoryTest.java	(working copy)
+@@ -28,7 +28,6 @@
+ import java.util.List;
+ 
+ import org.apache.lucene.analysis.StopAnalyzer;
+-import org.apache.lucene.analysis.standard.StandardAnalyzer;
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.index.TermDocs;
+@@ -37,6 +36,9 @@
+ import org.apache.lucene.search.Query;
+ import org.apache.lucene.search.TermQuery;
+ import org.apache.lucene.search.TopDocs;
++import org.apache.lucene.store.Directory;
++import org.apache.lucene.store.FSDirectory;
++import org.apache.lucene.util.Version;
+ 
+ import org.hibernate.Session;
+ import org.hibernate.search.Environment;
+@@ -76,63 +78,70 @@
+ 		);
+ 		s.getTransaction().commit();
+ 		s.close();
+-		IndexReader reader = IndexReader.open( new File( getBaseIndexDir(), "Documents" ) );
++
++		Directory dir = FSDirectory.open( new File( getBaseIndexDir(), "Documents" ) );
+ 		try {
+-			int num = reader.numDocs();
+-			assertEquals( 1, num );
+-			TermDocs docs = reader.termDocs( new Term( "Abstract", "Hibernate" ) );
+-			docs.next();
+-			org.apache.lucene.document.Document doc = reader.document( docs.doc() );
+-			assertFalse( docs.next() );
+-			docs = reader.termDocs( new Term( "Title", "Action" ) );
+-			docs.next();
+-			doc = reader.document( docs.doc() );
+-			assertFalse( docs.next() );
+-			assertEquals( "1", doc.getField( "id" ).stringValue() );
+-		}
+-		finally {
+-			reader.close();
+-		}
++			IndexReader reader = IndexReader.open( dir, true );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 1, num );
++				TermDocs docs = reader.termDocs( new Term( "Abstract", "Hibernate" ) );
++				docs.next();
++				org.apache.lucene.document.Document doc = reader.document( docs.doc() );
++				assertFalse( docs.next() );
++				docs = reader.termDocs( new Term( "Title", "Action" ) );
++				docs.next();
++				doc = reader.document( docs.doc() );
++				assertFalse( docs.next() );
++				assertEquals( "1", doc.getField( "id" ).stringValue() );
++			}
++			finally {
++				reader.close();
++			}
+ 
+-		s = getSessions().openSession();
+-		s.getTransaction().begin();
+-		Document entity = (Document) s.get( Document.class, Long.valueOf( 1 ) );
+-		entity.setSummary( "Object/relational mapping with EJB3" );
+-		s.persist( new Document( "Seam in Action", "", "blah blah blah blah" ) );
+-		s.getTransaction().commit();
+-		s.close();
++			s = getSessions().openSession();
++			s.getTransaction().begin();
++			Document entity = (Document) s.get( Document.class, Long.valueOf( 1 ) );
++			entity.setSummary( "Object/relational mapping with EJB3" );
++			s.persist( new Document( "Seam in Action", "", "blah blah blah blah" ) );
++			s.getTransaction().commit();
++			s.close();
+ 
+-		reader = IndexReader.open( new File( getBaseIndexDir(), "Documents" ) );
+-		try {
+-			int num = reader.numDocs();
+-			assertEquals( 2, num );
+-			TermDocs docs = reader.termDocs( new Term( "Abstract", "ejb" ) );
+-			assertTrue( docs.next() );
+-			org.apache.lucene.document.Document doc = reader.document( docs.doc() );
+-			assertFalse( docs.next() );
+-		}
+-		finally {
+-			reader.close();
+-		}
++			reader = IndexReader.open( dir, true );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 2, num );
++				TermDocs docs = reader.termDocs( new Term( "Abstract", "ejb" ) );
++				assertTrue( docs.next() );
++				org.apache.lucene.document.Document doc = reader.document( docs.doc() );
++				assertFalse( docs.next() );
++			}
++			finally {
++				reader.close();
++			}
+ 
+-		s = getSessions().openSession();
+-		s.getTransaction().begin();
+-		s.delete( entity );
+-		s.getTransaction().commit();
+-		s.close();
++			s = getSessions().openSession();
++			s.getTransaction().begin();
++			s.delete( entity );
++			s.getTransaction().commit();
++			s.close();
+ 
+-		reader = IndexReader.open( new File( getBaseIndexDir(), "Documents" ) );
+-		try {
+-			int num = reader.numDocs();
+-			assertEquals( 1, num );
+-			TermDocs docs = reader.termDocs( new Term( "title", "seam" ) );
+-			assertTrue( docs.next() );
+-			org.apache.lucene.document.Document doc = reader.document( docs.doc() );
+-			assertFalse( docs.next() );
+-			assertEquals( "2", doc.getField( "id" ).stringValue() );
++			reader = IndexReader.open( dir, true );
++			try {
++				int num = reader.numDocs();
++				assertEquals( 1, num );
++				TermDocs docs = reader.termDocs( new Term( "title", "seam" ) );
++				assertTrue( docs.next() );
++				org.apache.lucene.document.Document doc = reader.document( docs.doc() );
++				assertFalse( docs.next() );
++				assertEquals( "2", doc.getField( "id" ).stringValue() );
++			}
++			finally {
++				reader.close();
++			}
+ 		}
+ 		finally {
+-			reader.close();
++			dir.close();
+ 		}
+ 
+ 		s = getSessions().openSession();
+@@ -154,9 +163,10 @@
+ 		s.getTransaction().commit();
+ 		s.close();
+ 
+-		IndexSearcher searcher = new IndexSearcher( new File( getBaseIndexDir(), "Documents" ).getCanonicalPath() );
++		FSDirectory dir = FSDirectory.open( new File( getBaseIndexDir(), "Documents" ) );
++		IndexSearcher searcher = new IndexSearcher( dir, true );
+ 		try {
+-			QueryParser qp = new QueryParser( "id", new StandardAnalyzer() );
++			QueryParser qp = new QueryParser( Version.LUCENE_CURRENT, "id", SearchTestCase.standardAnalyzer );
+ 			Query query = qp.parse( "title:Action OR Abstract:Action" );
+ 			TopDocs hits = searcher.search( query, 1000 );
+ 			assertEquals( 2, hits.totalHits );
+@@ -166,6 +176,7 @@
+ 		}
+ 		finally {
+ 			searcher.close();
++			dir.close();
+ 		}
+ 
+ 		s = getSessions().openSession();
+@@ -182,23 +193,25 @@
+ 	public void testSearchOnDeletedIndex() throws Exception {
+ 		Session s = getSessions().openSession();
+ 		s.getTransaction().begin();
+-		s.persist( new Document( "Hibernate Search in Action", "", "") );
++		s.persist( new Document( "Hibernate Search in Action", "", "" ) );
+ 		s.getTransaction().commit();
+ 		s.close();
+-		
+-		IndexSearcher searcher = new IndexSearcher( new File( getBaseIndexDir(), "Documents" ).getCanonicalPath() );
++
++		Directory dir = FSDirectory.open( new File( getBaseIndexDir(), "Documents" ) );
++		IndexSearcher searcher = new IndexSearcher( dir, true );
+ 		// deleting before search, but after IndexSearcher creation:
+ 		// ( fails when deleting -concurrently- to IndexSearcher initialization! )
+-		FileHelper.delete(getBaseIndexDir());
+-		TermQuery query = new TermQuery( new Term("title","action") );
++		FileHelper.delete( getBaseIndexDir() );
++		TermQuery query = new TermQuery( new Term( "title", "action" ) );
+ 		TopDocs hits = searcher.search( query, 1000 );
+ 		assertEquals( 1, hits.totalHits );
+ 		org.apache.lucene.document.Document doc = searcher.doc( 0 );
+ 		assertEquals( "Hibernate Search in Action", doc.get( "title" ) );
+ 		searcher.close();
++		dir.close();
+ 	}
+ 
+-	protected Class[] getMappings() {
++	protected Class<?>[] getMappings() {
+ 		return new Class[] {
+ 				Document.class
+ 		};
+@@ -213,4 +226,3 @@
+ 	}
+ 
+ }
+-
+Index: src/test/java/org/hibernate/search/test/util/textbuilder/WordDictionary.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/util/textbuilder/WordDictionary.java	(revision 18709)
++++ src/test/java/org/hibernate/search/test/util/textbuilder/WordDictionary.java	(working copy)
+@@ -24,6 +24,7 @@
+  */
+ package org.hibernate.search.test.util.textbuilder;
+ 
++import java.io.Serializable;
+ import java.util.Arrays;
+ import java.util.Comparator;
+ import java.util.Random;
+@@ -53,7 +54,7 @@
+ 		gaussFactor = ((double)maxSize +1 ) / 4d ;
+ 	}
+ 	
+-	private static class StringLengthComparator implements Comparator<String> {
++	private static class StringLengthComparator implements Comparator<String>, Serializable {
+ 
+ 		public int compare(String o1, String o2) {
+ 			return o1.length()-o2.length();
+Index: src/main/java/org/hibernate/search/filter/CachingWrapperFilter.java
+===================================================================
+--- src/main/java/org/hibernate/search/filter/CachingWrapperFilter.java	(revision 18709)
++++ src/main/java/org/hibernate/search/filter/CachingWrapperFilter.java	(working copy)
+@@ -25,7 +25,6 @@
+ package org.hibernate.search.filter;
+ 
+ import java.io.IOException;
+-import java.util.BitSet;
+ 
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.search.DocIdSet;
+@@ -75,18 +74,6 @@
+ 	}	
+ 
+ 	@Override
+-	public BitSet bits(IndexReader reader) throws IOException {
+-		throw new UnsupportedOperationException();
+-		/* BitSet cached = (BitSet) cache.get(reader);
+-		if (cached != null) {
+-			return cached;
+-		}
+-		final BitSet bits = filter.bits(reader);
+-		cache.put(reader, bits);
+-		return bits; */
+-	}
+-	
+-	@Override
+ 	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
+ 		DocIdSet cached = (DocIdSet) cache.get( reader );
+ 		if ( cached != null ) {
+Index: src/main/java/org/hibernate/search/reader/CacheableMultiReader.java
+===================================================================
+--- src/main/java/org/hibernate/search/reader/CacheableMultiReader.java	(revision 18709)
++++ src/main/java/org/hibernate/search/reader/CacheableMultiReader.java	(working copy)
+@@ -24,8 +24,6 @@
+  */
+ package org.hibernate.search.reader;
+ 
+-import java.io.IOException;
+-
+ import org.apache.lucene.index.IndexReader;
+ import org.apache.lucene.index.MultiReader;
+ 
+@@ -41,7 +39,7 @@
+ 	// expose this publically (it's a protected member in Lucene 2.3)
+ 	final IndexReader[] subReaders;
+ 
+-	public CacheableMultiReader(IndexReader[] subReaders) throws IOException {
++	public CacheableMultiReader(IndexReader[] subReaders) {
+ 		super( subReaders );
+ 		this.subReaders = subReaders;
+ 	}

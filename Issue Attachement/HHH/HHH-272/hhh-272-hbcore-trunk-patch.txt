@@ -1,0 +1,3558 @@
+Index: core/src/main/java/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- core/src/main/java/org/hibernate/cfg/HbmBinder.java	(revision 17474)
++++ core/src/main/java/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -25,15 +25,12 @@
+ package org.hibernate.cfg;
+ 
+ import java.util.ArrayList;
+-import java.util.Collections;
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.Properties;
+ import java.util.StringTokenizer;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ import org.dom4j.Attribute;
+ import org.dom4j.Document;
+ import org.dom4j.Element;
+@@ -42,10 +39,10 @@
+ import org.hibernate.FetchMode;
+ import org.hibernate.FlushMode;
+ import org.hibernate.MappingException;
++import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.engine.FilterDefinition;
+ import org.hibernate.engine.NamedQueryDefinition;
+ import org.hibernate.engine.Versioning;
+-import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+ import org.hibernate.mapping.Any;
+ import org.hibernate.mapping.Array;
+@@ -100,6 +97,8 @@
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Walks an XML mapping document and produces the Hibernate configuration-time metamodel (the
+@@ -1705,7 +1704,7 @@
+ 
+ 	}
+ 
+-	public static void bindColumn(Element node, Column column, boolean isNullable) {
++	public static void bindColumn(Element node, Column column, boolean isNullable) throws MappingException {
+ 		Attribute lengthNode = node.attribute( "length" );
+ 		if ( lengthNode != null ) column.setLength( Integer.parseInt( lengthNode.getValue() ) );
+ 		Attribute scalNode = node.attribute( "scale" );
+@@ -1725,6 +1724,13 @@
+ 		Attribute typeNode = node.attribute( "sql-type" );
+ 		if ( typeNode != null ) column.setSqlType( typeNode.getValue() );
+ 
++		String customWrite = node.attributeValue( "write" );
++		if(customWrite != null && !customWrite.matches("[^?]*\\?[^?]*")) {
++			throw new MappingException("write expression must contain exactly one value placeholder ('?') character");
++		}
++		column.setCustomWrite( customWrite );
++		column.setCustomRead( node.attributeValue( "read" ) );
++		
+ 		Element comment = node.element("comment");
+ 		if (comment!=null) column.setComment( comment.getTextTrim() );
+ 
+Index: core/src/main/java/org/hibernate/dialect/lock/UpdateLockingStrategy.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/lock/UpdateLockingStrategy.java	(revision 17474)
++++ core/src/main/java/org/hibernate/dialect/lock/UpdateLockingStrategy.java	(working copy)
+@@ -24,23 +24,23 @@
+  */
+ package org.hibernate.dialect.lock;
+ 
+-import org.hibernate.persister.entity.Lockable;
++import java.io.Serializable;
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import org.hibernate.HibernateException;
++import org.hibernate.JDBCException;
+ import org.hibernate.LockMode;
+-import org.hibernate.HibernateException;
+ import org.hibernate.StaleObjectStateException;
+-import org.hibernate.JDBCException;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.exception.JDBCExceptionHelper;
++import org.hibernate.persister.entity.Lockable;
+ import org.hibernate.pretty.MessageHelper;
+-import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.sql.Update;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.engine.SessionFactoryImplementor;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+-import java.io.Serializable;
+-import java.sql.PreparedStatement;
+-import java.sql.SQLException;
+-
+ /**
+  * A locking strategy where the locks are obtained through update statements.
+  * <p/>
+@@ -131,7 +131,7 @@
+ 		SessionFactoryImplementor factory = lockable.getFactory();
+ 		Update update = new Update( factory.getDialect() );
+ 		update.setTableName( lockable.getRootTableName() );
+-		update.setPrimaryKeyColumnNames( lockable.getRootTableIdentifierColumnNames() );
++		update.addPrimaryKeyColumns( lockable.getRootTableIdentifierColumnNames() );
+ 		update.setVersionColumnName( lockable.getVersionColumnName() );
+ 		update.addColumn( lockable.getVersionColumnName() );
+ 		if ( factory.getSettings().isCommentsEnabled() ) {
+Index: core/src/main/java/org/hibernate/mapping/Column.java
+===================================================================
+--- core/src/main/java/org/hibernate/mapping/Column.java	(revision 17474)
++++ core/src/main/java/org/hibernate/mapping/Column.java	(working copy)
+@@ -31,6 +31,7 @@
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.dialect.function.SQLFunctionRegistry;
+ import org.hibernate.engine.Mapping;
++import org.hibernate.sql.Template;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -58,6 +59,8 @@
+ 	private String checkConstraint;
+ 	private String comment;
+ 	private String defaultValue;
++	private String customWrite;
++	private String customRead;
+ 
+ 	public Column() { };
+ 
+@@ -260,9 +263,18 @@
+ 	}
+ 
+ 	public String getTemplate(Dialect dialect, SQLFunctionRegistry functionRegistry) {
+-		return getQuotedName(dialect);
++		String expr = getReadExpr(dialect);
++		return Template.renderWhereStringTemplate(expr, dialect, functionRegistry);
+ 	}
+ 
++	public String getReadExpr(Dialect dialect) {
++		return ( customRead != null && customRead.length() > 0 ) ? customRead : getQuotedName(dialect);
++	}
++	
++	public String getWriteExpr() {
++		return ( customWrite != null && customWrite.length() > 0 ) ? customWrite : "?";
++	}
++	
+ 	public boolean isFormula() {
+ 		return false;
+ 	}
+@@ -304,6 +316,22 @@
+ 		this.defaultValue = defaultValue;
+ 	}
+ 
++	public String getCustomWrite() {
++		return customWrite;
++	}
++
++	public void setCustomWrite(String customWrite) {
++		this.customWrite = customWrite;
++	}
++
++	public String getCustomRead() {
++		return customRead;
++	}
++
++	public void setCustomRead(String customRead) {
++		this.customRead = customRead;
++	}
++
+ 	public String getCanonicalName() {
+ 		return quoted ? name : name.toLowerCase();
+ 	}
+@@ -327,6 +355,8 @@
+ 		copy.setCheckConstraint( checkConstraint );
+ 		copy.setComment( comment );
+ 		copy.setDefaultValue( defaultValue );
++		copy.setCustomRead( customRead );
++		copy.setCustomWrite( customWrite );
+ 		return copy;
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(working copy)
+@@ -33,16 +33,12 @@
+ import java.util.Iterator;
+ import java.util.Map;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.FetchMode;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
+ import org.hibernate.TransientObjectException;
+-import org.hibernate.jdbc.Expectation;
+-import org.hibernate.jdbc.Expectations;
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.cache.access.CollectionRegionAccessStrategy;
+ import org.hibernate.cache.entry.CacheEntryStructure;
+@@ -53,15 +49,17 @@
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.EntityKey;
++import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
++import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.engine.PersistenceContext;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.SubselectFetch;
+-import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+-import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.exception.SQLExceptionConverter;
+ import org.hibernate.id.IdentifierGenerator;
++import org.hibernate.jdbc.Expectation;
++import org.hibernate.jdbc.Expectations;
+ import org.hibernate.loader.collection.CollectionInitializer;
+ import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.Column;
+@@ -88,6 +86,8 @@
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.FilterHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ 
+ /**
+@@ -140,6 +140,9 @@
+ 	protected final String[] indexFormulas;
+ 	protected final boolean[] indexColumnIsSettable;
+ 	protected final String[] elementColumnNames;
++	protected final String[] elementColumnWriters;
++	protected final String[] elementColumnReaders;
++	protected final String[] elementColumnReaderTemplates;
+ 	protected final String[] elementFormulaTemplates;
+ 	protected final String[] elementFormulas;
+ 	protected final boolean[] elementColumnIsSettable;
+@@ -320,6 +323,9 @@
+ 		int elementSpan = collection.getElement().getColumnSpan();
+ 		elementColumnAliases = new String[elementSpan];
+ 		elementColumnNames = new String[elementSpan];
++		elementColumnWriters = new String[elementSpan];
++		elementColumnReaders = new String[elementSpan];
++		elementColumnReaderTemplates = new String[elementSpan];
+ 		elementFormulaTemplates = new String[elementSpan];
+ 		elementFormulas = new String[elementSpan];
+ 		elementColumnIsSettable = new boolean[elementSpan];
+@@ -339,6 +345,9 @@
+ 			else {
+ 				Column col = (Column) selectable;
+ 				elementColumnNames[j] = col.getQuotedName(dialect);
++				elementColumnWriters[j] = col.getWriteExpr();
++				elementColumnReaders[j] = col.getReadExpr(dialect);
++				elementColumnReaderTemplates[j] = col.getTemplate(dialect, factory.getSqlFunctionRegistry());
+ 				elementColumnIsSettable[j] = true;
+ 				elementColumnIsInPrimaryKey[j] = !col.isNullable();
+ 				if ( !col.isNullable() ) {
+@@ -513,6 +522,8 @@
+ 		if ( elementType.isComponentType() ) {
+ 			elementPropertyMapping = new CompositeElementPropertyMapping( 
+ 					elementColumnNames,
++					elementColumnReaders,
++					elementColumnReaderTemplates,
+ 					elementFormulaTemplates,
+ 					(AbstractComponentType) elementType,
+ 					factory 
+@@ -970,7 +981,7 @@
+ 	protected void appendElementColumns(SelectFragment frag, String elemAlias) {
+ 		for ( int i=0; i<elementColumnIsSettable.length; i++ ) {
+ 			if ( elementColumnIsSettable[i] ) {
+-				frag.addColumn( elemAlias, elementColumnNames[i], elementColumnAliases[i] );
++				frag.addColumnTemplate( elemAlias, elementColumnReaderTemplates[i], elementColumnAliases[i] );
+ 			}
+ 			else {
+ 				frag.addFormula( elemAlias, elementFormulaTemplates[i], elementColumnAliases[i] );
+Index: core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/collection/BasicCollectionPersister.java	(working copy)
+@@ -31,10 +31,6 @@
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+-import org.hibernate.jdbc.Expectations;
+-import org.hibernate.jdbc.Expectation;
+-import org.hibernate.type.AssociationType;
+-import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.cache.access.CollectionRegionAccessStrategy;
+ import org.hibernate.cfg.Configuration;
+@@ -44,15 +40,19 @@
+ import org.hibernate.engine.SubselectFetch;
+ import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.exception.JDBCExceptionHelper;
++import org.hibernate.jdbc.Expectation;
++import org.hibernate.jdbc.Expectations;
+ import org.hibernate.loader.collection.BatchingCollectionInitializer;
+ import org.hibernate.loader.collection.CollectionInitializer;
+ import org.hibernate.loader.collection.SubselectCollectionLoader;
+ import org.hibernate.mapping.Collection;
++import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.pretty.MessageHelper;
+ import org.hibernate.sql.Delete;
+ import org.hibernate.sql.Insert;
++import org.hibernate.sql.SelectFragment;
+ import org.hibernate.sql.Update;
+-import org.hibernate.sql.SelectFragment;
++import org.hibernate.type.AssociationType;
+ import org.hibernate.util.ArrayHelper;
+ 
+ /**
+@@ -81,7 +81,7 @@
+ 		
+ 		Delete delete = new Delete()
+ 				.setTableName( qualifiedTableName )
+-				.setPrimaryKeyColumnNames( keyColumnNames );
++				.addPrimaryKeyColumns( keyColumnNames );
+ 		
+ 		if ( hasWhere ) delete.setWhere( sqlWhereString );
+ 		
+@@ -112,7 +112,7 @@
+ 		}
+ 		
+ 		//if ( !elementIsFormula ) {
+-			insert.addColumns( elementColumnNames, elementColumnIsSettable );
++			insert.addColumns( elementColumnNames, elementColumnIsSettable, elementColumnWriters );
+ 		//}
+ 		
+ 		return insert.toStatementString();
+@@ -127,17 +127,18 @@
+ 			.setTableName( qualifiedTableName );
+ 		
+ 		//if ( !elementIsFormula ) {
+-			update.addColumns( elementColumnNames, elementColumnIsSettable );
++			update.addColumns( elementColumnNames, elementColumnIsSettable, elementColumnWriters );
+ 		//}
+ 		
+ 		if ( hasIdentifier ) {
+-			update.setPrimaryKeyColumnNames( new String[]{ identifierColumnName } );
++			update.addPrimaryKeyColumns( new String[]{ identifierColumnName } );
+ 		}
+ 		else if ( hasIndex && !indexContainsFormula ) {
+-			update.setPrimaryKeyColumnNames( ArrayHelper.join( keyColumnNames, indexColumnNames ) );
++			update.addPrimaryKeyColumns( ArrayHelper.join( keyColumnNames, indexColumnNames ) );
+ 		}
+ 		else {
+-			update.setPrimaryKeyColumnNames( ArrayHelper.join( keyColumnNames, elementColumnNames, elementColumnIsInPrimaryKey ) );
++			update.addPrimaryKeyColumns( keyColumnNames );
++			update.addPrimaryKeyColumns( elementColumnNames, elementColumnIsInPrimaryKey, elementColumnWriters );
+ 		}
+ 		
+ 		if ( getFactory().getSettings().isCommentsEnabled() ) {
+@@ -156,13 +157,14 @@
+ 			.setTableName( qualifiedTableName );
+ 		
+ 		if ( hasIdentifier ) {
+-			delete.setPrimaryKeyColumnNames( new String[]{ identifierColumnName } );
++			delete.addPrimaryKeyColumns( new String[]{ identifierColumnName } );
+ 		}
+ 		else if ( hasIndex && !indexContainsFormula ) {
+-			delete.setPrimaryKeyColumnNames( ArrayHelper.join( keyColumnNames, indexColumnNames ) );
++			delete.addPrimaryKeyColumns( ArrayHelper.join( keyColumnNames, indexColumnNames ) );
+ 		}
+ 		else {
+-			delete.setPrimaryKeyColumnNames( ArrayHelper.join( keyColumnNames, elementColumnNames, elementColumnIsInPrimaryKey ) );
++			delete.addPrimaryKeyColumns( keyColumnNames );
++			delete.addPrimaryKeyColumns( elementColumnNames, elementColumnIsInPrimaryKey, elementColumnWriters );
+ 		}
+ 		
+ 		if ( getFactory().getSettings().isCommentsEnabled() ) {
+Index: core/src/main/java/org/hibernate/persister/collection/CompositeElementPropertyMapping.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/CompositeElementPropertyMapping.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/collection/CompositeElementPropertyMapping.java	(working copy)
+@@ -38,7 +38,9 @@
+ 	private final AbstractComponentType compositeType;
+ 	
+ 	public CompositeElementPropertyMapping(
+-			String[] elementColumns, 
++			String[] elementColumns,
++			String[] elementColumnReaders,
++			String[] elementColumnReaderTemplates, 
+ 			String[] elementFormulaTemplates, 
+ 			AbstractComponentType compositeType, 
+ 			Mapping factory)
+@@ -46,7 +48,8 @@
+ 
+ 		this.compositeType = compositeType;
+ 
+-		initComponentPropertyPaths(null, compositeType, elementColumns, elementFormulaTemplates, factory);
++		initComponentPropertyPaths(null, compositeType, elementColumns, elementColumnReaders,
++				elementColumnReaderTemplates, elementFormulaTemplates, factory);
+ 
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java	(working copy)
+@@ -31,8 +31,6 @@
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+-import org.hibernate.jdbc.Expectation;
+-import org.hibernate.jdbc.Expectations;
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.cache.access.CollectionRegionAccessStrategy;
+ import org.hibernate.cfg.Configuration;
+@@ -42,6 +40,8 @@
+ import org.hibernate.engine.SubselectFetch;
+ import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.exception.JDBCExceptionHelper;
++import org.hibernate.jdbc.Expectation;
++import org.hibernate.jdbc.Expectations;
+ import org.hibernate.loader.collection.BatchingCollectionInitializer;
+ import org.hibernate.loader.collection.CollectionInitializer;
+ import org.hibernate.loader.collection.SubselectOneToManyLoader;
+@@ -96,7 +96,7 @@
+ 		Update update = new Update( getDialect() )
+ 				.setTableName( qualifiedTableName )
+ 				.addColumns( keyColumnNames, "null" )
+-				.setPrimaryKeyColumnNames( keyColumnNames );
++				.addPrimaryKeyColumns( keyColumnNames );
+ 		
+ 		if ( hasIndex && !indexContainsFormula ) update.addColumns( indexColumnNames, "null" );
+ 		
+@@ -125,7 +125,7 @@
+ 			update.setComment( "create one-to-many row " + getRole() );
+ 		}
+ 		
+-		return update.setPrimaryKeyColumnNames( elementColumnNames )
++		return update.addPrimaryKeyColumns( elementColumnNames, elementColumnWriters )
+ 				.toStatementString();
+ 	}
+ 
+@@ -156,7 +156,7 @@
+ 		//the ordering of removal and addition is not guaranteed when
+ 		//a child moves from one parent to another
+ 		String[] rowSelectColumnNames = ArrayHelper.join(keyColumnNames, elementColumnNames);
+-		return update.setPrimaryKeyColumnNames( rowSelectColumnNames )
++		return update.addPrimaryKeyColumns( rowSelectColumnNames )
+ 				.toStatementString();
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -30,15 +30,13 @@
+ import java.sql.SQLException;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.Comparator;
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.Map;
+ import java.util.Set;
+-import java.util.Comparator;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.EntityMode;
+ import org.hibernate.FetchMode;
+@@ -48,36 +46,36 @@
+ import org.hibernate.QueryException;
+ import org.hibernate.StaleObjectStateException;
+ import org.hibernate.StaleStateException;
+-import org.hibernate.jdbc.Expectation;
+-import org.hibernate.jdbc.Expectations;
+-import org.hibernate.jdbc.TooManyRowsAffectedException;
+-import org.hibernate.dialect.lock.LockingStrategy;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.access.EntityRegionAccessStrategy;
+ import org.hibernate.cache.entry.CacheEntry;
+ import org.hibernate.cache.entry.CacheEntryStructure;
+ import org.hibernate.cache.entry.StructuredCacheEntry;
+ import org.hibernate.cache.entry.UnstructuredCacheEntry;
++import org.hibernate.dialect.lock.LockingStrategy;
+ import org.hibernate.engine.CascadeStyle;
+ import org.hibernate.engine.CascadingAction;
+ import org.hibernate.engine.EntityEntry;
++import org.hibernate.engine.EntityKey;
++import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
++import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ValueInclusion;
+ import org.hibernate.engine.Versioning;
+-import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+-import org.hibernate.engine.EntityKey;
+-import org.hibernate.engine.ValueInclusion;
+-import org.hibernate.engine.LoadQueryInfluencers;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.id.IdentifierGenerator;
+ import org.hibernate.id.PostInsertIdentifierGenerator;
+ import org.hibernate.id.PostInsertIdentityPersister;
++import org.hibernate.id.insert.Binder;
+ import org.hibernate.id.insert.InsertGeneratedIdentifierDelegate;
+-import org.hibernate.id.insert.Binder;
+-import org.hibernate.intercept.LazyPropertyInitializer;
+ import org.hibernate.intercept.FieldInterceptionHelper;
+ import org.hibernate.intercept.FieldInterceptor;
++import org.hibernate.intercept.LazyPropertyInitializer;
++import org.hibernate.jdbc.Expectation;
++import org.hibernate.jdbc.Expectations;
++import org.hibernate.jdbc.TooManyRowsAffectedException;
+ import org.hibernate.loader.entity.BatchingEntityLoader;
+ import org.hibernate.loader.entity.CascadeEntityLoader;
+ import org.hibernate.loader.entity.EntityLoader;
+@@ -99,10 +97,9 @@
+ import org.hibernate.sql.SimpleSelect;
+ import org.hibernate.sql.Template;
+ import org.hibernate.sql.Update;
+-import org.hibernate.sql.AliasGenerator;
++import org.hibernate.tuple.Tuplizer;
+ import org.hibernate.tuple.entity.EntityMetamodel;
+ import org.hibernate.tuple.entity.EntityTuplizer;
+-import org.hibernate.tuple.Tuplizer;
+ import org.hibernate.type.AbstractComponentType;
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.EntityType;
+@@ -112,6 +109,8 @@
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.FilterHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Basic functionality for persisting an entity via JDBC
+@@ -136,6 +135,8 @@
+ 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 	private final String[] rootTableKeyColumnNames;
++	private final String[] rootTableKeyColumnReaders;
++	private final String[] rootTableKeyColumnReaderTemplates;
+ 	private final String[] identifierAliases;
+ 	private final int identifierColumnSpan;
+ 	private final String versionColumnName;
+@@ -158,6 +159,8 @@
+ 	private final String[][] propertyColumnAliases;
+ 	private final String[][] propertyColumnNames;
+ 	private final String[][] propertyColumnFormulaTemplates;
++	private final String[][] propertyColumnReaderTemplates;
++	private final String[][] propertyColumnWriters;
+ 	private final boolean[][] propertyColumnUpdateable;
+ 	private final boolean[][] propertyColumnInsertable;
+ 	private final boolean[] propertyUniqueness;
+@@ -175,6 +178,8 @@
+ 	private final Type[] subclassPropertyTypeClosure;
+ 	private final String[][] subclassPropertyFormulaTemplateClosure;
+ 	private final String[][] subclassPropertyColumnNameClosure;
++	private final String[][] subclassPropertyColumnReaderClosure;
++	private final String[][] subclassPropertyColumnReaderTemplateClosure;
+ 	private final FetchMode[] subclassPropertyFetchModeClosure;
+ 	private final boolean[] subclassPropertyNullabilityClosure;
+ 	private final boolean[] propertyDefinedOnSubclass;
+@@ -187,6 +192,7 @@
+ 	private final boolean[] subclassColumnLazyClosure;
+ 	private final String[] subclassColumnAliasClosure;
+ 	private final boolean[] subclassColumnSelectableClosure;
++	private final String[] subclassColumnReaderTemplateClosure;
+ 	private final String[] subclassFormulaClosure;
+ 	private final String[] subclassFormulaTemplateClosure;
+ 	private final String[] subclassFormulaAliasClosure;
+@@ -285,6 +291,14 @@
+ 		return DISCRIMINATOR_ALIAS;
+ 	}
+ 
++	public String getDiscriminatorColumnReaders() {
++		return DISCRIMINATOR_ALIAS;
++	}	
++	
++	public String getDiscriminatorColumnReaderTemplate() {
++		return DISCRIMINATOR_ALIAS;
++	}	
++	
+ 	protected String getDiscriminatorAlias() {
+ 		return DISCRIMINATOR_ALIAS;
+ 	}
+@@ -471,6 +485,8 @@
+ 
+ 		identifierColumnSpan = persistentClass.getIdentifier().getColumnSpan();
+ 		rootTableKeyColumnNames = new String[identifierColumnSpan];
++		rootTableKeyColumnReaders = new String[identifierColumnSpan];
++		rootTableKeyColumnReaderTemplates = new String[identifierColumnSpan];
+ 		identifierAliases = new String[identifierColumnSpan];
+ 
+ 		rowIdName = persistentClass.getRootTable().getRowId();
+@@ -482,6 +498,8 @@
+ 		while ( iter.hasNext() ) {
+ 			Column col = ( Column ) iter.next();
+ 			rootTableKeyColumnNames[i] = col.getQuotedName( factory.getDialect() );
++			rootTableKeyColumnReaders[i] = col.getReadExpr( factory.getDialect() );
++			rootTableKeyColumnReaderTemplates[i] = col.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
+ 			identifierAliases[i] = col.getAlias( factory.getDialect(), persistentClass.getRootTable() );
+ 			i++;
+ 		}
+@@ -512,6 +530,8 @@
+ 		propertyColumnAliases = new String[hydrateSpan][];
+ 		propertyColumnNames = new String[hydrateSpan][];
+ 		propertyColumnFormulaTemplates = new String[hydrateSpan][];
++		propertyColumnReaderTemplates = new String[hydrateSpan][];
++		propertyColumnWriters = new String[hydrateSpan][];
+ 		propertyUniqueness = new boolean[hydrateSpan];
+ 		propertySelectable = new boolean[hydrateSpan];
+ 		propertyColumnUpdateable = new boolean[hydrateSpan][];
+@@ -536,7 +556,9 @@
+ 			propertySubclassNames[i] = prop.getPersistentClass().getEntityName();
+ 			String[] colNames = new String[span];
+ 			String[] colAliases = new String[span];
+-			String[] templates = new String[span];
++			String[] colReaderTemplates = new String[span];
++			String[] colWriters = new String[span];
++			String[] formulaTemplates = new String[span];
+ 			Iterator colIter = prop.getColumnIterator();
+ 			int k = 0;
+ 			while ( colIter.hasNext() ) {
+@@ -544,15 +566,20 @@
+ 				colAliases[k] = thing.getAlias( factory.getDialect() , prop.getValue().getTable() );
+ 				if ( thing.isFormula() ) {
+ 					foundFormula = true;
+-					templates[k] = thing.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
++					formulaTemplates[k] = thing.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
+ 				}
+ 				else {
+-					colNames[k] = thing.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
++					Column col = (Column)thing;
++					colNames[k] = col.getQuotedName( factory.getDialect() );
++					colReaderTemplates[k] = col.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
++					colWriters[k] = col.getWriteExpr();
+ 				}
+ 				k++;
+ 			}
+ 			propertyColumnNames[i] = colNames;
+-			propertyColumnFormulaTemplates[i] = templates;
++			propertyColumnFormulaTemplates[i] = formulaTemplates;
++			propertyColumnReaderTemplates[i] = colReaderTemplates;
++			propertyColumnWriters[i] = colWriters;
+ 			propertyColumnAliases[i] = colAliases;
+ 
+ 			if ( lazyAvailable && prop.isLazy() ) {
+@@ -583,6 +610,7 @@
+ 
+ 		ArrayList columns = new ArrayList();
+ 		ArrayList columnsLazy = new ArrayList();
++		ArrayList columnReaderTemplates = new ArrayList();
+ 		ArrayList aliases = new ArrayList();
+ 		ArrayList formulas = new ArrayList();
+ 		ArrayList formulaAliases = new ArrayList();
+@@ -593,6 +621,8 @@
+ 		ArrayList classes = new ArrayList();
+ 		ArrayList templates = new ArrayList();
+ 		ArrayList propColumns = new ArrayList();
++		ArrayList propColumnReaders = new ArrayList();
++		ArrayList propColumnReaderTemplates = new ArrayList();
+ 		ArrayList joinedFetchesList = new ArrayList();
+ 		ArrayList cascades = new ArrayList();
+ 		ArrayList definedBySubclass = new ArrayList();
+@@ -613,6 +643,8 @@
+ 
+ 			Iterator colIter = prop.getColumnIterator();
+ 			String[] cols = new String[prop.getColumnSpan()];
++			String[] readers = new String[prop.getColumnSpan()];
++			String[] readerTemplates = new String[prop.getColumnSpan()];
+ 			String[] forms = new String[prop.getColumnSpan()];
+ 			int[] colnos = new int[prop.getColumnSpan()];
+ 			int[] formnos = new int[prop.getColumnSpan()];
+@@ -631,7 +663,8 @@
+ 					formulasLazy.add( lazy );
+ 				}
+ 				else {
+-					String colName = thing.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
++					Column col = (Column)thing;
++					String colName = col.getQuotedName( factory.getDialect() );
+ 					colnos[l] = columns.size(); //before add :-)
+ 					formnos[l] = -1;
+ 					columns.add( colName );
+@@ -639,10 +672,17 @@
+ 					aliases.add( thing.getAlias( factory.getDialect(), prop.getValue().getTable() ) );
+ 					columnsLazy.add( lazy );
+ 					columnSelectables.add( Boolean.valueOf( prop.isSelectable() ) );
++					
++					readers[l] = col.getReadExpr( factory.getDialect() );
++					String readerTemplate = col.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
++					readerTemplates[l] = readerTemplate;
++					columnReaderTemplates.add( readerTemplate );
+ 				}
+ 				l++;
+ 			}
+ 			propColumns.add( cols );
++			propColumnReaders.add( readers );
++			propColumnReaderTemplates.add( readerTemplates );
+ 			templates.add( forms );
+ 			propColumnNumbers.add( colnos );
+ 			propFormulaNumbers.add( formnos );
+@@ -654,6 +694,7 @@
+ 		subclassColumnAliasClosure = ArrayHelper.toStringArray( aliases );
+ 		subclassColumnLazyClosure = ArrayHelper.toBooleanArray( columnsLazy );
+ 		subclassColumnSelectableClosure = ArrayHelper.toBooleanArray( columnSelectables );
++		subclassColumnReaderTemplateClosure = ArrayHelper.toStringArray( columnReaderTemplates );
+ 
+ 		subclassFormulaClosure = ArrayHelper.toStringArray( formulas );
+ 		subclassFormulaTemplateClosure = ArrayHelper.toStringArray( formulaTemplates );
+@@ -666,6 +707,8 @@
+ 		subclassPropertyNullabilityClosure = ArrayHelper.toBooleanArray( propNullables );
+ 		subclassPropertyFormulaTemplateClosure = ArrayHelper.to2DStringArray( templates );
+ 		subclassPropertyColumnNameClosure = ArrayHelper.to2DStringArray( propColumns );
++		subclassPropertyColumnReaderClosure = ArrayHelper.to2DStringArray( propColumnReaders );
++		subclassPropertyColumnReaderTemplateClosure = ArrayHelper.to2DStringArray( propColumnReaderTemplates );
+ 		subclassPropertyColumnNumberClosure = ArrayHelper.to2DIntArray( propColumnNumbers );
+ 		subclassPropertyFormulaNumberClosure = ArrayHelper.to2DIntArray( propFormulaNumbers );
+ 
+@@ -906,6 +949,14 @@
+ 		return rootTableKeyColumnNames;
+ 	}
+ 
++	public String[] getIdentifierColumnReaders() {
++		return rootTableKeyColumnReaders;
++	}	
++
++	public String[] getIdentifierColumnReaderTemplates() {
++		return rootTableKeyColumnReaderTemplates;
++	}	
++	
+ 	protected int getIdentifierColumnSpan() {
+ 		return identifierColumnSpan;
+ 	}
+@@ -997,14 +1048,14 @@
+ 
+ 		int[] columnTableNumbers = getSubclassColumnTableNumberClosure();
+ 		String[] columnAliases = getSubclassColumnAliasClosure();
+-		String[] columns = getSubclassColumnClosure();
++		String[] columnReaderTemplates = getSubclassColumnReaderTemplateClosure();
+ 		for ( int i = 0; i < getSubclassColumnClosure().length; i++ ) {
+ 			boolean selectable = ( allProperties || !subclassColumnLazyClosure[i] ) &&
+ 				!isSubclassTableSequentialSelect( columnTableNumbers[i] ) &&
+ 				subclassColumnSelectableClosure[i];
+ 			if ( selectable ) {
+ 				String subalias = generateTableAlias( tableAlias, columnTableNumbers[i] );
+-				select.addColumn( subalias, columns[i], columnAliases[i] );
++				select.addColumnTemplate( subalias, columnReaderTemplates[i], columnAliases[i] );
+ 			}
+ 		}
+ 
+@@ -1174,9 +1225,9 @@
+ 		SelectFragment frag = new SelectFragment();
+ 		for ( int i = 0; i < propertyCount; i++ ) {
+ 			if ( inclusionChecker.includeProperty( i ) ) {
+-				frag.addColumns(
++				frag.addColumnTemplates(
+ 						generateTableAlias( alias, propertyTableNumbers[i] ),
+-						propertyColumnNames[i],
++						propertyColumnReaderTemplates[i],
+ 						propertyColumnAliases[i]
+ 				);
+ 				frag.addFormulas(
+@@ -1284,7 +1335,7 @@
+ 			update.setComment( "forced version increment" );
+ 		}
+ 		update.addColumn( getVersionColumnName() );
+-		update.setPrimaryKeyColumnNames( getIdentifierColumnNames() );
++		update.addPrimaryKeyColumns( getIdentifierColumnNames() );
+ 		update.setVersionColumnName( getVersionColumnName() );
+ 		return update.toStatementString();
+ 	}
+@@ -1472,6 +1523,10 @@
+ 	public String[] getPropertyColumnNames(int i) {
+ 		return propertyColumnNames[i];
+ 	}
++	
++	public String[] getPropertyColumnWriters(int i) {
++		return propertyColumnWriters[i];
++	}	
+ 
+ 	protected int getPropertyColumnSpan(int i) {
+ 		return propertyColumnSpans[i];
+@@ -1520,7 +1575,15 @@
+ 	protected String[][] getSubclassPropertyColumnNameClosure() {
+ 		return subclassPropertyColumnNameClosure;
+ 	}
++	
++	public String[][] getSubclassPropertyColumnReaderClosure() {
++		return subclassPropertyColumnReaderClosure;
++	}
+ 
++	public String[][] getSubclassPropertyColumnReaderTemplateClosure() {
++		return subclassPropertyColumnReaderTemplateClosure;
++	}
++
+ 	protected String[] getSubclassPropertyNameClosure() {
+ 		return subclassPropertyNameClosure;
+ 	}
+@@ -1537,6 +1600,10 @@
+ 		return subclassColumnAliasClosure;
+ 	}
+ 
++	public String[] getSubclassColumnReaderTemplateClosure() {
++		return subclassColumnReaderTemplateClosure;
++	}
++
+ 	protected String[] getSubclassFormulaClosure() {
+ 		return subclassFormulaClosure;
+ 	}
+@@ -1744,6 +1811,8 @@
+ 			propertyMapping.initPropertyPaths( getSubclassPropertyNameClosure()[i],
+ 					getSubclassPropertyTypeClosure()[i],
+ 					getSubclassPropertyColumnNameClosure()[i],
++					getSubclassPropertyColumnReaderClosure()[i],
++					getSubclassPropertyColumnReaderTemplateClosure()[i],
+ 					getSubclassPropertyFormulaTemplateClosure()[i],
+ 					mapping );
+ 		}
+@@ -1752,13 +1821,16 @@
+ 	private void initIdentifierPropertyPaths(Mapping mapping) throws MappingException {
+ 		String idProp = getIdentifierPropertyName();
+ 		if ( idProp != null ) {
+-			propertyMapping.initPropertyPaths( idProp, getIdentifierType(), getIdentifierColumnNames(), null, mapping );
++			propertyMapping.initPropertyPaths( idProp, getIdentifierType(), getIdentifierColumnNames(),
++					getIdentifierColumnReaders(), getIdentifierColumnReaderTemplates(), null, mapping );
+ 		}
+ 		if ( entityMetamodel.getIdentifierProperty().isEmbedded() ) {
+-			propertyMapping.initPropertyPaths( null, getIdentifierType(), getIdentifierColumnNames(), null, mapping );
++			propertyMapping.initPropertyPaths( null, getIdentifierType(), getIdentifierColumnNames(),
++					getIdentifierColumnReaders(), getIdentifierColumnReaderTemplates(), null, mapping );
+ 		}
+ 		if ( ! entityMetamodel.hasNonIdentifierPropertyNamedId() ) {
+-			propertyMapping.initPropertyPaths( ENTITY_ID, getIdentifierType(), getIdentifierColumnNames(), null, mapping );
++			propertyMapping.initPropertyPaths( ENTITY_ID, getIdentifierType(), getIdentifierColumnNames(),
++					getIdentifierColumnReaders(), getIdentifierColumnReaderTemplates(), null, mapping );
+ 		}
+ 	}
+ 
+@@ -1766,6 +1838,8 @@
+ 		propertyMapping.initPropertyPaths( ENTITY_CLASS,
+ 				getDiscriminatorType(),
+ 				new String[]{getDiscriminatorColumnName()},
++				new String[]{getDiscriminatorColumnReaders()},
++				new String[]{getDiscriminatorColumnReaderTemplate()},
+ 				new String[]{getDiscriminatorFormulaTemplate()},
+ 				getFactory() );
+ 	}
+@@ -1838,17 +1912,17 @@
+ 
+ 		// select the correct row by either pk or rowid
+ 		if ( useRowId ) {
+-			update.setPrimaryKeyColumnNames( new String[]{rowIdName} ); //TODO: eventually, rowIdName[j]
++			update.addPrimaryKeyColumns( new String[]{rowIdName} ); //TODO: eventually, rowIdName[j]
+ 		}
+ 		else {
+-			update.setPrimaryKeyColumnNames( getKeyColumns( j ) );
++			update.addPrimaryKeyColumns( getKeyColumns( j ) );
+ 		}
+ 
+ 		boolean hasColumns = false;
+ 		for ( int i = 0; i < entityMetamodel.getPropertySpan(); i++ ) {
+ 			if ( includeProperty[i] && isPropertyOfTable( i, j ) ) {
+ 				// this is a property of the table, which we are updating
+-				update.addColumns( getPropertyColumnNames(i), propertyColumnUpdateable[i] );
++				update.addColumns( getPropertyColumnNames(i), propertyColumnUpdateable[i], propertyColumnWriters[i] );
+ 				hasColumns = hasColumns || getPropertyColumnSpan( i ) > 0;
+ 			}
+ 		}
+@@ -1879,10 +1953,11 @@
+ 					// this property belongs to the table, and it is not specifically
+ 					// excluded from optimistic locking by optimistic-lock="false"
+ 					String[] propertyColumnNames = getPropertyColumnNames( i );
++					String[] propertyColumnWriters = getPropertyColumnWriters( i );
+ 					boolean[] propertyNullness = types[i].toColumnNullness( oldFields[i], getFactory() );
+ 					for ( int k=0; k<propertyNullness.length; k++ ) {
+ 						if ( propertyNullness[k] ) {
+-							update.addWhereColumn( propertyColumnNames[k] );
++							update.addWhereColumn( propertyColumnNames[k], "=" + propertyColumnWriters[k] );
+ 						}
+ 						else {
+ 							update.addWhereColumn( propertyColumnNames[k], " is null" );
+@@ -1928,7 +2003,7 @@
+ 		for ( int i = 0; i < entityMetamodel.getPropertySpan(); i++ ) {
+ 			if ( includeProperty[i] && isPropertyOfTable( i, j ) ) {
+ 				// this property belongs on the table and is to be inserted
+-				insert.addColumns( getPropertyColumnNames(i), propertyColumnInsertable[i] );
++				insert.addColumns( getPropertyColumnNames(i), propertyColumnInsertable[i], propertyColumnWriters[i] );
+ 			}
+ 		}
+ 
+@@ -1976,7 +2051,7 @@
+ 		for ( int i = 0; i < entityMetamodel.getPropertySpan(); i++ ) {
+ 			if ( includeProperty[i] && isPropertyOfTable( i, 0 ) ) {
+ 				// this property belongs on the table and is to be inserted
+-				insert.addColumns( getPropertyColumnNames(i), propertyColumnInsertable[i] );
++				insert.addColumns( getPropertyColumnNames(i), propertyColumnInsertable[i], propertyColumnWriters[i] );
+ 			}
+ 		}
+ 
+@@ -1998,7 +2073,7 @@
+ 	protected String generateDeleteString(int j) {
+ 		Delete delete = new Delete()
+ 				.setTableName( getTableName( j ) )
+-				.setPrimaryKeyColumnNames( getKeyColumns( j ) );
++				.addPrimaryKeyColumns( getKeyColumns( j ) );
+ 		if ( j == 0 ) {
+ 			delete.setVersionColumnName( getVersionColumnName() );
+ 		}
+@@ -2750,7 +2825,7 @@
+ 		for ( int j = span - 1; j >= 0; j-- ) {
+ 			Delete delete = new Delete()
+ 					.setTableName( getTableName( j ) )
+-					.setPrimaryKeyColumnNames( getKeyColumns( j ) );
++					.addPrimaryKeyColumns( getKeyColumns( j ) );
+ 			if ( getFactory().getSettings().isCommentsEnabled() ) {
+ 				delete.setComment( "delete " + getEntityName() + " [" + j + "]" );
+ 			}
+@@ -2889,12 +2964,12 @@
+ 
+ 		int[] columnTableNumbers = getSubclassColumnTableNumberClosure();
+ 		String[] columnAliases = getSubclassColumnAliasClosure();
+-		String[] columns = getSubclassColumnClosure();
++		String[] columnReaderTemplates = getSubclassColumnReaderTemplateClosure();
+ 		for ( int i = 0; i < subclassColumnNumbers.length; i++ ) {
+ 			int columnNumber = subclassColumnNumbers[i];
+ 			if ( subclassColumnSelectableClosure[columnNumber] ) {
+ 				final String subalias = generateTableAlias( getRootAlias(), columnTableNumbers[columnNumber] );
+-				selectFragment.addColumn( subalias, columns[columnNumber], columnAliases[columnNumber] );
++				selectFragment.addColumnTemplate( subalias, columnReaderTemplates[columnNumber], columnAliases[columnNumber] );
+ 			}
+ 		}
+ 
+Index: core/src/main/java/org/hibernate/persister/entity/AbstractPropertyMapping.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/AbstractPropertyMapping.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/entity/AbstractPropertyMapping.java	(working copy)
+@@ -47,12 +47,22 @@
+ 
+ 	private final Map typesByPropertyPath = new HashMap();
+ 	private final Map columnsByPropertyPath = new HashMap();
++	private final Map columnReadersByPropertyPath = new HashMap();
++	private final Map columnReaderTemplatesByPropertyPath = new HashMap();
+ 	private final Map formulaTemplatesByPropertyPath = new HashMap();
+ 
+ 	public String[] getIdentifierColumnNames() {
+ 		throw new UnsupportedOperationException("one-to-one is not supported here");
+ 	}
+ 
++	public String[] getIdentifierColumnReaderTemplates() {
++		throw new UnsupportedOperationException("one-to-one is not supported here");
++	}
++
++	public String[] getIdentifierColumnReaders() {
++		throw new UnsupportedOperationException("one-to-one is not supported here");
++	}
++	
+ 	protected abstract String getEntityName();
+ 
+ 	public Type toType(String propertyName) throws QueryException {
+@@ -81,14 +91,15 @@
+ 		if ( columns == null ) {
+ 			throw propertyException( propertyName );
+ 		}
+-		String[] templates = (String[]) formulaTemplatesByPropertyPath.get(propertyName);
++		String[] formulaTemplates = (String[]) formulaTemplatesByPropertyPath.get(propertyName);
++		String[] columnReaderTemplates = (String[]) columnReaderTemplatesByPropertyPath.get(propertyName);		
+ 		String[] result = new String[columns.length];
+ 		for ( int i=0; i<columns.length; i++ ) {
+-			if ( columns[i]==null ) {
+-				result[i] = StringHelper.replace( templates[i], Template.TEMPLATE, alias );
++			if ( columnReaderTemplates[i]==null ) {
++				result[i] = StringHelper.replace( formulaTemplates[i], Template.TEMPLATE, alias );
+ 			}
+ 			else {
+-				result[i] = StringHelper.qualify( alias, columns[i] );
++				result[i] = StringHelper.replace( columnReaderTemplates[i], Template.TEMPLATE, alias );
+ 			}
+ 		}
+ 		return result;
+@@ -99,22 +110,27 @@
+ 		if ( columns == null ) {
+ 			throw propertyException( propertyName );
+ 		}
+-		String[] templates = (String[]) formulaTemplatesByPropertyPath.get(propertyName);
++		String[] formulaTemplates = (String[]) formulaTemplatesByPropertyPath.get(propertyName);
++		String[] columnReaders = (String[]) columnReadersByPropertyPath.get(propertyName);
+ 		String[] result = new String[columns.length];
+ 		for ( int i=0; i<columns.length; i++ ) {
+-			if ( columns[i]==null ) {
+-				result[i] = StringHelper.replace( templates[i], Template.TEMPLATE, "" );
++			if ( columnReaders[i]==null ) {
++				result[i] = StringHelper.replace( formulaTemplates[i], Template.TEMPLATE, "" );
+ 			}
+ 			else {
+-				result[i] = columns[i];
++				result[i] = columnReaders[i];
+ 			}
+ 		}
+ 		return result;
+ 	}
+ 
+-	protected void addPropertyPath(String path, Type type, String[] columns, String[] formulaTemplates) {
++	protected void addPropertyPath(String path, Type type, String[] columns,
++			String[] columnReaders, String[] columnReaderTemplates,
++			String[] formulaTemplates) {
+ 		typesByPropertyPath.put(path, type);
+ 		columnsByPropertyPath.put(path, columns);
++		columnReadersByPropertyPath.put(path, columnReaders);
++		columnReaderTemplatesByPropertyPath.put(path, columnReaderTemplates);
+ 		if (formulaTemplates!=null) {
+ 			formulaTemplatesByPropertyPath.put(path, formulaTemplates);
+ 		}
+@@ -135,6 +151,8 @@
+ 			final String path,
+ 			final Type type,
+ 			String[] columns,
++			String[] columnReaders,
++			String[] columnReaderTemplates,
+ 			final String[] formulaTemplates,
+ 			final Mapping factory)
+ 	throws MappingException {
+@@ -150,6 +168,8 @@
+ 			AssociationType actype = (AssociationType) type;
+ 			if ( actype.useLHSPrimaryKey() ) {
+ 				columns = getIdentifierColumnNames();
++				columnReaders = getIdentifierColumnReaders();
++				columnReaderTemplates = getIdentifierColumnReaderTemplates();
+ 			}
+ 			else {
+ 				String foreignKeyProperty = actype.getLHSPropertyName();
+@@ -158,27 +178,31 @@
+ 					//      referenced property in the mapping file (ok?)
+ 					columns = (String[]) columnsByPropertyPath.get(foreignKeyProperty);
+ 					if (columns==null) return; //get em on the second pass!
++					columnReaders = (String[]) columnReadersByPropertyPath.get(foreignKeyProperty);
++					columnReaderTemplates = (String[]) columnReaderTemplatesByPropertyPath.get(foreignKeyProperty);
+ 				}
+ 			}
+ 		}
+ 
+-		if (path!=null) addPropertyPath(path, type, columns, formulaTemplates);
++		if (path!=null) addPropertyPath(path, type, columns, columnReaders, columnReaderTemplates, formulaTemplates);
+ 
+ 		if ( type.isComponentType() ) {
+ 			AbstractComponentType actype = (AbstractComponentType) type;
+-			initComponentPropertyPaths( path, actype, columns, formulaTemplates, factory );
++			initComponentPropertyPaths( path, actype, columns, columnReaders, columnReaderTemplates, formulaTemplates, factory );
+ 			if ( actype.isEmbedded() ) {
+ 				initComponentPropertyPaths(
+ 						path==null ? null : StringHelper.qualifier(path),
+ 						actype,
+ 						columns,
++						columnReaders,
++						columnReaderTemplates,
+ 						formulaTemplates,
+ 						factory
+ 					);
+ 			}
+ 		}
+ 		else if ( type.isEntityType() ) {
+-			initIdentifierPropertyPaths( path, (EntityType) type, columns, factory );
++			initIdentifierPropertyPaths( path, (EntityType) type, columns, columnReaders, columnReaderTemplates, factory );
+ 		}
+ 	}
+ 
+@@ -186,6 +210,8 @@
+ 			final String path,
+ 			final EntityType etype,
+ 			final String[] columns,
++			final String[] columnReaders,
++			final String[] columnReaderTemplates,
+ 			final Mapping factory) throws MappingException {
+ 
+ 		Type idtype = etype.getIdentifierOrUniqueKeyType( factory );
+@@ -195,15 +221,15 @@
+ 		if ( etype.isReferenceToPrimaryKey() ) {
+ 			if ( !hasNonIdentifierPropertyNamedId ) {
+ 				String idpath1 = extendPath(path, EntityPersister.ENTITY_ID);
+-				addPropertyPath(idpath1, idtype, columns, null);
+-				initPropertyPaths(idpath1, idtype, columns, null, factory);
++				addPropertyPath(idpath1, idtype, columns, columnReaders, columnReaderTemplates, null);
++				initPropertyPaths(idpath1, idtype, columns, columnReaders, columnReaderTemplates, null, factory);
+ 			}
+ 		}
+ 
+ 		if (idPropName!=null) {
+ 			String idpath2 = extendPath(path, idPropName);
+-			addPropertyPath(idpath2, idtype, columns, null);
+-			initPropertyPaths(idpath2, idtype, columns, null, factory);
++			addPropertyPath(idpath2, idtype, columns, columnReaders, columnReaderTemplates, null);
++			initPropertyPaths(idpath2, idtype, columns, columnReaders, columnReaderTemplates, null, factory);
+ 		}
+ 	}
+ 
+@@ -223,6 +249,8 @@
+ 			final String path,
+ 			final AbstractComponentType type,
+ 			final String[] columns,
++			final String[] columnReaders,
++			final String[] columnReaderTemplates,
+ 			String[] formulaTemplates, final Mapping factory)
+ 	throws MappingException {
+ 
+@@ -234,9 +262,11 @@
+ 			try {
+ 				int length = types[i].getColumnSpan(factory);
+ 				String[] columnSlice = ArrayHelper.slice(columns, begin, length);
++				String[] columnReaderSlice = ArrayHelper.slice(columnReaders, begin, length);
++				String[] columnReaderTemplateSlice = ArrayHelper.slice(columnReaderTemplates, begin, length);
+ 				String[] formulaSlice = formulaTemplates==null ?
+ 						null : ArrayHelper.slice(formulaTemplates, begin, length);
+-				initPropertyPaths(subpath, types[i], columnSlice, formulaSlice, factory);
++				initPropertyPaths(subpath, types[i], columnSlice, columnReaderSlice, columnReaderTemplateSlice, formulaSlice, factory);
+ 				begin+=length;
+ 			}
+ 			catch (Exception e) {
+Index: core/src/main/java/org/hibernate/persister/entity/BasicEntityPropertyMapping.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/BasicEntityPropertyMapping.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/entity/BasicEntityPropertyMapping.java	(working copy)
+@@ -41,6 +41,14 @@
+ 	public String[] getIdentifierColumnNames() {
+ 		return persister.getIdentifierColumnNames();
+ 	}
++	
++	public String[] getIdentifierColumnReaders() {
++		return persister.getIdentifierColumnReaders();
++	}
++	
++	public String[] getIdentifierColumnReaderTemplates() {
++		return persister.getIdentifierColumnReaderTemplates();
++	}
+ 
+ 	protected String getEntityName() {
+ 		return persister.getEntityName();
+Index: core/src/main/java/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(working copy)
+@@ -36,10 +36,10 @@
+ import org.hibernate.MappingException;
+ import org.hibernate.QueryException;
+ import org.hibernate.cache.access.EntityRegionAccessStrategy;
++import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.Versioning;
+-import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.KeyValue;
+ import org.hibernate.mapping.PersistentClass;
+@@ -65,7 +65,11 @@
+ 	private final String[] tableNames;
+ 	private final String[] naturalOrderTableNames;
+ 	private final String[][] tableKeyColumns;
++	private final String[][] tableKeyColumnReaders;
++	private final String[][] tableKeyColumnReaderTemplates;
+ 	private final String[][] naturalOrderTableKeyColumns;
++	private final String[][] naturalOrderTableKeyColumnReaders;
++	private final String[][] naturalOrderTableKeyColumnReaderTemplates;
+ 	private final boolean[] naturalOrderCascadeDeleteEnabled;
+ 
+ 	private final String[] spaces;
+@@ -139,6 +143,8 @@
+ 
+ 		ArrayList tables = new ArrayList();
+ 		ArrayList keyColumns = new ArrayList();
++		ArrayList keyColumnReaders = new ArrayList();
++		ArrayList keyColumnReaderTemplates = new ArrayList();
+ 		ArrayList cascadeDeletes = new ArrayList();
+ 		Iterator titer = persistentClass.getTableClosureIterator();
+ 		Iterator kiter = persistentClass.getKeyClosureIterator();
+@@ -152,15 +158,24 @@
+ 			);
+ 			tables.add(tabname);
+ 			String[] keyCols = new String[idColumnSpan];
++			String[] keyColReaders = new String[idColumnSpan];
++			String[] keyColReaderTemplates = new String[idColumnSpan];
+ 			Iterator citer = key.getColumnIterator();
+ 			for ( int k=0; k<idColumnSpan; k++ ) {
+-				keyCols[k] = ( (Column) citer.next() ).getQuotedName( factory.getDialect() );
++				Column column = (Column) citer.next();
++				keyCols[k] = column.getQuotedName( factory.getDialect() );
++				keyColReaders[k] = column.getReadExpr( factory.getDialect() );
++				keyColReaderTemplates[k] = column.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
+ 			}
+ 			keyColumns.add(keyCols);
++			keyColumnReaders.add(keyColReaders);
++			keyColumnReaderTemplates.add(keyColReaderTemplates);
+ 			cascadeDeletes.add( new Boolean( key.isCascadeDeleteEnabled() && factory.getDialect().supportsCascadeDelete() ) );
+ 		}
+ 		naturalOrderTableNames = ArrayHelper.toStringArray(tables);
+ 		naturalOrderTableKeyColumns = ArrayHelper.to2DStringArray(keyColumns);
++		naturalOrderTableKeyColumnReaders = ArrayHelper.to2DStringArray(keyColumnReaders);
++		naturalOrderTableKeyColumnReaderTemplates = ArrayHelper.to2DStringArray(keyColumnReaderTemplates);
+ 		naturalOrderCascadeDeleteEnabled = ArrayHelper.toBooleanArray(cascadeDeletes);
+ 
+ 		ArrayList subtables = new ArrayList();
+@@ -198,6 +213,8 @@
+ 		tableSpan = naturalOrderTableNames.length;
+ 		tableNames = reverse(naturalOrderTableNames);
+ 		tableKeyColumns = reverse(naturalOrderTableKeyColumns);
++		tableKeyColumnReaders = reverse(naturalOrderTableKeyColumnReaders);
++		tableKeyColumnReaderTemplates = reverse(naturalOrderTableKeyColumnReaderTemplates);
+ 		reverse(subclassTableNameClosure, tableSpan);
+ 		reverse(subclassTableKeyColumnClosure, tableSpan);
+ 
+@@ -514,6 +531,14 @@
+ 		return tableKeyColumns[0];
+ 	}
+ 
++	public String[] getIdentifierColumnReaderTemplates() {
++		return tableKeyColumnReaderTemplates[0];
++	}
++
++	public String[] getIdentifierColumnReaders() {
++		return tableKeyColumnReaders[0];
++	}		
++	
+ 	public String[] toColumns(String alias, String propertyName) throws QueryException {
+ 
+ 		if ( ENTITY_CLASS.equals(propertyName) ) {
+Index: core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 17474)
++++ core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java	(working copy)
+@@ -35,9 +35,9 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.cache.access.EntityRegionAccessStrategy;
++import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.ExecuteUpdateResultCheckStyle;
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.Formula;
+ import org.hibernate.mapping.Join;
+@@ -102,6 +102,8 @@
+ 	private final Map subclassesByDiscriminatorValue = new HashMap();
+ 	private final boolean forceDiscriminator;
+ 	private final String discriminatorColumnName;
++	private final String discriminatorColumnReaders;
++	private final String discriminatorColumnReaderTemplate;
+ 	private final String discriminatorFormula;
+ 	private final String discriminatorFormulaTemplate;
+ 	private final String discriminatorAlias;
+@@ -295,11 +297,15 @@
+ 				discriminatorFormula = formula.getFormula();
+ 				discriminatorFormulaTemplate = formula.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
+ 				discriminatorColumnName = null;
++				discriminatorColumnReaders = null;
++				discriminatorColumnReaderTemplate = null;
+ 				discriminatorAlias = "clazz_";
+ 			}
+ 			else {
+ 				Column column = (Column) selectable;
+ 				discriminatorColumnName = column.getQuotedName( factory.getDialect() );
++				discriminatorColumnReaders = column.getReadExpr( factory.getDialect() );
++				discriminatorColumnReaderTemplate = column.getTemplate( factory.getDialect(), factory.getSqlFunctionRegistry() );
+ 				discriminatorAlias = column.getAlias( factory.getDialect(), persistentClass.getRootTable() );
+ 				discriminatorFormula = null;
+ 				discriminatorFormulaTemplate = null;
+@@ -334,6 +340,8 @@
+ 			forceDiscriminator = false;
+ 			discriminatorInsertable = false;
+ 			discriminatorColumnName = null;
++			discriminatorColumnReaders = null;
++			discriminatorColumnReaderTemplate = null;
+ 			discriminatorAlias = null;
+ 			discriminatorType = null;
+ 			discriminatorValue = null;
+@@ -444,6 +452,14 @@
+ 		return discriminatorColumnName;
+ 	}
+ 
++	public String getDiscriminatorColumnReaders() {
++		return discriminatorColumnReaders;
++	}			
++	
++	public String getDiscriminatorColumnReaderTemplate() {
++		return discriminatorColumnReaderTemplate;
++	}	
++	
+ 	protected String getDiscriminatorAlias() {
+ 		return discriminatorAlias;
+ 	}
+Index: core/src/main/java/org/hibernate/sql/Delete.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/Delete.java	(revision 17474)
++++ core/src/main/java/org/hibernate/sql/Delete.java	(working copy)
+@@ -24,8 +24,12 @@
+  */
+ package org.hibernate.sql;
+ 
+-import org.hibernate.util.StringHelper;
++import java.util.Iterator;
++import java.util.LinkedHashMap;
++import java.util.Map;
+ 
++import net.sf.cglib.transform.impl.AddPropertyTransformer;
++
+ /**
+  * An SQL <tt>DELETE</tt> statement
+  *
+@@ -34,10 +38,11 @@
+ public class Delete {
+ 
+ 	private String tableName;
+-	private String[] primaryKeyColumnNames;
+ 	private String versionColumnName;
+ 	private String where;
+ 
++	private Map primaryKeyColumns = new LinkedHashMap();	
++	
+ 	private String comment;
+ 	public Delete setComment(String comment) {
+ 		this.comment = comment;
+@@ -55,12 +60,17 @@
+ 			buf.append( "/* " ).append(comment).append( " */ " );
+ 		}
+ 		buf.append( "delete from " ).append(tableName);
+-		if ( where != null || primaryKeyColumnNames != null || versionColumnName != null ) {
++		if ( where != null || !primaryKeyColumns.isEmpty() || versionColumnName != null ) {
+ 			buf.append( " where " );
+ 		}
+ 		boolean conditionsAppended = false;
+-		if ( primaryKeyColumnNames != null ) {
+-			buf.append( StringHelper.join( "=? and ", primaryKeyColumnNames ) ).append( "=?" );
++		Iterator iter = primaryKeyColumns.entrySet().iterator();
++		while ( iter.hasNext() ) {
++			Map.Entry e = (Map.Entry) iter.next();
++			buf.append( e.getKey() ).append( '=' ).append( e.getValue() );
++			if ( iter.hasNext() ) {
++				buf.append( " and " );
++			}
+ 			conditionsAppended = true;
+ 		}
+ 		if ( where!=null ) {
+@@ -94,11 +104,38 @@
+ 		return this;
+ 	}
+ 
+-	public Delete setPrimaryKeyColumnNames(String[] primaryKeyColumnNames) {
+-		this.primaryKeyColumnNames = primaryKeyColumnNames;
++	public Delete setPrimaryKeyColumnNames(String[] columnNames) {
++		this.primaryKeyColumns.clear();
++		addPrimaryKeyColumns(columnNames);
+ 		return this;
++	}	
++
++	public Delete addPrimaryKeyColumns(String[] columnNames) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			addPrimaryKeyColumn( columnNames[i], "?" );
++		}
++		return this;
+ 	}
++	
++	public Delete addPrimaryKeyColumns(String[] columnNames, boolean[] includeColumns, String[] valueExpressions) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			if( includeColumns[i] ) addPrimaryKeyColumn( columnNames[i], valueExpressions[i] );
++		}
++		return this;
++	}
++	
++	public Delete addPrimaryKeyColumns(String[] columnNames, String[] valueExpressions) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			addPrimaryKeyColumn( columnNames[i], valueExpressions[i] );
++		}
++		return this;
++	}	
+ 
++	public Delete addPrimaryKeyColumn(String columnName, String valueExpression) {
++		this.primaryKeyColumns.put(columnName, valueExpression);
++		return this;
++	}
++
+ 	public Delete setVersionColumnName(String versionColumnName) {
+ 		this.versionColumnName = versionColumnName;
+ 		return this;
+Index: core/src/main/java/org/hibernate/sql/Insert.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/Insert.java	(revision 17474)
++++ core/src/main/java/org/hibernate/sql/Insert.java	(working copy)
+@@ -25,8 +25,8 @@
+ package org.hibernate.sql;
+ 
+ import java.util.Iterator;
++import java.util.LinkedHashMap;
+ import java.util.Map;
+-import java.util.LinkedHashMap;
+ 
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.type.LiteralType;
+@@ -75,11 +75,20 @@
+ 		return this;
+ 	}
+ 
+-	public Insert addColumn(String columnName, String value) {
+-		columns.put(columnName, value);
++	public Insert addColumns(String[] columnNames, boolean[] insertable, String[] valueExpressions) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			if ( insertable[i] ) {
++				addColumn( columnNames[i], valueExpressions[i] );
++			}
++		}
+ 		return this;
+ 	}
+ 
++	public Insert addColumn(String columnName, String valueExpression) {
++		columns.put(columnName, valueExpression);
++		return this;
++	}
++
+ 	public Insert addColumn(String columnName, Object value, LiteralType type) throws Exception {
+ 		return addColumn( columnName, type.objectToSQLString(value, dialect) );
+ 	}
+Index: core/src/main/java/org/hibernate/sql/SelectFragment.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/SelectFragment.java	(revision 17474)
++++ core/src/main/java/org/hibernate/sql/SelectFragment.java	(working copy)
+@@ -121,7 +121,17 @@
+ 		columnAliases.add(formulaAlias);
+ 		return this;
+ 	}
++	
++	public SelectFragment addColumnTemplate(String tableAlias, String columnTemplate, String columnAlias) {
++		// In this context, there's no difference between a column template and a formula.
++		return addFormula( tableAlias, columnTemplate, columnAlias );
++	}
+ 
++	public SelectFragment addColumnTemplates(String tableAlias, String[] columnTemplates, String columnAliases[]) {
++		// In this context, there's no difference between a column template and a formula.
++		return addFormulas( tableAlias, columnTemplates, columnAliases );
++	}	
++	
+ 	public String toFragmentString() {
+ 		StringBuffer buf = new StringBuffer( columns.size() * 10 );
+ 		Iterator iter = columns.iterator();
+Index: core/src/main/java/org/hibernate/sql/Update.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/Update.java	(revision 17474)
++++ core/src/main/java/org/hibernate/sql/Update.java	(working copy)
+@@ -25,12 +25,11 @@
+ package org.hibernate.sql;
+ 
+ import java.util.Iterator;
++import java.util.LinkedHashMap;
+ import java.util.Map;
+-import java.util.LinkedHashMap;
+ 
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.type.LiteralType;
+-import org.hibernate.util.StringHelper;
+ 
+ /**
+  * An SQL <tt>UPDATE</tt> statement
+@@ -40,12 +39,12 @@
+ public class Update {
+ 
+ 	private String tableName;
+-	private String[] primaryKeyColumnNames;
+ 	private String versionColumnName;
+ 	private String where;
+ 	private String assignments;
+ 	private String comment;
+ 
++	private Map primaryKeyColumns = new LinkedHashMap();
+ 	private Map columns = new LinkedHashMap();
+ 	private Map whereColumns = new LinkedHashMap();
+ 	
+@@ -74,11 +73,38 @@
+ 		return this;
+ 	}
+ 
+-	public Update setPrimaryKeyColumnNames(String[] primaryKeyColumnNames) {
+-		this.primaryKeyColumnNames = primaryKeyColumnNames;
++	public Update setPrimaryKeyColumnNames(String[] columnNames) {
++		this.primaryKeyColumns.clear();
++		addPrimaryKeyColumns(columnNames);
+ 		return this;
++	}	
++	
++	public Update addPrimaryKeyColumns(String[] columnNames) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			addPrimaryKeyColumn( columnNames[i], "?" );
++		}
++		return this;
+ 	}
++	
++	public Update addPrimaryKeyColumns(String[] columnNames, boolean[] includeColumns, String[] valueExpressions) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			if( includeColumns[i] ) addPrimaryKeyColumn( columnNames[i], valueExpressions[i] );
++		}
++		return this;
++	}
++	
++	public Update addPrimaryKeyColumns(String[] columnNames, String[] valueExpressions) {
++		for ( int i=0; i<columnNames.length; i++ ) {
++			addPrimaryKeyColumn( columnNames[i], valueExpressions[i] );
++		}
++		return this;
++	}	
+ 
++	public Update addPrimaryKeyColumn(String columnName, String valueExpression) {
++		this.primaryKeyColumns.put(columnName, valueExpression);
++		return this;
++	}
++	
+ 	public Update setVersionColumnName(String versionColumnName) {
+ 		this.versionColumnName = versionColumnName;
+ 		return this;
+@@ -89,7 +115,7 @@
+ 		this.comment = comment;
+ 		return this;
+ 	}
+-
++	
+ 	public Update addColumns(String[] columnNames) {
+ 		for ( int i=0; i<columnNames.length; i++ ) {
+ 			addColumn( columnNames[i] );
+@@ -97,16 +123,16 @@
+ 		return this;
+ 	}
+ 
+-	public Update addColumns(String[] columnNames, boolean[] updateable) {
++	public Update addColumns(String[] columnNames, boolean[] updateable, String[] valueExpressions) {
+ 		for ( int i=0; i<columnNames.length; i++ ) {
+-			if ( updateable[i] ) addColumn( columnNames[i] );
++			if ( updateable[i] ) addColumn( columnNames[i], valueExpressions[i] );
+ 		}
+ 		return this;
+ 	}
+ 
+-	public Update addColumns(String[] columnNames, String value) {
++	public Update addColumns(String[] columnNames, String valueExpression) {
+ 		for ( int i=0; i<columnNames.length; i++ ) {
+-			addColumn( columnNames[i], value );
++			addColumn( columnNames[i], valueExpression );
+ 		}
+ 		return this;
+ 	}
+@@ -115,8 +141,8 @@
+ 		return addColumn(columnName, "?");
+ 	}
+ 
+-	public Update addColumn(String columnName, String value) {
+-		columns.put(columnName, value);
++	public Update addColumn(String columnName, String valueExpression) {
++		columns.put(columnName, valueExpression);
+ 		return this;
+ 	}
+ 
+@@ -131,9 +157,9 @@
+ 		return this;
+ 	}
+ 
+-	public Update addWhereColumns(String[] columnNames, String value) {
++	public Update addWhereColumns(String[] columnNames, String valueExpression) {
+ 		for ( int i=0; i<columnNames.length; i++ ) {
+-			addWhereColumn( columnNames[i], value );
++			addWhereColumn( columnNames[i], valueExpression );
+ 		}
+ 		return this;
+ 	}
+@@ -142,8 +168,8 @@
+ 		return addWhereColumn(columnName, "=?");
+ 	}
+ 
+-	public Update addWhereColumn(String columnName, String value) {
+-		whereColumns.put(columnName, value);
++	public Update addWhereColumn(String columnName, String valueExpression) {
++		whereColumns.put(columnName, valueExpression);
+ 		return this;
+ 	}
+ 
+@@ -176,11 +202,16 @@
+ 		}
+ 
+ 		boolean conditionsAppended = false;
+-		if ( primaryKeyColumnNames != null || where != null || !whereColumns.isEmpty() || versionColumnName != null ) {
++		if ( !primaryKeyColumns.isEmpty() || where != null || !whereColumns.isEmpty() || versionColumnName != null ) {
+ 			buf.append( " where " );
+ 		}
+-		if ( primaryKeyColumnNames != null ) {
+-			buf.append( StringHelper.join( "=? and ", primaryKeyColumnNames ) ).append( "=?" );
++		iter = primaryKeyColumns.entrySet().iterator();
++		while ( iter.hasNext() ) {
++			Map.Entry e = (Map.Entry) iter.next();
++			buf.append( e.getKey() ).append( '=' ).append( e.getValue() );
++			if ( iter.hasNext() ) {
++				buf.append( " and " );
++			}
+ 			conditionsAppended = true;
+ 		}
+ 		if ( where != null ) {
+Index: core/src/main/resources/org/hibernate/hibernate-mapping-3.0.dtd
+===================================================================
+--- core/src/main/resources/org/hibernate/hibernate-mapping-3.0.dtd	(revision 17474)
++++ core/src/main/resources/org/hibernate/hibernate-mapping-3.0.dtd	(working copy)
+@@ -916,6 +916,8 @@
+ 	<!ATTLIST column index CDATA #IMPLIED>
+ 	<!ATTLIST column check CDATA #IMPLIED>						<!-- default: no check constraint -->
+     <!ATTLIST column default CDATA #IMPLIED>                    <!-- default: no default value -->
++    <!ATTLIST column read CDATA #IMPLIED>                       <!-- default: column name -->
++    <!ATTLIST column write CDATA #IMPLIED>                      <!-- default: parameter placeholder ('?') -->
+ 
+ <!-- The formula and subselect elements allow us to map derived properties and 
+ entities. -->
+Index: testsuite/src/test/java/org/hibernate/test/component/basic/ComponentTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/component/basic/ComponentTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/component/basic/ComponentTest.java	(working copy)
+@@ -7,16 +7,17 @@
+ 
+ import junit.framework.Test;
+ 
++import org.hibernate.Hibernate;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+-import org.hibernate.Hibernate;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.cfg.Mappings;
+ import org.hibernate.criterion.Property;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.dialect.Dialect;
++import org.hibernate.dialect.SybaseASE15Dialect;
+ import org.hibernate.dialect.function.SQLFunction;
+-import org.hibernate.dialect.SybaseASE15Dialect;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ import org.hibernate.mapping.Component;
+@@ -207,7 +208,49 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		User u = new User( "steve", "hibernater", new Person( "Steve Ebersole", new Date(), "Main St") );
++		final double HEIGHT_INCHES = 73;
++		final double HEIGHT_CENTIMETERS = HEIGHT_INCHES * 2.54d;
++		u.getPerson().setHeightInches(HEIGHT_INCHES);
++		s.persist( u );
++		s.flush();
++		
++		// Test value conversion during insert
++		Double heightViaSql = (Double)s.createSQLQuery("select height_centimeters from t_user where t_user.username='steve'").uniqueResult();
++		assertEquals(HEIGHT_CENTIMETERS, heightViaSql, 0.01d);
+ 
++		// Test projection
++		Double heightViaHql = (Double)s.createQuery("select u.person.heightInches from User u where u.id = 'steve'").uniqueResult();
++		assertEquals(HEIGHT_INCHES, heightViaHql, 0.01d);
++		
++		// Test restriction and entity load via criteria
++		u = (User)s.createCriteria(User.class)
++			.add(Restrictions.between("person.heightInches", HEIGHT_INCHES - 0.01d, HEIGHT_INCHES + 0.01d))
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, u.getPerson().getHeightInches(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		u = (User)s.createQuery("from User u where u.person.heightInches between ? and ?")
++			.setDouble(0, HEIGHT_INCHES - 0.01d)
++			.setDouble(1, HEIGHT_INCHES + 0.01d)
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, u.getPerson().getHeightInches(), 0.01d);
++		
++		// Test update
++		u.getPerson().setHeightInches(1);
++		s.flush();
++		heightViaSql = (Double)s.createSQLQuery("select height_centimeters from t_user where t_user.username='steve'").uniqueResult();
++		assertEquals(2.54d, heightViaSql, 0.01d);
++		s.delete(u);
++		t.commit();
++		s.close();
++	}
++	
++
+ 	public void testNamedQuery() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+Index: testsuite/src/test/java/org/hibernate/test/component/basic/Person.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/component/basic/Person.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/component/basic/Person.java	(working copy)
+@@ -13,6 +13,7 @@
+ 	private String currentAddress;
+ 	private String previousAddress;
+ 	private int yob;
++	private double heightInches;
+ 	Person() {}
+ 	public Person(String name, Date dob, String address) {
+ 		this.name = name;
+@@ -60,4 +61,10 @@
+ 	public void setCurrentAddress(String currentAddress) {
+ 		this.currentAddress = currentAddress;
+ 	}
++	public double getHeightInches() {
++		return heightInches;
++	}
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}	
+ }
+Index: testsuite/src/test/java/org/hibernate/test/component/basic/User.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/component/basic/User.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/component/basic/User.hbm.xml	(working copy)
+@@ -19,6 +19,12 @@
+ 			<property name="address"/>
+ 			<property name="previousAddress" insert="false"/>
+ 			<property name="yob" formula="year(dob)"/>
++			<property name="heightInches">
++				<column name="height_centimeters"
++					not-null="true" 
++					read="height_centimeters / 2.54" 
++					write="? * 2.54"/>
++			</property>
+ 			<property name="currentAddress"
+ 				column="address"
+ 				insert="false"
+Index: testsuite/src/test/java/org/hibernate/test/compositeelement/Child.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/compositeelement/Child.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/compositeelement/Child.java	(working copy)
+@@ -9,6 +9,7 @@
+ 	private String bio;
+ 	private Parent parent;
+ 	private int bioLength;
++	private double heightInches;
+ 	Child() {}
+ 	public Child(String name) {
+ 		this.name = name;
+@@ -43,6 +44,12 @@
+ 	public void setBio(String bio) {
+ 		this.bio = bio;
+ 	}
++	public double getHeightInches() {
++		return heightInches;
++	}
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}	
+ 	public int hashCode() {
+ 		return name.hashCode();
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/compositeelement/CompositeElementTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/compositeelement/CompositeElementTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/compositeelement/CompositeElementTest.java	(working copy)
+@@ -8,6 +8,7 @@
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+ import org.hibernate.cfg.Mappings;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.dialect.function.SQLFunction;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+@@ -85,6 +86,52 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		final double HEIGHT_INCHES = 49;
++		final double HEIGHT_CENTIMETERS = HEIGHT_INCHES * 2.54d;
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Child c = new Child( "Child One" );
++		c.setHeightInches(HEIGHT_INCHES);
++		Parent p = new Parent( "Parent" );
++		p.getChildren().add( c );
++		c.setParent( p );
++		s.save( p );
++		s.flush();
++		
++		// Test value conversion during insert		
++		Double heightViaSql = (Double)s.createSQLQuery("select height_centimeters from parentchild c where c.name='Child One'")
++			.uniqueResult();
++		assertEquals(HEIGHT_CENTIMETERS, heightViaSql, 0.01d);
++		
++		// Test projection		
++		Double heightViaHql = (Double)s.createQuery("select c.heightInches from Parent p join p.children c where p.name='Parent'")
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, heightViaHql, 0.01d);
++		
++		// Test entity load via criteria
++		p = (Parent)s.createCriteria(Parent.class).add(Restrictions.eq("name", "Parent")).uniqueResult();
++		c = (Child)p.getChildren().iterator().next();
++		assertEquals(HEIGHT_INCHES, c.getHeightInches(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		p = (Parent)s.createQuery("from Parent p join p.children c where c.heightInches between ? and ?")
++			.setDouble(0, HEIGHT_INCHES - 0.01d)
++			.setDouble(1, HEIGHT_INCHES + 0.01d)
++			.uniqueResult();
++		c = (Child)p.getChildren().iterator().next();
++		assertEquals(HEIGHT_INCHES, c.getHeightInches(), 0.01d);
++		
++		// Test update
++		c.setHeightInches(1);
++		s.flush();
++		heightViaSql = (Double)s.createSQLQuery("select height_centimeters from parentchild c where c.name='Child One'").uniqueResult();
++		assertEquals(2.54d, heightViaSql, 0.01d);
++		s.delete( p );
++		t.commit();
++		s.close();
++	}
+ 
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/compositeelement/Parent.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/compositeelement/Parent.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/compositeelement/Parent.hbm.xml	(working copy)
+@@ -28,6 +28,12 @@
+ 				<property name="name" not-null="true"/>
+ 				<property name="bio"/>
+ 				<property name="bioLength" formula="length(bio)"/>
++				<property name="heightInches">
++					<column name="height_centimeters" 
++						not-null="true" 
++						read="height_centimeters / 2.54" 
++						write="? * 2.54"/>
++				</property>				
+ 			</composite-element>
+ 		</set>
+ 	</class>
+Index: testsuite/src/test/java/org/hibernate/test/cut/CompositeUserTypeTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/cut/CompositeUserTypeTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/cut/CompositeUserTypeTest.java	(working copy)
+@@ -8,6 +8,7 @@
+ import junit.framework.Test;
+ 
+ import org.hibernate.Session;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.dialect.HSQLDialect;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+@@ -57,6 +58,44 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		org.hibernate.Transaction t = s.beginTransaction();
++		final BigDecimal AMOUNT = new BigDecimal(73000000d);
++		final BigDecimal AMOUNT_MILLIONS = AMOUNT.divide(new BigDecimal(1000000d));
++		MutualFund f = new MutualFund();
++		f.setHoldings( new MonetoryAmount( AMOUNT, Currency.getInstance("USD") ) );
++		s.persist(f);
++		s.flush();
++		
++		// Test value conversion during insert
++		BigDecimal amountViaSql = (BigDecimal)s.createSQLQuery("select amount_millions from MutualFund").uniqueResult();
++		assertEquals(AMOUNT_MILLIONS.doubleValue(), amountViaSql.doubleValue(), 0.01d);
++		
++		// Test projection
++		BigDecimal amountViaHql = (BigDecimal)s.createQuery("select f.holdings.amount from MutualFund f").uniqueResult();
++		assertEquals(AMOUNT.doubleValue(), amountViaHql.doubleValue(), 0.01d);
++		
++		// Test restriction and entity load via criteria
++		BigDecimal one = new BigDecimal(1);
++		f = (MutualFund)s.createCriteria(MutualFund.class)
++			.add(Restrictions.between("holdings.amount", AMOUNT.subtract(one), AMOUNT.add(one)))
++			.uniqueResult();
++		assertEquals(AMOUNT.doubleValue(), f.getHoldings().getAmount().doubleValue(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		f = (MutualFund)s.createQuery("from MutualFund f where f.holdings.amount between ? and ?")
++			.setBigDecimal(0, AMOUNT.subtract(one))
++			.setBigDecimal(1, AMOUNT.add(one))
++			.uniqueResult();
++		assertEquals(AMOUNT.doubleValue(), f.getHoldings().getAmount().doubleValue(), 0.01d);
++				
++		s.delete(f);
++		t.commit();
++		s.close();
++		
++	}
+ 
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/cut/MutualFund.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/cut/MutualFund.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/cut/MutualFund.java	(revision 0)
+@@ -0,0 +1,28 @@
++package org.hibernate.test.cut;
++
++/**
++ * @author Rob.Hasselbaum
++ *
++ */
++public class MutualFund {
++	
++	private Long id;
++	private MonetoryAmount holdings;
++	
++	public Long getId() {
++		return id;
++	}
++	
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public MonetoryAmount getHoldings() {
++		return holdings;
++	}
++
++	public void setHoldings(MonetoryAmount holdings) {
++		this.holdings = holdings;
++	}
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/cut/Transaction.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/cut/Transaction.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/cut/Transaction.hbm.xml	(working copy)
+@@ -21,5 +21,18 @@
+ 			<column name="currency" not-null="true"/>
+ 		</property>
+ 	</class>
++	
++    <class name="MutualFund" table="MutualFund">
++		<id name="id">
++			<generator class="native"/>
++		</id>
++		<property name="holdings" type="money">
++			<column name="amount_millions"
++				not-null="true"
++				read="amount_millions * 1000000.0"
++				write="? / 1000000.0"/>
++			<column name="currency" not-null="true"/>
++		</property>
++	</class>	
+ 
+ </hibernate-mapping>
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/filter/DynamicFilterTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/filter/DynamicFilterTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/filter/DynamicFilterTest.java	(working copy)
+@@ -11,21 +11,19 @@
+ 
+ import junit.framework.Test;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
++import org.hibernate.Criteria;
+ import org.hibernate.EntityMode;
+ import org.hibernate.FetchMode;
+ import org.hibernate.Hibernate;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+-import org.hibernate.Criteria;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.entry.CollectionCacheEntry;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+-import org.hibernate.criterion.Restrictions;
+ import org.hibernate.criterion.DetachedCriteria;
+ import org.hibernate.criterion.Property;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.criterion.Subqueries;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.impl.SessionFactoryImpl;
+@@ -33,6 +31,8 @@
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.transform.DistinctRootEntityResultTransformer;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Implementation of DynamicFilterTest.
+@@ -179,7 +179,25 @@
+ 		session.close();
+ 		testData.release();
+ 	}
++	
++	public void testFiltersWithCustomerReadAndWrite() {
++		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++		// Custom SQL read/write with filter
++		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++		log.info( "Starting HQL filter with custom SQL get/set tests" );
++		TestData testData = new TestData();
++		testData.prepare();
+ 
++		Session session = openSession();
++		session.enableFilter( "heavyProducts" ).setParameter("weightKilograms", 4d);
++		log.info( "HQL against Product..." );
++		List results = session.createQuery( "from Product").list();
++		assertEquals( 1, results.size() );
++
++		session.close();
++		testData.release();
++	}
++
+ 	public void testCriteriaQueryFilters() {
+ 		//~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 		// Criteria-query test
+@@ -824,6 +842,7 @@
+ 			Product product1 = new Product();
+ 			product1.setName( "Acme Hair Gel" );
+ 			product1.setStockNumber( 123 );
++			product1.setWeightPounds( 0.25 );
+ 			product1.setEffectiveStartDate( lastMonth.getTime() );
+ 			product1.setEffectiveEndDate( nextMonth.getTime() );
+ 
+@@ -848,6 +867,7 @@
+ 			Product product2 = new Product();
+ 			product2.setName( "Acme Super-Duper DTO Factory" );
+ 			product2.setStockNumber( 124 );
++			product1.setWeightPounds( 10.0 );
+ 			product2.setEffectiveStartDate( sixMonthsAgo.getTime() );
+ 			product2.setEffectiveEndDate( new Date() );
+ 
+Index: testsuite/src/test/java/org/hibernate/test/filter/Product.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/filter/Product.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/filter/Product.hbm.xml	(working copy)
+@@ -12,6 +12,12 @@
+ 
+     	<property name="name" type="string"/>
+ 	    <property name="stockNumber" column="STOCK_NUM" type="int"/>
++	    <property name="weightPounds">
++	    	<column name="weight_kg" 
++	    		not-null="true" 
++	    		write="0.453 * ?" 
++	    		read="weight_kg / 0.453"/>
++	    </property>
+ 
+ 	    <property name="effectiveStartDate" column="eff_start_dt" type="java.util.Date"/>
+ 	    <property name="effectiveEndDate" column="eff_end_dt" type="java.util.Date"/>
+@@ -30,6 +36,7 @@
+ 	    </set>
+ 
+ 	    <filter name="effectiveDate" condition=":asOfDate BETWEEN eff_start_dt and eff_end_dt"/>
++	    <filter name="heavyProducts" condition=":weightKilograms &lt; weight_kg"/>
+ 
+ 	</class>
+ 
+Index: testsuite/src/test/java/org/hibernate/test/filter/Product.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/filter/Product.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/filter/Product.java	(working copy)
+@@ -1,9 +1,9 @@
+ // $Id: Product.java 6507 2005-04-25 16:57:32Z steveebersole $
+ package org.hibernate.test.filter;
+ 
+-import java.util.Set;
+ import java.util.Date;
+ import java.util.HashSet;
++import java.util.Set;
+ 
+ /**
+  * @author Steve Ebersole
+@@ -14,6 +14,7 @@
+ 	private int stockNumber;  // int for ease of hashCode() impl
+ 	private Date effectiveStartDate;
+ 	private Date effectiveEndDate;
++	private double weightPounds;
+ 	private Set orderLineItems;
+ 	private Set categories;
+ 
+@@ -73,6 +74,14 @@
+ 		this.effectiveEndDate = effectiveEndDate;
+ 	}
+ 
++	public double getWeightPounds() {
++		return weightPounds;
++	}
++
++	public void setWeightPounds(double weightPounds) {
++		this.weightPounds = weightPounds;
++	}
++	
+ 	public Set getCategories() {
+ 		return categories;
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/filter/defs.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/filter/defs.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/filter/defs.hbm.xml	(working copy)
+@@ -20,6 +20,10 @@
+ 		<filter-param name="asOfDate" type="timestamp"/>
+ 	</filter-def>
+ 
++	<filter-def name="heavyProducts">
++		<filter-param name="weightKilograms" type="double"/>
++	</filter-def>
++
+ 	<filter-def name="seniorSalespersons">
+ 		<filter-param name="asOfDate" type="timestamp"/>
+ 	</filter-def>
+Index: testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/ASTParserLoadingTest.java	(working copy)
+@@ -13,8 +13,6 @@
+ import java.util.Map;
+ 
+ import junit.framework.Test;
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.HibernateException;
+@@ -30,7 +28,6 @@
+ import org.hibernate.dialect.HSQLDialect;
+ import org.hibernate.dialect.MySQLDialect;
+ import org.hibernate.dialect.Oracle8iDialect;
+-
+ import org.hibernate.dialect.PostgreSQLDialect;
+ import org.hibernate.dialect.SQLServerDialect;
+ import org.hibernate.dialect.Sybase11Dialect;
+@@ -55,6 +52,8 @@
+ import org.hibernate.type.ManyToOneType;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Tests the integration of the new AST parser into the loading of query results using
+@@ -82,6 +81,7 @@
+ 				"hql/FooBarCopy.hbm.xml",
+ 				"hql/SimpleEntityWithAssociation.hbm.xml",
+ 				"hql/CrazyIdFieldNames.hbm.xml",
++				"hql/Image.hbm.xml",
+ 				"batchfetch/ProductLine.hbm.xml",
+ 				"cid/Customer.hbm.xml",
+ 				"cid/Order.hbm.xml",
+@@ -1085,7 +1085,102 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testOrderedWithCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		SimpleEntityWithAssociation first = new SimpleEntityWithAssociation();
++		first.setNegatedNumber(1);
++		s.save(first);
++		SimpleEntityWithAssociation second = new SimpleEntityWithAssociation();
++		second.setNegatedNumber(2);
++		s.save(second);
++		s.flush();
+ 
++		// Check order via SQL. Numbers are negated in the DB, so second comes first.
++		List listViaSql = s.createSQLQuery("select id from simple_1 order by negated_num").list();
++		assertEquals(2, listViaSql.size());
++		assertEquals(second.getId().longValue(), ((Number)listViaSql.get(0)).longValue());
++		assertEquals(first.getId().longValue(), ((Number)listViaSql.get(1)).longValue());
++		
++		// Check order via HQL. Now first comes first b/c the read negates the DB negation.
++		List listViaHql = s.createQuery("from SimpleEntityWithAssociation order by negatedNumber").list();
++		assertEquals(2, listViaHql.size());
++		assertEquals(first.getId(), ((SimpleEntityWithAssociation)listViaHql.get(0)).getId());
++		assertEquals(second.getId(), ((SimpleEntityWithAssociation)listViaHql.get(1)).getId());
++		
++		s.delete(first);
++		s.delete(second);
++		t.commit();
++		s.close();
++		
++	}
++	
++	public void testHavingWithCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		SimpleEntityWithAssociation first = new SimpleEntityWithAssociation();
++		first.setNegatedNumber(5);
++		first.setName("simple");
++		s.save(first);
++		SimpleEntityWithAssociation second = new SimpleEntityWithAssociation();
++		second.setNegatedNumber(10);
++		second.setName("simple");
++		s.save(second);
++		SimpleEntityWithAssociation third = new SimpleEntityWithAssociation();
++		third.setNegatedNumber(20);
++		third.setName("complex");
++		s.save(third);
++		s.flush();
++
++		// Check order via HQL. Now first comes first b/c the read negates the DB negation.
++		Number r = (Number)s.createQuery("select sum(negatedNumber) from SimpleEntityWithAssociation " +
++				"group by name having sum(negatedNumber) < 20").uniqueResult();
++		assertEquals(r.intValue(), 15);
++		
++		s.delete(first);
++		s.delete(second);
++		s.delete(third);
++		t.commit();
++		s.close();
++		
++	}
++	
++	public void testLoadSnapshotWithCustomColumnReadAndWrite() {
++		// Exercises entity snapshot load when select-before-update is true.
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		final double SIZE_IN_KB = 1536d;
++		final double SIZE_IN_MB = SIZE_IN_KB / 1024d;
++		Image image = new Image();
++		image.setName("picture.gif");
++		image.setSizeKb(SIZE_IN_KB);
++		s.persist(image);
++		s.flush();
++		
++		Double sizeViaSql = (Double)s.createSQLQuery("select size_mb from image").uniqueResult();
++		assertEquals(SIZE_IN_MB, sizeViaSql, 0.01d);
++		t.commit();
++		s.close();
++		
++		s = openSession();
++		t = s.beginTransaction();
++		final double NEW_SIZE_IN_KB = 2048d;
++		final double NEW_SIZE_IN_MB = NEW_SIZE_IN_KB / 1024d;
++		image.setSizeKb(NEW_SIZE_IN_KB);
++		s.update(image);
++		s.flush();
++
++		sizeViaSql = (Double)s.createSQLQuery("select size_mb from image").uniqueResult();
++		assertEquals(NEW_SIZE_IN_MB, sizeViaSql, 0.01d);		
++		
++		s.delete(image);
++		t.commit();
++		s.close();
++		
++	}
++		
++
+ 	private Human genSimpleHuman(String fName, String lName) {
+ 		Human h = new Human();
+ 		h.setName( new Name( fName, 'X', lName ) );
+@@ -1188,13 +1283,13 @@
+ 		Transaction t = s.beginTransaction();
+ 		Human h = new Human();
+ 		h.setBodyWeight( (float) 74.0 );
+-		h.setHeight(120.5);
++		h.setHeightInches(120.5);
+ 		h.setDescription("Me");
+ 		h.setName( new Name("Gavin", 'A', "King") );
+ 		h.setNickName("Oney");
+ 		s.persist(h);
+ 		Double sum = (Double) s.createQuery("select sum(h.bodyWeight) from Human h").uniqueResult();
+-		Double avg = (Double) s.createQuery("select avg(h.height) from Human h").uniqueResult();
++		Double avg = (Double) s.createQuery("select avg(h.heightInches) from Human h").uniqueResult();	// uses custom read and write for column
+ 		assertEquals(sum.floatValue(), 74.0, 0.01);
+ 		assertEquals(avg.doubleValue(), 120.5, 0.01);
+ 		Long id = (Long) s.createQuery("select max(a.id) from Animal a").uniqueResult();
+@@ -1208,7 +1303,7 @@
+ 		Transaction t = s.beginTransaction();
+ 		Human h = new Human();
+ 		h.setBodyWeight( (float) 74.0 );
+-		h.setHeight(120.5);
++		h.setHeightInches(120.5);
+ 		h.setDescription("Me");
+ 		h.setName( new Name("Gavin", 'A', "King") );
+ 		h.setNickName("Oney");
+@@ -1395,7 +1490,41 @@
+ 		txn.commit();
+ 		session.close();
+ 	}
++	
++	public void testFilterWithCustomColumnReadAndWrite() {
++		Session session = openSession();
++		Transaction txn = session.beginTransaction();
+ 
++		Human human = new Human();
++		human.setName( new Name( "Steve", 'L', "Ebersole" ) );
++		human.setHeightInches(73d);
++		session.save( human );
++
++		Human friend = new Human();
++		friend.setName( new Name( "John", 'Q', "Doe" ) );
++		friend.setHeightInches(50d);
++		session.save( friend );
++
++		human.setFriends( new ArrayList() );
++		friend.setFriends( new ArrayList() );
++		human.getFriends().add( friend );
++		friend.getFriends().add( human );
++
++		session.flush();
++
++		assertEquals( session.createFilter( human.getFriends(), "" ).list().size(), 1 );
++		assertEquals( session.createFilter( human.getFriends(), "where this.heightInches < ?" ).setDouble( 0, 51d ).list().size(), 1 );
++		assertEquals( session.createFilter( human.getFriends(), "where this.heightInches > ?" ).setDouble( 0, 51d ).list().size(), 0 );
++		assertEquals( session.createFilter( human.getFriends(), "where this.heightInches between 49 and 51" ).list().size(), 1 );
++		assertEquals( session.createFilter( human.getFriends(), "where this.heightInches not between 49 and 51" ).list().size(), 0 );
++
++		session.delete(human);
++		session.delete(friend);
++
++		txn.commit();
++		session.close();		
++	}
++
+ 	public void testSelectExpressions() {
+ 		createTestBaseData();
+ 		Session session = openSession();
+Index: testsuite/src/test/java/org/hibernate/test/hql/Animal.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/Animal.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/Animal.hbm.xml	(working copy)
+@@ -47,8 +47,12 @@
+ 					<property name="last" column="name_last"/>
+ 				</component>
+ 				<property name="nickName"/>
+-				<property name="height"/>
+-
++				<property name="heightInches">
++					<column name="height_centimeters" 
++						not-null="true" 
++						read="height_centimeters / 2.54" 
++						write="? * 2.54"/>
++				</property>   
+ 				<property name="intValue"/>
+ 				<property name="floatValue"/>
+ 				<property name="bigDecimalValue"/>
+Index: testsuite/src/test/java/org/hibernate/test/hql/CriteriaClassicAggregationReturnTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/CriteriaClassicAggregationReturnTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/CriteriaClassicAggregationReturnTest.java	(working copy)
+@@ -43,12 +43,12 @@
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.INTEGER, translator.getReturnTypes()[0] );
+ 
+-		translator = createNewQueryTranslator( "select count(h.height) from Human h", sfi() );
++		translator = createNewQueryTranslator( "select count(h.heightInches) from Human h", sfi() );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.INTEGER, translator.getReturnTypes()[0] );
+ 
+ 		// MAX, MIN return the type of the state-field to which they are applied.
+-		translator = createNewQueryTranslator( "select max(h.height) from Human h", sfi() );
++		translator = createNewQueryTranslator( "select max(h.heightInches) from Human h", sfi() );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 
+@@ -57,7 +57,7 @@
+ 		assertEquals( "incorrect return type", Hibernate.LONG, translator.getReturnTypes()[0] );
+ 
+ 		// AVG returns Float integrals, and otherwise the field type.
+-		translator = createNewQueryTranslator( "select avg(h.height) from Human h", sfi() );
++		translator = createNewQueryTranslator( "select avg(h.heightInches) from Human h", sfi() );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 
+@@ -78,7 +78,7 @@
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.INTEGER, translator.getReturnTypes()[0] );
+ 
+-		translator = createNewQueryTranslator( "select sum(h.height) from Human h", sfi() );
++		translator = createNewQueryTranslator( "select sum(h.heightInches) from Human h", sfi() );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 
+Index: testsuite/src/test/java/org/hibernate/test/hql/CriteriaHQLAlignmentTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/CriteriaHQLAlignmentTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/CriteriaHQLAlignmentTest.java	(working copy)
+@@ -47,12 +47,12 @@
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.LONG, translator.getReturnTypes()[0] );
+ 		
+-		translator = createNewQueryTranslator( "select count(h.height) from Human h" );
++		translator = createNewQueryTranslator( "select count(h.heightInches) from Human h" );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.LONG, translator.getReturnTypes()[0] );
+ 				
+ 		// MAX, MIN return the type of the state-field to which they are applied. 
+-		translator = createNewQueryTranslator( "select max(h.height) from Human h" );
++		translator = createNewQueryTranslator( "select max(h.heightInches) from Human h" );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 		
+@@ -61,7 +61,7 @@
+ 		assertEquals( "incorrect return type", Hibernate.LONG, translator.getReturnTypes()[0] );
+ 		
+ 		// AVG returns Double.
+-		translator = createNewQueryTranslator( "select avg(h.height) from Human h" );
++		translator = createNewQueryTranslator( "select avg(h.heightInches) from Human h" );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 		
+@@ -83,7 +83,7 @@
+ 		assertEquals( "incorrect return type", Hibernate.LONG, translator.getReturnTypes()[0] );
+ 		
+ 		// SUM returns Double when applied to state-fields of floating point types; 
+-		translator = createNewQueryTranslator( "select sum(h.height) from Human h" );
++		translator = createNewQueryTranslator( "select sum(h.heightInches) from Human h" );
+ 		assertEquals( "incorrect return type count", 1, translator.getReturnTypes().length );
+ 		assertEquals( "incorrect return type", Hibernate.DOUBLE, translator.getReturnTypes()[0] );
+ 
+@@ -123,18 +123,18 @@
+ 		// EJB3: COUNT returns Long
+ 		Long longValue = (Long) s.createCriteria( Human.class ).setProjection( Projections.rowCount()).uniqueResult();
+ 		assertEquals(longValue, new Long(1));
+-		longValue = (Long) s.createCriteria( Human.class ).setProjection( Projections.count("height")).uniqueResult();
++		longValue = (Long) s.createCriteria( Human.class ).setProjection( Projections.count("heightInches")).uniqueResult();
+ 		assertEquals(longValue, new Long(1));
+ 		
+ 		 // MAX, MIN return the type of the state-field to which they are applied. 		
+-		Double dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.max( "height" )).uniqueResult();
++		Double dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.max( "heightInches" )).uniqueResult();
+ 		assertNotNull(dblValue);
+ 		
+ 		longValue = (Long) s.createCriteria( Human.class ).setProjection( Projections.max( "id" )).uniqueResult();
+ 		assertNotNull(longValue);
+ 		
+ 		// AVG returns Double.
+-		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.avg( "height" )).uniqueResult();
++		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.avg( "heightInches" )).uniqueResult();
+ 		assertNotNull(dblValue);
+ 		
+ 		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.avg( "id" )).uniqueResult();
+@@ -151,7 +151,7 @@
+ 		assertNotNull(longValue);
+ 		
+ 		// SUM returns Double when applied to state-fields of floating point types; 
+-		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.sum( "height" )).uniqueResult();
++		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.sum( "heightInches" )).uniqueResult();
+ 		assertNotNull(dblValue);
+ 		
+ 		dblValue = (Double) s.createCriteria( Human.class ).setProjection( Projections.sum( "floatValue" )).uniqueResult();
+Index: testsuite/src/test/java/org/hibernate/test/hql/Human.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/Human.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/Human.java	(working copy)
+@@ -16,7 +16,7 @@
+ 	private Collection friends;
+ 	private Collection pets;
+ 	private Map family;
+-	private double height;
++	private double heightInches;
+ 	
+ 	private BigInteger bigIntegerValue;
+ 	private BigDecimal bigDecimalValue;
+@@ -58,11 +58,12 @@
+ 		this.nickName = nickName;
+ 	}
+ 	
+-	public double getHeight() {
+-		return height;
++	public double getHeightInches() {
++		return heightInches;
+ 	}
+-	public void setHeight(double height) {
+-		this.height = height;
++	
++	public void setHeightInches(double height) {
++		this.heightInches = height;
+ 	}
+ 
+ 	public Map getFamily() {
+Index: testsuite/src/test/java/org/hibernate/test/hql/Image.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/Image.hbm.xml	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/hql/Image.hbm.xml	(revision 0)
+@@ -0,0 +1,20 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
++
++<hibernate-mapping package="org.hibernate.test.hql">
++
++    <class name="Image" table="image" select-before-update="true" >
++        <id name="id" type="java.lang.Long" column="id">
++            <generator class="native"/>
++        </id>
++        <property name="name" type="java.lang.String" column="name"/>
++    	<property name="sizeKb" lazy="true">
++    		<column name="size_mb"
++    			read="size_mb * 1024.0"
++    			write="? / 1024.0"/>
++    	</property>
++    </class>
++
++</hibernate-mapping>
+Index: testsuite/src/test/java/org/hibernate/test/hql/Image.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/Image.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/hql/Image.java	(revision 0)
+@@ -0,0 +1,49 @@
++package org.hibernate.test.hql;
++
++/**
++ * @author Rob.Hasselbaum
++ */
++public class Image {
++	
++	private Long id;
++	private String name;
++	private double sizeKb;
++	
++	/**
++	 * @return the id
++	 */
++	public Long getId() {
++		return id;
++	}
++	/**
++	 * @param id the id to set
++	 */
++	public void setId(Long id) {
++		this.id = id;
++	}
++	/**
++	 * @return the name
++	 */
++	public String getName() {
++		return name;
++	}
++	/**
++	 * @param name the name to set
++	 */
++	public void setName(String name) {
++		this.name = name;
++	}
++	/**
++	 * @return the size in kb
++	 */
++	public double getSizeKb() {
++		return sizeKb;
++	}
++	/**
++	 * @param sizeKb the size in kb to set
++	 */
++	public void setSizeKb(double sizeKb) {
++		this.sizeKb = sizeKb;
++	}
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.hbm.xml	(working copy)
+@@ -11,6 +11,11 @@
+             <generator class="native"/>
+         </id>
+         <property name="name" column="NAME" type="string"/>
++        <property name="negatedNumber">
++			<column name="negated_num"
++				read="-negated_num"
++				write="0 - ?"/>        
++        </property>
+         <set name="associatedEntities" cascade="all" inverse="true" lazy="true">
+             <key column="SIMPLE_1_ID"/>
+             <one-to-many class="SimpleAssociatedEntity"/>
+Index: testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/hql/SimpleEntityWithAssociation.java	(working copy)
+@@ -1,7 +1,7 @@
+ package org.hibernate.test.hql;
+ 
++import java.util.HashSet;
+ import java.util.Set;
+-import java.util.HashSet;
+ 
+ /**
+  * @author Steve Ebersole
+@@ -9,6 +9,7 @@
+ public class SimpleEntityWithAssociation {
+ 	private Long id;
+ 	private String name;
++	private Integer negatedNumber;
+ 	private Set associatedEntities = new HashSet();
+ 	private Set manyToManyAssociatedEntities = new HashSet();
+ 
+@@ -34,7 +35,15 @@
+ 	public void setName(String name) {
+ 		this.name = name;
+ 	}
++	
++	public Integer getNegatedNumber() {
++		return negatedNumber;
++	}
+ 
++	public void setNegatedNumber(Integer negatedNumber) {
++		this.negatedNumber = negatedNumber;
++	}	
++
+ 	public Set getAssociatedEntities() {
+ 		return associatedEntities;
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/instrument/buildtime/InstrumentTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/buildtime/InstrumentTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/buildtime/InstrumentTest.java	(working copy)
+@@ -5,18 +5,19 @@
+ import junit.framework.TestSuite;
+ 
+ import org.hibernate.intercept.FieldInterceptionHelper;
+-import org.hibernate.test.instrument.domain.Document;
++import org.hibernate.junit.UnitTestCase;
++import org.hibernate.test.instrument.cases.Executable;
++import org.hibernate.test.instrument.cases.TestCustomColumnReadAndWrite;
+ import org.hibernate.test.instrument.cases.TestDirtyCheckExecutable;
+ import org.hibernate.test.instrument.cases.TestFetchAllExecutable;
++import org.hibernate.test.instrument.cases.TestInjectFieldInterceptorExecutable;
++import org.hibernate.test.instrument.cases.TestIsPropertyInitializedExecutable;
+ import org.hibernate.test.instrument.cases.TestLazyExecutable;
+ import org.hibernate.test.instrument.cases.TestLazyManyToOneExecutable;
+-import org.hibernate.test.instrument.cases.TestInjectFieldInterceptorExecutable;
+-import org.hibernate.test.instrument.cases.TestIsPropertyInitializedExecutable;
+ import org.hibernate.test.instrument.cases.TestLazyPropertyCustomTypeExecutable;
+ import org.hibernate.test.instrument.cases.TestManyToOneProxyExecutable;
+ import org.hibernate.test.instrument.cases.TestSharedPKOneToOneExecutable;
+-import org.hibernate.test.instrument.cases.Executable;
+-import org.hibernate.junit.UnitTestCase;
++import org.hibernate.test.instrument.domain.Document;
+ 
+ /**
+  * @author Gavin King
+@@ -67,6 +68,10 @@
+ 		execute( new TestSharedPKOneToOneExecutable() );
+ 	}
+ 
++	public void testCustomColumnReadAndWrite() throws Exception {
++		execute( new TestCustomColumnReadAndWrite() );
++	}	
++	
+ 	private void execute(Executable executable) throws Exception {
+ 		executable.prepare();
+ 		try {
+Index: testsuite/src/test/java/org/hibernate/test/instrument/cases/TestCustomColumnReadAndWrite.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/cases/TestCustomColumnReadAndWrite.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/instrument/cases/TestCustomColumnReadAndWrite.java	(revision 0)
+@@ -0,0 +1,66 @@
++package org.hibernate.test.instrument.cases;
++
++import static junit.framework.Assert.assertEquals;
++import static junit.framework.Assert.assertFalse;
++import static junit.framework.Assert.assertTrue;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Transaction;
++import org.hibernate.classic.Session;
++import org.hibernate.test.instrument.domain.Document;
++import org.hibernate.test.instrument.domain.Folder;
++import org.hibernate.test.instrument.domain.Owner;
++
++/**
++ * @author Rob.Hasselbaum
++ */
++public class TestCustomColumnReadAndWrite extends AbstractExecutable {
++	public void execute() {
++		Session s = getFactory().openSession();
++		Transaction t = s.beginTransaction();
++		final double SIZE_IN_KB = 20480;
++		final double SIZE_IN_MB = SIZE_IN_KB / 1024d;
++		Owner o = new Owner();
++		Document doc = new Document();
++		Folder fol = new Folder();
++		o.setName("gavin");
++		doc.setName("Hibernate in Action");
++		doc.setSummary("blah");
++		doc.updateText("blah blah");	
++		fol.setName("books");
++		doc.setOwner(o);
++		doc.setFolder(fol);
++		doc.setSizeKb(SIZE_IN_KB);
++		fol.getDocuments().add(doc);
++		s.persist(o);
++		s.persist(fol);
++		t.commit();
++		s.close();
++
++		s = getFactory().openSession();
++		t = s.beginTransaction();
++		
++		// Check value conversion on insert
++		Double sizeViaSql = (Double)s.createSQLQuery("select size_mb from documents").uniqueResult();
++		assertEquals( SIZE_IN_MB, sizeViaSql, 0.01d );
++
++		// Test explicit fetch of all properties
++		doc = (Document) s.createQuery("from Document fetch all properties").uniqueResult();
++		assertTrue( Hibernate.isPropertyInitialized( doc, "sizeKb" ) );
++		assertEquals( SIZE_IN_KB, doc.getSizeKb() );
++		t.commit();
++		s.close();		
++
++		// Test lazy fetch with custom read
++		s = getFactory().openSession();
++		t = s.beginTransaction();
++		doc = (Document) s.get( Document.class, doc.getId() );
++		assertFalse( Hibernate.isPropertyInitialized( doc, "sizeKb" ) );
++		assertEquals( SIZE_IN_KB, doc.getSizeKb() );
++		s.delete(doc);
++		s.delete( doc.getOwner() );
++		s.delete( doc.getFolder() );
++		t.commit();
++		s.close();
++	}
++}
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/instrument/domain/Document.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/domain/Document.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/domain/Document.java	(working copy)
+@@ -14,6 +14,7 @@
+ 	private String text;
+ 	private Owner owner;
+ 	private Folder folder;
++	private double sizeKb;
+ 	private Date lastTextModification = new Date();
+ 	/**
+ 	 * @return Returns the folder.
+@@ -99,6 +100,18 @@
+ 	public void setUpperCaseName(String upperCaseName) {
+ 		this.upperCaseName = upperCaseName;
+ 	}
++	/**
++	 * @param sizeKb The size in KBs.
++	 */
++	public void setSizeKb(double sizeKb) {
++		this.sizeKb = sizeKb;
++	}
++	/**
++	 * @return The size in KBs.
++	 */
++	public double getSizeKb() {
++		return sizeKb;
++	}	
+ 	
+ 	public void updateText(String newText) {
+ 		if ( !newText.equals(text) ) {
+Index: testsuite/src/test/java/org/hibernate/test/instrument/domain/Documents.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/domain/Documents.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/domain/Documents.hbm.xml	(working copy)
+@@ -53,6 +53,11 @@
+     	<many-to-one name="owner" not-null="true" lazy="no-proxy" fetch="select"/>
+     	<property name="text" not-null="true" length="2000" lazy="true"/>
+     	<property name="lastTextModification" not-null="true" lazy="true" access="field"/>
++    	<property name="sizeKb" lazy="true">
++    		<column name="size_mb"
++    			read="size_mb * 1024.0"
++    			write="? / 1024.0"/>
++    	</property>
+     </class>
+ 
+     <class name="Entity" table="entity">
+Index: testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java	(working copy)
+@@ -82,6 +82,10 @@
+ 		executeExecutable( "org.hibernate.test.instrument.cases.TestSharedPKOneToOneExecutable" );
+ 	}
+ 
++	public void testCustomColumnReadAndWrite() {
++		executeExecutable( "org.hibernate.test.instrument.cases.TestCustomColumnReadAndWrite" );
++	}	
++
+ 	// reflection code to ensure isolation into the created classloader ~~~~~~~
+ 
+ 	private static final Class[] SIG = new Class[] {};
+Index: testsuite/src/test/java/org/hibernate/test/instrument/runtime/CGLIBInstrumentationTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/runtime/CGLIBInstrumentationTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/runtime/CGLIBInstrumentationTest.java	(working copy)
+@@ -1,10 +1,11 @@
+ package org.hibernate.test.instrument.runtime;
+ 
+-import org.hibernate.bytecode.BytecodeProvider;
+-import org.hibernate.bytecode.cglib.BytecodeProviderImpl;
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ 
++import org.hibernate.bytecode.BytecodeProvider;
++import org.hibernate.bytecode.cglib.BytecodeProviderImpl;
++
+ /**
+  * @author Steve Ebersole
+  */
+@@ -52,4 +53,9 @@
+ 	public void testSharedPKOneToOne() {
+ 		super.testSharedPKOneToOne();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		super.testCustomColumnReadAndWrite();
++	}	
++
+ }
+Index: testsuite/src/test/java/org/hibernate/test/instrument/runtime/JavassistInstrumentationTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/runtime/JavassistInstrumentationTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/instrument/runtime/JavassistInstrumentationTest.java	(working copy)
+@@ -1,11 +1,12 @@
+ //$Id: $
+ package org.hibernate.test.instrument.runtime;
+ 
+-import org.hibernate.bytecode.BytecodeProvider;
+-import org.hibernate.bytecode.javassist.BytecodeProviderImpl;
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ 
++import org.hibernate.bytecode.BytecodeProvider;
++import org.hibernate.bytecode.javassist.BytecodeProviderImpl;
++
+ /**
+  * @author Steve Ebersole
+  */
+@@ -53,4 +54,9 @@
+ 	public void testSharedPKOneToOne() {
+ 		super.testSharedPKOneToOne();
+ 	}
++
++	public void testCustomColumnReadAndWrite() {
++		super.testCustomColumnReadAndWrite();
++	}	
++	
+ }
+Index: testsuite/src/test/java/org/hibernate/test/join/JoinTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/join/JoinTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/join/JoinTest.java	(working copy)
+@@ -9,6 +9,7 @@
+ import org.hibernate.Hibernate;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ 
+@@ -130,6 +131,82 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		final double HEIGHT_INCHES = 73;
++		final double HEIGHT_CENTIMETERS = HEIGHT_INCHES * 2.54d;
++		Person p = new Person();
++		p.setName("Emmanuel");
++		p.setSex('M');
++		p.setHeightInches(HEIGHT_INCHES);
++		s.persist(p);
++		final double PASSWORD_EXPIRY_WEEKS = 4;
++		final double PASSWORD_EXPIRY_DAYS = PASSWORD_EXPIRY_WEEKS * 7d;
++		User u = new User();
++		u.setName("Steve");
++		u.setSex('M');
++		u.setPasswordExpiryDays(PASSWORD_EXPIRY_DAYS);
++		s.persist(u);
++		s.flush();
++		
++		// Test value conversion during insert
++		Double heightViaSql = (Double)s.createSQLQuery("select height_centimeters from person where name='Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_CENTIMETERS, heightViaSql, 0.01d);
++		Double expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from t_user where person_id=?")
++			.setLong(0, u.getId())
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_WEEKS, expiryViaSql, 0.01d);
++		
++		// Test projection
++		Double heightViaHql = (Double)s.createQuery("select p.heightInches from Person p where p.name = 'Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_INCHES, heightViaHql, 0.01d);
++		Double expiryViaHql = (Double)s.createQuery("select u.passwordExpiryDays from User u where u.name = 'Steve'").uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, expiryViaHql, 0.01d);
++		
++		// Test restriction and entity load via criteria
++		p = (Person)s.createCriteria(Person.class)
++			.add(Restrictions.between("heightInches", HEIGHT_INCHES - 0.01d, HEIGHT_INCHES + 0.01d))
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		u = (User)s.createCriteria(User.class)
++			.add(Restrictions.between("passwordExpiryDays", PASSWORD_EXPIRY_DAYS - 0.01d, PASSWORD_EXPIRY_DAYS + 0.01d))
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, u.getPasswordExpiryDays(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		p = (Person)s.createQuery("from Person p where p.heightInches between ? and ?")
++			.setDouble(0, HEIGHT_INCHES - 0.01d)
++			.setDouble(1, HEIGHT_INCHES + 0.01d)
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		u = (User)s.createQuery("from User u where u.passwordExpiryDays between ? and ?")
++			.setDouble(0, PASSWORD_EXPIRY_DAYS - 0.01d)
++			.setDouble(1, PASSWORD_EXPIRY_DAYS + 0.01d)
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, u.getPasswordExpiryDays(), 0.01d);
++		
++		// Test update
++		p.setHeightInches(1);
++		u.setPasswordExpiryDays(7d);
++		s.flush();
++		heightViaSql = (Double)s.createSQLQuery("select height_centimeters from person where name='Emmanuel'").uniqueResult();
++		assertEquals(2.54d, heightViaSql, 0.01d);
++		expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from t_user where person_id=?")
++			.setLong(0, u.getId())
++			.uniqueResult();
++		assertEquals(1d, expiryViaSql, 0.01d);
++		
++		s.delete(p);
++		s.delete(u);
++		assertTrue( s.createQuery("from Person").list().isEmpty() );		
++		
++		t.commit();
++		s.close();
++		
++	}
++	
+ 
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/join/Person.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/join/Person.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/join/Person.hbm.xml	(working copy)
+@@ -36,6 +36,12 @@
+ 
+         <property name="name" not-null="true" length="80"/>
+         <property name="sex" not-null="true" update="false"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54" 
++				write="? * 2.54"/>
++		</property>        
+ 
+         <join table="address">
+             <key column="address_id"/>
+@@ -65,6 +71,11 @@
+             <join table="t_user" fetch="select" optional="true">
+                 <key column="person_id"/>
+                 <property name="login" column="u_login"/>
++				<property name="passwordExpiryDays">
++					<column name="pwd_expiry_weeks" 
++						read="pwd_expiry_weeks * 7.0" 
++						write="? / 7.0"/>
++				</property>                
+             </join>
+             <join table="t_silly" fetch="select" optional="true">
+                 <key column="person_id"/>
+Index: testsuite/src/test/java/org/hibernate/test/join/Person.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/join/Person.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/join/Person.java	(working copy)
+@@ -11,6 +11,7 @@
+ 	private String address;
+ 	private String zip;
+ 	private String country;
++	private double heightInches;
+ 	private char sex;
+ 	
+ 	/**
+@@ -78,6 +79,18 @@
+ 		this.zip = zip;
+ 	}
+ 	/**
++	 * @return the The height in inches.
++	 */
++	public double getHeightInches() {
++		return heightInches;
++	}
++	/**
++	 * @param heightInches The height in inches.
++	 */
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
++	/**
+ 	 * @param address The address to set.
+ 	 */
+ 	public void setAddress(String address) {
+Index: testsuite/src/test/java/org/hibernate/test/join/User.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/join/User.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/join/User.java	(working copy)
+@@ -7,6 +7,7 @@
+ public class User extends Person {
+ 	private String login;
+ 	private String silly;
++	private Double passwordExpiryDays;
+ 
+ 	/**
+ 	 * @return Returns the login.
+@@ -20,4 +21,16 @@
+ 	public void setLogin(String login) {
+ 		this.login = login;
+ 	}
++	/**
++	 * @return The password expiry policy in days.
++	 */
++	public Double getPasswordExpiryDays() {
++		return passwordExpiryDays;
++	}
++	/**
++	 * @param passwordExpiryDays The password expiry policy in days. 
++	 */
++	public void setPasswordExpiryDays(Double passwordExpiryDays) {
++		this.passwordExpiryDays = passwordExpiryDays;
++	}	
+ }
+Index: testsuite/src/test/java/org/hibernate/test/joinedsubclass/Employee.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/joinedsubclass/Employee.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/joinedsubclass/Employee.java	(working copy)
+@@ -9,6 +9,7 @@
+ public class Employee extends Person {
+ 	private String title;
+ 	private BigDecimal salary;
++	private double passwordExpiryDays;
+ 	private Employee manager;
+ 	/**
+ 	 * @return Returns the title.
+@@ -46,4 +47,16 @@
+ 	public void setSalary(BigDecimal salary) {
+ 		this.salary = salary;
+ 	}
++	/**
++	 * @return The password expiry policy in days.
++	 */
++	public double getPasswordExpiryDays() {
++		return passwordExpiryDays;
++	}
++	/**
++	 * @param passwordExpiryDays The password expiry policy in days. 
++	 */
++	public void setPasswordExpiryDays(double passwordExpiryDays) {
++		this.passwordExpiryDays = passwordExpiryDays;
++	}
+ }
+Index: testsuite/src/test/java/org/hibernate/test/joinedsubclass/JoinedSubclassTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/joinedsubclass/JoinedSubclassTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/joinedsubclass/JoinedSubclassTest.java	(working copy)
+@@ -179,6 +179,79 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		final double HEIGHT_INCHES = 73;
++		final double HEIGHT_CENTIMETERS = HEIGHT_INCHES * 2.54d;
++		Person p = new Person();
++		p.setName("Emmanuel");
++		p.setSex('M');
++		p.setHeightInches(HEIGHT_INCHES);
++		s.persist(p);
++		final double PASSWORD_EXPIRY_WEEKS = 4;
++		final double PASSWORD_EXPIRY_DAYS = PASSWORD_EXPIRY_WEEKS * 7d;
++		Employee e = new Employee();
++		e.setName("Steve");
++		e.setSex('M');
++		e.setTitle("Mr");		
++		e.setPasswordExpiryDays(PASSWORD_EXPIRY_DAYS);
++		s.persist(e);
++		s.flush();
++		
++		// Test value conversion during insert
++		Double heightViaSql = (Double)s.createSQLQuery("select height_centimeters from JPerson where name='Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_CENTIMETERS, heightViaSql, 0.01d);
++		Double expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from JEmployee where person_id=?")
++			.setLong(0, e.getId())
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_WEEKS, expiryViaSql, 0.01d);
++		
++		// Test projection
++		Double heightViaHql = (Double)s.createQuery("select p.heightInches from Person p where p.name = 'Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_INCHES, heightViaHql, 0.01d);
++		Double expiryViaHql = (Double)s.createQuery("select e.passwordExpiryDays from Employee e where e.name = 'Steve'").uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, expiryViaHql, 0.01d);
++		
++		// Test restriction and entity load via criteria
++		p = (Person)s.createCriteria(Person.class)
++			.add(Restrictions.between("heightInches", HEIGHT_INCHES - 0.01d, HEIGHT_INCHES + 0.01d))
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		e = (Employee)s.createCriteria(Employee.class)
++			.add(Restrictions.between("passwordExpiryDays", PASSWORD_EXPIRY_DAYS - 0.01d, PASSWORD_EXPIRY_DAYS + 0.01d))
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, e.getPasswordExpiryDays(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		p = (Person)s.createQuery("from Person p where p.heightInches between ? and ?")
++			.setDouble(0, HEIGHT_INCHES - 0.01d)
++			.setDouble(1, HEIGHT_INCHES + 0.01d)
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		e = (Employee)s.createQuery("from Employee e where e.passwordExpiryDays between ? and ?")
++			.setDouble(0, PASSWORD_EXPIRY_DAYS - 0.01d)
++			.setDouble(1, PASSWORD_EXPIRY_DAYS + 0.01d)
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, e.getPasswordExpiryDays(), 0.01d);
++		
++		// Test update
++		p.setHeightInches(1);
++		e.setPasswordExpiryDays(7);
++		s.flush();
++		heightViaSql = (Double)s.createSQLQuery("select height_centimeters from JPerson where name='Emmanuel'").uniqueResult();
++		assertEquals(2.54d, heightViaSql, 0.01d);
++		expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from JEmployee where person_id=?")
++			.setLong(0, e.getId())
++			.uniqueResult();
++		assertEquals(1d, expiryViaSql, 0.01d);
++		s.delete(p);
++		s.delete(e);	
++		t.commit();
++		s.close();
++		
++	}
+ 
+ 	public void testLockingJoinedSubclass() {
+ 		Session s = openSession();
+Index: testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.hbm.xml	(working copy)
+@@ -35,6 +35,12 @@
+ 		<property name="sex" 
+ 			not-null="true"
+ 			update="false"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54" 
++				write="? * 2.54"/>
++		</property>
+ 		
+ 		<component name="address">
+ 			<property name="address"/>
+@@ -49,6 +55,12 @@
+ 					length="20"/>
+ 				<property name="salary" 
+ 					length="0"/>
++				<property name="passwordExpiryDays">
++					<column name="pwd_expiry_weeks" 
++						not-null="true" 
++						read="pwd_expiry_weeks * 7.0" 
++						write="? / 7.0"/>
++				</property>					
+ 				<many-to-one name="manager"/>
+ 		</joined-subclass>
+ 		
+Index: testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/joinedsubclass/Person.java	(working copy)
+@@ -10,6 +10,7 @@
+ 	private String name;
+ 	private char sex;
+ 	private int version;
++	private double heightInches;
+ 	private Address address = new Address();
+ 	/**
+ 	 * @return Returns the address.
+@@ -68,6 +69,20 @@
+ 		this.name = identity;
+ 	}
+ 
++	/**
++	 * @return Returns the height in inches.
++	 */
++	public double getHeightInches() {
++		return heightInches;
++	}
++
++	/**
++	 * @param heightInches The height in inches to set.
++	 */
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
++
+ 	public int getVersion() {
+ 		return version;
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/subselect/Alien.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/subselect/Alien.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/subselect/Alien.java	(working copy)
+@@ -9,6 +9,7 @@
+ 	private String identity;
+ 	private String planet;
+ 	private String species;
++	private double heightInches;
+ 	
+ 	public void setIdentity(String identity) {
+ 		this.identity = identity;
+@@ -28,6 +29,12 @@
+ 	public String getPlanet() {
+ 		return planet;
+ 	}
++	public double getHeightInches() {
++		return heightInches;
++	}
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
+ 	public void setId(Long id) {
+ 		this.id = id;
+ 	}
+Index: testsuite/src/test/java/org/hibernate/test/subselect/Being.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/subselect/Being.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/subselect/Being.java	(working copy)
+@@ -9,6 +9,7 @@
+ 	private String identity;
+ 	private String location;
+ 	private String species;
++	private double heightInches;	
+ 	
+ 	public void setLocation(String location) {
+ 		this.location = location;
+@@ -28,4 +29,10 @@
+ 	public String getIdentity() {
+ 		return identity;
+ 	}
++	public double getHeightInches() {
++		return heightInches;
++	}
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
+ }
+Index: testsuite/src/test/java/org/hibernate/test/subselect/Beings.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/subselect/Beings.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/subselect/Beings.hbm.xml	(working copy)
+@@ -36,6 +36,12 @@
+ 			not-null="true" 
+ 			update="false"/>
+ 		<property name="address"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54" 
++				write="? * 2.54"/>
++		</property>		
+ 		
+ 	</class>
+ 	
+@@ -53,16 +59,22 @@
+ 		<property name="species" 
+ 			not-null="true" 
+ 			update="false"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54" 
++				write="? * 2.54"/>
++		</property>			
+ 			
+ 	</class>
+ 	
+ 	<class name="Being" mutable="false">
+ 	
+ 		<subselect>
+-			select bid, name as ident, address as loc, 'human' as species 
++			select bid, name as ident, address as loc, 'human' as species, height_centimeters
+ 			from humans 
+ 			union 
+-			select bid, ident, planet as loc, species 
++			select bid, ident, planet as loc, species, height_centimeters
+ 			from aliens
+ 		</subselect>
+ 		
+@@ -77,6 +89,11 @@
+ 		<property name="identity" column="ident"/>
+ 		<property name="location" column="loc"/>
+ 		<property name="species"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54"/>
++		</property>		
+ 		
+ 	</class>
+ 
+Index: testsuite/src/test/java/org/hibernate/test/subselect/Human.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/subselect/Human.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/subselect/Human.java	(working copy)
+@@ -9,6 +9,7 @@
+ 	private String name;
+ 	private char sex;
+ 	private String address;
++	private double heightInches;
+ 	
+ 	public void setAddress(String address) {
+ 		this.address = address;
+@@ -34,4 +35,10 @@
+ 	public Long getId() {
+ 		return id;
+ 	}
++	public double getHeightInches() {
++		return heightInches;
++	}
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
+ }
+Index: testsuite/src/test/java/org/hibernate/test/subselect/SubselectTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/subselect/SubselectTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/subselect/SubselectTest.java	(working copy)
+@@ -8,6 +8,7 @@
+ 
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
++import org.hibernate.criterion.Restrictions;
+ import org.hibernate.junit.functional.FunctionalTestCase;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ 
+@@ -67,6 +68,57 @@
+ 		t.commit();
+ 		s.close();
+ 	}
++	
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		final double HUMAN_INCHES = 73;
++		final double ALIEN_INCHES = 931;
++		final double HUMAN_CENTIMETERS = HUMAN_INCHES * 2.54d;		
++		final double ALIEN_CENTIMETERS = ALIEN_INCHES * 2.54d;		
++		Human gavin = new Human();
++		gavin.setName( "gavin" );
++		gavin.setSex( 'M' );
++		gavin.setAddress( "Melbourne, Australia" );
++		gavin.setHeightInches( HUMAN_INCHES );
++		Alien x23y4 = new Alien();
++		x23y4.setIdentity( "x23y4$$hu%3" );
++		x23y4.setPlanet( "Mars" );
++		x23y4.setSpecies( "martian" );
++		x23y4.setHeightInches( ALIEN_INCHES );
++		s.save(gavin);
++		s.save(x23y4);
++		s.flush();
++		
++		// Test value conversion during insert
++		Double humanHeightViaSql = (Double)s.createSQLQuery("select height_centimeters from humans").uniqueResult();
++		assertEquals(HUMAN_CENTIMETERS, humanHeightViaSql, 0.01d);
++		Double alienHeightViaSql = (Double)s.createSQLQuery("select height_centimeters from aliens").uniqueResult();
++		assertEquals(ALIEN_CENTIMETERS, alienHeightViaSql, 0.01d);
++		s.clear();
++		
++		// Test projection
++		Double heightViaHql = (Double)s.createQuery("select heightInches from Being b where b.identity = 'gavin'").uniqueResult();
++		assertEquals(HUMAN_INCHES, heightViaHql, 0.01d);
++		
++		// Test restriction and entity load via criteria
++		Being b = (Being)s.createCriteria(Being.class)
++			.add(Restrictions.between("heightInches", HUMAN_INCHES - 0.01d, HUMAN_INCHES + 0.01d))
++			.uniqueResult();
++		assertEquals(HUMAN_INCHES, b.getHeightInches(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		b = (Being)s.createQuery("from Being b where b.heightInches between ? and ?")
++			.setDouble(0, ALIEN_INCHES - 0.01d)
++			.setDouble(1, ALIEN_INCHES + 0.01d)
++			.uniqueResult();
++		assertEquals(ALIEN_INCHES, b.getHeightInches(), 0.01d);
++                s.delete(gavin);
++                s.delete(x23y4);		
++		t.commit();
++		s.close();
++		
++	}
+ 
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass2/Employee.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass2/Employee.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass2/Employee.java	(working copy)
+@@ -9,6 +9,7 @@
+ public class Employee extends Person {
+ 	private String title;
+ 	private BigDecimal salary;
++	private double passwordExpiryDays;	
+ 	private Employee manager;
+ 	/**
+ 	 * @return Returns the title.
+@@ -46,4 +47,16 @@
+ 	public void setSalary(BigDecimal salary) {
+ 		this.salary = salary;
+ 	}
++	/**
++	 * @return The password expiry policy in days.
++	 */
++	public double getPasswordExpiryDays() {
++		return passwordExpiryDays;
++	}
++	/**
++	 * @param passwordExpiryDays The password expiry policy in days. 
++	 */
++	public void setPasswordExpiryDays(double passwordExpiryDays) {
++		this.passwordExpiryDays = passwordExpiryDays;
++	}	
+ }
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.hbm.xml	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.hbm.xml	(working copy)
+@@ -34,6 +34,12 @@
+ 		<property name="sex" 
+ 			not-null="true"
+ 			update="false"/>
++		<property name="heightInches">
++			<column name="height_centimeters" 
++				not-null="true" 
++				read="height_centimeters / 2.54" 
++				write="? * 2.54"/>
++		</property>			
+ 		
+ 		<component name="address">
+ 			<property name="address" index="AddressIndex"/>
+@@ -47,6 +53,12 @@
+ 					length="20"/>
+ 				<property name="salary" 
+ 					length="0"/>
++				<property name="passwordExpiryDays">
++					<column name="pwd_expiry_weeks" 
++						not-null="true" 
++						read="pwd_expiry_weeks * 7.0" 
++						write="? / 7.0"/>
++				</property>					
+ 				<many-to-one name="manager"/>
+ 		</union-subclass>
+ 		
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass2/Person.java	(working copy)
+@@ -9,6 +9,7 @@
+ 	private long id;
+ 	private String name;
+ 	private char sex;
++	private double heightInches;
+ 	private Address address = new Address();
+ 	/**
+ 	 * @return Returns the address.
+@@ -66,5 +67,16 @@
+ 	public void setName(String identity) {
+ 		this.name = identity;
+ 	}
+-
++	/**
++	 * @return Returns the height in inches.
++	 */
++	public double getHeightInches() {
++		return heightInches;
++	}
++	/**
++	 * @param heightInches The height in inches to set.
++	 */
++	public void setHeightInches(double heightInches) {
++		this.heightInches = heightInches;
++	}
+ }
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass2/UnionSubclassTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass2/UnionSubclassTest.java	(revision 17474)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass2/UnionSubclassTest.java	(working copy)
+@@ -149,5 +149,79 @@
+ 		s.close();
+ 	}
+ 
++	public void testCustomColumnReadAndWrite() {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		final double HEIGHT_INCHES = 73;
++		final double HEIGHT_CENTIMETERS = HEIGHT_INCHES * 2.54d;
++		Person p = new Person();
++		p.setName("Emmanuel");
++		p.setSex('M');
++		p.setHeightInches(HEIGHT_INCHES);
++		s.persist(p);
++		final double PASSWORD_EXPIRY_WEEKS = 4;
++		final double PASSWORD_EXPIRY_DAYS = PASSWORD_EXPIRY_WEEKS * 7d;
++		Employee e = new Employee();
++		e.setName("Steve");
++		e.setSex('M');
++		e.setTitle("Mr");		
++		e.setPasswordExpiryDays(PASSWORD_EXPIRY_DAYS);
++		s.persist(e);
++		s.flush();
++		
++		// Test value conversion during insert
++		Double heightViaSql = (Double)s.createSQLQuery("select height_centimeters from UPerson where name='Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_CENTIMETERS, heightViaSql, 0.01d);
++		Double expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from UEmployee where person_id=?")
++			.setLong(0, e.getId())
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_WEEKS, expiryViaSql, 0.01d);
++		
++		// Test projection
++		Double heightViaHql = (Double)s.createQuery("select p.heightInches from Person p where p.name = 'Emmanuel'").uniqueResult();
++		assertEquals(HEIGHT_INCHES, heightViaHql, 0.01d);
++		Double expiryViaHql = (Double)s.createQuery("select e.passwordExpiryDays from Employee e where e.name = 'Steve'").uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, expiryViaHql, 0.01d);
++		
++		// Test restriction and entity load via criteria
++		p = (Person)s.createCriteria(Person.class)
++			.add(Restrictions.between("heightInches", HEIGHT_INCHES - 0.01d, HEIGHT_INCHES + 0.01d))
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		e = (Employee)s.createCriteria(Employee.class)
++			.add(Restrictions.between("passwordExpiryDays", PASSWORD_EXPIRY_DAYS - 0.01d, PASSWORD_EXPIRY_DAYS + 0.01d))
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, e.getPasswordExpiryDays(), 0.01d);
++		
++		// Test predicate and entity load via HQL
++		p = (Person)s.createQuery("from Person p where p.heightInches between ? and ?")
++			.setDouble(0, HEIGHT_INCHES - 0.01d)
++			.setDouble(1, HEIGHT_INCHES + 0.01d)
++			.uniqueResult();
++		assertEquals(HEIGHT_INCHES, p.getHeightInches(), 0.01d);
++		e = (Employee)s.createQuery("from Employee e where e.passwordExpiryDays between ? and ?")
++			.setDouble(0, PASSWORD_EXPIRY_DAYS - 0.01d)
++			.setDouble(1, PASSWORD_EXPIRY_DAYS + 0.01d)
++			.uniqueResult();
++		assertEquals(PASSWORD_EXPIRY_DAYS, e.getPasswordExpiryDays(), 0.01d);
++		
++		// Test update
++		p.setHeightInches(1);
++		e.setPasswordExpiryDays(7);
++		s.flush();
++		heightViaSql = (Double)s.createSQLQuery("select height_centimeters from UPerson where name='Emmanuel'").uniqueResult();
++		assertEquals(2.54d, heightViaSql, 0.01d);
++		expiryViaSql = (Double)s.createSQLQuery("select pwd_expiry_weeks from UEmployee where person_id=?")
++			.setLong(0, e.getId())
++			.uniqueResult();
++		assertEquals(1d, expiryViaSql, 0.01d);
++		s.delete(p);
++		s.delete(e);
++		t.commit();
++		s.close();
++		
++	}
++	
++	
+ }
+ 

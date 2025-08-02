@@ -1,0 +1,121 @@
+Index: src/main/java/org/hibernate/engine/QueryParameters.java
+===================================================================
+--- src/main/java/org/hibernate/engine/QueryParameters.java	(revision 17987)
++++ src/main/java/org/hibernate/engine/QueryParameters.java	(working copy)
+@@ -141,13 +141,39 @@
+ 			final String comment,
+ 			final boolean isLookupByNaturalKey,
+ 			final ResultTransformer transformer) {
++      this(
++            positionalParameterTypes,
++            positionalParameterValues,
++            lockModes,
++            rowSelection,
++            false,
++            cacheable,
++            cacheRegion,
++            comment,
++            isLookupByNaturalKey,
++            transformer
++      );
++   }
++
++	public QueryParameters(
++			final Type[] positionalParameterTypes,
++			final Object[] positionalParameterValues,
++			final Map lockModes,
++			final RowSelection rowSelection,
++			final boolean readOnly,
++			final boolean cacheable,
++			final String cacheRegion,
++			//final boolean forceCacheRefresh,
++			final String comment,
++			final boolean isLookupByNaturalKey,
++			final ResultTransformer transformer) {
+ 		this(
+ 				positionalParameterTypes,
+ 				positionalParameterValues,
+ 				null,
+ 				lockModes,
+ 				rowSelection,
+-				false,
++				readOnly,
+ 				cacheable,
+ 				cacheRegion,
+ 				comment,
+Index: src/main/java/org/hibernate/impl/CriteriaImpl.java
+===================================================================
+--- src/main/java/org/hibernate/impl/CriteriaImpl.java	(revision 17987)
++++ src/main/java/org/hibernate/impl/CriteriaImpl.java	(working copy)
+@@ -72,6 +72,7 @@
+ 	private Integer timeout;
+ 	private Integer fetchSize;
+ 
++	private boolean readOnly;
+ 	private boolean cacheable;
+ 	private String cacheRegion;
+ 	private String comment;
+@@ -263,6 +264,15 @@
+ 		return this;
+ 	}
+ 
++	public boolean getReadOnly() {
++		return this.readOnly;
++	}
++
++	public Criteria setReadOnly(boolean readOnly) {
++		this.readOnly = readOnly;
++		return this;
++	}
++
+ 	public boolean getCacheable() {
+ 		return this.cacheable;
+ 	}
+@@ -467,7 +477,12 @@
+ 			return new Subcriteria( Subcriteria.this, associationPath, alias, joinType );
+ 		}
+ 
+-		public Criteria setCacheable(boolean cacheable) {
++      public Criteria setReadOnly(boolean readOnly) {
++         CriteriaImpl.this.setReadOnly(readOnly);
++         return this;
++      }
++
++      public Criteria setCacheable(boolean cacheable) {
+ 			CriteriaImpl.this.setCacheable(cacheable);
+ 			return this;
+ 		}
+Index: src/main/java/org/hibernate/Criteria.java
+===================================================================
+--- src/main/java/org/hibernate/Criteria.java	(revision 17987)
++++ src/main/java/org/hibernate/Criteria.java	(working copy)
+@@ -278,6 +278,17 @@
+ 	 */
+ 	public Criteria setTimeout(int timeout);
+ 
++   /**
++    * Entities retrieved by this criteria will be loaded in
++    * a read-only mode where Hibernate will never dirty-check
++    * them or make changes persistent.
++    *
++    * @param readOnly Should the result be considered readOnly; default is
++    * to create snapshot (false).
++    * @return this (for method chaining)
++    */
++   public Criteria setReadOnly(boolean readOnly);
++
+ 	/**
+ 	 * Enable caching of this query result, provided query caching is enabled
+ 	 * for the underlying session factory.
+Index: src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+===================================================================
+--- src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(revision 17987)
++++ src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(working copy)
+@@ -307,6 +307,7 @@
+ 		        valueArray,
+ 		        lockModes,
+ 		        selection,
++		        rootCriteria.getReadOnly(),
+ 		        rootCriteria.getCacheable(),
+ 		        rootCriteria.getCacheRegion(),
+ 		        rootCriteria.getComment(),

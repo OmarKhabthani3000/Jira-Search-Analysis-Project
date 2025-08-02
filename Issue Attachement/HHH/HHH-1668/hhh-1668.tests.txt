@@ -1,0 +1,527 @@
+Index: CollectionSuite.java
+===================================================================
+--- CollectionSuite.java	(revision 10449)
++++ CollectionSuite.java	(working copy)
+@@ -17,6 +17,8 @@
+ 		suite.addTest( CollectionTest.suite() );
+ 		suite.addTest( PersistentMapTest.suite() );
+ 		suite.addTest( PersistentSetTest.suite() );
++		suite.addTest( PersistentListTest.suite() );
++		suite.addTest( PersistentBagTest.suite() );
+ 		return suite;
+ 	}
+ 
+Index: bag/Mappings.hbm.xml
+===================================================================
+--- bag/Mappings.hbm.xml	(revision 0)
++++ bag/Mappings.hbm.xml	(revision 0)
+@@ -0,0 +1,23 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.test.collection.bag">
++
++    <class name="Parent">
++		<id name="name" column="NAME" type="string" />
++
++        <bag name="children" inverse="true" cascade="all">
++            <key column="PARENT" />
++            <one-to-many class="Child" />
++        </bag>
++	</class>
++
++    <class name="Child">
++        <id name="name" column="NAME" type="string"/>
++        <many-to-one name="parent" class="Parent" cascade="none" />
++    </class>
++
++</hibernate-mapping>
+Index: bag/Child.java
+===================================================================
+--- bag/Child.java	(revision 0)
++++ bag/Child.java	(revision 0)
+@@ -0,0 +1,34 @@
++package org.hibernate.test.collection.bag;
++
++/**
++ * todo: describe Child
++ *
++ * @author Steve Ebersole
++ */
++public class Child {
++	private String name;
++	private Parent parent;
++
++	public Child() {
++	}
++
++	public Child(String name) {
++		this.name = name;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Parent getParent() {
++		return parent;
++	}
++
++	public void setParent(Parent parent) {
++		this.parent = parent;
++	}
++}
+Index: bag/Parent.java
+===================================================================
+--- bag/Parent.java	(revision 0)
++++ bag/Parent.java	(revision 0)
+@@ -0,0 +1,40 @@
++package org.hibernate.test.collection.bag;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.test.legacy.E;
++
++
++/**
++ * todo: describe Parent
++ *
++ * @author Steve Ebersole
++ */
++public class Parent {
++	private String name;
++	private List children = new ArrayList();
++
++	public Parent() {
++	}
++
++	public Parent(String name) {
++		this.name = name;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public List getChildren() {
++		return children;
++	}
++
++	public void setChildren(List<E> children) {
++		this.children = children;
++	}
++}
+Index: bag/PersistentBagTest.java
+===================================================================
+--- bag/PersistentBagTest.java	(revision 0)
++++ bag/PersistentBagTest.java	(revision 0)
+@@ -0,0 +1,78 @@
++package org.hibernate.test.collection.bag;
++
++import org.hibernate.test.TestCase;
++import org.hibernate.Session;
++import org.hibernate.collection.PersistentBag;
++
++import java.util.HashSet;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++/**
++ * todo: describe PersistentSetTest
++ *
++ * @author Steve Ebersole
++ */
++public class PersistentBagTest extends TestCase {
++	public PersistentBagTest(String name) {
++		super( name );
++	}
++
++	protected String[] getMappings() {
++		return new String[] { "collection/bag/Mappings.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite( PersistentBagTest.class );
++	}
++
++	public void testWriteMethodDirtying() {
++		Parent parent = new Parent( "p1" );
++		Child child = new Child( "c1" );
++		parent.getChildren().add( child );
++		child.setParent( parent );
++		Child otherChild = new Child( "c2" );
++
++		Session session = openSession();
++		session.beginTransaction();
++		session.save( parent );
++		session.flush();
++		// at this point, the set on parent has now been replaced with a PersistentSet...
++		PersistentBag children = ( PersistentBag ) parent.getChildren();
++
++//		only applies to sets
++//		assertFalse( children.add( child ) );
++//		assertFalse( children.isDirty() );
++
++		assertFalse( children.remove( otherChild ) );
++		assertFalse( children.isDirty() );
++
++		HashSet otherSet = new HashSet();
++		otherSet.add( child );
++//		only applies to sets
++//		assertFalse( children.addAll( otherSet ) );
++//		assertFalse( children.isDirty() );
++
++		assertFalse( children.retainAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		otherSet = new HashSet();
++		otherSet.add( otherChild );
++		assertFalse( children.removeAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		children.clear();
++		session.delete( child );
++		assertTrue( children.isDirty() );
++
++		session.flush();
++
++		children.clear();
++		assertFalse( children.isDirty() );
++
++		session.delete( parent );
++		session.getTransaction().commit();
++		session.close();
++	}
++}
+Index: list/Mappings.hbm.xml
+===================================================================
+--- list/Mappings.hbm.xml	(revision 0)
++++ list/Mappings.hbm.xml	(revision 0)
+@@ -0,0 +1,24 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++
++<hibernate-mapping package="org.hibernate.test.collection.list">
++
++    <class name="Parent">
++		<id name="name" column="NAME" type="string" />
++
++        <list name="children" inverse="true" cascade="all">
++            <key column="PARENT" />
++            <index column="index"/>
++            <one-to-many class="Child" />
++        </list>
++	</class>
++
++    <class name="Child">
++        <id name="name" column="NAME" type="string"/>
++        <many-to-one name="parent" class="Parent" cascade="none" />
++    </class>
++
++</hibernate-mapping>
+Index: list/Child.java
+===================================================================
+--- list/Child.java	(revision 0)
++++ list/Child.java	(revision 0)
+@@ -0,0 +1,34 @@
++package org.hibernate.test.collection.list;
++
++/**
++ * todo: describe Child
++ *
++ * @author Steve Ebersole
++ */
++public class Child {
++	private String name;
++	private Parent parent;
++
++	public Child() {
++	}
++
++	public Child(String name) {
++		this.name = name;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Parent getParent() {
++		return parent;
++	}
++
++	public void setParent(Parent parent) {
++		this.parent = parent;
++	}
++}
+Index: list/Parent.java
+===================================================================
+--- list/Parent.java	(revision 0)
++++ list/Parent.java	(revision 0)
+@@ -0,0 +1,40 @@
++package org.hibernate.test.collection.list;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.test.legacy.E;
++
++
++/**
++ * todo: describe Parent
++ *
++ * @author Steve Ebersole
++ */
++public class Parent {
++	private String name;
++	private List children = new ArrayList();
++
++	public Parent() {
++	}
++
++	public Parent(String name) {
++		this.name = name;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public List getChildren() {
++		return children;
++	}
++
++	public void setChildren(List<E> children) {
++		this.children = children;
++	}
++}
+Index: list/PersistentListTest.java
+===================================================================
+--- list/PersistentListTest.java	(revision 0)
++++ list/PersistentListTest.java	(revision 0)
+@@ -0,0 +1,80 @@
++package org.hibernate.test.collection.list;
++
++import org.hibernate.test.TestCase;
++import org.hibernate.Session;
++import org.hibernate.collection.PersistentList;
++
++import java.util.HashSet;
++import java.util.ListIterator;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++/**
++ * todo: describe PersistentSetTest
++ *
++ * @author Steve Ebersole
++ */
++public class PersistentListTest extends TestCase {
++	public PersistentListTest(String name) {
++		super( name );
++	}
++
++	protected String[] getMappings() {
++		return new String[] { "collection/list/Mappings.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite( PersistentListTest.class );
++	}
++
++	public void testWriteMethodDirtying() {
++		Parent parent = new Parent( "p1" );
++		Child child = new Child( "c1" );
++		parent.getChildren().add( child );
++		child.setParent( parent );
++		Child otherChild = new Child( "c2" );
++
++		Session session = openSession();
++		session.beginTransaction();
++		session.save( parent );
++		session.flush();
++		// at this point, the list on parent has now been replaced with a PersistentList...
++		PersistentList children = ( PersistentList ) parent.getChildren();
++
++//		only applies to sets
++//		assertFalse( children.add( child ) );
++//		assertFalse( children.isDirty() );
++
++		assertFalse( children.remove( otherChild ) );
++		assertFalse( children.isDirty() );
++
++		HashSet otherSet = new HashSet();
++		otherSet.add( child );
++//		only applies to sets
++//		assertFalse( children.addAll( otherSet ) );
++//		assertFalse( children.isDirty() );
++
++		assertFalse( children.retainAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		otherSet = new HashSet();
++		otherSet.add( otherChild );
++		assertFalse( children.removeAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		children.clear();
++		session.delete( child );
++		assertTrue( children.isDirty() );
++
++		session.flush();
++
++		children.clear();
++		assertFalse( children.isDirty() );
++
++		session.delete( parent );
++		session.getTransaction().commit();
++		session.close();
++	}
++
++}
+Index: map/PersistentMapTest.java
+===================================================================
+--- map/PersistentMapTest.java	(revision 10449)
++++ map/PersistentMapTest.java	(working copy)
+@@ -4,7 +4,10 @@
+ import org.hibernate.Session;
+ import org.hibernate.collection.PersistentMap;
+ 
++import java.util.Collection;
+ import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Set;
+ 
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+@@ -38,7 +41,7 @@
+ 		session.beginTransaction();
+ 		session.save( parent );
+ 		session.flush();
+-		// at this point, the set on parent has now been replaced with a PersistentSet...
++		// at this point, the map on parent has now been replaced with a PersistentMap...
+ 		PersistentMap children = ( PersistentMap ) parent.getChildren();
+ 
+ 		Object old = children.put( child.getName(), child );
+@@ -72,4 +75,96 @@
+ 		session.getTransaction().commit();
+ 		session.close();
+ 	}
++	
++	public void testKeySetWriteMethodDirtying() {
++		Parent parent = new Parent( "p1" );
++		Child child = new Child( "c1" );
++		parent.getChildren().put( child.getName(), child );
++		child.setParent( parent );
++		Child otherChild = new Child( "c2" );
++
++		Session session = openSession();
++		session.beginTransaction();
++		session.save( parent );
++		session.flush();
++		// at this point, the map on parent has now been replaced with a PersistentMap...
++		PersistentMap children = ( PersistentMap ) parent.getChildren();
++
++		Set keySet = children.keySet();
++		
++		assertFalse( keySet.add( "c1" ) );
++		assertFalse( children.isDirty() );
++
++		assertFalse( keySet.remove( "c2" ) );
++		assertFalse( children.isDirty() );
++
++		HashSet otherSet = new HashSet();
++		otherSet.add( "c1" );
++		assertFalse( keySet.addAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		assertFalse( keySet.retainAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		otherSet = new HashSet();
++		otherSet.add( otherChild );
++		assertFalse( keySet.removeAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		children.clear();
++		session.delete( child );
++		assertTrue( children.isDirty() );
++
++		session.flush();
++
++		keySet.clear();
++		assertFalse( children.isDirty() );
++		
++	}
++	
++	public void testValuesSetWriteMethodDirtying() {
++		Parent parent = new Parent( "p1" );
++		Child child = new Child( "c1" );
++		parent.getChildren().put( child.getName(), child );
++		child.setParent( parent );
++		Child otherChild = new Child( "c2" );
++
++		Session session = openSession();
++		session.beginTransaction();
++		session.save( parent );
++		session.flush();
++		// at this point, the map on parent has now been replaced with a PersistentMap...
++		PersistentMap children = ( PersistentMap ) parent.getChildren();
++
++		Collection values = children.values();
++
++		assertFalse( values.add( child ) );
++		assertFalse( children.isDirty() );
++
++		assertFalse( values.remove( otherChild ) );
++		assertFalse( children.isDirty() );
++
++		HashSet otherSet = new HashSet();
++		otherSet.add( child );
++		assertFalse( values.addAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		assertFalse( values.retainAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		otherSet = new HashSet();
++		otherSet.add( otherChild );
++		assertFalse( values.removeAll( otherSet ) );
++		assertFalse( children.isDirty() );
++
++		children.clear();
++		session.delete( child );
++		assertTrue( children.isDirty() );
++
++		session.flush();
++
++		values.clear();
++		assertFalse( children.isDirty() );
++		
++	}
+ }

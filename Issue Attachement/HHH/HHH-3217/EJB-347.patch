@@ -1,0 +1,199 @@
+Index: src/test/org/hibernate/ejb/test/cascade/Author.java
+===================================================================
+--- src/test/org/hibernate/ejb/test/cascade/Author.java	(revision 14479)
++++ src/test/org/hibernate/ejb/test/cascade/Author.java	(working copy)
+@@ -1,11 +1,14 @@
+ //$Id: $
+ package org.hibernate.ejb.test.cascade;
+ 
++import java.util.List;
++
+ import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
+ import javax.persistence.Id;
+-import javax.persistence.GeneratedValue;
++import javax.persistence.OneToMany;
+ import javax.persistence.SequenceGenerator;
+-import javax.persistence.GenerationType;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -16,4 +19,26 @@
+ 	@SequenceGenerator(name = "ENTITY2_SEQ")
+  private Long id;
+ 
++	@OneToMany(mappedBy = "author")
++    private List<Song> songs;
++	private String name;
++
++    public List<Song> getSongs()
++    {
++        return songs;
++    }
++    public void setSongs(List<Song> songs)
++    {
++        this.songs = songs;
++    }
++    
++    public String getName()
++    {
++        return name;
++    }
++    public void setName(String name)
++    {
++        this.name = name;
++    }
++	
+ }
+Index: src/test/org/hibernate/ejb/test/cascade/CascadeTest.java
+===================================================================
+--- src/test/org/hibernate/ejb/test/cascade/CascadeTest.java	(revision 14479)
++++ src/test/org/hibernate/ejb/test/cascade/CascadeTest.java	(working copy)
+@@ -1,6 +1,8 @@
+ //$Id: FetchTest.java 9796 2006-04-26 06:46:52Z epbernard $
+ package org.hibernate.ejb.test.cascade;
+ 
++import java.util.ArrayList;
++
+ import javax.persistence.EntityManager;
+ import javax.persistence.EntityTransaction;
+ 
+@@ -82,7 +84,111 @@
+ 
+ 	}
+ 
++    public void testNoCascadeAndMergeAfterChildIsUpdated() throws Exception {
++        Author author = new Author();
++        author.setName("author persist");
++        author.setSongs(new ArrayList<Song>());
+ 
++        Song song1 = new Song();
++        song1.setAuthor(author);
++        song1.setTitle("song1 persist");
++        author.getSongs().add(song1);
++        Song song2 = new Song();
++        song2.setAuthor(author);
++        song2.setTitle("song2 persist");
++        author.getSongs().add(song2);
++
++        // Insert testdata
++        EntityManager em = factory.createEntityManager();
++        EntityTransaction tx = em.getTransaction();
++        tx.begin();
++        em.persist(author);
++        em.persist(song1);
++        em.persist(song2);
++        tx.commit();
++        em.close();
++
++        // User gets author (and his songs but just to show the songs - they aren't cascaded)
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        Author detachedAuthor = (Author) em.createQuery("select a from Author a left join fetch a.songs")
++                .getSingleResult();
++        tx.commit();
++        em.close();
++        
++        // Another user deletes song 2
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        song2 = em.find(Song.class, song2.getId());
++        song2.setTitle("song2 renamed"); // Different from testNoCascadeAndMergeAfterChildIsDeleted
++        tx.commit();
++        em.close();
++
++        // First users changed the author
++        author.setName("author merge");
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        em.merge(detachedAuthor);
++        tx.commit();
++        em.close();
++    }
++
++    public void testNoCascadeAndMergeAfterChildIsDeleted() throws Exception {
++        Author author = new Author();
++        author.setName("author persist");
++        author.setSongs(new ArrayList<Song>());
++
++        Song song1 = new Song();
++        song1.setAuthor(author);
++        song1.setTitle("song1 persist");
++        author.getSongs().add(song1);
++        Song song2 = new Song();
++        song2.setAuthor(author);
++        song2.setTitle("song2 persist");
++        author.getSongs().add(song2);
++
++        // Insert testdata
++        EntityManager em = factory.createEntityManager();
++        EntityTransaction tx = em.getTransaction();
++        tx.begin();
++        em.persist(author);
++        em.persist(song1);
++        em.persist(song2);
++        tx.commit();
++        em.close();
++
++        // User gets author (and his songs but just to show the songs - they aren't cascaded)
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        Author detachedAuthor = (Author) em.createQuery("select a from Author a left join fetch a.songs")
++                .getSingleResult();
++        tx.commit();
++        em.close();
++        
++        // Another user deletes song 2
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        song2 = em.find(Song.class, song2.getId());
++        em.remove(song2); // Different from testNoCascadeAndMergeAfterChildIsUpdated
++        tx.commit();
++        em.close();
++
++        // First users changed the author
++        author.setName("author merge");
++        em = factory.createEntityManager();
++        tx = em.getTransaction();
++        tx.begin();
++        em.merge(detachedAuthor);
++        tx.commit();
++        em.close();
++    }
++
++
+ 	public Class[] getAnnotatedClasses() {
+ 		return new Class[]{
+ 				Teacher.class,
+Index: src/test/org/hibernate/ejb/test/cascade/Song.java
+===================================================================
+--- src/test/org/hibernate/ejb/test/cascade/Song.java	(revision 14479)
++++ src/test/org/hibernate/ejb/test/cascade/Song.java	(working copy)
+@@ -18,6 +18,7 @@
+ 	@SequenceGenerator(name = "ENTITY1_SEQ") private Long id;
+ 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
+ 	private Author author;
++	private String title;
+ 
+ 	public Author getAuthor() {
+ 		return author;
+@@ -35,4 +36,13 @@
+ 		this.id = id;
+ 	}
+ 
++    public String getTitle()
++    {
++        return title;
++    }
++    public void setTitle(String title)
++    {
++        this.title = title;
++    }
++
+ }

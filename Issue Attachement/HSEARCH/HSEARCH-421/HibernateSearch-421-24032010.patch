@@ -1,0 +1,381 @@
+Index: hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	(revision 19013)
++++ hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	Wed Mar 24 07:18:26 GMT 2010
+@@ -24,21 +24,6 @@
+  */
+ package org.hibernate.search.impl;
+ 
+-import java.beans.Introspector;
+-import java.lang.reflect.Method;
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Properties;
+-import java.util.Set;
+-import java.util.concurrent.atomic.AtomicBoolean;
+-import java.util.concurrent.locks.ReentrantLock;
+-
+ import org.apache.lucene.analysis.Analyzer;
+ import org.apache.lucene.search.Similarity;
+ import org.hibernate.annotations.common.reflection.MetadataProvider;
+@@ -74,6 +59,8 @@
+ import org.hibernate.search.engine.EntityState;
+ import org.hibernate.search.engine.FilterDef;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.LogErrorHandler;
+ import org.hibernate.search.filter.CachingWrapperFilter;
+ import org.hibernate.search.filter.FilterCachingStrategy;
+ import org.hibernate.search.filter.MRUFilterCachingStrategy;
+@@ -90,6 +77,21 @@
+ import org.hibernate.util.StringHelper;
+ import org.slf4j.Logger;
+ 
++import java.beans.Introspector;
++import java.lang.reflect.Method;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Properties;
++import java.util.Set;
++import java.util.concurrent.atomic.AtomicBoolean;
++import java.util.concurrent.locks.ReentrantLock;
++
+ /**
+  * @author Emmanuel Bernard
+  */
+@@ -689,4 +691,14 @@
+ 		return dirProviderData.get( provider ).exclusiveIndexUsage;
+ 	}
+ 
++    public ErrorHandler getErrorHandler() {
++        String errorHandlerClassName = configurationProperties.getProperty(Environment.ERROR_HANDLER);
++        if (StringHelper.isEmpty(errorHandlerClassName)) {
++            return new LogErrorHandler();
+-}
++        }
++
++        return PluginLoader.instanceFromName(ErrorHandler.class, errorHandlerClassName, SearchFactoryImpl.class, "Error Handler");
++    }
++
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	Wed Mar 24 17:49:53 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	Wed Mar 24 17:49:53 GMT 2010
+@@ -0,0 +1,47 @@
++package org.hibernate.search.exception.impl;
++
++import org.hibernate.search.exception.ErrorContext;
++import org.hibernate.search.exception.FailingOperation;
++
++import java.util.HashSet;
++import java.util.Set;
++
++
++public class ErrorContextBuilder {
++
++    private FailingOperation operationAtFault;
++
++    private Throwable th;
++
++
++    private Set<FailingOperation> failingOperations;
++
++    public ErrorContextBuilder() {
++        failingOperations = new HashSet<FailingOperation>();
++    }
++
++    public ErrorContextBuilder primaryFailure(FailingOperation operationAtFault) {
++        this.operationAtFault = operationAtFault;
++        return this;
++
++    }
++
++    public ErrorContextBuilder errorThatOccurred(Throwable th) {
++        this.th = th;
++        return this;
++    }
++
++    public ErrorContextBuilder subsequentFailure(FailingOperation operation) {
++        failingOperations.add(operation);
++        return this;
++    }
++
++
++    public ErrorContext createErrorContext(){
++        ErrorContextImpl context = new ErrorContextImpl();
++        context.setOperationAtFault(operationAtFault);
++        context.setThrowable(th);
++        return context;
++
++    }
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java	Wed Mar 24 07:07:22 GMT 2010
+@@ -214,4 +214,8 @@
+ 		return entitiesInDirectory;
+ 	}
+ 
++    public SearchFactoryImplementor getSearchFactory() {
++        return this.searchFactoryImplementor;
+-}
++    }
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	Wed Mar 24 06:34:43 GMT 2010
+@@ -24,10 +24,6 @@
+  */
+ package org.hibernate.search.engine;
+ 
+-import java.util.Map;
+-import java.util.Set;
+-import java.util.concurrent.locks.ReentrantLock;
+-
+ import org.apache.lucene.search.Similarity;
+ import org.hibernate.search.SearchFactory;
+ import org.hibernate.search.backend.BackendQueueProcessorFactory;
+@@ -35,10 +31,15 @@
+ import org.hibernate.search.backend.Worker;
+ import org.hibernate.search.backend.impl.batchlucene.BatchBackend;
+ import org.hibernate.search.batchindexing.MassIndexerProgressMonitor;
++import org.hibernate.search.exception.ErrorHandler;
+ import org.hibernate.search.filter.FilterCachingStrategy;
+ import org.hibernate.search.store.DirectoryProvider;
+ import org.hibernate.search.store.optimization.OptimizerStrategy;
+ 
++import java.util.Map;
++import java.util.Set;
++import java.util.concurrent.locks.ReentrantLock;
++
+ /**
+  * Interface which gives access to the different directory providers and their configuration.
+  *
+@@ -93,4 +94,6 @@
+ 	Similarity getSimilarity(DirectoryProvider<?> directoryProvider);
+ 
+ 	boolean isExclusiveIndexUsageEnabled(DirectoryProvider<?> provider);
++
++    ErrorHandler getErrorHandler();
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/FailingOperation.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/FailingOperation.java	Wed Mar 24 17:21:28 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/FailingOperation.java	Wed Mar 24 17:21:28 GMT 2010
+@@ -0,0 +1,43 @@
++package org.hibernate.search.exception;
++
++import java.io.Serializable;
++
++
++public class FailingOperation implements Serializable {
++
++    private final Serializable id;
++
++    private final Class<?> entityClass;
++
++    private final Operation operation;
++
++    public FailingOperation(final Serializable id, final Class<?> entityClass, final Operation operation) {
++        this.id = id;
++        this.entityClass = entityClass;
++        this.operation = operation;
++    }
++
++    public Serializable getId() {
++        return this.id;
++    }
++
++    public Class<?> getEntityClass() {
++        return this.entityClass;
++    }
++
++    public Operation getOperation() {
++        return this.operation;
++    }
++
++    public enum Operation {
++        ADD, UPDATE, DELETE, OPTIMIZE;
++    }
++
++   
++    @Override
++    public String toString() {
++        StringBuilder builder = new StringBuilder();
++        builder.append( "Operation " ).append( operation ).append( " for " ).append( entityClass ).append( " failed." );                            
++        return builder.toString();
++    }
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	Wed Mar 24 17:50:47 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	Wed Mar 24 17:50:47 GMT 2010
+@@ -0,0 +1,60 @@
++package org.hibernate.search.exception.impl;
++
++import org.hibernate.search.exception.ErrorContext;
++import org.hibernate.search.exception.FailingOperation;
++
++import java.util.Collections;
++import java.util.Set;
++
++
++class ErrorContextImpl implements ErrorContext {
++
++    private Set<FailingOperation> failingOperations;
++
++    private FailingOperation operationAtFault;
++
++    private Throwable throwable;
++
++    public Set<FailingOperation> getFailingOperations() {
++        return Collections.unmodifiableSet(failingOperations);
++    }
++
++    public FailingOperation getOperationAtFault() {
++        return this.operationAtFault;
++    }
++
++    public Throwable getThrowable() {
++        return this.throwable;
++    }
++
++
++    public void setFailingOperations(Set<FailingOperation> failingOperations) {
++        this.failingOperations = failingOperations;
++    }
++
++    public void setThrowable(Throwable th) {
++        this.throwable = th;
++    }
++
++    public void setOperationAtFault(FailingOperation operationAtFault) {
++        this.operationAtFault = operationAtFault;
++    }
++
++
++    public boolean hasErrors() {
++        final boolean hasFailingOperations = failingOperations != null && failingOperations.size() > 0;
++        return operationAtFault != null && hasFailingOperations;
++    }
++
++    @Override
++    public String toString() {
++        StringBuilder builder = new StringBuilder();
++        builder.append("Operation at fault ").append(operationAtFault);
++        builder.append("Subsequent operations that failed ").append("\n");
++        for (FailingOperation failingOperation : failingOperations) {
++            builder.append(failingOperation).append("\n");
++        }
++        builder.append("Underlying exception ").append(throwable.toString());
++        return builder.toString();
++    }
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	Wed Mar 24 07:07:22 GMT 2010
+@@ -75,5 +75,9 @@
+ 		}
+ 		executor.shutdown();
+ 	}
+-	
++
++    public SearchFactoryImplementor getSearchFactory() {
++        return workspace.getSearchFactory();
+-}
++    }
++	
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	Wed Mar 24 07:13:08 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	Wed Mar 24 07:13:08 GMT 2010
+@@ -0,0 +1,20 @@
++package org.hibernate.search.exception;
++
++import java.util.Set;
++
++/**
++ * ErrorContext
++ *
++ * @author: Amin Mohammed-Coleman
++ * @since: Mar 23, 2010
++ */
++public interface ErrorContext {
++
++    Set<FailingOperation> getFailingOperations();
++
++    FailingOperation getOperationAtFault();
++
++    Throwable getThrowable();
++
++    boolean hasErrors();
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	Tue Mar 23 19:37:56 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	Tue Mar 23 19:37:56 GMT 2010
+@@ -0,0 +1,12 @@
++package org.hibernate.search.exception;
++
++/**
++ * ErrorHandler
++ *
++ * @author: Amin Mohammed-Coleman
++ * @since: Mar 23, 2010
++ */
++public interface ErrorHandler {
++
++    void handle(ErrorContext context);
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/Environment.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/Environment.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/Environment.java	Wed Mar 24 06:36:08 GMT 2010
+@@ -115,5 +115,8 @@
+ 	 *
+ 	 */
+ 	public static final String MODEL_MAPPING = "hibernate.search.model_mapping";
+-	
++
++
++    public static final String ERROR_HANDLER = "hibernate.search.error.handler";
++	
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java	Wed Mar 24 17:26:11 GMT 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java	Wed Mar 24 17:26:11 GMT 2010
+@@ -0,0 +1,14 @@
++package org.hibernate.search.exception;
++
++import org.hibernate.search.util.LoggerFactory;
++import org.slf4j.Logger;
++
++
++public class LogErrorHandler implements ErrorHandler {
++
++    private static final Logger log = LoggerFactory.make();
++
++    public void handle(ErrorContext context) {
++        log.error("" + context);        
++    }
++}

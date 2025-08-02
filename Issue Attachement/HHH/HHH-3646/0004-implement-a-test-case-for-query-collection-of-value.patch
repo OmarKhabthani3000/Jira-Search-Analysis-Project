@@ -1,0 +1,96 @@
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/Course.java b/project/testsuite/src/test/java/org/hibernate/test/criteria/Course.java
+index 17ce8e5..97e115e 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/Course.java
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/Course.java
+@@ -1,12 +1,16 @@
+ //$Id: Course.java 5686 2005-02-12 07:27:32Z steveebersole $
+ package org.hibernate.test.criteria;
+ 
++import java.util.Set;
++
+ /**
+  * @author Gavin King
+  */
+ public class Course {
+ 	private String courseCode;
+ 	private String description;
++	private Set crossListedAs;
++
+ 	public String getCourseCode() {
+ 		return courseCode;
+ 	}
+@@ -19,4 +23,10 @@ public class Course {
+ 	public void setDescription(String description) {
+ 		this.description = description;
+ 	}
++	public Set getCrossListedAs() {
++		return crossListedAs;
++	}
++	public void setCrossListedAs(Set crossListedAs) {
++		this.crossListedAs = crossListedAs;
++	};
+ }
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java b/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+index ef464af..e232897 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+@@ -3,6 +3,8 @@ package org.hibernate.test.criteria;
+ 
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
++import java.util.HashSet;
+ 
+ import junit.framework.Test;
+ 
+@@ -888,5 +890,35 @@ public class CriteriaQueryTest extends FunctionalTestCase {
+ 		t.commit();
+ 		session.close();
+ 	}
++
++	public void testCriteriaCollectionOfValue() {
++		Session session = openSession();
++		Transaction t = session.beginTransaction();
++
++		Course course = new Course();
++		course.setCourseCode("HIB");
++		course.setDescription("Hibernate Training");
++		Set/*<String>*/ crossListedAs = new HashSet/*<String>*/();
++		crossListedAs.add("Java Persistence 101");
++		crossListedAs.add("CS101");
++		course.setCrossListedAs(crossListedAs);
++		session.persist(course);
++		session.flush();
++		session.clear();
++		List results = session.createCriteria(Course.class)
++		    .createCriteria("crossListedAs")
++		    .add(Restrictions.eq("elements", "CS101"))
++		    .list();
++
++		assertEquals( 1, results.size() );
++		course = (Course)results.get(0);
++		assertEquals( 2, course.getCrossListedAs().size() );
++
++		session.delete(course);
++		
++		t.commit();
++		session.close();
++		
++	}
+ }
+ 
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml b/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
+index 05022a4..51e9281 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
+@@ -10,6 +10,10 @@
+ 			<generator class="assigned"/>
+ 		</id>
+ 		<property name="description"/>
++		<set name="crossListedAs">
++			<key />
++			<element type="string" />
++		</set>
+ 	</class>
+ 	
+ 	<class name="Student">

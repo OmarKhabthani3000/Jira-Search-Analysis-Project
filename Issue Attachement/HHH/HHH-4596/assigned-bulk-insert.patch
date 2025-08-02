@@ -1,0 +1,55 @@
+Index: core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java	(revision 18016)
++++ core/src/main/java/org/hibernate/hql/ast/HqlSqlWalker.java	(working copy)
+@@ -78,6 +78,7 @@
+ import org.hibernate.hql.ast.util.SessionFactoryHelper;
+ import org.hibernate.hql.ast.util.SyntheticAndFactory;
+ import org.hibernate.hql.ast.util.NodeTraverser;
++import org.hibernate.id.Assigned;
+ import org.hibernate.id.IdentifierGenerator;
+ import org.hibernate.id.PostInsertIdentifierGenerator;
+ import org.hibernate.id.SequenceGenerator;
+@@ -705,7 +706,8 @@
+ 
+ 	public static boolean supportsIdGenWithBulkInsertion(IdentifierGenerator generator) {
+ 		return SequenceGenerator.class.isAssignableFrom( generator.getClass() )
++		        || Assigned.class.isAssignableFrom( generator.getClass() );
+ 	}
+ 
+ 	protected void postProcessInsert(AST insert) throws SemanticException, QueryException {
+Index: testsuite/src/test/java/org/hibernate/test/hql/BulkManipulationTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/hql/BulkManipulationTest.java	(revision 18016)
++++ testsuite/src/test/java/org/hibernate/test/hql/BulkManipulationTest.java	(working copy)
+@@ -48,7 +48,8 @@
+ 				"legacy/Multi.hbm.xml",
+ 				"hql/EntityWithCrazyCompositeKey.hbm.xml",
+ 				"hql/SimpleEntityWithAssociation.hbm.xml",
++				"hql/AssignedCompositeEntity.hbm.xml"
+ 		};
+ 	}
+ 
+@@ -474,7 +475,22 @@
+ 		s.close();
+ 	}
+ 
++	public void testInsertWithAssignedCompositeId() {
++		Session s = openSession();
++		s.beginTransaction();
+ 
++		AssignedCompositeEntity assignedComposite = new AssignedCompositeEntity();
++		assignedComposite.setKey1(1L);
++		assignedComposite.setKey2("key2");
++
++		s.save(assignedComposite);
++
++		s.createQuery( "insert into AssignedCompositeEntity (key1, key2) select a.key1, 'key3' from AssignedCompositeEntity a" ).executeUpdate(); // itentionaly match no rows, test only hql to sql compilation
++		s.createQuery( "delete from AssignedCompositeEntity" ).executeUpdate();
++		s.getTransaction().commit();
++		s.close();		
++	}
++
+ 	// UPDATES ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 	public void testIncorrectSyntax() {

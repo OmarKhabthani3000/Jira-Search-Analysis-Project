@@ -1,0 +1,152 @@
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java	(working copy)
+@@ -1,6 +1,7 @@
+ package org.hibernate.cfg.reveng;
+ 
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ 
+ import org.hibernate.connection.ConnectionProvider;
+@@ -8,6 +9,10 @@
+ 
+ public interface ReverseEngineeringStrategy {
+ 
++    public boolean ignoreForeignKeys();
++    
++    public Map tableToMetaAttributes(TableIdentifier tableIdentifier);
++
+ 	/**
+ 	 * 
+ 	 * @return a fully-qualified class name (must be aligned with tableToPackageName and tableToSimpleClassName) 
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java	(working copy)
+@@ -4,6 +4,7 @@
+ import java.util.Collections;
+ import java.util.HashSet;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ import java.util.Set;
+ 
+@@ -32,7 +33,15 @@
+ 		super();
+ 	}
+ 		
+-	public String columnToPropertyName(TableIdentifier table, String columnName) {
++    public boolean ignoreForeignKeys() {
++        return false;
++    }
++
++    public Map tableToMetaAttributes(TableIdentifier tableIdentifier) {
++        return Collections.EMPTY_MAP;
++    }
++
++    public String columnToPropertyName(TableIdentifier table, String columnName) {
+ 		String decapitalize = Introspector.decapitalize( toUpperCamelCase(columnName) );
+ 		
+ 		return keywordCheck( decapitalize );
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/JDBCReader.java	(working copy)
+@@ -106,6 +106,11 @@
+ 	
+ 	
+ 	protected Map processForeignKeys(DatabaseCollector dbs, Table referencedTable, ProgressListener progress) throws JDBCBinderException {
++        
++        if (revengStrategy.ignoreForeignKeys()) {
++            return new HashMap();
++        }
++        
+ 		// foreign key name to list of columns
+ 		Map dependentColumns = new HashMap();
+ 		// foreign key name to Table
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java	(working copy)
+@@ -1,6 +1,8 @@
+ package org.hibernate.cfg.reveng;
+ 
++import java.util.Collections;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ 
+ import org.hibernate.connection.ConnectionProvider;
+@@ -10,7 +12,15 @@
+ 
+ 	ReverseEngineeringStrategy delegate;
+ 
+-	public List getForeignKeys(TableIdentifier referencedTable) {
++    public boolean ignoreForeignKeys() {
++        return delegate==null?false:delegate.ignoreForeignKeys();
++    }
++
++    public Map tableToMetaAttributes(TableIdentifier tableIdentifier) {
++        return delegate==null?null:delegate.tableToMetaAttributes(tableIdentifier);
++    }
++
++    public List getForeignKeys(TableIdentifier referencedTable) {
+ 		return delegate==null?null:delegate.getForeignKeys(referencedTable);
+ 	}
+ 
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java	(working copy)
+@@ -123,7 +123,7 @@
+ 	 * @param mappings2
+ 	 */
+ 	private void createPersistentClasses(Map manyToOneCandidates, Mapping mapping) {
+-		
++
+ 		for (Iterator iter = mappings.iterateTables(); iter.hasNext();) {
+ 			Table table = (Table) iter.next();
+ 			if(table.getColumnSpan()==0) {
+@@ -144,8 +144,10 @@
+ 			rc.setClassName( className );				
+ 			rc.setProxyInterfaceName( rc.getEntityName() ); // TODO: configurable ?
+ 			rc.setLazy(true);
+-			
+-			rc.setDiscriminatorValue( rc.getEntityName() );
++
++			rc.setMetaAttributes(revengStrategy.tableToMetaAttributes(tableIdentifier));
++
++            rc.setDiscriminatorValue( rc.getEntityName() );
+ 			rc.setTable(table);
+ 			try {
+ 				mappings.addClass(rc);
+Index: C:/DAL2.1/workspace/HibernateExt/tools/src/testsupport/NoopReverseEngineeringStrategy.java
+===================================================================
+--- C:/DAL2.1/workspace/HibernateExt/tools/src/testsupport/NoopReverseEngineeringStrategy.java	(revision 9668)
++++ C:/DAL2.1/workspace/HibernateExt/tools/src/testsupport/NoopReverseEngineeringStrategy.java	(working copy)
+@@ -1,4 +1,6 @@
++import java.util.Collections;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ 
+ import org.hibernate.cfg.reveng.ReverseEngineeringStrategy;
+@@ -13,7 +15,15 @@
+  */
+ public class NoopReverseEngineeringStrategy implements ReverseEngineeringStrategy {
+ 
+-	public String tableToClassName(TableIdentifier tableIdentifier) {
++    public boolean ignoreForeignKeys() {
++        return false;
++    }
++
++    public Map tableToMetaAttributes(TableIdentifier tableIdentifier) {
++        return null;
++    }
++
++    public String tableToClassName(TableIdentifier tableIdentifier) {
+ 		// TODO Auto-generated method stub
+ 		return null;
+ 	}

@@ -1,0 +1,160 @@
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/build.xml,v
+retrieving revision 1.13
+diff -u -r1.13 build.xml
+--- build.xml	24 Mar 2005 00:23:07 -0000	1.13
++++ build.xml	3 Apr 2005 19:25:49 -0000
+@@ -100,6 +100,32 @@
+         
+     </target>
+ 
++  <path id="tasks.classpath">
++    <fileset dir="${hibernate-core.lib.dir}">
++      <include name="**/*.jar" />
++    </fileset>
++      <fileset dir="lib">
++        <include name="**/*.jar" />
++      </fileset>    
++    <pathelement location="${hibernate-core.jar}"/>
++    <pathelement path="build/classes"/>
++  </path>
++  
++  <target name="testanthbm2java" depends="jar">
++    
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++      <hibernatetool destdir="${build.dir}/bottomup">
++        <configuration propertyfile="etc/hibernate.properties">
++          <fileset dir="src/test/org/hibernate/tool/hbm2x">
++            <include name="**/*.hbm.xml" />
++          </fileset>        
++        </configuration>
++          
++              <hbm2java generics="true"/>
++      </hibernatetool>   
++      
++  </target>  
++  
+     <target name="testantannotationcfg" depends="jar">
+         <taskdef name="hibernatetoolx" classname="org.hibernate.tool.ant.HibernateToolTask" classpath="${hibernate-core.jar};build/classes;../metadata/build/classes;"/>   
+         <hibernatetoolx destdir="${build.dir}/bottomup">
+Index: src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java,v
+retrieving revision 1.2
+diff -u -r1.2 Hbm2JavaGeneratorTask.java
+--- src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	23 Mar 2005 19:55:50 -0000	1.2
++++ src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	3 Apr 2005 19:25:49 -0000
+@@ -15,7 +15,10 @@
+ public class Hbm2JavaGeneratorTask extends GeneratorTask {
+ 
+ 	boolean ejb3 = false;
+-	/**
++
++  boolean generics = false;
++
++  /**
+ 	 * @param parent
+ 	 */
+ 	public Hbm2JavaGeneratorTask(HibernateToolTask parent) {
+@@ -26,9 +29,13 @@
+ 		ejb3 = b;
+ 	}
+ 	
++  public void setGenerics(boolean b) {
++    generics = b;
++  }  
++  
+ 	public void execute() {
+ 		ConfigurationNavigator cv = new ConfigurationNavigator();
+-		Exporter exporter = new POJOExporter(parent.getConfiguration(), getDestdir(), getTemplatePath().list(), ejb3);
++		Exporter exporter = new POJOExporter(parent.getConfiguration(), getDestdir(), getTemplatePath().list(), ejb3, generics);
+ 		cv.export(parent.getConfiguration(), exporter);
+ 	}
+ 
+
+Index: src/java/org/hibernate/tool/hbm2x/POJOExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/POJOExporter.java,v
+retrieving revision 1.9
+diff -u -r1.9 POJOExporter.java
+--- src/java/org/hibernate/tool/hbm2x/POJOExporter.java	17 Feb 2005 17:31:36 -0000	1.9
++++ src/java/org/hibernate/tool/hbm2x/POJOExporter.java	3 Apr 2005 19:25:50 -0000
+@@ -29,16 +29,21 @@
+ 	private final Configuration cfg;
+ 
+     private final boolean ejb3;
++    private final boolean generics;
+ 		
+-	public POJOExporter(Configuration cfg, File outputdir, String[] templatePaths, boolean ejb3) {
++	public POJOExporter(Configuration cfg, File outputdir, String[] templatePaths, boolean ejb3, boolean generics) {
+ 		this.cfg = cfg;
+ 		this.outputdir = outputdir;
+         this.templatePaths = templatePaths;
+         this.ejb3 = ejb3;
++        if (ejb3)
++          this.generics = true;
++        else 
++          this.generics = generics;
+ 	}
+     
+     public POJOExporter(Configuration cfg, File outputdir) {
+-        this(cfg,outputdir, new String[0],false);
++        this(cfg,outputdir, new String[0],false, false);
+     }
+ 
+ 	public boolean startPersistentClass(PersistentClass clazz) {
+@@ -87,6 +92,7 @@
+ 		vh.init(templatePaths);
+         vh.putInContext("cfg", cfg);
+         vh.putInContext("ejb3", Boolean.valueOf(ejb3));
++        vh.putInContext("generics", Boolean.valueOf(generics));
+ 	}
+ 	
+ 	public void finish() throws ExporterException {	
+Index: src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java,v
+retrieving revision 1.3
+diff -u -r1.3 Hbm2JavaEjb3Test.java
+--- src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java	18 Mar 2005 11:35:03 -0000	1.3
++++ src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java	3 Apr 2005 19:25:50 -0000
+@@ -37,7 +37,7 @@
+ 		outputdir.mkdirs();
+ 		
+ 		ConfigurationNavigator cv = new ConfigurationNavigator();
+-		Exporter exporter = new POJOExporter(getCfg(), outputdir, new String[0], true);
++		Exporter exporter = new POJOExporter(getCfg(), outputdir, new String[0], true, true);
+ 		
+ 		cv.export(getCfg(), exporter);
+ 	}
+Index: src/velocity/pojo/javaclass.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/pojo/javaclass.vm,v
+retrieving revision 1.5
+diff -u -r1.5 javaclass.vm
+--- src/velocity/pojo/javaclass.vm	23 Mar 2005 09:38:03 -0000	1.5
++++ src/velocity/pojo/javaclass.vm	3 Apr 2005 19:25:50 -0000
+@@ -29,7 +29,7 @@
+ ## #if ($type.equals("java.util.Set"))
+ ## $c2j.getFieldModifiers($field) java.util.Set<$field.value.element.associatedClass.entityName> $field.name;
+ ## #else
+- $c2j.getFieldModifiers($field) $c2j.getTypeName($field, $ejb3) $field.name;
++ $c2j.getFieldModifiers($field) $c2j.getTypeName($field, $generics) $field.name;
+ ## #end
+ #end
+ 
+@@ -90,11 +90,11 @@
+  #end
+ #end
+ #end
+-    $c2j.getPropertyGetModifiers($property) $c2j.getTypeName($property, $ejb3) $c2j.getGetterSignature($property) () {
++    $c2j.getPropertyGetModifiers($property) $c2j.getTypeName($property, $generics) $c2j.getGetterSignature($property) () {
+         return this.$property.name;
+     }
+     
+-   $c2j.getPropertySetModifiers($property) void set$c2j.getPropertyName($property) ($c2j.getTypeName($property, $ejb3) $property.Name) {
++   $c2j.getPropertySetModifiers($property) void set$c2j.getPropertyName($property) ($c2j.getTypeName($property, $generics) $property.Name) {
+         this.$property.Name = $property.Name;
+     }
+ #end

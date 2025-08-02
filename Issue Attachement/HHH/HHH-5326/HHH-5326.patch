@@ -1,0 +1,394 @@
+Index: core/src/main/java/org/hibernate/cache/UpdateTimestampsCache.java
+===================================================================
+--- core/src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(revision 19965)
++++ core/src/main/java/org/hibernate/cache/UpdateTimestampsCache.java	(working copy)
+@@ -29,6 +29,7 @@
+ import java.util.Properties;
+ import java.util.Set;
+ 
++import org.hibernate.engine.SessionFactoryImplementor;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+@@ -50,8 +51,10 @@
+ 	private static final Logger log = LoggerFactory.getLogger( UpdateTimestampsCache.class );
+ 
+ 	private final TimestampsRegion region;
++	private final SessionFactoryImplementor factory;
+ 
+-	public UpdateTimestampsCache(Settings settings, Properties props) throws HibernateException {
++	public UpdateTimestampsCache(Settings settings, Properties props, final SessionFactoryImplementor factory) throws HibernateException {
++		this.factory = factory;
+ 		String prefix = settings.getCacheRegionPrefix();
+ 		String regionName = prefix == null ? REGION_NAME : prefix + '.' + REGION_NAME;
+ 		log.info( "starting update timestamps cache at region: " + regionName );
+@@ -68,6 +71,9 @@
+ 			//put() has nowait semantics, is this really appropriate?
+ 			//note that it needs to be async replication, never local or sync
+ 			region.put( spaces[i], ts );
++			if(factory.getStatistics().isStatisticsEnabled()) {
++				factory.getStatisticsImplementor().updateTimestampsCachePut();
++			}
+ 		}
+ 		//TODO: return new Lock(ts);
+ 	}
+@@ -83,6 +89,9 @@
+ 			//put() has nowait semantics, is this really appropriate?
+ 			//note that it needs to be async replication, never local or sync
+ 			region.put( spaces[i], ts );
++			if(factory.getStatistics().isStatisticsEnabled()) {
++				factory.getStatisticsImplementor().updateTimestampsCachePut();
++			}
+ 		}
+ 	}
+ 
+@@ -92,6 +101,9 @@
+ 			Serializable space = (Serializable) iter.next();
+ 			Long lastUpdate = (Long) region.get(space);
+ 			if ( lastUpdate==null ) {
++				if(factory.getStatistics().isStatisticsEnabled()) {
++					factory.getStatisticsImplementor().updateTimestampsCacheMiss();
++				}
+ 				//the last update timestamp was lost from the cache
+ 				//(or there were no updates since startup!)
+ 				//updateTimestamps.put( space, new Long( updateTimestamps.nextTimestamp() ) );
+@@ -101,6 +113,9 @@
+ 				if ( log.isDebugEnabled() ) {
+ 					log.debug("[" + space + "] last update timestamp: " + lastUpdate + ", result set timestamp: " + timestamp );
+ 				}
++				if(factory.getStatistics().isStatisticsEnabled()) {
++					factory.getStatisticsImplementor().updateTimestampsCacheHit();
++				}
+ 				if ( lastUpdate.longValue() >= timestamp.longValue() ) {
+ 					return false;
+ 				}
+Index: core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(revision 19965)
++++ core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -412,7 +412,7 @@
+ 		currentSessionContext = buildCurrentSessionContext();
+ 
+ 		if ( settings.isQueryCacheEnabled() ) {
+-			updateTimestampsCache = new UpdateTimestampsCache(settings, properties);
++			updateTimestampsCache = new UpdateTimestampsCache(settings, properties, this);
+ 			queryCache = settings.getQueryCacheFactory()
+ 			        .getQueryCache(null, updateTimestampsCache, settings, properties);
+ 			queryCaches = new HashMap();
+Index: core/src/main/java/org/hibernate/jmx/StatisticsService.java
+===================================================================
+--- core/src/main/java/org/hibernate/jmx/StatisticsService.java	(revision 19965)
++++ core/src/main/java/org/hibernate/jmx/StatisticsService.java	(working copy)
+@@ -180,6 +180,19 @@
+ 	public long getQueryCachePutCount() {
+ 		return stats.getQueryCachePutCount();
+ 	}
++
++	public long getUpdateTimestampsCacheHitCount() {
++		return stats.getUpdateTimestampsCacheHitCount();
++	}
++
++	public long getUpdateTimestampsCacheMissCount() {
++		return stats.getUpdateTimestampsCacheMissCount();
++	}
++
++	public long getUpdateTimestampsCachePutCount() {
++		return stats.getUpdateTimestampsCachePutCount();
++	}
++
+ 	/**
+ 	 * @see StatisticsServiceMBean#getFlushCount()
+ 	 */
+Index: core/src/main/java/org/hibernate/stat/StatisticsImplementor.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/StatisticsImplementor.java	(revision 19965)
++++ core/src/main/java/org/hibernate/stat/StatisticsImplementor.java	(working copy)
+@@ -51,6 +51,9 @@
+ 	public void queryCacheHit(String hql, String regionName);
+ 	public void queryCacheMiss(String hql, String regionName);
+ 	public void queryCachePut(String hql, String regionName);
++	public void updateTimestampsCacheHit();
++	public void updateTimestampsCacheMiss();
++	public void updateTimestampsCachePut();
+ 	public void endTransaction(boolean success);
+ 	public void closeStatement();
+ 	public void prepareStatement();
+Index: core/src/main/java/org/hibernate/stat/StatisticsImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/StatisticsImpl.java	(revision 19965)
++++ core/src/main/java/org/hibernate/stat/StatisticsImpl.java	(working copy)
+@@ -76,7 +76,10 @@
+ 	private long queryCacheHitCount;
+ 	private long queryCacheMissCount;
+ 	private long queryCachePutCount;
+-	
++	private long updateTimestampsCacheHitCount;
++	private long updateTimestampsCacheMissCount;
++	private long updateTimestampsCachePutCount;
++
+ 	private long commitedTransactionCount;
+ 	private long transactionCount;
+ 	
+@@ -134,7 +137,11 @@
+ 		queryExecutionMaxTimeQueryString = null;
+ 		queryCacheMissCount = 0;
+ 		queryCachePutCount = 0;
+-		
++
++		updateTimestampsCacheMissCount = 0;
++		updateTimestampsCacheHitCount = 0;
++		updateTimestampsCachePutCount = 0;
++
+ 		transactionCount = 0;
+ 		commitedTransactionCount = 0;
+ 		
+@@ -327,6 +334,18 @@
+ 		slcs.putCount++;
+ 	}
+ 
++	public synchronized void updateTimestampsCacheHit() {
++		updateTimestampsCacheHitCount++;
++	}
++
++	public synchronized void updateTimestampsCacheMiss() {
++		updateTimestampsCacheMissCount++;
++	}
++
++	public synchronized void updateTimestampsCachePut() {
++		updateTimestampsCacheMissCount++;
++	}
++
+ 	/**
+ 	 * Query statistics from query string (HQL or SQL)
+ 	 * 
+@@ -392,7 +411,19 @@
+ 	public long getQueryCachePutCount() {
+ 		return queryCachePutCount;
+ 	}
+-	
++
++	public long getUpdateTimestampsCacheHitCount() {
++		return updateTimestampsCacheHitCount;
++	}
++
++	public long getUpdateTimestampsCacheMissCount() {
++		return updateTimestampsCacheMissCount;
++	}
++
++	public long getUpdateTimestampsCachePutCount() {
++		return updateTimestampsCachePutCount;
++	}
++
+ 	/**
+ 	 * @return flush
+ 	 */
+@@ -516,6 +547,9 @@
+ 		log.info("query cache puts: " + queryCachePutCount);
+ 		log.info("query cache hits: " + queryCacheHitCount);
+ 		log.info("query cache misses: " + queryCacheMissCount);
++		log.info("update timestamps cache puts: " + updateTimestampsCachePutCount);
++		log.info("update timestamps cache hits: " + updateTimestampsCacheHitCount);
++		log.info("update timestamps cache misses: " + updateTimestampsCacheMissCount);
+ 		log.info("max query time: " + queryExecutionMaxTime + "ms");
+ 	}
+ 	
+Index: core/src/main/java/org/hibernate/stat/ConcurrentStatisticsImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/ConcurrentStatisticsImpl.java	(revision 19965)
++++ core/src/main/java/org/hibernate/stat/ConcurrentStatisticsImpl.java	(working copy)
+@@ -54,6 +54,10 @@
+ 	private			 AtomicLong	queryCacheMissCount				 = new AtomicLong();
+ 	private			 AtomicLong	queryCachePutCount				 = new AtomicLong();
+ 
++	private          AtomicLong updateTimestampsCacheHitCount    = new AtomicLong();
++	private          AtomicLong updateTimestampsCacheMissCount   = new AtomicLong();
++	private          AtomicLong updateTimestampsCachePutCount    = new AtomicLong();
++
+ 	private			 AtomicLong	commitedTransactionCount		 = new AtomicLong();
+ 	private			 AtomicLong	transactionCount				 = new AtomicLong();
+ 
+@@ -120,6 +124,10 @@
+ 		queryCacheMissCount.set(0);
+ 		queryCachePutCount.set(0);
+ 
++		updateTimestampsCacheMissCount.set(0);
++		updateTimestampsCacheHitCount.set(0);
++		updateTimestampsCachePutCount.set(0);
++
+ 		transactionCount.set(0);
+ 		commitedTransactionCount.set(0);
+ 
+@@ -323,6 +331,18 @@
+ 		slcs.incrementPutCount();
+ 	}
+ 
++	public void updateTimestampsCacheHit() {
++		updateTimestampsCacheHitCount.getAndIncrement();
++	}
++
++	public void updateTimestampsCacheMiss() {
++		updateTimestampsCacheMissCount.getAndIncrement();
++	}
++
++	public void updateTimestampsCachePut() {
++		updateTimestampsCachePutCount.getAndIncrement();
++	}
++
+ 	/**
+ 	 * Query statistics from query string (HQL or SQL)
+ 	 *
+@@ -392,6 +412,18 @@
+ 		return queryCachePutCount.get();
+ 	}
+ 
++	public long getUpdateTimestampsCacheHitCount() {
++		return updateTimestampsCacheHitCount.get();
++	}
++
++	public long getUpdateTimestampsCacheMissCount() {
++		return updateTimestampsCacheMissCount.get();
++	}
++
++	public long getUpdateTimestampsCachePutCount() {
++		return updateTimestampsCachePutCount.get();
++	}
++
+ 	/**
+ 	 * @return flush
+ 	 */
+@@ -516,6 +548,9 @@
+ 		log.info("query cache puts: " + queryCachePutCount);
+ 		log.info("query cache hits: " + queryCacheHitCount);
+ 		log.info("query cache misses: " + queryCacheMissCount);
++		log.info("update timestamps cache puts: " + updateTimestampsCachePutCount);
++		log.info("update timestamps cache hits: " + updateTimestampsCacheHitCount);
++		log.info("update timestamps cache misses: " + updateTimestampsCacheMissCount);
+ 		log.info("max query time: " + queryExecutionMaxTime + "ms");
+ 	}
+ 
+@@ -649,6 +684,9 @@
+ 				.append(",query cache puts=").append(queryCachePutCount)
+ 				.append(",query cache hits=").append(queryCacheHitCount)
+ 				.append(",query cache misses=").append(queryCacheMissCount)
++				.append(",update timestamps cache puts=").append(updateTimestampsCachePutCount)
++				.append(",update timestamps cache hits=").append(updateTimestampsCacheHitCount)
++				.append(",update timestamps cache misses=").append(updateTimestampsCacheMissCount)
+ 				.append(",max query time=").append(queryExecutionMaxTime)
+ 				.append(']')
+ 				.toString();
+Index: core/src/main/java/org/hibernate/stat/Statistics.java
+===================================================================
+--- core/src/main/java/org/hibernate/stat/Statistics.java	(revision 19965)
++++ core/src/main/java/org/hibernate/stat/Statistics.java	(working copy)
+@@ -126,6 +126,18 @@
+      * Get the global number of cacheable queries put in cache
+      */
+ 	public long getQueryCachePutCount();
++    /**
++     * Get the global number of timestamps successfully retrieved from cache
++     */
++	public long getUpdateTimestampsCacheHitCount();
++    /**
++     * Get the global number of tables for which no update timestamps was *not* found in cache
++     */
++	public long getUpdateTimestampsCacheMissCount();
++    /**
++     * Get the global number of timestamps put in cache
++     */
++	public long getUpdateTimestampsCachePutCount();
+ 	/**
+      * Get the global number of flush executed by sessions (either implicit or explicit)
+      */
+Index: testsuite/src/test/java/org/hibernate/test/tm/CMTTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/tm/CMTTest.java	(revision 19965)
++++ testsuite/src/test/java/org/hibernate/test/tm/CMTTest.java	(working copy)
+@@ -59,7 +59,9 @@
+ 
+ 	public void testConcurrent() throws Exception {
+ 		getSessions().getStatistics().clear();
+-
++		assertEquals(0, getSessions().getStatistics().getUpdateTimestampsCacheHitCount());
++		assertEquals(0, getSessions().getStatistics().getUpdateTimestampsCachePutCount());
++		assertEquals(0, getSessions().getStatistics().getUpdateTimestampsCacheMissCount());
+ 		SimpleJtaTransactionManagerImpl.getInstance().begin();
+ 		Session s = openSession();
+ 		Map foo = new HashMap();
+@@ -71,6 +73,9 @@
+ 		bar.put( "description", "a small bar" );
+ 		s.persist( "Item", bar );
+ 		SimpleJtaTransactionManagerImpl.getInstance().commit();
++		assertEquals(0, getSessions().getStatistics().getUpdateTimestampsCacheHitCount());
++		assertEquals(3, getSessions().getStatistics().getUpdateTimestampsCachePutCount()); // Twice preinvalidate & one invalidate
++		assertEquals(0, getSessions().getStatistics().getUpdateTimestampsCacheMissCount());
+ 
+ 		getSessions().evictEntity( "Item" );
+ 
+@@ -115,6 +120,8 @@
+ 		assertEquals( getSessions().getStatistics().getEntityFetchCount(), 0 );
+ 		assertEquals( getSessions().getStatistics().getQueryExecutionCount(), 3 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 0 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 0 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 3 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 0 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().begin();
+@@ -170,6 +177,8 @@
+ 		assertEquals( getSessions().getStatistics().getQueryExecutionCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 1 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 1 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 0 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 1 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().resume( tx1 );
+@@ -188,6 +197,9 @@
+ 		assertEquals( getSessions().getStatistics().getQueryExecutionCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 2 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 2 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 0 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheMissCount(), 0 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 1 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().resume( tx4 );
+@@ -203,6 +215,8 @@
+ 		assertEquals( getSessions().getStatistics().getQueryExecutionCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 3 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 3 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 0 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 1 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().begin();
+@@ -265,10 +279,14 @@
+ 		assertEquals( getSessions().getStatistics().getQueryExecutionCount(), 2 );
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 2 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 0 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 4 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 2 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 2 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().resume( tx1 );
+ 		tx1.commit();
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCachePutCount(), 3 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 5 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().begin();
+ 		Session s3 = openSession();
+@@ -284,6 +302,7 @@
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 3 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 0 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 3 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 6 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().resume( tx4 );
+ 		List r4 = s4.createCriteria( "Item" ).addOrder( Order.asc( "description" ) )
+@@ -299,6 +318,7 @@
+ 		assertEquals( getSessions().getStatistics().getQueryCachePutCount(), 3 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheHitCount(), 1 );
+ 		assertEquals( getSessions().getStatistics().getQueryCacheMissCount(), 3 );
++		assertEquals( getSessions().getStatistics().getUpdateTimestampsCacheHitCount(), 7 );
+ 
+ 		SimpleJtaTransactionManagerImpl.getInstance().begin();
+ 		s = openSession();

@@ -1,0 +1,301 @@
+diff -ru hibernate-3.0.old/src/org/hibernate/engine/QueryParameters.java hibernate-3.0/src/org/hibernate/engine/QueryParameters.java
+--- hibernate-3.0.old/src/org/hibernate/engine/QueryParameters.java	2006-03-22 10:36:59.897581328 -0800
++++ hibernate-3.0/src/org/hibernate/engine/QueryParameters.java	2006-03-22 11:22:31.304344384 -0800
+@@ -8,11 +8,11 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ import java.util.StringTokenizer;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+-
+ import org.hibernate.HibernateException;
+ import org.hibernate.QueryException;
+ import org.hibernate.ScrollMode;
+@@ -48,7 +48,10 @@
+ 	private String processedSQL;
+ 	private Type[] processedPositionalParameterTypes;
+ 	private Object[] processedPositionalParameterValues;
+-	
++    private Integer[] filterOffsets;
++    private Integer nonFilterOffset;
++    private Set reservedLocs;
++    
+ 	public QueryParameters() {
+ 		this( ArrayHelper.EMPTY_TYPE_ARRAY, ArrayHelper.EMPTY_OBJECT_ARRAY );
+ 	}
+@@ -334,6 +337,8 @@
+ 		
+ 			List parameters = new ArrayList();
+ 			List parameterTypes = new ArrayList();
++			List filterOffsetList = new ArrayList();
++			int offset = 0;
+ 		
+ 			while ( tokens.hasMoreTokens() ) {
+ 				final String token = tokens.nextToken();
+@@ -348,6 +353,7 @@
+ 							result.append( '?' );
+ 							parameters.add( elementValue );
+ 							parameterTypes.add( type );
++							filterOffsetList.add( new Integer( offset++ ) );
+ 							if ( itr.hasNext() ) {
+ 								result.append( ", " );
+ 							}
+@@ -357,18 +363,28 @@
+ 						result.append( '?' );
+ 						parameters.add( value );
+ 						parameterTypes.add( type );
++						filterOffsetList.add( new Integer( offset++ ) );
+ 					}
+ 				}
+ 				else {
+-					result.append( token );
++				    if ( token.equals( "?" ) ) {
++					if (nonFilterOffset == null) {
++					    nonFilterOffset = new Integer( offset );
++					}
++                        
++					offset++;
++				    }
++                    
++				    result.append( token );
+ 				}
+ 			}
+ 			parameters.addAll( Arrays.asList( getPositionalParameterValues() ) );
+ 			parameterTypes.addAll( Arrays.asList( getPositionalParameterTypes() ) );
+ 			processedPositionalParameterValues = parameters.toArray();
+ 			processedPositionalParameterTypes = ( Type[] ) parameterTypes.toArray( new Type[0] );
++			filterOffsets = ( Integer[] ) filterOffsetList.toArray( new Integer[0] );
++            
+ 			processedSQL = result.toString();
+-			
+ 		}
+ 	}
+ 
+@@ -383,7 +399,23 @@
+ 	public Type[] getFilteredPositionalParameterTypes() {
+ 		return processedPositionalParameterTypes;
+ 	}
++    
++	public Integer[] getFilterOffsets() {
++	    return filterOffsets;
++	}
++    
++	public Integer getNonFilterOffset() {
++	    return nonFilterOffset;
++	}
++    
++	public Set getReservedLocations() {
++	    return reservedLocs;
++	}
+ 
++	public void setReservedLocations(Set reservedLocs) {
++	    this.reservedLocs = reservedLocs;
++	}
++    
+ 	public boolean isNaturalKeyLookup() {
+ 		return isNaturalKeyLookup;
+ 	}
+diff -ru hibernate-3.0.old/src/org/hibernate/hql/classic/QueryTranslatorImpl.java hibernate-3.0/src/org/hibernate/hql/classic/QueryTranslatorImpl.java
+--- hibernate-3.0.old/src/org/hibernate/hql/classic/QueryTranslatorImpl.java	2006-03-22 10:37:00.046558680 -0800
++++ hibernate-3.0/src/org/hibernate/hql/classic/QueryTranslatorImpl.java	2006-03-22 11:29:50.748538712 -0800
+@@ -862,7 +862,7 @@
+ 		pathJoins.put( path, joinSequence );
+ 	}
+ 
+-	protected int bindNamedParameters(PreparedStatement ps, Map namedParams, int start, SessionImplementor session)
++	protected int bindNamedParameters(PreparedStatement ps, Map namedParams, Set reservedLocs, int start, SessionImplementor session)
+ 			throws SQLException, HibernateException {
+ 		if ( namedParams != null ) {
+ 			// assumes that types are all of span 1
+@@ -873,8 +873,17 @@
+ 				String name = ( String ) e.getKey();
+ 				TypedValue typedval = ( TypedValue ) e.getValue();
+ 				int[] locs = getNamedParameterLocs( name );
++				int loc;
+ 				for ( int i = 0; i < locs.length; i++ ) {
+-					typedval.getType().nullSafeSet( ps, typedval.getValue(), locs[i] + start, session );
++				    	loc = locs[i] + start;
++				   	 // find the next unreserved location
++				    	while ( reservedLocs.contains( new Integer( loc ) ) ) {
++				    	    	loc++;
++				    	}
++                    
++					typedval.getType().nullSafeSet( ps, typedval.getValue(), loc, session );
++                    
++					reservedLocs.add( new Integer( loc ) );
+ 				}
+ 				result += locs.length;
+ 			}
+diff -ru hibernate-3.0.old/src/org/hibernate/loader/custom/CustomLoader.java hibernate-3.0/src/org/hibernate/loader/custom/CustomLoader.java
+--- hibernate-3.0.old/src/org/hibernate/loader/custom/CustomLoader.java	2006-03-22 10:37:00.124546824 -0800
++++ hibernate-3.0/src/org/hibernate/loader/custom/CustomLoader.java	2006-03-22 11:29:27.697043072 -0800
+@@ -162,7 +162,8 @@
+ 
+ 	protected int bindNamedParameters(
+ 			PreparedStatement ps, 
+-			Map namedParams, 
++			Map namedParams,
++			Set reservedLocs,
+ 			int start, 
+ 			SessionImplementor session)
+ 	throws SQLException, HibernateException {
+@@ -175,10 +176,19 @@
+ 				String name = (String) e.getKey();
+ 				TypedValue typedval = (TypedValue) e.getValue();
+ 				int[] locs = getNamedParameterLocs(name);
++				int loc;
+ 				for (int i = 0; i < locs.length; i++) {
++				    	loc = locs[i] + start;
++                    
++				    	// find the next unreserved location
++				    	while ( reservedLocs.contains( new Integer( loc ) ) ) {
++				    	    	loc++;
++				    	}
+ 					typedval.getType().nullSafeSet(
+-						ps, typedval.getValue(), locs[i] + start, session
++						ps, typedval.getValue(), loc, session
+ 					);
++                    
++					reservedLocs.add( new Integer( loc ) );
+ 				}
+ 				result += locs.length;
+ 			}
+diff -ru hibernate-3.0.old/src/org/hibernate/loader/hql/QueryLoader.java hibernate-3.0/src/org/hibernate/loader/hql/QueryLoader.java
+--- hibernate-3.0.old/src/org/hibernate/loader/hql/QueryLoader.java	2006-03-22 10:37:00.135545152 -0800
++++ hibernate-3.0/src/org/hibernate/loader/hql/QueryLoader.java	2006-03-22 11:28:26.221388792 -0800
+@@ -8,6 +8,7 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -241,9 +242,10 @@
+ 	}
+ 	
+ 	protected int bindNamedParameters(final PreparedStatement ps,
+-									  final Map namedParams,
+-									  final int start,
+-									  final SessionImplementor session)
++					  final Map namedParams,
++					  final Set reservedLocs,
++					  final int start,
++					  final SessionImplementor session)
+ 			throws SQLException, HibernateException {
+ 
+ 		if ( namedParams != null ) {
+@@ -255,13 +257,23 @@
+ 				String name = ( String ) e.getKey();
+ 				TypedValue typedval = ( TypedValue ) e.getValue();
+ 				int[] locs = getNamedParameterLocs( name );
++				int loc;
+ 				for ( int i = 0; i < locs.length; i++ ) {
++				    	loc = locs[i] + start;
++                    
++				    	// find the next unreserved location
++				    	while ( reservedLocs.contains( new Integer( loc ) ) ) {
++						loc++;
++				    	}
++                    
+ 					if ( log.isDebugEnabled() ) {
+ 						log.debug( "bindNamedParameters() " +
+ 								typedval.getValue() + " -> " + name +
+ 								" [" + ( locs[i] + start ) + "]" );
+ 					}
+-					typedval.getType().nullSafeSet( ps, typedval.getValue(), locs[i] + start, session );
++					typedval.getType().nullSafeSet( ps, typedval.getValue(), loc, session );
++                    
++					reservedLocs.add( new Integer( loc ) );
+ 				}
+ 				result += locs.length;
+ 			}
+diff -ru hibernate-3.0.old/src/org/hibernate/loader/Loader.java hibernate-3.0/src/org/hibernate/loader/Loader.java
+--- hibernate-3.0.old/src/org/hibernate/loader/Loader.java	2006-03-22 10:37:00.141544240 -0800
++++ hibernate-3.0/src/org/hibernate/loader/Loader.java	2006-03-22 11:27:40.883281232 -0800
+@@ -1103,18 +1103,36 @@
+ 	 * (these are parameters specified by a JDBC-style ?).
+ 	 */
+ 	protected int bindPositionalParameters(final PreparedStatement st,
+-										   final QueryParameters queryParameters,
+-										   final int start,
+-										   final SessionImplementor session)
++	    				       final QueryParameters queryParameters,
++	    				       final int start,
++	    				       final SessionImplementor session)
+ 			throws SQLException, HibernateException {
+ 
+ 		final Object[] values = queryParameters.getFilteredPositionalParameterValues();
+ 		final Type[] types = queryParameters.getFilteredPositionalParameterTypes();
++		final Integer[] filterOffsets = queryParameters.getFilterOffsets();
+ 		int span = 0;
+-		for ( int i = 0; i < values.length; i++ ) {
+-			types[i].nullSafeSet( st, values[i], start + span, session );
++		int i = 0;
++		int loc;
++		final Set reservedLocs = new HashSet();
++        
++		if (filterOffsets != null) {
++		    for ( ; i < filterOffsets.length; i++ ) {
++			loc = start + filterOffsets[i].intValue();
++			reservedLocs.add( new Integer( loc ) );
++			types[i].nullSafeSet( st, values[i], loc, session );
+ 			span += types[i].getColumnSpan( getFactory() );
++		    }
++		}
++        
++		for ( ; i < values.length; i++ ) {
++		    loc = start + span;
++		    reservedLocs.add( new Integer( loc ) );
++		    types[i].nullSafeSet( st, values[i], loc, session );
++		    span += types[i].getColumnSpan( getFactory() );
+ 		}
++        
++		queryParameters.setReservedLocations(reservedLocs);
+ 		return span;
+ 	}
+ 
+@@ -1136,6 +1154,7 @@
+ 		boolean hasFirstRow = getFirstRow( selection ) > 0;
+ 		boolean useOffset = hasFirstRow && useLimit && dialect.supportsLimitOffset();
+ 		boolean callable = queryParameters.isCallable();
++		final Integer nonFilterOffset = queryParameters.getNonFilterOffset();
+ 		
+ 		boolean useScrollableResultSetToSkip = hasFirstRow &&
+ 				!useOffset &&
+@@ -1174,8 +1193,16 @@
+ 			if (callable) {
+ 				col = dialect.registerResultSetOutParameter( (CallableStatement)st, col );
+ 			}
+-			col += bindPositionalParameters( st, queryParameters, col, session );
+-			col += bindNamedParameters( st, queryParameters.getNamedParameters(), col, session );
++            
++			int positionalCol = col;
++            
++			col += bindPositionalParameters( st, queryParameters, positionalCol, session );
++            
++			int namedCol = ( nonFilterOffset != null ? nonFilterOffset.intValue() : 0 ) +
++				positionalCol;
++                
++			col += bindNamedParameters( st, queryParameters.getNamedParameters(),
++			    	queryParameters.getReservedLocations(), namedCol, session );
+ 
+ 			if ( useLimit && !dialect.bindLimitParametersFirst() ) {
+ 				col += bindLimitParameters( st, col, selection );
+@@ -1316,9 +1343,10 @@
+ 	 * (queries) which allow named parameters.
+ 	 */
+ 	protected int bindNamedParameters(PreparedStatement st,
+-									  Map namedParams,
+-									  int start,
+-									  SessionImplementor session)
++					  Map namedParams,
++					  Set reservedLocs,
++					  int start,
++					  SessionImplementor session)
+ 			throws SQLException, HibernateException {
+ 		return 0;
+ 	}

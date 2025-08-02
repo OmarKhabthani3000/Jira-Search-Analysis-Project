@@ -1,0 +1,211 @@
+Index: C:/Projects/workspace/hibernate-core/src/main/java/org/hibernate/engine/TwoPhaseLoad.java
+===================================================================
+--- C:/Projects/workspace/hibernate-core/src/main/java/org/hibernate/engine/TwoPhaseLoad.java (revision 14641)
++++ C:/Projects/workspace/hibernate-core/src/main/java/org/hibernate/engine/TwoPhaseLoad.java (working copy)
+@@ -109,106 +109,110 @@
+          MessageHelper.infoString(persister, id, session.getFactory())
+        );
+  
+-   Type[] types = persister.getPropertyTypes();
+-   for ( int i = 0; i < hydratedState.length; i++ ) {
+-     final Object value = hydratedState[i];
+-     if ( value!=LazyPropertyInitializer.UNFETCHED_PROPERTY && value!=BackrefPropertyAccessor.UNKNOWN ) {
+-       hydratedState[i] = types[i].resolve( value, session, entity );
+-     }
+-   }
++        try {
++       Type[] types = persister.getPropertyTypes();
++       for ( int i = 0; i < hydratedState.length; i++ ) {
++         final Object value = hydratedState[i];
++         if ( value!=LazyPropertyInitializer.UNFETCHED_PROPERTY && value!=BackrefPropertyAccessor.UNKNOWN ) {
++           hydratedState[i] = types[i].resolve( value, session, entity );
++         }
++       }
+  
+-   //Must occur after resolving identifiers!
+-   if ( session.isEventSource() ) {
+-     preLoadEvent.setEntity(entity).setState(hydratedState).setId(id).setPersister(persister);
+-     PreLoadEventListener[] listeners = session.getListeners().getPreLoadEventListeners();
+-     for ( int i = 0; i < listeners.length; i++ ) {
+-       listeners[i].onPreLoad(preLoadEvent);
+-     }
+-   }
++       //Must occur after resolving identifiers!
++       if ( session.isEventSource() ) {
++         preLoadEvent.setEntity(entity).setState(hydratedState).setId(id).setPersister(persister);
++         PreLoadEventListener[] listeners = session.getListeners().getPreLoadEventListeners();
++         for ( int i = 0; i < listeners.length; i++ ) {
++           listeners[i].onPreLoad(preLoadEvent);
++         }
++       }
+  
+-   persister.setPropertyValues( entity, hydratedState, session.getEntityMode() );
++       persister.setPropertyValues( entity, hydratedState, session.getEntityMode() );
++     
++       final SessionFactoryImplementor factory = session.getFactory();
++       if ( persister.hasCache() && session.getCacheMode().isPutEnabled() ) {
++         
++         if ( log.isDebugEnabled() )
++           log.debug(
++               "adding entity to second-level cache: " +
++               MessageHelper.infoString( persister, id, session.getFactory() )
++             );
++    
++         Object version = Versioning.getVersion(hydratedState, persister);
++         CacheEntry entry = new CacheEntry(
++             hydratedState, 
++             persister, 
++             entityEntry.isLoadedWithLazyPropertiesUnfetched(), 
++             version, 
++             session, 
++             entity
++         );
++         CacheKey cacheKey = new CacheKey( 
++             id, 
++             persister.getIdentifierType(), 
++             persister.getRootEntityName(), 
++             session.getEntityMode(), 
++             session.getFactory() 
++         );
++         boolean put = persister.getCacheAccessStrategy().putFromLoad(
++             cacheKey,
++             persister.getCacheEntryStructure().structure( entry ),
++             session.getTimestamp(),
++             version,
++             useMinimalPuts( session, entityEntry )
++         );
++    
++         if ( put && factory.getStatistics().isStatisticsEnabled() ) {
++           factory.getStatisticsImplementor().secondLevelCachePut( persister.getCacheAccessStrategy().getRegion().getName() );
++         }
++       }
+  
+-   final SessionFactoryImplementor factory = session.getFactory();
+-   if ( persister.hasCache() && session.getCacheMode().isPutEnabled() ) {
+-     
+-     if ( log.isDebugEnabled() )
+-       log.debug(
+-           "adding entity to second-level cache: " +
+-           MessageHelper.infoString( persister, id, session.getFactory() )
+-         );
+-
+-     Object version = Versioning.getVersion(hydratedState, persister);
+-     CacheEntry entry = new CacheEntry(
+-         hydratedState, 
+-         persister, 
+-         entityEntry.isLoadedWithLazyPropertiesUnfetched(), 
+-         version, 
+-         session, 
+-         entity
+-     );
+-     CacheKey cacheKey = new CacheKey( 
+-         id, 
+-         persister.getIdentifierType(), 
+-         persister.getRootEntityName(), 
+-         session.getEntityMode(), 
+-         session.getFactory() 
+-     );
+-     boolean put = persister.getCacheAccessStrategy().putFromLoad(
+-         cacheKey,
+-         persister.getCacheEntryStructure().structure( entry ),
+-         session.getTimestamp(),
+-         version,
+-         useMinimalPuts( session, entityEntry )
+-     );
+-
+-     if ( put && factory.getStatistics().isStatisticsEnabled() ) {
+-       factory.getStatisticsImplementor().secondLevelCachePut( persister.getCacheAccessStrategy().getRegion().getName() );
+-     }
+-   }
+- 
+-   if ( readOnly || !persister.isMutable() ) {
+-     //no need to take a snapshot - this is a 
+-     //performance optimization, but not really
+-     //important, except for entities with huge 
+-     //mutable property values
+-     persistenceContext.setEntryStatus(entityEntry, Status.READ_ONLY);
+-   }
+-   else {
+-     //take a snapshot
+-     TypeFactory.deepCopy( 
+-         hydratedState, 
+-         persister.getPropertyTypes(), 
+-         persister.getPropertyUpdateability(), 
+-         hydratedState,  //after setting values to object, entityMode
+-         session
+-       );
+-     persistenceContext.setEntryStatus(entityEntry, Status.MANAGED);
+-   }
++       if ( readOnly || !persister.isMutable() ) {
++         //no need to take a snapshot - this is a 
++         //performance optimization, but not really
++         //important, except for entities with huge 
++         //mutable property values
++         persistenceContext.setEntryStatus(entityEntry, Status.READ_ONLY);
++       }
++       else {
++         //take a snapshot
++                TypeFactory.deepCopy( 
++                        hydratedState, 
++                        persister.getPropertyTypes(), 
++                        persister.getPropertyUpdateability(), 
++                        hydratedState,  //after setting values to object, entityMode
++                        session
++                    );
++         persistenceContext.setEntryStatus(entityEntry, Status.MANAGED);
++       }
++       
++       persister.afterInitialize(
++           entity, 
++           entityEntry.isLoadedWithLazyPropertiesUnfetched(), 
++           session
++         );
++       
++       if ( session.isEventSource() ) {
++         postLoadEvent.setEntity(entity).setId(id).setPersister(persister);
++         PostLoadEventListener[] listeners = session.getListeners().getPostLoadEventListeners();
++         for ( int i = 0; i < listeners.length; i++ ) {
++           listeners[i].onPostLoad(postLoadEvent);
++         }
++       }
+    
+-   persister.afterInitialize(
+-       entity, 
+-       entityEntry.isLoadedWithLazyPropertiesUnfetched(), 
+-       session
+-     );
+-   
+-   if ( session.isEventSource() ) {
+-     postLoadEvent.setEntity(entity).setId(id).setPersister(persister);
+-     PostLoadEventListener[] listeners = session.getListeners().getPostLoadEventListeners();
+-     for ( int i = 0; i < listeners.length; i++ ) {
+-       listeners[i].onPostLoad(postLoadEvent);
+-     }
+-   }
+-   
+-   if ( log.isDebugEnabled() )
+-     log.debug(
+-         "done materializing entity " +
+-         MessageHelper.infoString( persister, id, session.getFactory() )
+-       );
+-   
+-   if ( factory.getStatistics().isStatisticsEnabled() ) {
+-     factory.getStatisticsImplementor().loadEntity( persister.getEntityName() );
+-   }
+- 
++       if ( log.isDebugEnabled() )
++         log.debug(
++             "done materializing entity " +
++             MessageHelper.infoString( persister, id, session.getFactory() )
++           );
++       
++       if ( factory.getStatistics().isStatisticsEnabled() ) {
++         factory.getStatisticsImplementor().loadEntity( persister.getEntityName() );
++       }
++        } catch (Exception e) {
++            throw new HibernateException("Unable to initialize entity: " + 
++                    entityEntry.getEntityName() + "#" + id.toString());
++        }
+  }
+ 
+  private static boolean useMinimalPuts(SessionImplementor session, EntityEntry entityEntry) {

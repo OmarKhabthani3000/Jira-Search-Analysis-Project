@@ -1,0 +1,253 @@
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/build.xml,v
+retrieving revision 1.16
+diff -u -r1.16 build.xml
+--- build.xml	7 Apr 2005 09:36:41 -0000	1.16
++++ build.xml	8 Apr 2005 21:18:04 -0000
+@@ -119,6 +119,7 @@
+   <path id="tasks.classpath">
+     <fileset dir="${hibernate-core.lib.dir}">
+       <include name="**/*.jar" />
++    	<exclude name="log4j*.jar" />    	
+     </fileset>
+       <fileset dir="lib">
+         <include name="**/*.jar" />
+@@ -137,7 +138,7 @@
+           </fileset>        
+         </configuration>
+           
+-              <hbm2java generics="true"/>
++              <hbm2java generics="false" cfg2javaclass="org.hibernate.tool.hbm2x.ExtendedCfg2JavaTool"/>
+       </hibernatetool>   
+       
+   </target>  
+Index: src/java/org/hibernate/tool/ant/GeneratorTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/GeneratorTask.java,v
+retrieving revision 1.2
+diff -u -r1.2 GeneratorTask.java
+--- src/java/org/hibernate/tool/ant/GeneratorTask.java	23 Mar 2005 19:55:50 -0000	1.2
++++ src/java/org/hibernate/tool/ant/GeneratorTask.java	8 Apr 2005 21:18:04 -0000
+@@ -64,6 +64,10 @@
+ 			return templatePath;
+ 		}		
+ 	}
++  
++  public HibernateToolTask getHibernateTask() {
++    return parent;
++  }
+ 	
+ 	abstract String getName();
+ }
+Index: src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java,v
+retrieving revision 1.3
+diff -u -r1.3 Hbm2JavaGeneratorTask.java
+--- src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	3 Apr 2005 20:32:21 -0000	1.3
++++ src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	8 Apr 2005 21:18:04 -0000
+@@ -4,6 +4,8 @@
+  */
+ package org.hibernate.tool.ant;
+ 
++import org.apache.tools.ant.BuildException;
++import org.hibernate.tool.hbm2x.Cfg2JavaTool;
+ import org.hibernate.tool.hbm2x.ConfigurationNavigator;
+ import org.hibernate.tool.hbm2x.Exporter;
+ import org.hibernate.tool.hbm2x.POJOExporter;
+@@ -14,9 +16,11 @@
+  */
+ public class Hbm2JavaGeneratorTask extends GeneratorTask {
+ 
+-	boolean ejb3 = false;
++	private boolean ejb3 = false;
+ 
+-  boolean generics = false;
++  private boolean generics = false;
++  
++  private String cfg2JavaClassname = null;
+ 
+   /**
+ 	 * @param parent
+@@ -33,9 +37,20 @@
+     generics = b;
+   }  
+   
++  public void setCfg2JavaClass(String cl) {
++    cfg2JavaClassname = cl;
++
++  }
++  
+ 	public void execute() {
+ 		ConfigurationNavigator cv = new ConfigurationNavigator();
+-Exporter exporter = new POJOExporter(parent.getConfiguration(), getDestdir(), getTemplatePath().list(), ejb3, generics);
++    Class cfg2JavaClass = null;
++    try{
++      cfg2JavaClass = Class.forName(cfg2JavaClassname,true,Thread.currentThread().getContextClassLoader());
++    }catch (ClassNotFoundException e){
++      throw new BuildException(cfg2JavaClassname + " not found",e);
++    }
++    Exporter exporter = new POJOExporter(parent.getConfiguration(), getDestdir(), getTemplatePath().list(), ejb3, generics, cfg2JavaClass);
+ 		cv.export(parent.getConfiguration(), exporter);
+ 	}
+ 
+Index: src/java/org/hibernate/tool/ant/HibernateToolTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/HibernateToolTask.java,v
+retrieving revision 1.2
+diff -u -r1.2 HibernateToolTask.java
+--- src/java/org/hibernate/tool/ant/HibernateToolTask.java	23 Mar 2005 19:55:50 -0000	1.2
++++ src/java/org/hibernate/tool/ant/HibernateToolTask.java	8 Apr 2005 21:18:04 -0000
+@@ -13,6 +13,7 @@
+ import org.apache.tools.ant.BuildException;
+ import org.apache.tools.ant.Task;
+ import org.apache.tools.ant.types.Path;
++import org.apache.tools.ant.types.Reference;
+ import org.hibernate.cfg.Configuration;
+ 
+ /**
+@@ -75,6 +76,15 @@
+     }
+ 
+     /**
++     * Classpath to use, by reference.
++     *
++     * @param r a reference to an existing classpath
++     */
++    public void setClasspathRef(Reference r) {
++        createClasspath().setRefid(r);
++    }    
++
++    /**
+      * Adds a path to the classpath.
+      *
+      * @return created classpath
+Index: src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java,v
+retrieving revision 1.17
+diff -u -r1.17 HibernateMappingExporter.java
+--- src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java	18 Mar 2005 10:38:38 -0000	1.17
++++ src/java/org/hibernate/tool/hbm2x/HibernateMappingExporter.java	8 Apr 2005 21:18:04 -0000
+@@ -42,7 +42,7 @@
+ 	}
+ 
+     public void init() throws ExporterException {
+-        vh = new TemplateHelper();
++        vh = new TemplateHelper(null);
+         vh.init(templatePaths);
+         vh.putInContext("hmgs", globalSettings);
+         vh.putInContext("cfg", cfg);
+Index: src/java/org/hibernate/tool/hbm2x/POJOExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/POJOExporter.java,v
+retrieving revision 1.12
+diff -u -r1.12 POJOExporter.java
+--- src/java/org/hibernate/tool/hbm2x/POJOExporter.java	7 Apr 2005 17:12:58 -0000	1.12
++++ src/java/org/hibernate/tool/hbm2x/POJOExporter.java	8 Apr 2005 21:18:04 -0000
+@@ -27,24 +27,26 @@
+     private String[] templatePaths;
+ 	private final File outputdir;
+ 	private final Configuration cfg;
++  private Class cfg2JavaClass;
+ 
+ 	String templateName = POJO_JAVACLASS_VM;
+     private final boolean ejb3;
+     private final boolean generics;
+ 		
+-	public POJOExporter(Configuration cfg, File outputdir, String[] templatePaths, boolean ejb3, boolean generics) {
++	public POJOExporter(Configuration cfg, File outputdir, String[] templatePaths, boolean ejb3, boolean generics, Class cfg2JavaClass2) {
+ 		this.cfg = cfg;
+ 		this.outputdir = outputdir;
+         this.templatePaths = templatePaths;
+         this.ejb3 = ejb3;
++        this.cfg2JavaClass = cfg2JavaClass2;
+         if (ejb3)
+           this.generics = true;
+         else 
+           this.generics = generics;
+ 	}
+-    
++  
+     public POJOExporter(Configuration cfg, File outputdir) {
+-        this(cfg,outputdir, new String[0],false, false);
++        this(cfg,outputdir, new String[0],false, false, null);
+     }
+ 
+ 	public boolean startPersistentClass(PersistentClass clazz) {
+@@ -100,7 +102,7 @@
+ 	}
+ 	
+ 	public void init() throws ExporterException {
+-        vh = new TemplateHelper();
++        vh = new TemplateHelper(cfg2JavaClass);
+ 		vh.init(templatePaths);
+         vh.putInContext("cfg", cfg);
+         vh.putInContext("ejb3", Boolean.valueOf(ejb3));
+Index: src/java/org/hibernate/tool/hbm2x/TemplateHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/TemplateHelper.java,v
+retrieving revision 1.3
+diff -u -r1.3 TemplateHelper.java
+--- src/java/org/hibernate/tool/hbm2x/TemplateHelper.java	19 Jan 2005 21:19:55 -0000	1.3
++++ src/java/org/hibernate/tool/hbm2x/TemplateHelper.java	8 Apr 2005 21:18:04 -0000
+@@ -32,9 +32,21 @@
+     
+     private VelocityContext context;
+     private VelocityEngine engine;
+-    private Cfg2JavaTool c2j = new Cfg2JavaTool();
++    private Cfg2JavaTool c2j;
+     private Cfg2HbmTool c2h = new Cfg2HbmTool();
+ 
++    public TemplateHelper(Class c2jclass) {
++      if (c2jclass != null) {
++        try{
++          c2j = (Cfg2JavaTool) c2jclass.newInstance();
++        }catch (Exception e){
++          throw new ExporterException("Impossible to instanciate " + c2jclass.getName(), e);
++        }
++      } else {
++        c2j = new Cfg2JavaTool();
++      }
++    }
++    
+     public void init(String[] templatePaths) {
+         context = new VelocityContext();
+         engine = new VelocityEngine();
+Index: src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java,v
+retrieving revision 1.7
+diff -u -r1.7 Hbm2JavaEjb3Test.java
+--- src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java	7 Apr 2005 09:36:40 -0000	1.7
++++ src/test/org/hibernate/tool/hbm2x/Hbm2JavaEjb3Test.java	8 Apr 2005 21:18:04 -0000
+@@ -30,7 +30,7 @@
+ 		outputdir.mkdirs();
+ 		
+ 		ConfigurationNavigator cv = new ConfigurationNavigator();
+-		Exporter exporter = new POJOExporter(getCfg(), outputdir, new String[0], true, true);
++		Exporter exporter = new POJOExporter(getCfg(), outputdir, new String[0], true, true, null);
+ 		
+ 		cv.export(getCfg(), exporter);
+ 	}
+Index: src/test/org/hibernate/tool/hbm2x/ExtendedCfg2JavaTool.java
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2x/ExtendedCfg2JavaTool.java
+diff -N src/test/org/hibernate/tool/hbm2x/ExtendedCfg2JavaTool.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2x/ExtendedCfg2JavaTool.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,39 @@
++package org.hibernate.tool.hbm2x;
++
++
++
++public class ExtendedCfg2JavaTool extends Cfg2JavaTool {
++
++  public ExtendedCfg2JavaTool() {
++    super();
++    // TODO Auto-generated constructor stub
++  }
++
++
++}

@@ -1,0 +1,105 @@
+--- src/main/java/org/hibernate/type/EnumType.java.hibernate367	2011-09-16 18:13:08.000000000 +0200
++++ src/main/java/org/hibernate/type/EnumType.java	2011-09-16 18:14:12.000000000 +0200
+@@ -38,14 +38,54 @@
+ 
+ /**
+  * Enum type mapper
+- * Try and find the appropriate SQL type depending on column metadata
+- * <p/>
++ * <p>
++ * Implements a generic enum user type identified / represented by a single identifier / column.
++ * <p><ul>
++ *	<li>The enum type being represented by the certain user type must be set
++ *        by using the '{@code enumClass}' property.</li>
++ *    <!--li>The SQL type is automatically determined by the column metadata.</li-->
++ *    <li>The SQL type must be set by using the '{@code type}' property.</li>
++ * </ul></p>
++ * <p>
++ * Example of an enum type represented by an int value:
++ * <code><pre>
++ * public enum SimpleNumber {
++ *   Unknown, Zero, One, Two, Three;
++ * }
++ * </pre></code>
++ * <p>
++ * The Mapping would look like this:
++ * <code><pre>
++ *    &lt;typedef name="SimpleNumber" class="org.hibernate.type.EnumType">
++ *        &lt;param name="enumClass">SimpleNumber&lt;/param>
++ *        &lt;param name="type">12&lt;/param>&lt;!-- java.sql.Types.VARCHAR -->
++ *    &lt;/typedef>
++ *    &lt;class ...>
++ *      ...
++ *      &lt;property name="number" column="number" type="SimpleNumber"/>
++ *    &lt;/class>
++ * </pre></code>
++ * or
++ * <code><pre>
++ *    &lt;class ...>
++ *      ...
++ *      &lt;property name="number" column="number">
++ *          &lt;type name="org.hibernate.type.EnumType">
++ *              &lt;param name="enumClass">SimpleNumber&lt;/param>
++ *              &lt;param name="type">12&lt;/param>&lt;!-- java.sql.Types.VARCHAR -->
++ *          &lt;/type>
++ *      &lt;/property>
++ *    &lt;/class>
++ * </pre></code>
++ *
++ * TODO Try and find the appropriate SQL type depending on column metadata
+  * TODO implements readobject/writeobject to recalculate the enumclasses
+  *
++ * @see java.sql.Types legal values for the {@code type} property
+  * @author Emmanuel Bernard
+  * @author Hardy Ferentschik
+  */
+-@SuppressWarnings("unchecked")
++@SuppressWarnings("serial")
+ public class EnumType implements EnhancedUserType, ParameterizedType, Serializable {
+ 	/**
+ 	 * This is the old scheme where logging of parameter bindings and value extractions
+@@ -67,10 +107,6 @@
+ 	}
+ 
+ 	public static final String ENUM = "enumClass";
+-	public static final String SCHEMA = "schema";
+-	public static final String CATALOG = "catalog";
+-	public static final String TABLE = "table";
+-	public static final String COLUMN = "column";
+ 	public static final String TYPE = "type";
+ 
+ 	private Class<? extends Enum> enumClass;
+@@ -94,6 +130,7 @@
+ 	}
+ 
+ 
++	@SuppressWarnings("unchecked")
+ 	public Object nullSafeGet(ResultSet rs, String[] names, Object owner) throws HibernateException, SQLException {
+ 		Object object = rs.getObject( names[0] );
+ 		if ( rs.wasNull() ) {
+@@ -119,7 +156,7 @@
+ 				log().debug( "Returning '{}' as column {}", name, names[0] );
+ 			}
+ 			try {
+-				return Enum.valueOf( enumClass, name );
++				return Enum.valueOf( enumClass, name.trim() );
+ 			}
+ 			catch ( IllegalArgumentException iae ) {
+ 				throw new IllegalArgumentException( "Unknown name value for enum " + enumClass + ": " + name, iae );
+@@ -242,6 +279,7 @@
+ 		}
+ 	}
+ 
++	@SuppressWarnings("unchecked")
+ 	public Object fromXMLString(String xmlValue) {
+ 		try {
+ 			int ordinal = Integer.parseInt( xmlValue );
+@@ -253,7 +291,7 @@
+ 		}
+ 		catch ( NumberFormatException e ) {
+ 			try {
+-				return Enum.valueOf( enumClass, xmlValue );
++				return Enum.valueOf( enumClass, xmlValue.trim() );
+ 			}
+ 			catch ( IllegalArgumentException iae ) {
+ 				throw new IllegalArgumentException( "Unknown name value for enum " + enumClass + ": " + xmlValue, iae );

@@ -1,0 +1,56 @@
+# HG changeset patch
+# User Arturas Sirvinskas <asirvinskas@gmail.com>
+HHH-7119 Hibernate filter's parameters are not populated when an entity's Collection is populated using a fetch mode of subselect.
+
+diff -r 86604f5d2bd8 -r 0a9bda93a8c6 hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/engine/QueryParameters.java
+--- a/hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/engine/QueryParameters.java	Fri Oct 31 07:13:00 2014 +0200
++++ b/hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/engine/QueryParameters.java	Fri Oct 31 18:01:30 2014 +0200
+@@ -454,6 +454,20 @@
+ 		return autodiscovertypes;
+ 	}
+ 
++	public void bindDynamicParameter(Type paramType, Object paramValue) {
++		int length = processedPositionalParameterTypes.length;
++		Type[] types = new Type[length + 1];
++		Object[] values = new Object[length + 1];
++		for(int i = 0; i < length; i++) {
++			types[i] = processedPositionalParameterTypes[i];
++			values[i] = processedPositionalParameterValues[i];
++		}
++		types[length] =  paramType;
++		values[length] = paramValue;
++		processedPositionalParameterTypes = types;
++		processedPositionalParameterValues = values;
++	}
++	
+ 	public void processFilters(String sql, SessionImplementor session) {
+ 		processFilters( sql, session.getLoadQueryInfluencers().getEnabledFilters(), session.getFactory() );
+ 	}
+diff -r 86604f5d2bd8 -r 0a9bda93a8c6 hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java
+--- a/hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java	Fri Oct 31 07:13:00 2014 +0200
++++ b/hibernate/hibernate-core-3.5.6-Final/src/main/java/org/hibernate/param/DynamicFilterParameterSpecification.java	Fri Oct 31 18:01:30 2014 +0200
+@@ -70,17 +70,22 @@
+ 			SessionImplementor session,
+ 			int start) throws SQLException {
+ 		final int columnSpan = definedParameterType.getColumnSpan( session.getFactory() );
+-		final Object value = session.getLoadQueryInfluencers().getFilterParameterValue( filterName + '.' + parameterName );
++		String fullParamName = filterName + '.' + parameterName;
++		final Object value = session.getLoadQueryInfluencers().getFilterParameterValue(fullParamName);
++		final Type type = session.getLoadQueryInfluencers().getFilterParameterType(fullParamName);
+ 		if ( Collection.class.isInstance( value ) ) {
+ 			int positions = 0;
+ 			Iterator itr = ( ( Collection ) value ).iterator();
+ 			while ( itr.hasNext() ) {
+-				definedParameterType.nullSafeSet( statement, itr.next(), start + positions, session );
++				Object next = itr.next();
++				qp.bindDynamicParameter(type, next);
++				definedParameterType.nullSafeSet( statement, next, start + positions, session );
+ 				positions += columnSpan;
+ 			}
+ 			return positions;
+ 		}
+ 		else {
++			qp.bindDynamicParameter(type, value);
+ 			definedParameterType.nullSafeSet( statement, value, start, session );
+ 			return columnSpan;
+ 		}

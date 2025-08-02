@@ -1,0 +1,51 @@
+Index: src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 9932)
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -3355,23 +3355,32 @@
+ 
+ 		session.getBatcher().executeBatch(); //force immediate execution of the insert
+ 
+-		PreparedStatement ps = null;
+ 		try {
+-			ps = session.getBatcher().prepareSelectStatement( selectionSQL );
+-			getIdentifierType().nullSafeSet( ps, id, 1, session );
+-			ResultSet rs = session.getBatcher().getResultSet( ps );
+-			if ( !rs.next() ) {
+-				throw new HibernateException(
+-						"Unable to locate row for retrieval of generated properties: " +
+-						MessageHelper.infoString( this, id, getFactory() )
+-					);
+-			}
+-			for ( int i = 0; i < getPropertySpan(); i++ ) {
+-				if ( included[i] ) {
+-					state[i] = getPropertyTypes()[i].hydrate( rs, getPropertyAliases( "", i ), session, entity );
+-					setPropertyValue( entity, i, state[i], session.getEntityMode() );
++			PreparedStatement ps = session.getBatcher().prepareSelectStatement( selectionSQL );
++			try {
++				getIdentifierType().nullSafeSet( ps, id, 1, session );
++				ResultSet rs = session.getBatcher().getResultSet( ps );
++				try {
++					if ( !rs.next() ) {
++						throw new HibernateException(
++								"Unable to locate row for retrieval of generated properties: " +
++								MessageHelper.infoString( this, id, getFactory() )
++							);
++					}
++					for ( int i = 0; i < getPropertySpan(); i++ ) {
++						if ( included[i] ) {
++							state[i] = getPropertyTypes()[i].hydrate( rs, getPropertyAliases( "", i ), session, entity );
++							setPropertyValue( entity, i, state[i], session.getEntityMode() );
++						}
++					}
+ 				}
++				finally {
++					rs.close();
++				}
+ 			}
++			finally {
++				session.getBatcher().closeStatement(ps);
++			}
+ 		}
+ 		catch( SQLException sqle ) {
+ 			JDBCExceptionHelper.convert(

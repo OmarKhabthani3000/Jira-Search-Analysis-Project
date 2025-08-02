@@ -1,0 +1,41 @@
+--- /home/mickey/src/hibernate-3.1.2/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	2006-01-28 13:12:24.000000000 +0100
++++ CriteriaQueryTranslator.java	2006-02-18 00:10:16.000000000 +0100
+@@ -114,6 +114,38 @@
+ 			String entityName = ( String ) iter.next();
+ 			result.addAll( Arrays.asList( getFactory().getEntityPersister( entityName ).getQuerySpaces() ) );
+ 		}
++		
++		// add collection spaces
++		for (Iterator i = associationPathCriteriaMap.keySet().iterator(); i.hasNext();) {
++			String path = (String) i.next();
++			StringTokenizer t = new StringTokenizer(path, ".");
++			String entityName = rootEntityName;
++			Queryable persister = (Queryable) sessionFactory.getEntityPersister(rootEntityName);
++			String componentPath = "";
++			// this adds collection spaces for every component in the path
++			// (think children.children2.children3 etc.)
++			while (t.hasMoreTokens()) {
++				componentPath += t.nextToken();
++				Type type = persister.toType(componentPath);
++				if (type.isAssociationType()) {
++					if (type.isCollectionType()) {
++						String role = entityName + "." + componentPath;
++						result.addAll(Arrays.asList(
++								sessionFactory.getCollectionPersister(role).getCollectionSpaces()));
++					}
++
++					AssociationType atype = (AssociationType) type;
++					entityName = atype.getAssociatedEntityName(sessionFactory);
++					persister = (Queryable) sessionFactory.getEntityPersister(entityName);
++					componentPath = "";
++				} else if (type.isComponentType()) {
++					componentPath += ".";
++				} else {
++					break;
++				}
++			}
++		}
++		
+ 		return result;
+ 	}
+ 

@@ -1,0 +1,377 @@
+Index: src/java/org/hibernate/tool/hbm2x/POJOExporter.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/POJOExporter.java	(revision 17529)
++++ src/java/org/hibernate/tool/hbm2x/POJOExporter.java	(working copy)
+@@ -5,13 +5,19 @@
+ package org.hibernate.tool.hbm2x;
+ 
+ import java.io.File;
++import java.util.HashMap;
++import java.util.Map;
+ 
+ import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.MetaAttribute;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.tool.hbm2x.pojo.EntityPOJOClass;
++import org.hibernate.tool.hbm2x.pojo.POJOClass;
+ 
+ /**
+  * @author max
+  */
+-public class POJOExporter extends GenericExporter {
++public class POJOExporter extends GenericExporter implements MetaAttributeConstants {
+ 
+ 	private static final String POJO_JAVACLASS_FTL = "pojo/Pojo.ftl";
+ 
+@@ -43,4 +49,105 @@
+ 		}	
+ 		super.setupContext();
+ 	}
++	
++	protected void exportPersistentClass(Map additionalContext, POJOClass element) {
++		Map metaAttributes = null;
++		PersistentClass pclz = null;
++		Map newMetaAttributes = null;
++		if ( element instanceof EntityPOJOClass ) {
++			boolean genConcrete = Boolean.parseBoolean(getProperties().getProperty("generate-concrete", "true"));
++			String concreteTransform = getProperties().getProperty("abstract.concrete.transform");
++			String baseTransform = getProperties().getProperty("abstract.base.transform");
++			EntityPOJOClass clz = (EntityPOJOClass) element;
++			pclz = (PersistentClass) clz.getDecoratedObject();
++			metaAttributes = pclz.getMetaAttributes();
++			newMetaAttributes = new HashMap();
++			if ( metaAttributes != null ) {
++				newMetaAttributes.putAll(metaAttributes);
++			}
++			if ( !genConcrete && baseTransform != null ) {
++				// abstract base part of pair
++				String baseClassname = resolvePattern( baseTransform, element );
++				baseClassname = baseClassname.replace( '/', '.' );
++				
++				getTemplateHelper().putInContext( "basePartOfPair", Boolean.TRUE );
++				getTemplateHelper().putInContext( "concretePartOfPair", Boolean.FALSE );
++
++				MetaAttribute ma;
++				// make sure the fields are either protected or public
++				ma = (MetaAttribute) newMetaAttributes.get( SCOPE_FIELD );
++				// see if the scope-field meta is either empty, not already set to something we like
++				if ( ma == null || !(ma.getValues().contains( "protected" ) || ma.getValues().contains( "public" )) ) {
++					ma = new MetaAttribute( SCOPE_FIELD );
++					ma.addValue( "protected" );
++					newMetaAttributes.put( SCOPE_FIELD, ma );
++				}
++
++				// make sure the class is abstract
++				String modifiers = clz.getClassModifiers();
++				if ( modifiers.indexOf( "abstract" ) < 0 ) {
++					// add abstract
++					// try new style
++					ma = (MetaAttribute) newMetaAttributes.get( CLASS_MODIFIER );
++					if ( ma == null ) {
++						// old
++						ma = (MetaAttribute) newMetaAttributes.get( SCOPE_CLASS );
++					}
++					if ( ma == null ) {
++						ma = new MetaAttribute( CLASS_MODIFIER );
++					}
++					ma.addValue( "abstract public");
++					newMetaAttributes.put( ma.getName(), ma );
++				}
++				
++				// overwrite the class name
++				ma = new MetaAttribute( GENERATED_CLASS );
++				ma.addValue( baseClassname );
++				newMetaAttributes.put( GENERATED_CLASS, ma );
++			} else if ( genConcrete && concreteTransform != null ) {
++				// concrete part of pair
++				String baseClassname = resolvePattern( baseTransform, element );
++				baseClassname = baseClassname.replace( '/', '.' );
++				String concreteClassname = resolvePattern( concreteTransform, element );
++				concreteClassname = concreteClassname.replace( '/', '.' );
++				
++				getTemplateHelper().putInContext( "basePartOfPair", Boolean.FALSE );
++				getTemplateHelper().putInContext( "concretePartOfPair", Boolean.TRUE );
++				
++				MetaAttribute ma;
++				// don't write out properties
++				ma = new MetaAttribute( GEN_PROPERTY );
++				ma.addValue( "false" );
++				newMetaAttributes.put( GEN_PROPERTY, ma );
++				
++				// overwrite class name
++				ma = new MetaAttribute( GENERATED_CLASS );
++				ma.addValue( concreteClassname );
++				newMetaAttributes.put( GENERATED_CLASS, ma );
++				
++				// extend the base class
++				ma = new MetaAttribute( EXTENDS );
++				ma.addValue( baseClassname );
++				newMetaAttributes.put( EXTENDS, ma );
++			}
++		}
++		
++		if ( newMetaAttributes != null ) {
++			pclz.setMetaAttributes( newMetaAttributes );
++		}
++		
++		super.exportPersistentClass(additionalContext, element);
++		
++		try {
++			getTemplateHelper().removeFromContext( "basePartOfPair", "" );
++			getTemplateHelper().removeFromContext( "concretePartOfPair", "" );
++		} catch ( IllegalStateException e ) {
++			// thrown when we didn't put it in the context, which is okay for the regular case
++		}
++		
++		// replace the original meta attributes
++		if ( newMetaAttributes != null ) {
++			pclz.setMetaAttributes( metaAttributes );
++		}
++	}
+ }
+Index: src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(revision 17529)
++++ src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(working copy)
+@@ -38,7 +38,7 @@
+  */
+ abstract public class BasicPOJOClass implements POJOClass, MetaAttributeConstants {
+ 
+-	protected ImportContext importContext;
++	private ImportContext importContext;
+ 	protected MetaAttributable meta;
+ 	protected final Cfg2JavaTool c2j;
+ 	
+@@ -54,14 +54,17 @@
+ 	
+ 	// called by subclasses
+ 	protected void init() {
+-		importContext = new ImportContextImpl(getPackageName());
++	}
++	
++	protected void initImportContext() {
++		setImportContext( new ImportContextImpl(getPackageName()) );
+ 		
+ 		MetaAttribute metaAttribute = meta.getMetaAttribute("extra-import");
+ 		if(metaAttribute!=null) {
+ 			Iterator values = metaAttribute.getValues().iterator();
+ 			while ( values.hasNext() ) {
+ 				String element = (String) values.next();
+-				importContext.importType(element);				
++				getImportContext().importType(element);				
+ 			}
+ 		}	
+ 	}
+@@ -302,15 +305,15 @@
+ 
+ 	
+ 	public String importType(String fqcn) {
+-		return importContext.importType(fqcn);
++		return getImportContext().importType(fqcn);
+ 	}
+ 	
+ 	public String generateImports() {
+-		return importContext.generateImports();
++		return getImportContext().generateImports();
+ 	}
+ 
+ 	public String staticImport(String fqcn, String member) {
+-		return importContext.staticImport(fqcn, member);
++		return getImportContext().staticImport(fqcn, member);
+ 	}
+ 	
+ 	public String generateBasicAnnotation(Property property) {
+@@ -800,7 +803,12 @@
+ 
+ 
+ 	public String getFieldModifiers(Property property) {
+-		return getModifiers( property, "scope-field", "private" );
++		String defaultModifier = getMetaAsString( SCOPE_FIELD );
++		if ( defaultModifier == null ) {
++			defaultModifier = "private";
++		}
++		
++		return getModifiers( property, "scope-field", defaultModifier );
+ 	}
+ 
+ 	public String getPropertyGetModifiers(Property property) {
+@@ -966,7 +974,7 @@
+ 				}
+ 
+ 				if(useGenerics) {
+-					decl = c2j.getGenericCollectionDeclaration((Collection) p.getValue(), true, importContext);
++					decl = c2j.getGenericCollectionDeclaration((Collection) p.getValue(), true, getImportContext());
+ 				}
+ 				return initialization.getDefaultValue(comparator, decl, this);
+ 			} else {
+@@ -975,6 +983,21 @@
+ 		} else {
+ 			return null;
+ 		}
++	}
++
++	protected void setImportContext( ImportContext importContext ) {
++		this.importContext = importContext;
++	}
++
++	/**
++	 * Lazily constructs and initializes the ImportContext, so that overrides to the package and classname are used.
++	 * @return importContext newly constructed and initalized on first call, the same one after that.
++	 */
++	protected ImportContext getImportContext() {
++		if ( importContext == null ) {
++			initImportContext();
++		}
++		return importContext;
+ 	}	
+ 	
+ }
+Index: src/java/org/hibernate/tool/hbm2x/MetaAttributeConstants.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/MetaAttributeConstants.java	(revision 17529)
++++ src/java/org/hibernate/tool/hbm2x/MetaAttributeConstants.java	(working copy)
+@@ -10,4 +10,6 @@
+ 	static final String IMPLEMENTS = "implements";
+ 	static final String EXTENDS = "extends";
+ 	static final String GEN_PROPERTY = "gen-property"; // in templates.
++	
++	static final String SCOPE_FIELD = "scope-field";
+ }
+Index: src/java/org/hibernate/tool/hbm2x/GenericExporter.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/GenericExporter.java	(revision 17529)
++++ src/java/org/hibernate/tool/hbm2x/GenericExporter.java	(working copy)
+@@ -145,11 +145,21 @@
+ 		if(filename.endsWith(".java") && filename.indexOf('$')>=0) {
+ 			log.warn("Filename for " + getClassNameForFile( element ) + " contains a $. Innerclass generation is not supported.");
+ 		}
+-		producer.produce(additionalContext, getTemplateName(), new File(getOutputDirectory(),filename), templateName, element.toString());
++		File outputFile = new File(getOutputDirectory(),filename);
++		if (! Boolean.parseBoolean( getProperties().getProperty( "overwrite", "true" ))) {
++			// property says no overwrite, check the file if it is there
++			if ( outputFile.exists() ) {
++				// skip produce()
++				log.info( "skipping '" + filename + "', it exists and overwrite==false" );
++				return;
++			}
++		}
++		producer.produce(additionalContext, getTemplateName(), outputFile, templateName, element.toString());
+ 	}
++	
+ 
+-	protected String resolveFilename(POJOClass element) {
+-		String filename = StringHelper.replace(filePattern, "{class-name}", getClassNameForFile( element )); 
++	protected String resolvePattern(String pattern, POJOClass element) {
++		String filename = StringHelper.replace(pattern, "{class-name}", getClassNameForFile( element )); 
+ 		String packageLocation = StringHelper.replace(getPackageNameForFile( element ),".", "/");
+ 		if(StringHelper.isEmpty(packageLocation)) {
+ 			packageLocation = "."; // done to ensure default package classes doesn't end up in the root of the filesystem when outputdir=""
+@@ -158,6 +168,10 @@
+ 		return filename;
+ 	}
+ 
++	protected String resolveFilename(POJOClass element) {
++		return resolvePattern( filePattern, element );
++	}
++
+ 	protected String getPackageNameForFile(POJOClass element) {
+ 		return element.getPackageName(); 
+ 	}
+Index: src/templates/pojo/PojoFields.ftl
+===================================================================
+--- src/templates/pojo/PojoFields.ftl	(revision 17529)
++++ src/templates/pojo/PojoFields.ftl	(working copy)
+@@ -1,8 +1,13 @@
+ <#-- // Fields -->
++<#if pojo.getImplements()?contains("Serializable")>
++    private static final long serialVersionUID = 1L;
++</#if>
+ 
++<#if pojo.getMetaAsBool("gen-property",true)>
+ <#foreach field in pojo.getAllPropertiesIterator()><#if pojo.getMetaAttribAsBool(field, "gen-property", true)> <#if pojo.hasMetaAttribute(field, "field-description")>    /**
+      ${pojo.getFieldJavaDoc(field, 0)}
+      */
+  </#if>    ${pojo.getFieldModifiers(field)} ${pojo.getJavaTypeName(field, jdk5)} ${field.name}<#if pojo.hasFieldInitializor(field, jdk5)> = ${pojo.getFieldInitialization(field, jdk5)}</#if>;
+ </#if>
+ </#foreach>
++</#if>
+\ No newline at end of file
+Index: src/templates/pojo/PojoConstructors.ftl
+===================================================================
+--- src/templates/pojo/PojoConstructors.ftl	(revision 17529)
++++ src/templates/pojo/PojoConstructors.ftl	(working copy)
+@@ -1,16 +1,22 @@
+ 
+ <#--  /** default constructor */ -->
+     public ${pojo.getDeclarationName()}() {
++<#if pojo.isSubclass() || concretePartOfPair!false>
++        super();
++</#if>
+     }
+ 
+ <#if pojo.needsMinimalConstructor()>	<#-- /** minimal constructor */ -->
+     public ${pojo.getDeclarationName()}(${c2j.asParameterList(pojo.getPropertyClosureForMinimalConstructor(), jdk5, pojo)}) {
+ <#if pojo.isSubclass() && !pojo.getPropertyClosureForSuperclassMinimalConstructor().isEmpty()>
+         super(${c2j.asArgumentList(pojo.getPropertyClosureForSuperclassMinimalConstructor())});        
+-</#if>
++<#elseif concretePartOfPair!false>
++        super(${c2j.asArgumentList(pojo.getPropertyClosureForMinimalConstructor())});
++<#else>
+ <#foreach field in pojo.getPropertiesForMinimalConstructor()>
+         this.${field.name} = ${field.name};
+ </#foreach>
++</#if>
+     }
+ </#if>    
+ <#if pojo.needsFullConstructor()>
+@@ -18,9 +24,12 @@
+     public ${pojo.getDeclarationName()}(${c2j.asParameterList(pojo.getPropertyClosureForFullConstructor(), jdk5, pojo)}) {
+ <#if pojo.isSubclass() && !pojo.getPropertyClosureForSuperclassFullConstructor().isEmpty()>
+         super(${c2j.asArgumentList(pojo.getPropertyClosureForSuperclassFullConstructor())});        
+-</#if>
++<#elseif concretePartOfPair!false>
++		super(${c2j.asArgumentList(pojo.getPropertyClosureForFullConstructor())});
++<#else>
+ <#foreach field in pojo.getPropertiesForFullConstructor()> 
+-       this.${field.name} = ${field.name};
++        this.${field.name} = ${field.name};
+ </#foreach>
++</#if>
+     }
+ </#if>    
+Index: src/templates/pojo/Ejb3TypeDeclaration.ftl
+===================================================================
+--- src/templates/pojo/Ejb3TypeDeclaration.ftl	(revision 17529)
++++ src/templates/pojo/Ejb3TypeDeclaration.ftl	(working copy)
+@@ -1,4 +1,8 @@
+ <#if ejb3?if_exists>
++<#-- if the class we gen is abstract, use MappedSuperclass instead -->
++<#if pojo.getClassModifiers()?contains("abstract")>
++@${pojo.importType("javax.persistence.MappedSuperclass")}
++<#else>
+ <#if pojo.isComponent()>
+ @${pojo.importType("javax.persistence.Embeddable")}
+ <#else>
+@@ -14,4 +18,5 @@
+     , uniqueConstraints = ${uniqueConstraint} 
+ </#if>)
+ </#if>
++</#if>
+ </#if>
+\ No newline at end of file
+Index: src/templates/pojo/PojoPropertyAccessors.ftl
+===================================================================
+--- src/templates/pojo/PojoPropertyAccessors.ftl	(revision 17529)
++++ src/templates/pojo/PojoPropertyAccessors.ftl	(working copy)
+@@ -1,4 +1,5 @@
+ <#-- // Property accessors -->
++<#if pojo.getMetaAsBool("gen-property",true)>
+ <#foreach property in pojo.getAllPropertiesIterator()>
+ <#if pojo.getMetaAttribAsBool(property, "gen-property", true)>
+  <#if pojo.hasFieldJavaDoc(property)>    
+@@ -16,3 +17,4 @@
+     }
+ </#if>
+ </#foreach>
++</#if>
+\ No newline at end of file

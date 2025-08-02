@@ -1,0 +1,3012 @@
+==== //depot/Nathan/hibernate/org/hibernate/action/BulkOperationCleanupAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\BulkOperationCleanupAction.java ====
+@@ -4,6 +4,7 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ 
+ import java.io.Serializable;
+ import java.util.Set;
+@@ -55,7 +56,7 @@
+ 		return true;
+ 	}
+ 
+-	public void afterTransactionCompletion(boolean success) throws HibernateException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws HibernateException {
+ 		evictEntityRegions();
+ 		evictCollectionRegions();
+ 	}
+@@ -64,11 +65,15 @@
+ 		return spaces;
+ 	}
+ 
+-	public void beforeExecutions() throws HibernateException {
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException {
++		// nothing to do
++	}
++
++	public void executeDatastorePhase() throws HibernateException {
+ 		// nothing to do
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
+ 		// nothing to do
+ 	}
+ 
+==== //depot/Nathan/hibernate/org/hibernate/action/CollectionAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\CollectionAction.java ====
+@@ -6,6 +6,7 @@
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.pretty.MessageHelper;
+ import org.hibernate.util.StringHelper;
+@@ -49,16 +50,16 @@
+ 		persister = session.getFactory().getCollectionPersister( collectionRole );
+ 	}
+ 
+-	public void afterTransactionCompletion(boolean success) throws CacheException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws CacheException {
+ 		if ( persister.hasCache() ) {
+-			final CacheKey ck = new CacheKey( 
+-					key, 
+-					persister.getKeyType(), 
+-					persister.getRole(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			final CacheKey ck = new CacheKey(
++					key,
++					persister.getKeyType(),
++					persister.getRole(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+-			persister.getCache().release(ck, lock);
++			actionQueue.unlock(ck);
+ 		}
+ 	}
+ 
+@@ -82,7 +83,7 @@
+ 		return session;
+ 	}
+ 
+-	public final void beforeExecutions() throws CacheException {
++	public final void beforeExecutions(ActionQueue actionQueue) throws CacheException {
+ 		// we need to obtain the lock before any actions are
+ 		// executed, since this may be an inverse="true"
+ 		// bidirectional association and it is one of the
+@@ -90,27 +91,27 @@
+ 		// the database (this action is resposible for
+ 		// second-level cache invalidation only)
+ 		if ( persister.hasCache() ) {
+-			final CacheKey ck = new CacheKey( 
+-					key, 
+-					persister.getKeyType(), 
+-					persister.getRole(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			final CacheKey ck = new CacheKey(
++					key,
++					persister.getKeyType(),
++					persister.getRole(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+-			lock = persister.getCache().lock(ck, null);
++			actionQueue.lock(ck, persister);
+ 		}
+ 	}
+ 
+-	protected final void evict() throws CacheException {
++	protected final void evict(ActionQueue actionQueue) throws CacheException {
+ 		if ( persister.hasCache() ) {
+-			CacheKey ck = new CacheKey( 
+-					key, 
+-					persister.getKeyType(), 
+-					persister.getRole(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			CacheKey ck = new CacheKey(
++					key,
++					persister.getKeyType(),
++					persister.getRole(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+-			persister.getCache().evict(ck);
++			actionQueue.evict(ck, getSession());
+ 		}
+ 	}
+ 
+==== //depot/Nathan/hibernate/org/hibernate/action/CollectionRecreateAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\CollectionRecreateAction.java ====
+@@ -5,6 +5,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ import org.hibernate.persister.collection.CollectionPersister;
+ 
+ import java.io.Serializable;
+@@ -20,16 +21,19 @@
+ 		super( persister, collection, id, session );
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void executeDatastorePhase() throws HibernateException {
++		getPersister().recreate( getCollection(), getKey() , getSession() );
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
+ 		final PersistentCollection collection = getCollection();
+-		
+-		getPersister().recreate( collection, getKey(), getSession() );
+-		
++
+ 		getSession().getPersistenceContext()
+ 				.getCollectionEntry(collection)
+ 				.afterAction(collection);
+-		
+-		evict();
++
++		evict(actionQueue);
+ 
+ 		if ( getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+ 			getSession().getFactory().getStatisticsImplementor()
+@@ -38,10 +42,3 @@
+ 	}
+ 
+ }
+-
+-
+-
+-
+-
+-
+-
+==== //depot/Nathan/hibernate/org/hibernate/action/CollectionRemoveAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\CollectionRemoveAction.java ====
+@@ -5,6 +5,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ import org.hibernate.persister.collection.CollectionPersister;
+ 
+ import java.io.Serializable;
+@@ -24,30 +25,20 @@
+ 		this.emptySnapshot = emptySnapshot;
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void executeDatastorePhase() throws HibernateException {
+ 		if ( !emptySnapshot ) getPersister().remove( getKey(), getSession() );
+-		
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
+ 		final PersistentCollection collection = getCollection();
+-		if (collection!=null) {
++		if (collection != null) {
+ 			getSession().getPersistenceContext()
+-				.getCollectionEntry(collection)
+-				.afterAction(collection);
++					.getCollectionEntry(collection)
++					.afterAction(collection);
+ 		}
+-		
+-		evict();
+ 
+-		if ( getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+-			getSession().getFactory().getStatisticsImplementor()
+-					.removeCollection( getPersister().getRole() );
+-		}
++		evict(actionQueue);
+ 	}
+ 
+-
+ }
+-
+-
+-
+-
+-
+-
+-
+==== //depot/Nathan/hibernate/org/hibernate/action/CollectionUpdateAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\CollectionUpdateAction.java ====
+@@ -6,6 +6,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.pretty.MessageHelper;
+ 
+@@ -26,7 +27,8 @@
+ 		this.emptySnapshot = emptySnapshot;
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void executeDatastorePhase() throws HibernateException {
++
+ 		final Serializable id = getKey();
+ 		final SessionImplementor session = getSession();
+ 		final CollectionPersister persister = getPersister();
+@@ -55,12 +57,17 @@
+ 			persister.updateRows( collection, id, session );
+ 			persister.insertRows( collection, id, session );
+ 		}
++	}
+ 
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
++		final PersistentCollection collection = getCollection();
++
+ 		getSession().getPersistenceContext()
+-			.getCollectionEntry(collection)
+-			.afterAction(collection);
++				.getCollectionEntry(collection)
++				.afterAction(collection);
+ 
+-		evict();
++		evict(actionQueue);
+ 
+ 		if ( getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+ 			getSession().getFactory().getStatisticsImplementor().
+@@ -69,10 +76,3 @@
+ 	}
+ 
+ }
+-
+-
+-
+-
+-
+-
+-
+==== //depot/Nathan/hibernate/org/hibernate/action/EntityAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\EntityAction.java ====
+@@ -1,7 +1,6 @@
+ //$Id: EntityAction.java 7887 2005-08-12 21:19:50Z oneovthafew $
+ package org.hibernate.action;
+ 
+-import org.hibernate.AssertionFailure;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.persister.entity.EntityPersister;
+ import org.hibernate.pretty.MessageHelper;
+@@ -23,6 +22,7 @@
+ 	private final String entityName;
+ 
+ 	private transient EntityPersister persister;
++	protected transient Boolean veto = null;
+ 
+ 	protected EntityAction(SessionImplementor session, Serializable id, Object instance, EntityPersister persister) {
+ 		this.session = session;
+@@ -58,12 +58,12 @@
+ 		return instance;
+ 	}
+ 
+-	public void beforeExecutions() {
+-		throw new AssertionFailure( "beforeExecutions() called for non-collection action" );
++	public boolean hasAfterTransactionCompletion() {
++		return useCache() || hasPostCommitEventListeners();
+ 	}
+ 
+-	public boolean hasAfterTransactionCompletion() {
+-		return persister.hasCache() || hasPostCommitEventListeners();
++	protected boolean useCache() {
++		return persister.hasCache();
+ 	}
+ 	
+ 	protected abstract boolean hasPostCommitEventListeners();
+==== //depot/Nathan/hibernate/org/hibernate/action/EntityDeleteAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\EntityDeleteAction.java ====
+@@ -7,17 +7,14 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.CacheConcurrencyStrategy.SoftLock;
+-import org.hibernate.engine.EntityEntry;
+-import org.hibernate.engine.EntityKey;
+-import org.hibernate.engine.PersistenceContext;
+-import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.*;
+ import org.hibernate.event.PostDeleteEvent;
+ import org.hibernate.event.PostDeleteEventListener;
+ import org.hibernate.event.PreDeleteEvent;
+ import org.hibernate.event.PreDeleteEventListener;
+ import org.hibernate.persister.entity.EntityPersister;
+ 
+-public final class EntityDeleteAction extends EntityAction {
++public final class EntityDeleteAction extends EntityExistenceAction {
+ 
+ 	private final Object version;
+ 	private SoftLock lock;
+@@ -38,43 +35,59 @@
+ 		this.state = state;
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException {
++		veto = Boolean.valueOf( preDelete() );
++		if ( getPersister().hasCache() ) {
++			Object version = this.version;
++			EntityPersister persister = getPersister();
++			SessionImplementor session = getSession();
++			Object instance = getInstance();
++			if ( persister.isVersionPropertyGenerated() ) {
++				// we need to grab the version value from the entity, otherwise
++				// we have issues with generated-version entities that may have
++				// multiple actions queued during the same flush
++				version = persister.getVersion( instance, session.getEntityMode() );
++			}
++			final CacheKey ck = new CacheKey(
++					getId(),
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
++				);
++			lock = getPersister().getCache().lock(ck, version);
++		}
++		super.beforeExecutions(actionQueue);
++	}
++
++	public void executeDatastorePhase() throws HibernateException {
++		if ( !isCascadeDeleteEnabled && !veto.booleanValue() )
++			getPersister().delete( getId(), version, getInstance(), getSession() );
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
+ 		Serializable id = getId();
+ 		EntityPersister persister = getPersister();
+ 		SessionImplementor session = getSession();
+ 		Object instance = getInstance();
+ 
+-		boolean veto = preDelete();
+-
+-		Object version = this.version;
+-		if ( persister.isVersionPropertyGenerated() ) {
+-			// we need to grab the version value from the entity, otherwise
+-			// we have issues with generated-version entities that may have
+-			// multiple actions queued during the same flush
+-			version = persister.getVersion( instance, session.getEntityMode() );
+-		}
+-		
+ 		final CacheKey ck;
+ 		if ( persister.hasCache() ) {
+-			ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+-			lock = persister.getCache().lock(ck, version);
+ 		}
+ 		else {
+ 			ck = null;
+ 		}
+ 
+-		if ( !isCascadeDeleteEnabled && !veto ) {
+-			persister.delete( id, version, instance, session );
+-		}
+-		
+ 		//postDelete:
+-		// After actually deleting a row, record the fact that the instance no longer 
++		// After actually deleting a row, record the fact that the instance no longer
+ 		// exists on the database (needed for identity-column key generation), and
+ 		// remove it from the session cache
+ 		final PersistenceContext persistenceContext = session.getPersistenceContext();
+@@ -87,12 +100,14 @@
+ 		EntityKey key = new EntityKey( entry.getId(), entry.getPersister(), session.getEntityMode() );
+ 		persistenceContext.removeEntity(key);
+ 		persistenceContext.removeProxy(key);
+-		
++
+ 		if ( persister.hasCache() ) persister.getCache().evict(ck);
+ 
++		evictOwningCollectionsFromCache(actionQueue);
++
+ 		postDelete();
+ 
+-		if ( getSession().getFactory().getStatistics().isStatisticsEnabled() && !veto ) {
++		if ( getSession().getFactory().getStatistics().isStatisticsEnabled() && !veto.booleanValue() ) {
+ 			getSession().getFactory().getStatisticsImplementor()
+ 					.deleteEntity( getPersister().getEntityName() );
+ 		}
+@@ -133,18 +148,24 @@
+ 		}
+ 	}
+ 
+-	public void afterTransactionCompletion(boolean success) throws HibernateException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws HibernateException {
++		super.afterTransactionCompletion(success, actionQueue);
+ 		if ( getPersister().hasCache() ) {
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					getPersister().getIdentifierType(), 
+-					getPersister().getRootEntityName(),
+-					getSession().getEntityMode(), 
+-					getSession().getFactory()
+-				);
+-			getPersister().getCache().release(ck, lock);
++			try {
++				final CacheKey ck = new CacheKey(
++						getId(),
++						getPersister().getIdentifierType(),
++						getPersister().getRootEntityName(),
++						getSession().getEntityMode(),
++						getSession().getFactory()
++					);
++				getPersister().getCache().release(ck, lock);
++			}
++			finally {
++				lock = null;
++			}
+ 		}
+-		postCommitDelete();
++   		postCommitDelete();
+ 	}
+ 
+ 	protected boolean hasPostCommitEventListeners() {
+==== //depot/Nathan/hibernate/org/hibernate/action/EntityIdentityInsertAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\EntityIdentityInsertAction.java ====
+@@ -5,6 +5,7 @@
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionQueue;
+ import org.hibernate.event.PostInsertEvent;
+ import org.hibernate.event.PostInsertEventListener;
+ import org.hibernate.event.PreInsertEvent;
+@@ -22,19 +23,23 @@
+ 		this.state = state;
+ 	}
+ 
+-	public void execute() throws HibernateException {
+-		
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException {
++		// Don't need to lock the cache here, since if someone
++		// else inserted the same pk first, the insert would fail
++		veto = Boolean.valueOf( preInsert() );
++	}
++
++	public void executeDatastorePhase() throws HibernateException {
++		if ( !veto.booleanValue() )
++			generatedId = getPersister().insert( state, getInstance(), getSession() );
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
+ 		final EntityPersister persister = getPersister();
+ 		final SessionImplementor session = getSession();
+ 		final Object instance = getInstance();
+-		
+-		boolean veto = preInsert();
+ 
+-		// Don't need to lock the cache here, since if someone
+-		// else inserted the same pk first, the insert would fail
+-
+-		if ( !veto ) {
+-			generatedId = persister.insert( state, instance, session );
++		if ( !veto.booleanValue() ) {
+ 			if ( persister.hasInsertGeneratedProperties() ) {
+ 				persister.processInsertGeneratedProperties( generatedId, instance, state, session );
+ 			}
+@@ -43,7 +48,6 @@
+ 			persister.setIdentifier( instance, generatedId, session.getEntityMode() );
+ 		}
+ 
+-
+ 		//TODO: this bit actually has to be called after all cascades!
+ 		//      but since identity insert is called *synchronously*,
+ 		//      instead of asynchronously as other actions, it isn't
+@@ -54,11 +58,10 @@
+ 		
+ 		postInsert();
+ 
+-		if ( session.getFactory().getStatistics().isStatisticsEnabled() && !veto ) {
++		if ( session.getFactory().getStatistics().isStatisticsEnabled() && !veto.booleanValue() ) {
+ 			session.getFactory().getStatisticsImplementor()
+ 					.insertEntity( getPersister().getEntityName() );
+ 		}
+-
+ 	}
+ 
+ 	private void postInsert() {
+@@ -97,7 +100,7 @@
+ 	}
+ 
+ 	//Make 100% certain that this is called before any subsequent ScheduledUpdate.afterTransactionCompletion()!!
+-	public void afterTransactionCompletion(boolean success) throws HibernateException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws HibernateException {
+ 		//TODO: reenable if we also fix the above todo
+ 		/*EntityPersister persister = getEntityPersister();
+ 		if ( success && persister.hasCache() && !persister.isCacheInvalidationRequired() ) {
+==== //depot/Nathan/hibernate/org/hibernate/action/EntityInsertAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\EntityInsertAction.java ====
+@@ -7,17 +7,14 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.entry.CacheEntry;
+-import org.hibernate.engine.EntityEntry;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.engine.Versioning;
++import org.hibernate.engine.*;
+ import org.hibernate.event.PostInsertEvent;
+ import org.hibernate.event.PostInsertEventListener;
+ import org.hibernate.event.PreInsertEvent;
+ import org.hibernate.event.PreInsertEventListener;
+ import org.hibernate.persister.entity.EntityPersister;
+ 
+-public final class EntityInsertAction extends EntityAction {
++public final class EntityInsertAction extends EntityExistenceAction {
+ 
+ 	private Object[] state;
+ 	private Object version;
+@@ -35,28 +32,35 @@
+ 		this.version = version;
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException {
++		// Don't need to lock the cache here, since if someone
++		// else inserted the same pk first, the insert would fail
++		veto = Boolean.valueOf( preInsert() );
++
++		super.beforeExecutions(actionQueue);
++	}
++
++	public void executeDatastorePhase() throws HibernateException {
++		if ( !veto.booleanValue() )
++			getPersister().insert( getId(), state, getInstance(), getSession() );
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
+ 		EntityPersister persister = getPersister();
+ 		SessionImplementor session = getSession();
+ 		Object instance = getInstance();
+ 		Serializable id = getId();
+ 
+-		boolean veto = preInsert();
++		if ( !veto.booleanValue() ) {
+ 
+-		// Don't need to lock the cache here, since if someone
+-		// else inserted the same pk first, the insert would fail
+-
+-		if ( !veto ) {
+-			
+-			persister.insert( id, state, instance, session );
+-		
+ 			EntityEntry entry = session.getPersistenceContext().getEntry( instance );
+ 			if ( entry == null ) {
+ 				throw new AssertionFailure( "possible nonthreadsafe access to session" );
+ 			}
+-			
++
+ 			entry.postInsert();
+-	
++
+ 			if ( persister.hasInsertGeneratedProperties() ) {
+ 				persister.processInsertGeneratedProperties( id, instance, state, session );
+ 				if ( persister.isVersionPropertyGenerated() ) {
+@@ -64,12 +68,11 @@
+ 				}
+ 				entry.postUpdate(instance, state, version);
+ 			}
+-			
+ 		}
+ 
+ 		final SessionFactoryImplementor factory = getSession().getFactory();
+ 
+-		if ( isCachePutEnabled( persister, session ) ) {
++		if ( useCache() ) {
+ 			
+ 			CacheEntry ce = new CacheEntry(
+ 					state,
+@@ -81,12 +84,12 @@
+ 				);
+ 			
+ 			cacheEntry = persister.getCacheEntryStructure().structure(ce);
+-			final CacheKey ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			final CacheKey ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+ 			boolean put = persister.getCache().insert(ck, cacheEntry);
+ 			
+@@ -97,13 +100,14 @@
+ 			
+ 		}
+ 
++		evictOwningCollectionsFromCache(actionQueue);
++
+ 		postInsert();
+ 
+-		if ( factory.getStatistics().isStatisticsEnabled() && !veto ) {
++		if ( factory.getStatistics().isStatisticsEnabled() && !veto.booleanValue() ) {
+ 			factory.getStatisticsImplementor()
+ 					.insertEntity( getPersister().getEntityName() );
+ 		}
+-
+ 	}
+ 
+ 	private void postInsert() {
+@@ -142,15 +146,16 @@
+ 	}
+ 
+ 	//Make 100% certain that this is called before any subsequent ScheduledUpdate.afterTransactionCompletion()!!
+-	public void afterTransactionCompletion(boolean success) throws HibernateException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws HibernateException {
++		super.afterTransactionCompletion(success, actionQueue);
+ 		EntityPersister persister = getPersister();
+-		if ( success && isCachePutEnabled( persister, getSession() ) ) {
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					getSession().getEntityMode(), 
+-					getSession().getFactory() 
++		if ( success && useCache() ) {
++			final CacheKey ck = new CacheKey(
++					getId(),
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					getSession().getEntityMode(),
++					getSession().getFactory()
+ 				);
+ 			boolean put = persister.getCache().afterInsert(ck, cacheEntry, version );
+ 			
+@@ -165,11 +170,12 @@
+ 	protected boolean hasPostCommitEventListeners() {
+ 		return getSession().getListeners().getPostCommitInsertEventListeners().length>0;
+ 	}
+-	
+-	private boolean isCachePutEnabled(EntityPersister persister, SessionImplementor session) {
+-		return persister.hasCache() && 
+-				!persister.isCacheInvalidationRequired() && 
+-				session.getCacheMode().isPutEnabled();
++
++	protected boolean useCache() {
++		EntityPersister persister = getPersister();
++		return persister.hasCache() &&
++				!persister.isCacheInvalidationRequired() &&
++				getSession().getCacheMode().isPutEnabled();
+ 	}
+ 
+ }
+==== //depot/Nathan/hibernate/org/hibernate/action/EntityUpdateAction.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\EntityUpdateAction.java ====
+@@ -9,11 +9,7 @@
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.CacheConcurrencyStrategy.SoftLock;
+ import org.hibernate.cache.entry.CacheEntry;
+-import org.hibernate.engine.EntityEntry;
+-import org.hibernate.engine.SessionFactoryImplementor;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.engine.Status;
+-import org.hibernate.engine.Versioning;
++import org.hibernate.engine.*;
+ import org.hibernate.event.PostUpdateEvent;
+ import org.hibernate.event.PostUpdateEventListener;
+ import org.hibernate.event.PreUpdateEvent;
+@@ -55,31 +51,51 @@
+ 		this.rowId = rowId;
+ 	}
+ 
+-	public void execute() throws HibernateException {
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException {
++		veto = Boolean.valueOf( preUpdate() );
++	}
++
++	public void executeDatastorePhase() throws HibernateException {
++
++		if ( !veto.booleanValue() ) {
++			getPersister().update(
++					getId(),
++					state, 
++					dirtyFields, 
++					hasDirtyCollection, 
++					previousState, 
++					previousVersion,
++					getInstance(),
++					rowId, 
++					getSession()
++				);
++		}
++	}
++
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException {
++
+ 		Serializable id = getId();
+ 		EntityPersister persister = getPersister();
+ 		SessionImplementor session = getSession();
+ 		Object instance = getInstance();
+ 
+-		boolean veto = preUpdate();
+-
+ 		final SessionFactoryImplementor factory = getSession().getFactory();
+-		Object previousVersion = this.previousVersion;
+-		if ( persister.isVersionPropertyGenerated() ) {
+-			// we need to grab the version value from the entity, otherwise
+-			// we have issues with generated-version entities that may have
+-			// multiple actions queued during the same flush
+-			previousVersion = persister.getVersion( instance, session.getEntityMode() );
+-		}
+ 		
+ 		final CacheKey ck;
+ 		if ( persister.hasCache() ) {
+-			ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			Object previousVersion = this.previousVersion;
++			if ( persister.isVersionPropertyGenerated() ) {
++				// we need to grab the version value from the entity, otherwise
++				// we have issues with generated-version entities that may have
++				// multiple actions queued during the same flush
++				previousVersion = persister.getVersion( instance, session.getEntityMode() );
++			}
++			ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+ 			lock = persister.getCache().lock(ck, previousVersion);
+ 		}
+@@ -87,21 +103,6 @@
+ 			ck = null;
+ 		}
+ 
+-		if ( !veto ) {
+-			persister.update( 
+-					id, 
+-					state, 
+-					dirtyFields, 
+-					hasDirtyCollection, 
+-					previousState, 
+-					previousVersion, 
+-					instance, 
+-					rowId, 
+-					session 
+-				);
+-		}
+-
+-
+ 		EntityEntry entry = getSession().getPersistenceContext().getEntry( instance );
+ 		if ( entry == null ) {
+ 			throw new AssertionFailure( "possible nonthreadsafe access to session" );
+@@ -159,7 +160,7 @@
+ 
+ 		postUpdate();
+ 
+-		if ( factory.getStatistics().isStatisticsEnabled() && !veto ) {
++		if ( factory.getStatistics().isStatisticsEnabled() && !veto.booleanValue() ) {
+ 			factory.getStatisticsImplementor()
+ 					.updateEntity( getPersister().getEntityName() );
+ 		}
+@@ -219,28 +220,33 @@
+ 		return veto;
+ 	}
+ 
+-	public void afterTransactionCompletion(boolean success) throws CacheException {
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws CacheException {
+ 		EntityPersister persister = getPersister();
+-		if ( persister.hasCache() ) {
+-			
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					getSession().getEntityMode(), 
+-					getSession().getFactory() 
++		if ( useCache() ) {
++
++			final CacheKey ck = new CacheKey(
++					getId(),
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					getSession().getEntityMode(),
++					getSession().getFactory()
+ 				);
+-			
+-			if ( success && cacheEntry!=null /*!persister.isCacheInvalidationRequired()*/ ) {
+-				boolean put = persister.getCache().afterUpdate(ck, cacheEntry, nextVersion, lock );
+-				
+-				if ( put && getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+-					getSession().getFactory().getStatisticsImplementor()
+-							.secondLevelCachePut( getPersister().getCache().getRegionName() );
++
++			try {
++				if ( success && cacheEntry!=null /*!persister.isCacheInvalidationRequired()*/ ) {
++					boolean put = persister.getCache().afterUpdate(ck, cacheEntry, nextVersion, lock );
++
++					if ( put && getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
++						getSession().getFactory().getStatisticsImplementor()
++								.secondLevelCachePut( getPersister().getCache().getRegionName() );
++					}
++				}
++				else {
++					persister.getCache().release(ck, lock);
+ 				}
+ 			}
+-			else {
+-				persister.getCache().release(ck, lock );
++			finally {
++				lock = null;
+ 			}
+ 		}
+ 		postCommitUpdate();
+==== //depot/Nathan/hibernate/org/hibernate/action/Executable.java#2 - C:\depot\Nathan\hibernate\org\hibernate\action\Executable.java ====
+@@ -2,6 +2,7 @@
+ package org.hibernate.action;
+ 
+ import org.hibernate.HibernateException;
++import org.hibernate.engine.ActionQueue;
+ 
+ import java.io.Serializable;
+ 
+@@ -15,12 +16,18 @@
+ public interface Executable {
+ 	/**
+ 	 * Called before executing any actions
++	 * @param actionQueue
++	 */
++	public void beforeExecutions(ActionQueue actionQueue) throws HibernateException;
++	/**
++	 * Make any datastore changes necessary for this Executable
+ 	 */
+-	public void beforeExecutions() throws HibernateException;
++	public void executeDatastorePhase() throws HibernateException;
+ 	/**
+-	 * Execute this action
++	 * Make any cache/post-datastore changes necessary for this Executable
++	 * @param actionQueue
+ 	 */
+-	public void execute() throws HibernateException;
++	public void executeCachePhase(ActionQueue actionQueue) throws HibernateException;
+ 	/**
+ 	 * Do we need to retain this instance until after the
+ 	 * transaction completes?
+@@ -31,7 +38,7 @@
+ 	/**
+ 	 * Called after the transaction completes
+ 	 */
+-	public void afterTransactionCompletion(boolean success) throws HibernateException;
++	public void afterTransactionCompletion(boolean success, ActionQueue actionQueue) throws HibernateException;
+ 	/**
+ 	 * What spaces (tables) are affected by this action?
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/AbstractJndiBoundCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\AbstractJndiBoundCacheProvider.java ====
+@@ -38,7 +38,7 @@
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+-	public final void start(Properties properties) throws CacheException {
++	public final void init(Properties properties) throws CacheException {
+ 		String jndiNamespace = properties.getProperty( Environment.CACHE_NAMESPACE );
+ 		if ( StringHelper.isEmpty( jndiNamespace ) ) {
+ 			throw new CacheException( "No JNDI namespace specified for cache" );
+@@ -48,6 +48,15 @@
+ 	}
+ 
+ 	/**
++	 * Callback to perform any necessary initialization of the underlying cache implementation during SessionFactory
++	 * construction.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public final void start(Properties properties) throws CacheException {
++	}
++
++	/**
+ 	 * Callback to perform any necessary cleanup of the underlying cache
+ 	 * implementation during SessionFactory.close().
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/CacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\CacheProvider.java ====
+@@ -26,7 +26,15 @@
+ 
+ 	/**
+ 	 * Callback to perform any necessary initialization of the underlying cache implementation
+-	 * during SessionFactory construction.
++	 * but will not start the cache, meaning it will not populate it with any objects.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void init(Properties properties) throws CacheException;
++
++	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/EhCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\EhCacheProvider.java ====
+@@ -125,7 +125,7 @@
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+-	public void start(Properties properties) throws CacheException {
++	public void init(Properties properties) throws CacheException {
+ 		try {
+ 			manager = CacheManager.create();
+ 			referenceCount++;
+@@ -136,6 +136,16 @@
+ 	}
+ 
+ 	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void start(Properties properties) throws CacheException {
++		// nothing further required after initialization
++	}
++
++	/**
+ 	 * Callback to perform any necessary cleanup of the underlying cache implementation
+ 	 * during SessionFactory.close().
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/HashtableCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\HashtableCacheProvider.java ====
+@@ -20,7 +20,16 @@
+ 
+ 	/**
+ 	 * Callback to perform any necessary initialization of the underlying cache implementation
+-	 * during SessionFactory construction.
++	 * but will not start the cache, meaning it will not populate it with any objects.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void init(Properties properties) throws CacheException {
++	}
++
++	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/NoCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\NoCacheProvider.java ====
+@@ -32,8 +32,19 @@
+ 	}
+ 
+ 	/**
+-	 * Callback to perform any necessary initialization of the underlying cache implementation during SessionFactory
+-	 * construction.
++	 * Callback to perform any necessary initialization of the underlying cache implementation
++	 * but will not start the cache, meaning it will not populate it with any objects.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void init(Properties properties) throws CacheException {
++		// this is called by SessionFactory irregardless; we just disregard here;
++		// could also add a check to SessionFactory to only conditionally call init
++	}
++
++	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/OSCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\OSCacheProvider.java ====
+@@ -66,7 +66,16 @@
+ 
+ 	/**
+ 	 * Callback to perform any necessary initialization of the underlying cache implementation
+-	 * during SessionFactory construction.
++	 * but will not start the cache, meaning it will not populate it with any objects.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void init(Properties properties) throws CacheException {
++	}
++
++	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/SwarmCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\SwarmCacheProvider.java ====
+@@ -31,16 +31,25 @@
+ 
+ 	/**
+ 	 * Callback to perform any necessary initialization of the underlying cache implementation
+-	 * during SessionFactory construction.
++	 * but will not start the cache, meaning it will not populate it with any objects.
+ 	 *
+ 	 * @param properties current configuration settings.
+ 	 */
+-	public void start(Properties properties) throws CacheException {
++	public void init(Properties properties) throws CacheException {
+         CacheConfiguration config = CacheConfigurationManager.getConfig(properties);
+         factory = new CacheFactory(config);
+ 	}
+ 
+ 	/**
++	 * Do only what is required to finally start the cache, including populating it with
++	 * an initial state.
++	 *
++	 * @param properties current configuration settings.
++	 */
++	public void start(Properties properties) throws CacheException {
++	}
++
++	/**
+ 	 * Callback to perform any necessary cleanup of the underlying cache implementation
+ 	 * during SessionFactory.close().
+ 	 */
+==== //depot/Nathan/hibernate/org/hibernate/cache/TransactionalCache.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\TransactionalCache.java ====
+@@ -11,11 +11,11 @@
+  * JBoss TreeCache. Note that this might be a less scalable
+  * concurrency strategy than <tt>ReadWriteCache</tt>. This is
+  * a "synchronous" concurrency strategy.
+- * 
++ *
+  * @author Gavin King
+  */
+ public class TransactionalCache implements CacheConcurrencyStrategy {
+-	
++
+ 	private static final Log log = LogFactory.getLog(TransactionalCache.class);
+ 
+ 	private Cache cache;
+@@ -23,7 +23,7 @@
+ 	public String getRegionName() {
+ 		return cache.getRegionName();
+ 	}
+-	
++
+ 	public Object get(Object key, long txTimestamp) throws CacheException {
+ 		if ( log.isDebugEnabled() ) log.debug("cache lookup: " + key);
+ 		Object result = cache.read(key);
+@@ -34,14 +34,14 @@
+ 	}
+ 
+ 	public boolean put(
+-			Object key, 
+-			Object value, 
+-			long txTimestamp, 
+-			Object version, 
++			Object key,
++			Object value,
++			long txTimestamp,
++			Object version,
+ 			Comparator versionComparator,
+ 			boolean minimalPut)
+ 	throws CacheException {
+-		
++
+ 		if ( minimalPut && cache.read(key)!=null ) {
+ 			if ( log.isDebugEnabled() ) log.debug("item already cached: " + key);
+ 			return false;
+@@ -112,7 +112,7 @@
+ 	/**
+ 	 * Do nothing.
+ 	 */
+-	public boolean afterInsert(Object key, Object value, Object version) 
++	public boolean afterInsert(Object key, Object value, Object version)
+ 	throws CacheException {
+ 		return false;
+ 	}
+@@ -120,11 +120,11 @@
+ 	/**
+ 	 * Do nothing.
+ 	 */
+-	public boolean afterUpdate(Object key, Object value, Object version, SoftLock clientLock) 
++	public boolean afterUpdate(Object key, Object value, Object version, SoftLock clientLock)
+ 	throws CacheException {
+ 		return false;
+ 	}
+-	
++
+ 	public String toString() {
+ 		return cache + "(transactional)";
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/cache/TreeCache.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\TreeCache.java ====
+@@ -112,7 +112,8 @@
+ 			cache.remove( new Fqn( new Object[] { regionName, key } ) );
+ 		}
+ 		catch (Exception e) {
+-			throw new CacheException(e);
++			throw new CacheException("Couldn't remove cache entry: region='"
++				+ regionName + "; key='" + key + '\'', e);
+ 		}
+ 	}
+ 
+==== //depot/Nathan/hibernate/org/hibernate/cache/TreeCacheProvider.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cache\TreeCacheProvider.java ====
+@@ -7,6 +7,7 @@
+ 
+ import javax.transaction.TransactionManager;
+ import java.util.Properties;
++import java.io.InputStream;
+ 
+ /**
+  * Support for a standalone JBossCache (TreeCache) instance.  The JBossCache is configured
+@@ -42,16 +43,35 @@
+ 	 *
+ 	 * @throws CacheException Indicates a problem preparing cache for use.
+ 	 */
+-	public void start(Properties properties) {
++	public void init(Properties properties) {
+ 		try {
+ 			cache = new org.jboss.cache.TreeCache();
+ 			PropertyConfigurator config = new PropertyConfigurator();
+-			config.configure(cache, "treecache.xml");
++			InputStream configIn = getConfigInputStream(properties);
++			if (configIn != null)
++				config.configure(cache, configIn);
++			else
++				config.configure(cache, "treecache.xml");
+ 			TransactionManagerLookup transactionManagerLookup = TransactionManagerLookupFactory.getTransactionManagerLookup(properties);
+ 			if (transactionManagerLookup!=null) {
+ 				cache.setTransactionManagerLookup( new TransactionManagerLookupAdaptor(transactionManagerLookup, properties) );
+ 				transactionManager = transactionManagerLookup.getTransactionManager(properties);
+ 			}
++		}
++		catch (Exception e) {
++			throw new CacheException(e);
++		}
++	}
++
++	/**
++	 * Start the underlying JBossCache TreeCache instance.
++	 *
++	 * @param properties All current config settings.
++	 *
++	 * @throws CacheException Indicates a problem preparing cache for use.
++	 */
++	public void start(Properties properties) {
++		try {
+ 			cache.start();
+ 		}
+ 		catch (Exception e) {
+@@ -59,6 +79,10 @@
+ 		}
+ 	}
+ 
++	protected InputStream getConfigInputStream(Properties properties) {
++		return null; // use "treecache.xml" file by default
++	}
++
+ 	public void stop() {
+ 		if (cache!=null) {
+ 			cache.stop();
+@@ -66,7 +90,7 @@
+ 			cache=null;
+ 		}
+ 	}
+-	
++
+ 	public boolean isMinimalPutsEnabledByDefault() {
+ 		return true;
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/CacheMode.java#2 - C:\depot\Nathan\hibernate\org\hibernate\CacheMode.java ====
+@@ -16,12 +16,17 @@
+ 	private final String name;
+ 	private final boolean isPutEnabled;
+ 	private final boolean isGetEnabled;
++	private final boolean isDatasourceGetEnabled;
+ 	private static final Map INSTANCES = new HashMap();
+ 
+ 	private CacheMode(String name, boolean isPutEnabled, boolean isGetEnabled) {
++		this(name, isPutEnabled, isGetEnabled, true);
++	}
++	private CacheMode(String name, boolean isPutEnabled, boolean isGetEnabled, boolean isDatasourceGetEnabled) {
+ 		this.name=name;
+ 		this.isPutEnabled = isPutEnabled;
+ 		this.isGetEnabled = isGetEnabled;
++		this.isDatasourceGetEnabled = isDatasourceGetEnabled;
+ 	}
+ 	public String toString() {
+ 		return name;
+@@ -32,6 +37,9 @@
+ 	public boolean isGetEnabled() {
+ 		return isGetEnabled;
+ 	}
++	public boolean isDatasourceGetEnabled() {
++		return isDatasourceGetEnabled;
++	}
+ 	/**
+ 	 * The session may read items from the cache, and add items to the cache
+ 	 */
+@@ -42,6 +50,11 @@
+ 	 */
+ 	public static final CacheMode IGNORE = new CacheMode("IGNORE", false, false);
+ 	/**
++	 * The session will only interact with the cache, and will never fetch an
++	 * object from a result set (in the ideal case the result set won't be requested)
++	 */
++	public static final CacheMode CACHE_ONLY = new CacheMode("CACHE_ONLY", true, true, false);
++	/**
+ 	 * The session may read items from the cache, but will not add items, 
+ 	 * except to invalidate items when updates occur
+ 	 */
+@@ -63,6 +76,7 @@
+ 	static {
+ 		INSTANCES.put( NORMAL.name, NORMAL );
+ 		INSTANCES.put( IGNORE.name, IGNORE );
++		INSTANCES.put( CACHE_ONLY.name, CACHE_ONLY );
+ 		INSTANCES.put( GET.name, GET );
+ 		INSTANCES.put( PUT.name, PUT );
+ 		INSTANCES.put( REFRESH.name, REFRESH );
+==== //depot/Nathan/hibernate/org/hibernate/cfg/Configuration.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cfg\Configuration.java ====
+@@ -173,7 +173,7 @@
+ 
+ 	private transient Mapping mapping = buildMapping();
+ 
+-	protected Configuration(SettingsFactory settingsFactory) {
++	public Configuration(SettingsFactory settingsFactory) {
+ 		this.settingsFactory = settingsFactory;
+ 		reset();
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/cfg/Environment.java#2 - C:\depot\Nathan\hibernate\org\hibernate\cfg\Environment.java ====
+@@ -381,6 +381,10 @@
+ 	 */
+ 	public static final String USE_SECOND_LEVEL_CACHE = "hibernate.cache.use_second_level_cache";
+ 	/**
++	 * Start cache immediately when the SessionFactory is created (enabled by default)
++	 */
++	public static final String START_SECOND_LEVEL_CACHE_IMMEDIATELY = "hibernate.cache.start_second_level_cache_immediately";
++	/**
+ 	 * Optimize the cache for mimimal puts instead of minimal gets
+ 	 */
+ 	public static final String USE_MINIMAL_PUTS = "hibernate.cache.use_minimal_puts";
+==== //depot/Nathan/hibernate/org/hibernate/EmptyInterceptor.java#2 - C:\depot\Nathan\hibernate\org\hibernate\EmptyInterceptor.java ====
+@@ -94,5 +94,8 @@
+ 	public void onCollectionRecreate(Object collection, Serializable key) throws CallbackException {}
+ 
+ 	public void onCollectionUpdate(Object collection, Serializable key) throws CallbackException {}
+-	
++
++	public boolean onDatastoreWriteException(HibernateException e, int attempt) {
++		return false;
++	}
+ }==== //depot/Nathan/hibernate/org/hibernate/engine/ActionQueue.java#2 - C:\depot\Nathan\hibernate\org\hibernate\engine\ActionQueue.java ====
+@@ -1,24 +1,17 @@
+ // $Id: ActionQueue.java 9194 2006-02-01 19:59:07Z steveebersole $
+ package org.hibernate.engine;
+ 
+-import org.hibernate.action.EntityInsertAction;
+-import org.hibernate.action.EntityDeleteAction;
+-import org.hibernate.action.Executable;
+-import org.hibernate.action.EntityUpdateAction;
+-import org.hibernate.action.CollectionRecreateAction;
+-import org.hibernate.action.CollectionRemoveAction;
+-import org.hibernate.action.CollectionUpdateAction;
+-import org.hibernate.action.EntityIdentityInsertAction;
+-import org.hibernate.action.BulkOperationCleanupAction;
++import org.hibernate.action.*;
+ import org.hibernate.HibernateException;
+ import org.hibernate.AssertionFailure;
++import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.cache.CacheException;
++import org.hibernate.cache.CacheKey;
++import org.hibernate.cache.CacheConcurrencyStrategy.SoftLock;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.Set;
++import java.util.*;
+ import java.io.ObjectInputStream;
+ import java.io.IOException;
+ import java.io.Serializable;
+@@ -37,6 +30,7 @@
+ 
+ 	private static final Log log = LogFactory.getLog( ActionQueue.class );
+ 	private static final int INIT_QUEUE_LIST_SIZE = 5;
++	private static final int INIT_LISTS_LIST_SIZE = 6;
+ 
+ 	private SessionImplementor session;
+ 
+@@ -54,9 +48,18 @@
+ 	private ArrayList collectionUpdates;
+ 	private ArrayList collectionRemovals;
+ 
++	private transient ArrayList lists;
++
+ 	private ArrayList executions;
+ 
+ 	/**
++	 * This map contains information about locks held and evictions
++	 * on L2 Collection cache entries.  It maps CacheKey keys to
++	 * Lists of { CollectionPersister, lockCount, softLock, wasEvicted }
++	 */
++	private transient Map collectionCacheState = new HashMap();
++
++	/**
+ 	 * Constructs an action queue bound to the given session.
+ 	 *
+ 	 * @param session The session "owning" this queue.
+@@ -76,16 +79,27 @@
+ 		collectionUpdates = new ArrayList( INIT_QUEUE_LIST_SIZE );
+ 
+ 		executions = new ArrayList( INIT_QUEUE_LIST_SIZE * 3 );
++
++		lists = new ArrayList( INIT_LISTS_LIST_SIZE );
++
++		buildListsList();
+ 	}
+ 
++	private void buildListsList() {
++		// The order matters here.  It determines their order of processing
++		lists.add( insertions );
++		lists.add( updates );
++		lists.add( collectionRemovals );
++		lists.add( collectionUpdates );
++		lists.add( collectionCreations );
++		lists.add( deletions );
++	}
++
+ 	public void clear() {
+-		updates.clear();
+-		insertions.clear();
+-		deletions.clear();
+-
+-		collectionCreations.clear();
+-		collectionRemovals.clear();
+-		collectionUpdates.clear();
++		int size = lists.size();
++		for ( int i = 0; i < size; i++ ) {
++			( (List) lists.get(i) ).clear();
++		}
+ 	}
+ 
+ 	public void addAction(EntityInsertAction action) {
+@@ -127,32 +141,76 @@
+ 	 * @throws HibernateException error executing queued insertion actions.
+ 	 */
+ 	public void executeInserts() throws HibernateException {
+-		executeActions( insertions );
++		List lists = java.util.Collections.singletonList(insertions);
++		prepareActions(lists);
++		executeActions(lists);
+ 	}
+ 
+-	/**
++  	/**
+ 	 * Perform all currently queued actions.
+ 	 *
+ 	 * @throws HibernateException error executing queued actions.
+ 	 */
+ 	public void executeActions() throws HibernateException {
+-		executeActions( insertions );
+-		executeActions( updates );
+-		executeActions( collectionRemovals );
+-		executeActions( collectionUpdates );
+-		executeActions( collectionCreations );
+-		executeActions( deletions );
++		prepareActions(lists);
++		executeActions(lists);
+ 	}
+ 
+ 	/**
+-	 * Prepares the internal action queues for execution.
++	 * Perform all currently queued actions contained in the lists contained in the provided list
+ 	 *
+-	 * @throws HibernateException error preparing actions.
++	 * @param lists list of lists which contain queued actions
++	 * @throws HibernateException
+ 	 */
+-	public void prepareActions() throws HibernateException {
+-		prepareActions( collectionRemovals );
+-		prepareActions( collectionUpdates );
+-		prepareActions( collectionCreations );
++	private void executeActions(List lists) throws HibernateException {
++
++		final int size = lists.size();
++
++		for ( int i = 0; i < size; i++ ) {
++			prepareForExecution( (List) lists.get(i) );
++		}
++
++
++		// Only support this retry feature if no other activity has yet been pushed through the
++		// Batcher.  This is because we would have to either use JDBC Connection SavePoints, or
++		// keep a log of all of the PreparedStatements that have been executed within this
++		// Transaction so that they too can be retried, along with the actions presently in this
++		// ActionQueue, after the rollback is done.
++		final boolean supportRetries = this.session.getBatcher().getExecutedStatementCount() == 0
++			&& !this.session.getBatcher().hasBatchedStatement();
++
++		for ( int j = 0; j < Integer.MAX_VALUE; j++ ) {
++			try {
++				for ( int i = 0; i < size; i++ ) {
++					executeActionsDatastorePhase( (List) lists.get(i) );
++				}
++
++				break;
++			}
++			catch (HibernateException e) {
++				if (!supportRetries
++					|| !this.session.getInterceptor().onDatastoreWriteException(e, j))
++					throw e;
++				log.warn("Exception making datastore changes, rolling back now for retry", e);
++				try {
++					// todo - Use the relevant Transaction object, not the Connection directly
++					session.connection().rollback();
++				}
++				catch (Exception ee) {
++					// todo - translator for SQLExceptions
++					throw new HibernateException(ee);
++				}
++			}
++		}
++
++
++		for ( int i = 0; i < size; i++ ) {
++			executeActionsCachePhase( (List) lists.get(i) );
++		}
++
++		for ( int i = 0; i < size; i++ ) {
++			( (List) lists.get(i) ).clear();
++		}
+ 	}
+ 
+ 	/**
+@@ -167,7 +225,7 @@
+ 			try {
+ 				Executable exec = ( Executable ) executions.get(i);
+ 				try {
+-					exec.afterTransactionCompletion( success );
++					exec.afterTransactionCompletion( success, this );
+ 				}
+ 				finally {
+ 					if ( invalidateQueryCache ) {
+@@ -184,6 +242,88 @@
+ 			}
+ 		}
+ 		executions.clear();
++
++		if (this.collectionCacheState.size() > 0)
++			throw new AssertionFailure( "Not all cache locks were released" );
++	}
++
++	/**
++	 * Lock the cache entry corresponding to the provided key.  If the
++	 * entry has already been locked by this ActionQueue, then the only
++	 * action taken is an increment of the lockCount for this key<->entry.
++	 *
++	 * @param cacheKey the key for the cache entry we want to lock
++	 * @param collPersister the persister associated with the CacheKey space
++	 */
++	public void lock(CacheKey cacheKey, CollectionPersister collPersister) {
++		List entry = (List) collectionCacheState.get(cacheKey);
++
++		if (entry == null) {
++			SoftLock lock = collPersister.getCache().lock(cacheKey, null);
++			entry = new ArrayList(4);
++			entry.add(collPersister);
++			entry.add(new Integer(1));
++			entry.add(lock);
++			entry.add(Boolean.FALSE);
++			collectionCacheState.put(cacheKey, entry);
++		}
++		else {
++			Integer currLockCount = (Integer) entry.get(1);
++			Integer newLockCount = new Integer(currLockCount.intValue() + 1);
++			entry.set(1, newLockCount);
++		}
++	}
++
++	/**
++	 * Unlock the cache entry corresponding to the provided key.  If the
++	 * lockCount is currently greater than one, then the only action taken
++	 * is a decrement of the lockCount.  Otherwise, the entry is unlocked
++	 * and any information held about the provided CacheKey by this ActionQueue
++	 * is purged.
++	 *
++	 * @param cacheKey the key for the cache entry we want to unlock
++	 */
++	public void unlock(CacheKey cacheKey) {
++		List entry = (List) collectionCacheState.get(cacheKey);
++		Integer currLockCount = (Integer) entry.get(1);
++
++		if (currLockCount.intValue() > 1) {
++			Integer newLockCount = new Integer(currLockCount.intValue() - 1);
++			entry.set(1, newLockCount);
++		}
++		else if (currLockCount.intValue() == 1) {
++			CollectionPersister collPersister = (CollectionPersister) entry.get(0);
++			SoftLock lock = (SoftLock) entry.get(2);
++			// Even if there's an error, we consider the
++
++			// lock invalid, so just remove it first
++			collectionCacheState.remove(cacheKey);
++			collPersister.getCache().release(cacheKey, lock);
++		}
++	}
++
++	/**
++	 * Evict the cache entry corresponding to the provided key.  If the
++	 * entry has not yet been evicted, then it is evicted and marked as
++	 * having been so.  If it was already evicted by this ActionQueue,
++	 * then no action is taken.
++	 *
++	 * @param cacheKey the key for the cache entry we want to evict
++	 */
++	public void evict(CacheKey cacheKey, SessionImplementor session) {
++		List entry = (List) collectionCacheState.get(cacheKey);
++		Boolean alreadyEvicted = (Boolean) entry.get(3);
++
++		if (!alreadyEvicted.booleanValue()) {
++			CollectionPersister collPersister = (CollectionPersister) entry.get(0);
++			collPersister.getCache().evict(cacheKey);
++			entry.set(3, Boolean.TRUE);
++
++			if ( session.getFactory().getStatistics().isStatisticsEnabled() ) {
++				session.getFactory().getStatisticsImplementor()
++						.removeCollection( collPersister.getRole() );
++			}
++		}
+ 	}
+ 
+ 	/**
+@@ -195,12 +335,12 @@
+ 	 * tables; false otherwise.
+ 	 */
+ 	public boolean areTablesToBeUpdated(Set tables) {
+-		return areTablesToUpdated( updates, tables ) ||
+-		       areTablesToUpdated( insertions, tables ) ||
+-		       areTablesToUpdated( deletions, tables ) ||
+-		       areTablesToUpdated( collectionUpdates, tables ) ||
+-		       areTablesToUpdated( collectionCreations, tables ) ||
+-		       areTablesToUpdated( collectionRemovals, tables );
++		int size = lists.size();
++		for ( int i = 0; i < size; i++ ) {
++			if (areTablesToUpdated( (List) lists.get(i), tables))
++				return true;
++		}
++		return false;
+ 	}
+ 
+ 	/**
+@@ -226,16 +366,37 @@
+ 		return false;
+ 	}
+ 
+-	private void executeActions(List list) throws HibernateException {
++	private void executeActionsDatastorePhase(List list) throws HibernateException {
++		int size = list.size();
++		for ( int i = 0; i < size; i++ ) {
++			( (Executable) list.get(i) ).executeDatastorePhase();
++		}
++		session.getBatcher().executeBatch();
++	}
++
++	private void executeActionsCachePhase(List list) throws HibernateException {
+ 		int size = list.size();
+ 		for ( int i = 0; i < size; i++ ) {
+-			execute( (Executable) list.get(i) );
++			( (Executable) list.get(i) ).executeCachePhase(this);
+ 		}
+-		list.clear();
++	}
++
++	public void execute(Executable executable) throws HibernateException {
++		executable.beforeExecutions(this);
++		prepareForExecution(executable);
++		executable.executeDatastorePhase();
+ 		session.getBatcher().executeBatch();
++		executable.executeCachePhase(this);
+ 	}
+ 
+-	public void execute(Executable executable) {
++	private void prepareForExecution(List list) throws HibernateException {
++		int size = list.size();
++		for ( int i = 0; i < size; i++ ) {
++			prepareForExecution( (Executable) list.get( i ) );
++		}
++	}
++
++	private void prepareForExecution(Executable executable) throws HibernateException {
+ 		final boolean lockQueryCache = session.getFactory().getSettings().isQueryCacheEnabled();
+ 		if ( executable.hasAfterTransactionCompletion() || lockQueryCache ) {
+ 			executions.add( executable );
+@@ -245,14 +406,17 @@
+ 				.getUpdateTimestampsCache()
+ 				.preinvalidate( executable.getPropertySpaces() );
+ 		}
+-		executable.execute();
+ 	}
+ 
+-	private void prepareActions(List queue) throws HibernateException {
+-		int size = queue.size();
+-		for ( int i=0; i<size; i++ ) {
+-			Executable executable = ( Executable ) queue.get(i);
+-			executable.beforeExecutions();
++	private void prepareActions(List lists) throws HibernateException {
++		int listsSize = lists.size();
++		for ( int i=0; i<listsSize; i++ ) {
++			List queue = (List) lists.get(i);
++			int size = queue.size();
++			for ( int j=0; j<size; ++j ) {
++				Executable executable = ( Executable ) queue.get(j);
++				executable.beforeExecutions(this);
++			}
+ 		}
+ 	}
+ 
+@@ -329,12 +493,12 @@
+ 	}
+ 
+ 	public boolean hasAnyQueuedActions() {
+-		return updates.size() > 0 ||
+-		       insertions.size() > 0 ||
+-		       deletions.size() > 0 ||
+-		       collectionUpdates.size() > 0 ||
+-		       collectionRemovals.size() > 0 ||
+-		       collectionCreations.size() > 0;
++		int size = lists.size();
++		for ( int i = 0; i < size; i++ ) {
++			if ( ( (List) lists.get(i) ).size() > 0 )
++				return true;
++		}
++		return false;
+ 	}
+ 
+ 	/**
+==== //depot/Nathan/hibernate/org/hibernate/engine/SessionFactoryImplementor.java#2 - C:\depot\Nathan\hibernate\org\hibernate\engine\SessionFactoryImplementor.java ====
+@@ -52,6 +52,12 @@
+ 	
+ 	public Interceptor getInterceptor();
+ 
++	/**
++	 * start the cache
++	 * @throws HibernateException if the cache is already started
++	 */
++	public void startCache() throws HibernateException;
++
+ 	public QueryPlanCache getQueryPlanCache();
+ 
+ 	/**
+==== //depot/Nathan/hibernate/org/hibernate/event/def/AbstractFlushingEventListener.java#2 - C:\depot\Nathan\hibernate\org\hibernate\event\def\AbstractFlushingEventListener.java ====
+@@ -293,8 +293,7 @@
+ 			// we need to lock the collection caches before
+ 			// executing entity inserts/updates in order to
+ 			// account for bidi associations
+-			session.getActionQueue().prepareActions();
+-			session.getActionQueue().executeActions();
++			session.getActionQueue().executeActions(); // <-- done in here
+ 		}
+ 		catch (HibernateException he) {
+ 			log.error("Could not synchronize database state with session", he);
+==== //depot/Nathan/hibernate/org/hibernate/event/def/DefaultLoadEventListener.java#2 - C:\depot\Nathan\hibernate\org\hibernate\event\def\DefaultLoadEventListener.java ====
+@@ -92,7 +92,7 @@
+ 			}
+ 		}
+ 		catch(HibernateException e) {
+-			log.info("Error performing load command", e);
++			//log.info("Error performing load command", e);
+ 			throw e;
+ 		}
+ 	}
+@@ -299,10 +299,10 @@
+ 		final EntityKey keyToLoad, 
+ 		final LoadEventListener.LoadType options) 
+ 	throws HibernateException {
+-		
++
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace(
+-					"attempting to resolve: " + 
++					"attempting to resolve: " +
+ 					MessageHelper.infoString( persister, event.getEntityId(), event.getSession().getFactory() )
+ 				);
+ 		}
+@@ -325,7 +325,14 @@
+ 			return null;
+ 		}*/
+ 
+-		entity = loadFromSecondLevelCache(event, persister, options);
++		if (event.getCacheMode().isGetEnabled())
++		    entity = event.getSession().loadFromSecondLevelCache(
++		        event.getEntityId(),
++		        persister,
++		        event.getLockMode(),
++		        event.getInstanceToLoad()
++		    );
++
+ 		if ( entity != null ) {
+ 			if ( log.isTraceEnabled() ) {
+ 				log.trace(
+@@ -343,7 +350,8 @@
+ 				);
+ 		}
+ 
+-		return loadFromDatasource(event, persister, keyToLoad, options);
++		return !event.getCacheMode().isDatasourceGetEnabled() ? null :
++			loadFromDatasource(event, persister, keyToLoad, options);
+ 	}
+ 
+ 	/**
+@@ -420,144 +428,4 @@
+ 		}
+ 	}
+ 
+-	/**
+-	 * Attempts to load the entity from the second-level cache.
+-	 *
+-	 * @return The entity from the second-level cache, or null.
+-	 * @throws HibernateException
+-	 */
+-	protected Object loadFromSecondLevelCache(
+-		final LoadEvent event,
+-		final EntityPersister persister,
+-		final LoadEventListener.LoadType options) 
+-	throws HibernateException {
+-		
+-		final SessionImplementor source = event.getSession();
+-		
+-		final boolean useCache = persister.hasCache() && 
+-			source.getCacheMode().isGetEnabled() && 
+-			event.getLockMode().lessThan(LockMode.READ);
+-		
+-		if (useCache) {
+-			
+-			final SessionFactoryImplementor factory = source.getFactory();
+-			
+-			final CacheKey ck = new CacheKey( 
+-					event.getEntityId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(),
+-					source.getEntityMode(), 
+-					source.getFactory()
+-				);
+-			Object ce = persister.getCache()
+-				.get( ck, source.getTimestamp() );
+-			
+-			if ( factory.getStatistics().isStatisticsEnabled() ) {
+-				if (ce==null) {
+-					factory.getStatisticsImplementor().secondLevelCacheMiss( 
+-						persister.getCache().getRegionName() 
+-					);
+-				}
+-				else {
+-					factory.getStatisticsImplementor().secondLevelCacheHit( 
+-						persister.getCache().getRegionName() 
+-					);
+-				}
+-			}
+-
+-			if ( ce != null ) {
+-
+-				CacheEntry entry = (CacheEntry) persister.getCacheEntryStructure()
+-						.destructure(ce, factory);
+-			
+-				// Entity was found in second-level cache...
+-				return assembleCacheEntry(
+-						entry,
+-						event.getEntityId(),
+-						persister,
+-						event
+-					);
+-			}
+-		}
+-		
+-		return null;
+-	}
+-
+-	private Object assembleCacheEntry(
+-		final CacheEntry entry,
+-		final Serializable id,
+-		final EntityPersister persister,
+-		final LoadEvent event)
+-	throws HibernateException {
+-		
+-		final Object optionalObject = event.getInstanceToLoad();
+-		final EventSource session = event.getSession();
+-		final SessionFactoryImplementor factory = session.getFactory();
+-		
+-		if ( log.isTraceEnabled() ) {
+-			log.trace(
+-					"assembling entity from second-level cache: " +
+-					MessageHelper.infoString( persister, id, factory )
+-				);
+-		}
+-
+-		EntityPersister subclassPersister = factory.getEntityPersister( entry.getSubclass() );
+-		Object result = optionalObject == null ? 
+-				session.instantiate( subclassPersister, id ) : optionalObject;
+-				
+-		// make it circular-reference safe
+-		TwoPhaseLoad.addUninitializedCachedEntity( 
+-				new EntityKey( id, subclassPersister, session.getEntityMode() ), 
+-				result, 
+-				subclassPersister, 
+-				LockMode.NONE, 
+-				entry.areLazyPropertiesUnfetched(),
+-				entry.getVersion(),
+-				session
+-			);
+-
+-		Type[] types = subclassPersister.getPropertyTypes();
+-		Object[] values = entry.assemble( result, id, subclassPersister, session.getInterceptor(), session ); // intializes result by side-effect
+-		TypeFactory.deepCopy( 
+-				values, 
+-				types, 
+-				subclassPersister.getPropertyUpdateability(), 
+-				values, 
+-				session
+-			);
+-		
+-		Object version = Versioning.getVersion( values, subclassPersister );
+-		if ( log.isTraceEnabled() ) log.trace( "Cached Version: " + version );
+-		
+-		final PersistenceContext persistenceContext = session.getPersistenceContext();
+-		persistenceContext.addEntry( 
+-				result, 
+-				Status.MANAGED, 
+-				values, 
+-				null, 
+-				id, 
+-				version, 
+-				LockMode.NONE, 
+-				true, 
+-				subclassPersister, 
+-				false, 
+-				entry.areLazyPropertiesUnfetched() 
+-			);
+-		subclassPersister.afterInitialize( result, entry.areLazyPropertiesUnfetched(), session );
+-		persistenceContext.initializeNonLazyCollections();
+-		// upgrade the lock if necessary:
+-		//lock(result, lockMode);
+-
+-		//PostLoad is needed for EJB3
+-		//TODO: reuse the PostLoadEvent...
+-		PostLoadEvent postLoadEvent = new PostLoadEvent(session).setEntity(result)
+-				.setId(id).setPersister(persister);
+-		PostLoadEventListener[] listeners = session.getListeners().getPostLoadEventListeners();
+-		for ( int i = 0; i < listeners.length; i++ ) {
+-			listeners[i].onPostLoad(postLoadEvent);
+-		}
+-		
+-		return result;
+-	}
+-
+ }
+==== //depot/Nathan/hibernate/org/hibernate/event/LoadEvent.java#2 - C:\depot\Nathan\hibernate\org\hibernate\event\LoadEvent.java ====
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ 
+ import org.hibernate.LockMode;
++import org.hibernate.CacheMode;
+ 
+ /**
+  *  Defines an event class for the loading of an entity.
+@@ -18,21 +19,22 @@
+ 	private String entityClassName;
+ 	private Object instanceToLoad;
+ 	private LockMode lockMode;
++	private CacheMode cacheMode;
+ 	private boolean isAssociationFetch;
+ 	private Object result;
+ 
+-	public LoadEvent(Serializable entityId, Object instanceToLoad, EventSource source) {
+-		this(entityId, null, instanceToLoad, null, false, source);
++	public LoadEvent(Serializable entityId, Object instanceToLoad, CacheMode cacheMode, EventSource source) {
++		this(entityId, null, instanceToLoad, null, cacheMode, false, source);
+ 	}
+ 
+-	public LoadEvent(Serializable entityId, String entityClassName, LockMode lockMode, EventSource source) {
+-		this(entityId, entityClassName, null, lockMode, false, source);
++	public LoadEvent(Serializable entityId, String entityClassName, LockMode lockMode, CacheMode cacheMode, EventSource source) {
++		this(entityId, entityClassName, null, lockMode, cacheMode, false, source);
+ 	}
+-	
+-	public LoadEvent(Serializable entityId, String entityClassName, boolean isAssociationFetch, EventSource source) {
+-		this(entityId, entityClassName, null, null, isAssociationFetch, source);
++
++	public LoadEvent(Serializable entityId, String entityClassName, CacheMode cacheMode, boolean isAssociationFetch, EventSource source) {
++		this(entityId, entityClassName, null, null, cacheMode, isAssociationFetch, source);
+ 	}
+-	
++
+ 	public boolean isAssociationFetch() {
+ 		return isAssociationFetch;
+ 	}
+@@ -42,6 +44,7 @@
+ 			String entityClassName,
+ 			Object instanceToLoad,
+ 			LockMode lockMode,
++			CacheMode cacheMode,
+ 			boolean isAssociationFetch,
+ 			EventSource source) {
+ 
+@@ -62,6 +65,7 @@
+ 		this.entityClassName = entityClassName;
+ 		this.instanceToLoad = instanceToLoad;
+ 		this.lockMode = lockMode;
++		this.cacheMode = cacheMode;
+ 		this.isAssociationFetch = isAssociationFetch;
+ 	}
+ 
+@@ -97,6 +101,14 @@
+ 		this.lockMode = lockMode;
+ 	}
+ 
++	public CacheMode getCacheMode() {
++		return cacheMode;
++	}
++
++	public void setCacheMode(CacheMode cacheMode) {
++		this.cacheMode = cacheMode;
++	}
++
+ 	public Object getResult() {
+ 		return result;
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/impl/SessionFactoryImpl.java#2 - C:\depot\Nathan\hibernate\org\hibernate\impl\SessionFactoryImpl.java ====
+@@ -82,6 +82,7 @@
+ import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.SerializationHelper;
++import org.hibernate.util.PropertiesHelper;
+ 
+ 
+ /**
+@@ -136,6 +137,7 @@
+ 	private final transient EventListeners eventListeners;
+ 	private final transient CurrentSessionContext currentSessionContext;
+ 
++	private transient boolean cacheStarted = false;
+ 	private final QueryPlanCache queryPlanCache = new QueryPlanCache( this );
+ 
+ 	private transient boolean isClosed = false;
+@@ -170,7 +172,13 @@
+ 		);
+ 
+ 		// Caches
+-		settings.getCacheProvider().start( properties );
++		settings.getCacheProvider().init( properties );
++
++		final boolean startNow =
++			PropertiesHelper.getBoolean(Environment.START_SECOND_LEVEL_CACHE_IMMEDIATELY, properties, true);
++		
++		if (startNow)
++			startCache();
+ 
+ 		//Generators:
+ 
+@@ -343,6 +351,14 @@
+ 		getStatistics().setStatisticsEnabled( settings.isStatisticsEnabled() );
+ 	}
+ 
++	public void startCache()
++	{
++		if (cacheStarted)
++			throw new HibernateException("Can't start cache, it has already been started");
++		settings.getCacheProvider().start( properties );
++		cacheStarted = true;
++	}
++
+ 	public QueryPlanCache getQueryPlanCache() {
+ 		return queryPlanCache;
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/impl/SessionImpl.java#2 - C:\depot\Nathan\hibernate\org\hibernate\impl\SessionImpl.java ====
+@@ -42,6 +42,8 @@
+ import org.hibernate.Transaction;
+ import org.hibernate.TransientObjectException;
+ import org.hibernate.UnresolvableObjectException;
++import org.hibernate.cache.CacheKey;
++import org.hibernate.cache.entry.CacheEntry;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.ActionQueue;
+ import org.hibernate.engine.CollectionEntry;
+@@ -50,9 +52,12 @@
+ import org.hibernate.engine.FilterDefinition;
+ import org.hibernate.engine.PersistenceContext;
+ import org.hibernate.engine.QueryParameters;
++import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.StatefulPersistenceContext;
+ import org.hibernate.engine.Status;
+ import org.hibernate.engine.query.FilterQueryPlan;
++import org.hibernate.engine.TwoPhaseLoad;
++import org.hibernate.engine.Versioning;
+ import org.hibernate.engine.query.HQLQueryPlan;
+ import org.hibernate.event.AutoFlushEvent;
+ import org.hibernate.event.AutoFlushEventListener;
+@@ -76,6 +81,8 @@
+ import org.hibernate.event.MergeEventListener;
+ import org.hibernate.event.PersistEvent;
+ import org.hibernate.event.PersistEventListener;
++import org.hibernate.event.PostLoadEvent;
++import org.hibernate.event.PostLoadEventListener;
+ import org.hibernate.event.RefreshEvent;
+ import org.hibernate.event.RefreshEventListener;
+ import org.hibernate.event.ReplicateEvent;
+@@ -98,6 +105,7 @@
+ import org.hibernate.stat.SessionStatisticsImpl;
+ import org.hibernate.tuple.DynamicMapInstantiator;
+ import org.hibernate.type.Type;
++import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.StringHelper;
+@@ -766,7 +774,7 @@
+ 	// load()/get() operations ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 	public void load(Object object, Serializable id) throws HibernateException {
+-		LoadEvent event = new LoadEvent(id, object, this);
++		LoadEvent event = new LoadEvent(id, object, cacheMode, this);
+ 		fireLoad( event, LoadEventListener.RELOAD );
+ 	}
+ 
+@@ -775,7 +783,7 @@
+ 	}
+ 
+ 	public Object load(String entityName, Serializable id) throws HibernateException {
+-		LoadEvent event = new LoadEvent(id, entityName, false, this);
++		LoadEvent event = new LoadEvent(id, entityName, cacheMode, false, this);
+ 		boolean success = false;
+ 		try {
+ 			fireLoad( event, LoadEventListener.LOAD );
+@@ -793,7 +801,7 @@
+ 	}
+ 
+ 	public Object get(String entityName, Serializable id) throws HibernateException {
+-		LoadEvent event = new LoadEvent(id, entityName, false, this);
++		LoadEvent event = new LoadEvent(id, entityName, cacheMode, false, this);
+ 		boolean success = false;
+ 		try {
+ 			fireLoad(event, LoadEventListener.GET);
+@@ -816,17 +824,147 @@
+ 			log.debug( "initializing proxy: " + MessageHelper.infoString( persister, id, getFactory() ) );
+ 		}
+ 		
+-		LoadEvent event = new LoadEvent(id, entityName, true, this);
++		LoadEvent event = new LoadEvent(id, entityName, cacheMode, true, this);
+ 		fireLoad(event, LoadEventListener.IMMEDIATE_LOAD);
+ 		return event.getResult();
+ 	}
+ 
++	/**
++	 * Load the entity from the second level cache.  If it's not in the cache, return null.
++	 */
++	public Object loadFromSecondLevelCache(Serializable id, EntityPersister persister,
++	    LockMode lockMode, final Object instanceToLoad) throws HibernateException
++	{
++		final boolean useCache = lockMode.lessThan( LockMode.READ )
++			&& persister.hasCache()
++			&& this.getCacheMode().isGetEnabled();
++
++		if (useCache) {
++
++			final SessionFactoryImplementor factory = this.getFactory();
++
++			final CacheKey ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					this.getEntityMode(),
++					factory
++				);
++			Object ce = persister.getCache()
++				.get( ck, this.getTimestamp() );
++
++			if ( factory.getStatistics().isStatisticsEnabled() ) {
++				if (ce==null) {
++					factory.getStatisticsImplementor().secondLevelCacheMiss(
++						persister.getCache().getRegionName()
++					);
++				}
++				else {
++					factory.getStatisticsImplementor().secondLevelCacheHit(
++						persister.getCache().getRegionName()
++					);
++				}
++			}
++
++			if ( ce != null ) {
++
++				CacheEntry entry = (CacheEntry) persister.getCacheEntryStructure()
++						.destructure(ce, factory);
++
++				// Entity was found in second-level cache...
++				return assembleCacheEntry(
++						entry,
++						id,
++						persister,
++						instanceToLoad
++					);
++			}
++		}
++
++		return null;
++	}
++
++	private Object assembleCacheEntry(
++		final CacheEntry entry,
++		final Serializable id,
++		final EntityPersister persister,
++	    final Object optionalObject)
++	throws HibernateException {
++
++		final SessionFactoryImplementor factory = this.getFactory();
++
++		if ( log.isTraceEnabled() ) {
++			log.trace(
++					"assembling entity from second-level cache: " +
++					MessageHelper.infoString( persister, id, factory )
++				);
++		}
++
++		EntityPersister subclassPersister = factory.getEntityPersister( entry.getSubclass() );
++		Object result = optionalObject == null ?
++				this.instantiate( subclassPersister, id ) : optionalObject;
++
++		// make it circular-reference safe
++		TwoPhaseLoad.addUninitializedCachedEntity(
++				new EntityKey( id, subclassPersister, this.getEntityMode() ),
++				result,
++				subclassPersister,
++				LockMode.NONE,
++				entry.areLazyPropertiesUnfetched(),
++				entry.getVersion(),
++				this
++			);
++
++		Type[] types = subclassPersister.getPropertyTypes();
++		Object[] values = entry.assemble( result, id, subclassPersister, this.getInterceptor(), this ); // intializes result by side-effect
++		TypeFactory.deepCopy(
++				values,
++				types,
++				subclassPersister.getPropertyUpdateability(),
++				values,
++				this
++			);
++
++		Object version = Versioning.getVersion( values, subclassPersister );
++		if ( log.isTraceEnabled() ) log.trace( "Cached Version: " + version );
++
++		final PersistenceContext persistenceContext = this.getPersistenceContext();
++		persistenceContext.addEntry(
++				result,
++				Status.MANAGED,
++				values,
++				null,
++				id,
++				version,
++				LockMode.NONE,
++				true,
++				subclassPersister,
++				false,
++				entry.areLazyPropertiesUnfetched()
++			);
++		subclassPersister.afterInitialize( result, entry.areLazyPropertiesUnfetched(), this );
++		persistenceContext.initializeNonLazyCollections();
++		// upgrade the lock if necessary:
++		//lock(result, lockMode);
++
++		//PostLoad is needed for EJB3
++		//TODO: reuse the PostLoadEvent...
++		PostLoadEvent postLoadEvent = new PostLoadEvent(this).setEntity(result)
++				.setId(id).setPersister(persister);
++		PostLoadEventListener[] listeners = this.getListeners().getPostLoadEventListeners();
++		for ( int i = 0; i < listeners.length; i++ ) {
++			listeners[i].onPostLoad(postLoadEvent);
++		}
++
++		return result;
++	}
++
+ 	public Object internalLoad(String entityName, Serializable id, boolean eager, boolean nullable) throws HibernateException {
+ 		// todo : remove
+ 		LoadEventListener.LoadType type = nullable ? 
+ 				LoadEventListener.INTERNAL_LOAD_NULLABLE : 
+ 				eager ? LoadEventListener.INTERNAL_LOAD_EAGER : LoadEventListener.INTERNAL_LOAD_LAZY;
+-		LoadEvent event = new LoadEvent(id, entityName, true, this);
++		LoadEvent event = new LoadEvent(id, entityName, cacheMode, true, this);
+ 		fireLoad(event, type);
+ 		if ( !nullable ) {
+ 			UnresolvableObjectException.throwIfNull( event.getResult(), id, entityName );
+@@ -839,7 +977,7 @@
+ 	}
+ 
+ 	public Object load(String entityName, Serializable id, LockMode lockMode) throws HibernateException {
+-		LoadEvent event = new LoadEvent(id, entityName, lockMode, this);
++		LoadEvent event = new LoadEvent(id, entityName, lockMode, cacheMode, this);
+ 		fireLoad( event, LoadEventListener.LOAD );
+ 		return event.getResult();
+ 	}
+@@ -849,7 +987,7 @@
+ 	}
+ 
+ 	public Object get(String entityName, Serializable id, LockMode lockMode) throws HibernateException {
+-		LoadEvent event = new LoadEvent(id, entityName, lockMode, this);
++		LoadEvent event = new LoadEvent(id, entityName, lockMode, cacheMode, this);
+ 	   	fireLoad(event, LoadEventListener.GET);
+ 		return event.getResult();
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/Interceptor.java#2 - C:\depot\Nathan\hibernate\org\hibernate\Interceptor.java ====
+@@ -152,4 +152,12 @@
+ 	 * @return original or modified sql
+ 	 */
+ 	public String onPrepareStatement(String sql);
++
++	/**
++	 * Called when an exception is thrown during datastore writing
++	 * @param e exception that was thrown during datastore writing
++	 * @param attempt index number of the current attempt
++	 * @return true if the datastore writes should be reattempted, false otherwise
++	 */
++	public boolean onDatastoreWriteException(HibernateException e, int attempt);
+ }
+==== //depot/Nathan/hibernate/org/hibernate/jdbc/AbstractBatcher.java#2 - C:\depot\Nathan\hibernate\org\hibernate\jdbc\AbstractBatcher.java ====
+@@ -44,6 +44,7 @@
+ 
+ 	private PreparedStatement batchUpdate;
+ 	private String batchUpdateSQL;
++	private int executedStatementCount = 0;
+ 
+ 	private HashSet statementsToClose = new HashSet();
+ 	private HashSet resultSetsToClose = new HashSet();
+@@ -187,12 +188,20 @@
+ 		return (CallableStatement)batchUpdate;
+ 	}
+ 
++	public int getExecutedStatementCount() {
++		return executedStatementCount;
++	}
+ 
++	public boolean hasBatchedStatement() {
++		return batchUpdate != null;
++	}
++
+ 	public void executeBatch() throws HibernateException {
+ 		if (batchUpdate!=null) {
+ 			try {
+ 				try {
+ 					doExecuteBatch(batchUpdate);
++					executedStatementCount++;
+ 				}
+ 				finally {
+ 					closeStatement(batchUpdate);
+==== //depot/Nathan/hibernate/org/hibernate/jdbc/Batcher.java#2 - C:\depot\Nathan\hibernate\org\hibernate\jdbc\Batcher.java ====
+@@ -92,6 +92,16 @@
+ 	public void addToBatch(int expectedRowCount) throws SQLException, HibernateException;
+ 
+ 	/**
++	 * @return the number of PreparedStatements that have already been executed by this Batcher
++	 */
++	public int getExecutedStatementCount();
++
++	/**
++	 * @return whether there is currently a batched PreparedStatement that has not yet been executed
++	 */
++	public boolean hasBatchedStatement();
++
++	/**
+ 	 * Execute the batch
+ 	 */
+ 	public void executeBatch() throws HibernateException;
+==== //depot/Nathan/hibernate/org/hibernate/persister/collection/AbstractCollectionPersister.java#2 - C:\depot\Nathan\hibernate\org\hibernate\persister\collection\AbstractCollectionPersister.java ====
+@@ -7,10 +7,7 @@
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
+ import java.sql.Types;
+-import java.util.Arrays;
+-import java.util.HashMap;
+-import java.util.Iterator;
+-import java.util.Map;
++import java.util.*;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -83,6 +80,7 @@
+ 	private final String sqlUpdateRowString;
+ 	private final String sqlDeleteRowString;
+ 	private final String sqlSelectSizeString;
++	private final String sqlSelectIDsString;
+ 	private final String sqlSelectRowByIndexString;
+ 	private final String sqlDetectRowByIndexString;
+ 	private final String sqlDetectRowByElementString;
+@@ -94,14 +92,14 @@
+ 	private final boolean hasOrder;
+ 	protected final boolean hasWhere;
+ 	private final int baseIndex;
+-	
++
+ 	private final String nodeName;
+ 	private final String elementNodeName;
+ 	private final String indexNodeName;
+ 
+ 	protected final boolean indexContainsFormula;
+ 	protected final boolean elementIsPureFormula;
+-	
++
+ 	//types
+ 	private final Type keyType;
+ 	private final Type indexType;
+@@ -122,7 +120,7 @@
+ 	protected final String[] indexColumnAliases;
+ 	protected final String[] elementColumnAliases;
+ 	protected final String[] keyColumnAliases;
+-	
++
+ 	protected final String identifierColumnName;
+ 	private final String identifierColumnAlias;
+ 	//private final String unquotedIdentifierColumnName;
+@@ -159,7 +157,7 @@
+ 	private final CacheConcurrencyStrategy cache;
+ 	private final CollectionType collectionType;
+ 	private CollectionInitializer initializer;
+-	
++
+ 	private final CacheEntryStructure cacheEntryStructure;
+ 
+ 	// dynamic filters for the collection
+@@ -194,14 +192,14 @@
+ 		this.factory = factory;
+ 		this.cache = cache;
+ 		if ( factory.getSettings().isStructuredCacheEntriesEnabled() ) {
+-			cacheEntryStructure = collection.isMap() ? 
+-					(CacheEntryStructure) new StructuredMapCacheEntry() : 
++			cacheEntryStructure = collection.isMap() ?
++					(CacheEntryStructure) new StructuredMapCacheEntry() :
+ 					(CacheEntryStructure) new StructuredCollectionCacheEntry();
+ 		}
+ 		else {
+ 			cacheEntryStructure = new UnstructuredCacheEntry();
+ 		}
+-		
++
+ 		dialect = factory.getDialect();
+ 		sqlExceptionConverter = factory.getSQLExceptionConverter();
+ 		collectionType = collection.getCollectionType();
+@@ -220,11 +218,11 @@
+ 		isPrimitiveArray = collection.isPrimitiveArray();
+ 		isArray = collection.isArray();
+ 		subselectLoadable = collection.isSubselectLoadable();
+-		
+-		qualifiedTableName = table.getQualifiedName( 
++
++		qualifiedTableName = table.getQualifiedName(
+ 				dialect,
+ 				factory.getSettings().getDefaultCatalogName(),
+-				factory.getSettings().getDefaultSchemaName() 
++				factory.getSettings().getDefaultSchemaName()
+ 			);
+ 
+ 		int spacesSize = 1 + collection.getSynchronizedTables().size();
+@@ -234,7 +232,7 @@
+ 		for ( int i = 1; i < spacesSize; i++ ) {
+ 			spaces[i] = (String) iter.next();
+ 		}
+-		
++
+ 		sqlOrderByString = collection.getOrderBy();
+ 		hasOrder = sqlOrderByString != null;
+ 		sqlOrderByStringTemplate = hasOrder ?
+@@ -253,7 +251,7 @@
+ 		batchSize = batch;
+ 
+ 		isVersioned = collection.isOptimisticLocked();
+-		
++
+ 		// KEY
+ 
+ 		keyType = collection.getKey().getType();
+@@ -269,7 +267,7 @@
+ 			keyColumnAliases[k] = col.getAlias(dialect);
+ 			k++;
+ 		}
+-		
++
+ 		//unquotedKeyColumnNames = StringHelper.unQuote(keyColumnAliases);
+ 
+ 		//ELEMENT
+@@ -282,11 +280,11 @@
+ 				elemNode = cfg.getClassMapping(entityName).getNodeName();
+ 			}
+ 			// NativeSQL: collect element column and auto-aliases
+-			
++
+ 		}
+ 		else {
+ 			elementPersister = null;
+-		}		
++		}
+ 		elementNodeName = elemNode;
+ 
+ 		int elementSpan = collection.getElement().getColumnSpan();
+@@ -319,7 +317,7 @@
+ 			j++;
+ 		}
+ 		elementIsPureFormula = isPureFormula;
+-		
++
+ 		//workaround, for backward compatibility of sets with no
+ 		//not-null columns, assume all columns are used in the
+ 		//row locator SQL
+@@ -359,10 +357,10 @@
+ 				i++;
+ 			}
+ 			indexContainsFormula = hasFormula;
+-			baseIndex = indexedCollection.isList() ? 
++			baseIndex = indexedCollection.isList() ?
+ 					( (List) indexedCollection ).getBaseIndex() : 0;
+ 
+-			indexNodeName = indexedCollection.getIndexNodeName(); 
++			indexNodeName = indexedCollection.getIndexNodeName();
+ 
+ 		}
+ 		else {
+@@ -376,7 +374,7 @@
+ 			baseIndex = 0;
+ 			indexNodeName = null;
+ 		}
+-		
++
+ 		hasIdentifier = collection.isIdentified();
+ 		if (hasIdentifier) {
+ 			if ( collection.isOneToMany() ) {
+@@ -389,7 +387,7 @@
+ 			identifierColumnName = col.getQuotedName(dialect);
+ 			identifierColumnAlias = col.getAlias(dialect);
+ 			//unquotedIdentifierColumnName = identifierColumnAlias;
+-			identifierGenerator = idColl.getIdentifier().createIdentifierGenerator( 
++			identifierGenerator = idColl.getIdentifier().createIdentifierGenerator(
+ 					factory.getDialect(),
+ 					factory.getSettings().getDefaultCatalogName(),
+ 					factory.getSettings().getDefaultSchemaName(),
+@@ -403,9 +401,9 @@
+ 			//unquotedIdentifierColumnName = null;
+ 			identifierGenerator = null;
+ 		}
+-		
++
+ 		//GENERATE THE SQL:
+-				
++
+ 		//sqlSelectString = sqlSelectString();
+ 		if ( collection.getCustomSQLDeleteAll() == null ) {
+ 			sqlDeleteString = generateDeleteString();
+@@ -442,12 +440,13 @@
+ 			deleteCallable = collection.isCustomDeleteCallable();
+ 		}
+ 		sqlSelectSizeString = generateSelectSizeString(  collection.isIndexed() && !collection.isMap() );
++		sqlSelectIDsString = generateSelectIDsString();
+ 		sqlDetectRowByIndexString = generateDetectRowByIndexString();
+ 		sqlDetectRowByElementString = generateDetectRowByElementString();
+ 		sqlSelectRowByIndexString = generateSelectRowByIndexString();
+-		
++
+ 		logStaticSQL();
+-		
++
+ 		isLazy = collection.isLazy();
+ 		isExtraLazy = collection.isExtraLazy();
+ 
+@@ -462,17 +461,17 @@
+ 		}
+ 
+ 		if ( elementType.isComponentType() ) {
+-			elementPropertyMapping = new CompositeElementPropertyMapping( 
++			elementPropertyMapping = new CompositeElementPropertyMapping(
+ 					elementColumnNames,
+ 					elementFormulaTemplates,
+ 					(AbstractComponentType) elementType,
+-					factory 
++					factory
+ 				);
+ 		}
+ 		else if ( !elementType.isEntityType() ) {
+-			elementPropertyMapping = new ElementPropertyMapping( 
++			elementPropertyMapping = new ElementPropertyMapping(
+ 					elementColumnNames,
+-					elementType 
++					elementType
+ 				);
+ 		}
+ 		else {
+@@ -480,13 +479,13 @@
+ 				elementPropertyMapping = (PropertyMapping) elementPersister;
+ 			}
+ 			else {
+-				elementPropertyMapping = new ElementPropertyMapping( 
++				elementPropertyMapping = new ElementPropertyMapping(
+ 						elementColumnNames,
+-						elementType 
++						elementType
+ 					);
+ 			}
+ 		}
+-			
++
+ 		// Handle any filters applied to this collection
+ 		filterHelper = new FilterHelper( collection.getFilterMap(), dialect );
+ 
+@@ -539,28 +538,28 @@
+ 	}
+ 
+ 	private CollectionInitializer getSubselectInitializer(Serializable key, SessionImplementor session) {
+-		
++
+ 		if ( !isSubselectLoadable() ) return null;
+-		
++
+ 		final PersistenceContext persistenceContext = session.getPersistenceContext();
+-		
++
+ 		SubselectFetch subselect = persistenceContext.getBatchFetchQueue()
+ 			.getSubselect( new EntityKey( key, getOwnerEntityPersister(), session.getEntityMode() ) );
+-		
++
+ 		if (subselect == null) {
+ 			return null;
+ 		}
+ 		else {
+-			
++
+ 			// Take care of any entities that might have
+-			// been evicted!	
++			// been evicted!
+ 			Iterator iter = subselect.getResult().iterator();
+ 			while ( iter.hasNext() ) {
+ 				if ( !persistenceContext.containsEntity( (EntityKey) iter.next() ) ) {
+ 					iter.remove();
+ 				}
+-			}	
+-			
++			}
++
+ 			// Run a subquery loader
+ 			return createSubselectInitializer( subselect, session );
+ 		}
+@@ -588,7 +587,7 @@
+ 	}
+ 
+ 	public String getSQLOrderByString(String alias) {
+-		return hasOrdering() ? 
++		return hasOrdering() ?
+ 			StringHelper.replace( sqlOrderByStringTemplate, Template.TEMPLATE, alias ) : "";
+ 	}
+ 
+@@ -639,13 +638,13 @@
+ 		return elementClass;
+ 	}
+ 
+-	public Object readElement(ResultSet rs, Object owner, String[] aliases, SessionImplementor session) 
++	public Object readElement(ResultSet rs, Object owner, String[] aliases, SessionImplementor session)
+ 	throws HibernateException, SQLException {
+ 		Object element = getElementType().nullSafeGet( rs, aliases, session, owner );
+ 		return element;
+ 	}
+ 
+-	public Object readIndex(ResultSet rs, String[] aliases, SessionImplementor session) 
++	public Object readIndex(ResultSet rs, String[] aliases, SessionImplementor session)
+ 	throws HibernateException, SQLException {
+ 		Object index = getIndexType().nullSafeGet( rs, aliases, session, null );
+ 		if ( index == null ) {
+@@ -662,7 +661,7 @@
+ 		return index;
+ 	}
+ 
+-	public Object readIdentifier(ResultSet rs, String alias, SessionImplementor session) 
++	public Object readIdentifier(ResultSet rs, String alias, SessionImplementor session)
+ 	throws HibernateException, SQLException {
+ 		Object id = getIdentifierType().nullSafeGet( rs, alias, session, null );
+ 		if ( id == null ) {
+@@ -671,7 +670,7 @@
+ 		return id;
+ 	}
+ 
+-	public Object readKey(ResultSet rs, String[] aliases, SessionImplementor session) 
++	public Object readKey(ResultSet rs, String[] aliases, SessionImplementor session)
+ 	throws HibernateException, SQLException {
+ 		return getKeyType().nullSafeGet( rs, aliases, session, null );
+ 	}
+@@ -681,7 +680,7 @@
+ 	 */
+ 	protected int writeKey(PreparedStatement st, Serializable key, int i, SessionImplementor session)
+ 			throws HibernateException, SQLException {
+-		
++
+ 		if ( key == null ) {
+ 			throw new NullPointerException( "null key for collection: " + role );  //an assertion
+ 		}
+@@ -745,7 +744,7 @@
+ 	 */
+ 	public int writeIdentifier(PreparedStatement st, Object id, int i, SessionImplementor session)
+ 			throws HibernateException, SQLException {
+-		
++
+ 		getIdentifierType().nullSafeSet( st, id, i, session );
+ 		return i + 1;
+ 	}
+@@ -783,7 +782,7 @@
+ 			return null;
+ 		}
+ 	}
+-	
++
+ 	public String getIdentifierColumnName() {
+ 		if ( hasIdentifier ) {
+ 			return identifierColumnName;
+@@ -806,7 +805,7 @@
+ 	}
+ 
+ 	protected String generateSelectSizeString(boolean isIntegerIndexed) {
+-		String selectValue = isIntegerIndexed ? 
++		String selectValue = isIntegerIndexed ?
+ 			"max(" + getIndexColumnNames()[0] + ") + 1": //lists, arrays
+ 			"count(" + getElementColumnNames()[0] + ")"; //sets, maps, bags
+ 		return new SimpleSelect(dialect)
+@@ -816,6 +815,14 @@
+ 				.toStatementString();
+ 	}
+ 
++	protected String generateSelectIDsString() {
++		return new SimpleSelect(dialect)
++				.setTableName( getTableName() )
++				.addCondition( getKeyColumnNames(), "=?" )
++				.addColumns( getElementColumnNames() )
++				.toStatementString();
++	}
++
+ 	protected String generateDetectRowByIndexString() {
+ 		if ( !hasIndex() ) return null;
+ 		return new SimpleSelect(dialect)
+@@ -900,7 +907,7 @@
+ 	public String[] getElementColumnNames(String alias) {
+ 		return qualify(alias, elementColumnNames, elementFormulaTemplates);
+ 	}
+-	
++
+ 	private static final String[] qualify(String alias, String[] columnNames, String[] formulaTemplates) {
+ 		int span = columnNames.length;
+ 		String[] result = new String[span];
+@@ -944,9 +951,9 @@
+ 		if ( !isInverse && isRowDeleteEnabled() ) {
+ 
+ 			if ( log.isDebugEnabled() ) {
+-				log.debug( 
+-						"Deleting collection: " + 
+-						MessageHelper.collectionInfoString( this, id, getFactory() ) 
++				log.debug(
++						"Deleting collection: " +
++						MessageHelper.collectionInfoString( this, id, getFactory() )
+ 					);
+ 			}
+ 
+@@ -980,7 +987,7 @@
+ 				throw JDBCExceptionHelper.convert(
+ 				        sqlExceptionConverter,
+ 				        sqle,
+-				        "could not delete collection: " + 
++				        "could not delete collection: " +
+ 				        MessageHelper.collectionInfoString( this, id, getFactory() ),
+ 				        getSQLDeleteString()
+ 					);
+@@ -996,9 +1003,9 @@
+ 		if ( !isInverse && isRowInsertEnabled() ) {
+ 
+ 			if ( log.isDebugEnabled() ) {
+-				log.debug( 
+-						"Inserting collection: " + 
+-						MessageHelper.collectionInfoString( this, id, getFactory() ) 
++				log.debug(
++						"Inserting collection: " +
++						MessageHelper.collectionInfoString( this, id, getFactory() )
+ 					);
+ 			}
+ 
+@@ -1058,14 +1065,14 @@
+ 				throw JDBCExceptionHelper.convert(
+ 				        sqlExceptionConverter,
+ 				        sqle,
+-				        "could not insert collection: " + 
++				        "could not insert collection: " +
+ 				        MessageHelper.collectionInfoString( this, id, getFactory() ),
+ 				        getSQLInsertRowString()
+ 					);
+ 			}
+ 		}
+ 	}
+-	
++
+ 	protected boolean isRowDeleteEnabled() {
+ 		return true;
+ 	}
+@@ -1076,14 +1083,14 @@
+ 		if ( !isInverse && isRowDeleteEnabled() ) {
+ 
+ 			if ( log.isDebugEnabled() ) {
+-				log.debug( 
+-						"Deleting rows of collection: " + 
+-						MessageHelper.collectionInfoString( this, id, getFactory() ) 
++				log.debug(
++						"Deleting rows of collection: " +
++						MessageHelper.collectionInfoString( this, id, getFactory() )
+ 					);
+ 			}
+-			
++
+ 			boolean deleteByIndex = !isOneToMany() && hasIndex && !indexContainsFormula;
+-			
++
+ 			try {
+ 				//delete all the deleted entries
+ 				Iterator deletes = collection.getDeletes( this, !deleteByIndex );
+@@ -1140,14 +1147,14 @@
+ 				throw JDBCExceptionHelper.convert(
+ 				        sqlExceptionConverter,
+ 				        sqle,
+-				        "could not delete collection rows: " + 
++				        "could not delete collection rows: " +
+ 				        MessageHelper.collectionInfoString( this, id, getFactory() ),
+ 				        getSQLDeleteRowString()
+ 					);
+ 			}
+ 		}
+ 	}
+-	
++
+ 	protected boolean isRowInsertEnabled() {
+ 		return true;
+ 	}
+@@ -1158,9 +1165,9 @@
+ 		if ( !isInverse && isRowInsertEnabled() ) {
+ 
+ 			if ( log.isDebugEnabled() ) {
+-				log.debug( 
+-						"Inserting rows of collection: " + 
+-						MessageHelper.collectionInfoString( this, id, getFactory() ) 
++				log.debug(
++						"Inserting rows of collection: " +
++						MessageHelper.collectionInfoString( this, id, getFactory() )
+ 					);
+ 			}
+ 
+@@ -1216,7 +1223,7 @@
+ 				throw JDBCExceptionHelper.convert(
+ 				        sqlExceptionConverter,
+ 				        sqle,
+-				        "could not insert collection rows: " + 
++				        "could not insert collection rows: " +
+ 				        MessageHelper.collectionInfoString( this, id, getFactory() ),
+ 				        getSQLInsertRowString()
+ 					);
+@@ -1324,7 +1331,7 @@
+ 
+ 	protected abstract String generateInsertRowString();
+ 
+-	public void updateRows(PersistentCollection collection, Serializable id, SessionImplementor session) 
++	public void updateRows(PersistentCollection collection, Serializable id, SessionImplementor session)
+ 	throws HibernateException {
+ 
+ 		if ( !isInverse && collection.isRowUpdatePossible() ) {
+@@ -1342,7 +1349,7 @@
+ 		}
+ 	}
+ 
+-	protected abstract int doUpdateRows(Serializable key, PersistentCollection collection, SessionImplementor session) 
++	protected abstract int doUpdateRows(Serializable key, PersistentCollection collection, SessionImplementor session)
+ 	throws HibernateException;
+ 
+ 	public CollectionMetadata getCollectionMetadata() {
+@@ -1392,7 +1399,7 @@
+ 	public boolean isVersioned() {
+ 		return isVersioned && getOwnerEntityPersister().isVersioned();
+ 	}
+-	
++
+ 	public String getNodeName() {
+ 		return nodeName;
+ 	}
+@@ -1421,23 +1428,23 @@
+ 	public boolean isSubselectLoadable() {
+ 		return subselectLoadable;
+ 	}
+-	
++
+ 	public boolean isMutable() {
+ 		return isMutable;
+ 	}
+ 
+ 	public String[] getCollectionPropertyColumnAliases(String propertyName, String suffix) {
+ 		String rawAliases[] = (String[]) collectionPropertyColumnAliases.get(propertyName);
+-		 
++
+ 		if(rawAliases==null) return null;
+-		
++
+ 		String result[] = new String[rawAliases.length];
+ 		for ( int i=0; i<rawAliases.length; i++ ) {
+ 			result[i] = new Alias(suffix).toUnquotedAliasString( rawAliases[i] );
+ 		}
+ 		return result;
+ 	}
+-	
++
+ 	//TODO: formulas ?
+ 	public void initCollectionPropertyMap() {
+ 
+@@ -1447,20 +1454,20 @@
+ 			initCollectionPropertyMap( "index", indexType, indexColumnAliases, indexColumnNames );
+ 		}
+ 		if (hasIdentifier) {
+-			initCollectionPropertyMap( 
+-					"id", 
+-					identifierType, 
+-					new String[] { identifierColumnAlias }, 
+-					new String[] { identifierColumnName } 
++			initCollectionPropertyMap(
++					"id",
++					identifierType,
++					new String[] { identifierColumnAlias },
++					new String[] { identifierColumnName }
+ 				);
+ 		}
+ 	}
+ 
+ 	private void initCollectionPropertyMap(String aliasName, Type type, String[] columnAliases, String[] columnNames) {
+-		
++
+ 		collectionPropertyColumnAliases.put(aliasName, columnAliases);
+ 		collectionPropertyColumnNames.put(aliasName, columnNames);
+-	
++
+ 		if( type.isComponentType() ) {
+ 			AbstractComponentType ct = (AbstractComponentType) type;
+ 			String[] propertyNames = ct.getPropertyNames();
+@@ -1469,8 +1476,8 @@
+ 				collectionPropertyColumnAliases.put( aliasName + "." + name, columnAliases[i] );
+ 				collectionPropertyColumnAliases.put( aliasName + "." + name, columnNames[i] );
+ 			}
+-		} 
+-		
++		}
++
+ 	}
+ 
+ 	public int getSize(Serializable key, SessionImplementor session) {
+@@ -1494,13 +1501,49 @@
+ 			throw JDBCExceptionHelper.convert(
+ 					getFactory().getSQLExceptionConverter(),
+ 					sqle,
+-					"could not retrieve collection size: " + 
++					"could not retrieve collection size: " +
+ 					MessageHelper.collectionInfoString( this, key, getFactory() ),
+ 					sqlSelectSizeString
+ 				);
+ 		}
+ 	}
+-	
++
++	public Serializable[] getElementIdentifiers(Serializable key, SessionImplementor session) {
++		try {
++			PreparedStatement st = session.getBatcher().prepareSelectStatement(sqlSelectIDsString);
++			try {
++				Type elementIDType = getElementPersister().getIdentifierType();
++
++				getKeyType().nullSafeSet(st, key, 1, session);
++				ResultSet rs = st.executeQuery();
++				try {
++					java.util.Collection elementIDs = new ArrayList();
++					while (rs.next()) {
++						Serializable elementID = (Serializable) elementIDType
++						.nullSafeGet(rs, getElementColumnNames(), session, null);
++						elementIDs.add(elementID);
++					}
++					return (Serializable[]) elementIDs.toArray(new Serializable[0]);
++				}
++				finally {
++					rs.close();
++				}
++			}
++			finally {
++				session.getBatcher().closeStatement( st );
++			}
++		}
++		catch (SQLException sqle) {
++			throw JDBCExceptionHelper.convert(
++					getFactory().getSQLExceptionConverter(),
++					sqle,
++					"could not retrieve collection element IDs: " +
++					MessageHelper.collectionInfoString( this, key, getFactory() ),
++					sqlSelectIDsString
++				);
++		}
++	}
++
+ 	public boolean indexExists(Serializable key, Object index, SessionImplementor session) {
+ 		return exists(key, incrementIndexByBase(index), getIndexType(), sqlDetectRowByIndexString, session);
+ 	}
+@@ -1531,7 +1574,7 @@
+ 			throw JDBCExceptionHelper.convert(
+ 					getFactory().getSQLExceptionConverter(),
+ 					sqle,
+-					"could not check row existence: " + 
++					"could not check row existence: " +
+ 					MessageHelper.collectionInfoString( this, key, getFactory() ),
+ 					sqlSelectSizeString
+ 				);
+@@ -1565,7 +1608,7 @@
+ 			throw JDBCExceptionHelper.convert(
+ 					getFactory().getSQLExceptionConverter(),
+ 					sqle,
+-					"could not read row: " + 
++					"could not read row: " +
+ 					MessageHelper.collectionInfoString( this, key, getFactory() ),
+ 					sqlSelectSizeString
+ 				);
+@@ -1575,8 +1618,14 @@
+ 	public boolean isExtraLazy() {
+ 		return isExtraLazy;
+ 	}
+-	
++
+ 	protected Dialect getDialect() {
+ 		return dialect;
+ 	}
++
++	public boolean hasProperty(String propertyName)	{
++		if ("index".equals(propertyName) && isManyToMany())
++			return false;
++		return elementPropertyMapping.hasProperty(propertyName);
++	}
+ }
+==== //depot/Nathan/hibernate/org/hibernate/persister/collection/CollectionPersister.java#2 - C:\depot\Nathan\hibernate\org\hibernate\persister\collection\CollectionPersister.java ====
+@@ -279,6 +279,7 @@
+ 	
+ 	public boolean isExtraLazy();
+ 	public int getSize(Serializable key, SessionImplementor session);
++	public Serializable[] getElementIdentifiers(Serializable key, SessionImplementor session);
+ 	public boolean indexExists(Serializable key, Object index, SessionImplementor session);
+ 	public boolean elementExists(Serializable key, Object element, SessionImplementor session);
+ 	public Object getElementByIndex(Serializable key, Object index, SessionImplementor session, Object owner);
+==== //depot/Nathan/hibernate/org/hibernate/tuple/Dom4jComponentTuplizer.java#2 - C:\depot\Nathan\hibernate\org\hibernate\tuple\Dom4jComponentTuplizer.java ====
+@@ -13,7 +13,9 @@
+  * @author Gavin King
+  */
+ public class Dom4jComponentTuplizer extends AbstractComponentTuplizer  {
+-	
++
++	static final long serialVersionUID = -1388355249637331815L;
++
+ 	public Class getMappedClass() {
+ 		return Element.class;
+ 	}
+==== //depot/Nathan/hibernate/org/hibernate/tuple/DynamicMapComponentTuplizer.java#2 - C:\depot\Nathan\hibernate\org\hibernate\tuple\DynamicMapComponentTuplizer.java ====
+@@ -14,6 +14,8 @@
+  * @author Gavin King
+  */
+ public class DynamicMapComponentTuplizer extends AbstractComponentTuplizer {
++
++	static final long serialVersionUID = -8055022916304008582L;
+ 	
+ 	public Class getMappedClass() {
+ 		return Map.class;
+==== //depot/Nathan/hibernate/org/hibernate/tuple/PojoInstantiator.java#2 - C:\depot\Nathan\hibernate\org\hibernate\tuple\PojoInstantiator.java ====
+@@ -20,6 +20,8 @@
+  */
+ public class PojoInstantiator implements Instantiator, Serializable {
+ 
++	static final long serialVersionUID = -6934810895192987370L;
++
+ 	private static final Log log = LogFactory.getLog(PojoInstantiator.class);
+ 
+ 	private transient Constructor constructor;

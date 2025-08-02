@@ -1,0 +1,333 @@
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/DeleteOneToManyOrphansTest.java b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/DeleteOneToManyOrphansTest.java
+new file mode 100644
+index 0000000..acf0db0
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/DeleteOneToManyOrphansTest.java
+@@ -0,0 +1,181 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.orphan.onetomany;
++
++import java.util.List;
++
++import org.junit.Test;
++
++import org.hibernate.Session;
++import org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;
++
++import static org.junit.Assert.assertEquals;
++
++/**
++ * Created by gbadner on 11/25/14.
++ */
++public class DeleteOneToManyOrphansTest extends BaseCoreFunctionalTestCase {
++
++	private void createData() {
++		Session s = openSession();
++		s.getTransaction().begin();
++
++		Feature newFeature = new Feature();
++		newFeature.setName("Feature 1");
++		s.persist( newFeature );
++
++		Product product = new Product();
++		newFeature.setProduct( product );
++		product.getFeatures().add( newFeature );
++		s.persist( product );
++
++		s.getTransaction().commit();
++		s.clear();
++
++	}
++
++	private void cleanupData() {
++		Session session = openSession();
++		session.beginTransaction();
++		session.createQuery( "delete Feature" ).executeUpdate();
++		session.createQuery( "delete Product" ).executeUpdate();
++		session.getTransaction().commit();
++		session.close();
++	}
++
++	@Test
++	public void testOrphanedWhileManaged() {
++		createData();
++
++		Session session = openSession();
++		session.beginTransaction();
++		List results = session.createQuery( "from Feature" ).list();
++		assertEquals( 1, results.size() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++		Product product = ( Product ) results.get( 0 );
++		assertEquals( 1, product.getFeatures().size() );
++		product.getFeatures().clear();;
++		session.getTransaction().commit();
++		session.close();
++
++		session = openSession();
++		session.beginTransaction();
++
++		product = ( Product ) session.get( Product.class, product.getId() );
++		assertEquals( 0, product.getFeatures().size() );
++		results = session.createQuery( "from Feature" ).list();
++		assertEquals( 0, results.size() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++
++		session.getTransaction().commit();
++		session.close();
++
++		cleanupData();
++	}
++
++	@Test
++	public void testOrphanedWhileManagedMergeOwner() {
++		createData();
++
++		Session session = openSession();
++		session.beginTransaction();
++		List results = session.createQuery( "from Feature" ).list();
++		assertEquals( 1, results.size() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++		Product product = ( Product ) results.get( 0 );
++		assertEquals( 1, product.getFeatures().size() );
++		product.getFeatures().clear();
++		session.merge( product );
++		session.getTransaction().commit();
++		session.close();
++
++		session = openSession();
++		session.beginTransaction();
++
++		product = ( Product ) session.get( Product.class, product.getId() );
++		assertEquals( 0, product.getFeatures().size() );
++		results = session.createQuery( "from Feature" ).list();
++		assertEquals( 0, results.size() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++
++		session.getTransaction().commit();
++		session.close();
++
++		cleanupData();
++	}
++
++
++	@Test
++	public void testReplacedWhileManaged() {
++		createData();
++
++		Session session = openSession();
++		session.beginTransaction();
++		List results = session.createQuery( "from Feature" ).list();
++		assertEquals( 1, results.size() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++		Product product = ( Product ) results.get( 0 );
++		assertEquals( 1, product.getFeatures().size() );
++
++		// Replace with a new Feature instance
++		product.getFeatures().remove( 0 );
++		Feature featureNew = new Feature();
++		featureNew.setName( "Feature 2" );
++		featureNew.setProduct( product );
++		product.getFeatures().add( featureNew );
++		session.persist( featureNew );
++		session.getTransaction().commit();
++		session.close();
++
++		session = openSession();
++		session.beginTransaction();
++		results = session.createQuery( "from Feature" ).list();
++		assertEquals( 1, results.size() );
++		Feature featureQueried = (Feature) results.get( 0 );
++		assertEquals( featureNew.getId(), featureQueried.getId() );
++		results = session.createQuery( "from Product" ).list();
++		assertEquals( 1, results.size() );
++		Product productQueried =  (Product) results.get( 0 );
++		assertEquals( 1, productQueried.getFeatures().size() );
++		assertEquals( featureQueried, productQueried.getFeatures().get( 0 ) );
++
++		session.getTransaction().commit();
++		session.close();
++
++		cleanupData();
++	}
++
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class[]{
++				Product.class,
++				Feature.class
++		};
++	}
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Feature.java b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Feature.java
+new file mode 100644
+index 0000000..6d535b0
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Feature.java
+@@ -0,0 +1,65 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.orphan.onetomany;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++import javax.persistence.Table;
++
++@Entity
++@Table(name="feature")
++public class Feature {
++	@Id @GeneratedValue(strategy= GenerationType.AUTO)
++	private Long id;
++
++	@ManyToOne()
++	private Product product;
++
++	private String name;
++
++	public Long getId() {
++		return id;
++	}
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Product getProduct() {
++		return product;
++	}
++	public void setProduct(Product product) {
++		this.product = product;
++	}
++}
++
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Product.java b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Product.java
+new file mode 100644
+index 0000000..9dfe27f
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/orphan/onetomany/Product.java
+@@ -0,0 +1,69 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.orphan.onetomany;
++
++import java.util.ArrayList;
++import java.util.List;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++import javax.persistence.Table;
++
++@Entity
++@Table(name="product")
++public class Product {
++	@Id
++	@GeneratedValue(strategy= GenerationType.AUTO)
++	private Long id;
++
++	@OneToMany(mappedBy = "product", orphanRemoval = true)
++	//, cascade ={CascadeType.PERSIST}
++	private List<Feature> features = new ArrayList<Feature>();
++
++	private String name;
++
++	public Long getId() {
++		return id;
++	}
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public List<Feature> getFeatures() {
++		return features;
++	}
++	public void setFeatures(List<Feature> features) {
++		this.features = features;
++	}
++}
++

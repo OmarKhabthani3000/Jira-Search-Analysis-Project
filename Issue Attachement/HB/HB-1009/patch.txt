@@ -1,0 +1,269 @@
+Index: org/hibernate/test/FooBarTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/FooBarTest.java,v
+retrieving revision 1.1.2.26
+diff -u -r1.1.2.26 FooBarTest.java
+--- org/hibernate/test/FooBarTest.java	21 May 2004 16:32:26 -0000	1.1.2.26
++++ org/hibernate/test/FooBarTest.java	4 Jun 2004 15:18:03 -0000
+@@ -4712,7 +4712,9 @@
+ 			"Fumm.hbm.xml",
+ 			"Fo.hbm.xml",
+ 			"One.hbm.xml",
++			"One2.hbm.xml",
+ 			"Many.hbm.xml",
++			"Many2.hbm.xml",
+ 			"Immutable.hbm.xml",
+ 			"Fee.hbm.xml",
+ 			"Vetoer.hbm.xml",
+@@ -4725,4 +4727,41 @@
+ 		};
+ 	}
+ 
++	
++
++	public void testManyToOneAliasBug() throws Exception {
++		try {
++		Session s = openSession();
++		One2 one = new One2();
++		s.save(one);
++		one.setValue("yada");
++		Many2 many = new Many2();
++		many.setOne(one);
++		s.save(many);
++		s.flush();
++		s.connection().commit();
++		s.close();
++
++		s = openSession();
++		one = (One2) s.load( One2.class, one.getKey() );
++		one.getManies().size();
++		s.connection().commit();
++		s.close();
++
++		s = openSession();
++		List l = s.find("FROM "+Many2.class.getPackage().getName()+".Many2");
++
++		s = openSession();
++		many = (Many2) s.load( Many2.class, many.getKey() );
++//		s.delete( many.getOne() );
++		s.delete(many);
++		s.flush();
++		s.connection().commit();
++		s.close();
++		} catch (Exception e) {
++			e.printStackTrace();
++			fail(e.toString());
++		}
++	}
++
+ }
+Index: org/hibernate/test/FumTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/FumTest.java,v
+retrieving revision 1.1.2.11
+diff -u -r1.1.2.11 FumTest.java
+--- org/hibernate/test/FumTest.java	2 Jun 2004 02:24:49 -0000	1.1.2.11
++++ org/hibernate/test/FumTest.java	4 Jun 2004 15:18:03 -0000
+@@ -1,6 +1,11 @@
+ //$Id: FumTest.java,v 1.1.2.11 2004/06/02 02:24:49 steveebersole Exp $
+ package org.hibernate.test;
+ 
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.ObjectInputStream;
++import java.io.ObjectOutputStream;
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.Date;
+@@ -12,12 +17,14 @@
+ import java.util.Map;
+ import java.util.Properties;
+ import java.util.Set;
++import java.util.logging.Logger;
+ 
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+ import junit.textui.TestRunner;
+ import net.sf.hibernate.Criteria;
+ import net.sf.hibernate.FetchMode;
++import net.sf.hibernate.FlushMode;
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.Query;
+@@ -35,6 +42,7 @@
+ import net.sf.hibernate.type.Type;
+ 
+ public class FumTest extends TestCase {
++	private static Logger log = Logger.getLogger(FumTest.class.getName());
+ 	
+ 	private static short fumKeyShort = 1;
+ 	
+Index: org/hibernate/test/Many2.hbm.xml
+===================================================================
+RCS file: org/hibernate/test/Many2.hbm.xml
+diff -N org/hibernate/test/Many2.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/test/Many2.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,21 @@
++<?xml version="1.0"?>
++
++<!DOCTYPE hibernate-mapping SYSTEM "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd" >
++
++<hibernate-mapping>
++  <class name="org.hibernate.test.Many2" table="many2">
++    <id name="key" column="many_key">
++      <generator class="native" />
++    </id>
++    <version name="v"/>
++    <property name="x"/>
++    <many-to-one 
++        name="one" 
++        column="many_key" 
++        class="org.hibernate.test.One2"
++        insert="false"
++        update="false"
++        />
++  </class>
++</hibernate-mapping>
++
+Index: org/hibernate/test/Many2.java
+===================================================================
+RCS file: org/hibernate/test/Many2.java
+diff -N org/hibernate/test/Many2.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/test/Many2.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,44 @@
++//$Id: Many.java,v 1.1.2.2 2004/04/25 13:53:05 oneovthafew Exp $
++package org.hibernate.test;
++
++public class Many2 {
++	Long key;
++	One2 one;
++	private int x;
++	private int v;
++	
++	public int getX() {
++		return x;
++	}
++	public void setX(int x) {
++		this.x = x;
++	}
++	
++	public void setKey(Long key) {
++		this.key = key;
++	}
++	
++	public Long getKey() {
++		return this.key;
++	}
++	
++	public void setOne(One2 one) {
++		this.one = one;
++	}
++	
++	public One2 getOne() {
++		return this.one;
++	}
++	public int getV() {
++		return v;
++	}
++	public void setV(int v) {
++		this.v = v;
++	}
++}
++
++
++
++
++
++
+Index: org/hibernate/test/One2.hbm.xml
+===================================================================
+RCS file: org/hibernate/test/One2.hbm.xml
+diff -N org/hibernate/test/One2.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/test/One2.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,19 @@
++<?xml version="1.0"?>
++
++<!DOCTYPE hibernate-mapping SYSTEM "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd" >
++
++<hibernate-mapping>
++	<class name="org.hibernate.test.One2" table="one2">
++		<id name="key" column="one_key">
++			<generator class="native" />
++		</id>
++		<version name="v"/>
++		<property name="x"/>
++		<property column="one_value" name="value"/>
++		<set name="manies" inverse="true" lazy="true">
++			<key column="one_key"/>
++			<one-to-many class="org.hibernate.test.Many2"/>
++		</set>
++	</class>
++</hibernate-mapping>
++
+Index: org/hibernate/test/One2.java
+===================================================================
+RCS file: org/hibernate/test/One2.java
+diff -N org/hibernate/test/One2.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/test/One2.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,56 @@
++//$Id: One.java,v 1.1.2.2 2004/04/25 13:53:05 oneovthafew Exp $
++package org.hibernate.test;
++
++import java.util.Set;
++
++public class One2 {
++	Long key;
++	String value;
++	Set manies;
++	private int x;
++	private int v;
++	
++	public int getX() {
++		return x;
++	}
++	public void setX(int x) {
++		this.x = x;
++	}
++	
++	public void setKey(Long key) {
++		this.key = key;
++	}
++	
++	public Long getKey() {
++		return this.key;
++	}
++	
++	public void setValue(String value) {
++		this.value = value;
++	}
++	
++	public String getValue() {
++		return this.value;
++	}
++	
++	public Set getManies() {
++		return manies;
++	}
++	
++	public void setManies(Set manies) {
++		this.manies = manies;
++	}
++	
++	public int getV() {
++		return v;
++	}
++	public void setV(int v) {
++		this.v = v;
++	}
++}
++
++
++
++
++
++

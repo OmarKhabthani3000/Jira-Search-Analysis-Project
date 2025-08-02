@@ -1,0 +1,70 @@
+Index: BulkAccessorFactory.java
+===================================================================
+--- BulkAccessorFactory.java	(revision 162959)
++++ BulkAccessorFactory.java	(working copy)
+@@ -28,6 +28,8 @@
+ import java.lang.reflect.Modifier;
+ import java.security.ProtectionDomain;
+ 
++import org.hibernate.bytecode.javassist.BulkAccessorException;
++
+ import javassist.CannotCompileException;
+ import javassist.bytecode.AccessFlag;
+ import javassist.bytecode.Bytecode;
+@@ -377,7 +379,7 @@
+ 		Class[] setParam = new Class[1];
+ 		for ( int i = 0; i < length; i++ ) {
+ 			if ( getterNames[i] != null ) {
+-				Method getter = findAccessor( clazz, getterNames[i], getParam, i );
++				Method getter = findAccessorDeep( clazz, getterNames[i], getParam, i );
+ 				if ( getter.getReturnType() != types[i] ) {
+ 					throw new BulkAccessorException( "wrong return type: " + getterNames[i], i );
+ 				}
+@@ -387,7 +389,7 @@
+ 
+ 			if ( setterNames[i] != null ) {
+ 				setParam[0] = types[i];
+-				setters[i] = findAccessor( clazz, setterNames[i], setParam, i );
++				setters[i] = findAccessorDeep( clazz, setterNames[i], setParam, i );
+ 			}
+ 		}
+ 	}
+@@ -396,17 +398,27 @@
+ 			Class clazz,
+ 	        String name,
+ 	        Class[] params,
+-	        int index) throws BulkAccessorException {
+-		try {
+-			Method method = clazz.getDeclaredMethod( name, params );
+-			if ( Modifier.isPrivate( method.getModifiers() ) ) {
+-				throw new BulkAccessorException( "private property", index );
+-			}
+-
+-			return method;
++	        int index) throws BulkAccessorException, SecurityException, NoSuchMethodException {
++		Method method = clazz.getDeclaredMethod( name, params );
++		if ( Modifier.isPrivate( method.getModifiers() ) ) {
++			throw new BulkAccessorException( "private property", index );
+ 		}
+-		catch ( NoSuchMethodException e ) {
+-			throw new BulkAccessorException( "cannot find an accessor", index );
+-		}
++
++		return method;
+ 	}
++	
++    private static Method findAccessorDeep(Class clazz, String name, Class[] params, int index) {
++        Method result;
++        do {
++            try {
++                result = findAccessor(clazz, name, params, index);
++                return result;
++            } catch (NoSuchMethodException e) {
++            }
++            clazz = clazz.getSuperclass();
++        } while (clazz != null);
++
++        throw new BulkAccessorException("cannot find an accessor", index);
++    }
++	
+ }

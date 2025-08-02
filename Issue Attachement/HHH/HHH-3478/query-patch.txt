@@ -1,0 +1,87 @@
+Index: src/main/java/org/hibernate/cache/StandardQueryCache.java
+===================================================================
+--- src/main/java/org/hibernate/cache/StandardQueryCache.java	(revision 15194)
++++ src/main/java/org/hibernate/cache/StandardQueryCache.java	(working copy)
+@@ -55,6 +55,14 @@
+ 
+ 	private QueryResultsRegion cacheRegion;
+ 	private UpdateTimestampsCache updateTimestampsCache;
++	private static Class entityNotFoundExceptionClass = Void.class;
++	static {
++	    try {
++	        entityNotFoundExceptionClass = Class.forName("javax.persistence.EntityNotFoundException");
++	    } 
++	    catch (Exception e) {
++	    }
++	}
+ 
+ 	public void clear() throws CacheException {
+ 		cacheRegion.evictAll();
+@@ -139,18 +147,18 @@
+ 			return null;
+ 		}
+ 
+-		log.debug( "returning cached query results" );
+-		for ( int i = 1; i < cacheable.size(); i++ ) {
+-			if ( returnTypes.length == 1 ) {
+-				returnTypes[0].beforeAssemble( ( Serializable ) cacheable.get( i ), session );
+-			}
+-			else {
+-				TypeFactory.beforeAssemble( ( Serializable[] ) cacheable.get( i ), returnTypes, session );
+-			}
+-		}
+-		List result = new ArrayList( cacheable.size() - 1 );
+-		for ( int i = 1; i < cacheable.size(); i++ ) {
+-			try {
++		try {
++    		log.debug( "returning cached query results" );
++    		for ( int i = 1; i < cacheable.size(); i++ ) {
++    			if ( returnTypes.length == 1 ) {
++    				returnTypes[0].beforeAssemble( ( Serializable ) cacheable.get( i ), session );
++    			}
++    			else {
++    				TypeFactory.beforeAssemble( ( Serializable[] ) cacheable.get( i ), returnTypes, session );
++    			}
++    		}
++    		List result = new ArrayList( cacheable.size() - 1 );
++    		for ( int i = 1; i < cacheable.size(); i++ ) {
+ 				if ( returnTypes.length == 1 ) {
+ 					result.add( returnTypes[0].assemble( ( Serializable ) cacheable.get( i ), session, null ) );
+ 				}
+@@ -162,22 +170,22 @@
+ 					);
+ 				}
+ 			}
+-			catch ( UnresolvableObjectException uoe ) {
+-				if ( isNaturalKeyLookup ) {
+-					//TODO: not really completely correct, since
+-					//      the uoe could occur while resolving
+-					//      associations, leaving the PC in an
+-					//      inconsistent state
+-					log.debug( "could not reassemble cached result set" );
+-					cacheRegion.evict( key );
+-					return null;
+-				}
+-				else {
+-					throw uoe;
+-				}
++    		return result;
++		} 
++		catch ( RuntimeException e ) {
++			if ( isNaturalKeyLookup && (e instanceof UnresolvableObjectException || entityNotFoundExceptionClass.isInstance(e))) {
++				//TODO: not really completely correct, since
++				//      the uoe could occur while resolving
++				//      associations, leaving the PC in an
++				//      inconsistent state
++				log.debug( "could not reassemble cached result set" );
++				cacheRegion.evict( key );
++				return null;
+ 			}
++			else {
++				throw e;
++			}
+ 		}
+-		return result;
+ 	}
+ 
+ 	protected boolean isUpToDate(Set spaces, Long timestamp) {

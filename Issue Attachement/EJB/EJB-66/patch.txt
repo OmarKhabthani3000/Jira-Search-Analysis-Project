@@ -1,0 +1,164 @@
+Index: org/hibernate/ejb/Ejb3Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/ejb/src/java/org/hibernate/ejb/Ejb3Configuration.java,v
+retrieving revision 1.11
+diff -u -r1.11 Ejb3Configuration.java
+--- org/hibernate/ejb/Ejb3Configuration.java	13 Sep 2005 16:35:20 -0000	1.11
++++ org/hibernate/ejb/Ejb3Configuration.java	3 Oct 2005 02:52:26 -0000
+@@ -122,7 +122,7 @@
+ 				) ) {
+ 					log.trace( "Archive to be processed by hibernate Entity Manager implementation found" );
+ 					//correct provider
+-					URL jarURL = JarVisitor.getJarURLFromURLEntry( url, "/META-INF/persistence.xml" );
++					URL jarURL = JarVisitor.getRootURL( url, "/META-INF/persistence.xml" );
+ 					JarVisitor visitor = JarVisitor.getVisitor( jarURL, filters );
+ 					if ( metadata.getName() == null ) {
+ 						metadata.setName( visitor.getUnqualifiedJarName() );
+Index: org/hibernate/ejb/packaging/JarVisitor.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/ejb/src/java/org/hibernate/ejb/packaging/JarVisitor.java,v
+retrieving revision 1.9
+diff -u -r1.9 JarVisitor.java
+--- org/hibernate/ejb/packaging/JarVisitor.java	11 Sep 2005 13:50:52 -0000	1.9
++++ org/hibernate/ejb/packaging/JarVisitor.java	3 Oct 2005 02:52:26 -0000
+@@ -65,24 +65,69 @@
+ 	}
+ 
+ 	/**
++	 * Find the resource's root as folder directory or jar entry, and return the URL to it.
++	 * <p>
++	 * This function can be used to obtain a visitor's starting point (the root).
++	 * @param resourceEntry resource's url 
++	 * @param resourcePath resource's relative path from root, or absoulte path.
++	 * @return url to jar or classfolder that contains the resource.
++	 * @throws IllegalArgumentException
++	 */
++	public static final URL getRootURL(URL resourceEntry, String resourcePath) throws IllegalArgumentException {
++		URL context = null;
++		String spec = null;
++		
++		if("jar".equals( resourceEntry.getProtocol()) ) {
++			
++			// the jar URL can be created without knowledge of inner scheme.
++			// set spec to '/' for root directory of jar
++			context = resourceEntry;
++			spec = "/";
++		
++		} else if( "file".equals( resourceEntry.getProtocol() )) {
++			
++			// remove matching 'entry' string to find root of class folder.
++			spec = resourceEntry.getFile();
++			if ( ! resourcePath.startsWith( "/" ) ) resourcePath = "/" + resourcePath;
++			int lindx = spec.lastIndexOf(resourcePath);
++			if(lindx < 0) throw new IllegalArgumentException(
++					String.format("Can't get classfolder root: Entry (%s) does not appear at end of URL (%s).",	resourcePath, resourceEntry));
++
++			if(lindx == 0)
++				spec = "/";
++			else
++				spec = spec.substring(0, lindx);
++			context = resourceEntry;
++		} else {
++			throw new IllegalArgumentException(
++					String.format("Unable to find root of entry, %s, in url: %s", resourcePath, resourceEntry));
++		}
++		
++		try {
++			return new URL(context, spec);
++		} catch(MalformedURLException e) {
++			throw new IllegalArgumentException( 
++					String.format("Unable to instantiate JAR Url from context: %s, spec: %s", context, spec),
++					e);
++		}
++	
++	}
++	
++
++	
++	/**
+ 	 * Build a JarVisitor on the given JAR URL applying th given filters
+ 	 * @throws IllegalArgumentException if the URL is malformed
+ 	 */
+ 	public static final JarVisitor getVisitor(URL jarUrl, Filter[] filters) throws IllegalArgumentException {
+ 		if ( "jar".equals( jarUrl.getProtocol() ) ) {
++			// this case handles: "jar:http:", "jar:file:", hopefully others.
+ 			return new ZippedJarVisitor( jarUrl, filters );
+ 		}
+-		else if ( "file".equals( jarUrl.getProtocol() ) ) {
+-			File file = new File( jarUrl.getFile() );
+-			if ( file.isDirectory() ) {
+-				return new ExplodedJarVisitor( jarUrl, filters );
+-			}
+-			else {
+-				return new ZippedJarVisitor( jarUrl, filters );
+-			}
+-		}
+-		else {
+-			//TODO: http
++		else if ( "file".equals( jarUrl.getProtocol() )){
++			return new ExplodedJarVisitor( jarUrl, filters );
++			
++		}  else {
+ 			throw new AssertionFailure( "Unsupported protocol while reading jar/par: " + jarUrl.toString() );
+ 		}
+ 	}
+Index: org/hibernate/ejb/packaging/ZippedJarVisitor.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/ejb/src/java/org/hibernate/ejb/packaging/ZippedJarVisitor.java,v
+retrieving revision 1.6
+diff -u -r1.6 ZippedJarVisitor.java
+--- org/hibernate/ejb/packaging/ZippedJarVisitor.java	11 Sep 2005 13:50:52 -0000	1.6
++++ org/hibernate/ejb/packaging/ZippedJarVisitor.java	3 Oct 2005 02:52:26 -0000
+@@ -4,7 +4,9 @@
+ import java.io.IOException;
+ import java.net.URL;
+ import java.util.Enumeration;
++import java.util.jar.JarEntry;
+ import java.util.jar.JarFile;
++import java.util.jar.JarInputStream;
+ import java.util.zip.ZipEntry;
+ 
+ import org.apache.commons.logging.Log;
+@@ -23,26 +25,26 @@
+ 	public ZippedJarVisitor(String fileName, Filter[] filters) {
+ 		super(fileName, filters);
+ 	}
+-
+-	protected void doProcessElements() {
+-		JarFile jarFile;
++	
++	protected void doProcessElements() throws IOException {
++		
++		JarInputStream jis;
+ 		try {
+-			jarFile = new JarFile( jarUrl.getFile() );
+-		}
+-		catch (IOException ze) {
+-			log.warn( "Unable to find file (ignored): " + jarUrl, ze );
++			jis = new JarInputStream(jarUrl.openStream());
++		} catch (IOException e) {
++			log.warn("Unable to find file (ignored): " + jarUrl, e);
+ 			return;
+ 		}
+-		Enumeration<? extends ZipEntry> entries = jarFile.entries();
+-		while ( entries.hasMoreElements() ) {
+-			ZipEntry entry = entries.nextElement();
+-			if ( !entry.isDirectory() ) {
+-
++		
++		JarEntry jent;
++		while( ( jent = jis.getNextJarEntry() ) != null ) {
++			if(!jent.isDirectory()) {
+ 				try {
+-					addElement( entry.getName(), jarFile.getInputStream( entry ), jarFile.getInputStream( entry ) );
+-				}
+-				catch (IOException e) {
+-					e.printStackTrace();  //To change body of catch statement use File | Settings | File Templates.
++					System.out.printf("addElement: %s", jent.getName());
++					addElement(jent.getName(), jis, jis);
++				} catch (IOException e) {
++					// TODO Auto-generated catch block
++					e.printStackTrace();
+ 				}
+ 			}
+ 		}

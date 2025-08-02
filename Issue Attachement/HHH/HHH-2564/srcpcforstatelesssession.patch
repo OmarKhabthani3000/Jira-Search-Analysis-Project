@@ -1,0 +1,96 @@
+Index: C:/work/os/hibernate/Branch_3_2/Hibernate3/src/org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+--- C:/work/os/hibernate/Branch_3_2/Hibernate3/src/org/hibernate/impl/StatelessSessionImpl.java	(revision 11396)
++++ C:/work/os/hibernate/Branch_3_2/Hibernate3/src/org/hibernate/impl/StatelessSessionImpl.java	(working copy)
+@@ -29,6 +29,7 @@
+ import org.hibernate.UnresolvableObjectException;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.collection.PersistentCollection;
++import org.hibernate.engine.EntityEntry;
+ import org.hibernate.engine.EntityKey;
+ import org.hibernate.engine.PersistenceContext;
+ import org.hibernate.engine.QueryParameters;
+@@ -155,8 +156,7 @@
+ 
+ 	public Object get(String entityName, Serializable id, LockMode lockMode) {
+ 		errorIfClosed();
+-		Object result = getFactory().getEntityPersister(entityName)
+-				.load(id, null, lockMode, this);
++		Object result = internalGet( entityName, id, lockMode );
+ 		temporaryPersistenceContext.clear();
+ 		return result;
+ 	}
+@@ -241,14 +241,32 @@
+ 	        boolean nullable) throws HibernateException {
+ 		errorIfClosed();
+ 		EntityPersister persister = getFactory().getEntityPersister(entityName);
+-		if ( !eager && persister.hasProxy() ) {
+-			return persister.createProxy(id, this);
++		
++		EntityKey keyToLoad = new EntityKey(id, persister, EntityMode.POJO);
++		Object loaded = temporaryPersistenceContext.getEntity( keyToLoad );
++
++		if (loaded==null && !eager && persister.hasProxy() ) {
++			loaded = persister.createProxy( id, this );
++			temporaryPersistenceContext.getBatchFetchQueue().addBatchLoadableEntityKey(keyToLoad);
++			temporaryPersistenceContext.addProxy(keyToLoad, loaded);			
++		} else if (loaded==null){
++			// TODO: throw if not loaded ?new UnsupportedOperationException("Stateless Session cannot lazy-load proxies");
++			// Do the same as get() but without clearing temporary context
++			loaded = internalGet( entityName, id, LockMode.NONE );
++			
+ 		}
+-		Object loaded = temporaryPersistenceContext.getEntity( new EntityKey(id, persister, EntityMode.POJO) );
+-		//TODO: if not loaded, throw an exception
+-		return loaded==null ? get( entityName, id ) : loaded;
++		
++		return loaded;
+ 	}
+ 
++	// used by get, but also via internal-load so clearing temporarypersistencecontext is not allowed.
++	private Object internalGet(String entityName, Serializable id, LockMode lockMode) {
++		Object loaded;
++		loaded = getFactory().getEntityPersister(entityName)
++		.load(id, null, lockMode, this);
++		return loaded;
++	}
++
+ 	public Iterator iterate(String query, QueryParameters queryParameters) throws HibernateException {
+ 		throw new UnsupportedOperationException();
+ 	}
+@@ -358,10 +376,23 @@
+ 	}
+ 
+ 	public Serializable getContextEntityIdentifier(Object object) {
++		// TODO: tempcontext?
++		/*errorIfClosed();
++		return null;*/
+ 		errorIfClosed();
+-		return null;
++		if ( object instanceof HibernateProxy ) {
++			return getProxyIdentifier(object);
++		}
++		else {
++			EntityEntry entry = temporaryPersistenceContext.getEntry(object);
++			return entry != null ? entry.getId() : null;
++		}		
+ 	}
+ 
++	private Serializable getProxyIdentifier(Object proxy) {
++		return ( (HibernateProxy) proxy ).getHibernateLazyInitializer().getIdentifier();
++	}
++	
+ 	public EntityMode getEntityMode() {
+ 		return EntityMode.POJO;
+ 	}
+@@ -380,7 +411,9 @@
+ 
+ 	public Object getEntityUsingInterceptor(EntityKey key) throws HibernateException {
+ 		errorIfClosed();
+-		return null;
++		// we don't have an interceptor, but we have a temporary persistencecontext!
++		final Object result = temporaryPersistenceContext.getEntity(key);
++		return result;		
+ 	}
+ 
+ 	public Type getFilterParameterType(String filterParameterName) {

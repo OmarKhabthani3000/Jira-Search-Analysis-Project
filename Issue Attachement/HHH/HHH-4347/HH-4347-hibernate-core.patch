@@ -1,0 +1,178 @@
+Index: src/main/java/org/hibernate/annotations/Columns.java
+===================================================================
+--- src/main/java/org/hibernate/annotations/Columns.java	(revision 20832)
++++ src/main/java/org/hibernate/annotations/Columns.java	(working copy)
+@@ -25,18 +25,21 @@
+ 
+ import static java.lang.annotation.ElementType.FIELD;
+ import static java.lang.annotation.ElementType.METHOD;
+-import java.lang.annotation.Retention;
++import static java.lang.annotation.ElementType.TYPE;
+ import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Retention;
+ import java.lang.annotation.Target;
++
+ import javax.persistence.Column;
+ 
+ /**
+  * Support an array of columns. Useful for component user types mappings
+- *
++ * 
+  * @author Emmanuel Bernard
+  */
+-@Target({METHOD, FIELD})
++@Target({ METHOD, FIELD, TYPE })
+ @Retention(RUNTIME)
+ public @interface Columns {
+-	Column[] columns();
++    Column[] columns();
+ }
+Index: src/main/java/org/hibernate/cfg/Ejb3Column.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Ejb3Column.java	(revision 20852)
++++ src/main/java/org/hibernate/cfg/Ejb3Column.java	(working copy)
+@@ -29,6 +29,7 @@
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.annotations.ColumnTransformer;
+ import org.hibernate.annotations.ColumnTransformers;
++import org.hibernate.annotations.Columns;
+ import org.hibernate.annotations.Index;
+ import org.hibernate.annotations.common.reflection.XProperty;
+ import org.hibernate.cfg.annotations.Nullability;
+@@ -37,9 +38,12 @@
+ import org.hibernate.mapping.Join;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Table;
++import org.hibernate.type.BasicType;
++import org.hibernate.type.CompositeCustomType;
++import org.hibernate.usertype.CompositeUserType;
+ import org.hibernate.util.StringHelper;
+-import org.slf4j.LoggerFactory;
+ import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Wrap state of an EJB3 @Column annotation
+@@ -422,57 +426,71 @@
+ 				actualCols = overriddenCols.length == 0 ? null : overriddenCols;
+ 				log.debug( "Column(s) overridden for property {}", inferredData.getPropertyName() );
+ 			}
+-			if ( actualCols == null ) {
+-				columns = buildImplicitColumn(
+-						inferredData,
+-						suffixForDefaultColumnName,
+-						secondaryTables,
+-						propertyHolder,
+-						nullability,
+-						mappings
+-				);
+-			}
+-			else {
+-				final int length = actualCols.length;
+-				columns = new Ejb3Column[length];
+-				for (int index = 0; index < length; index++) {
+-					final ObjectNameNormalizer nameNormalizer = mappings.getObjectNameNormalizer();
+-					javax.persistence.Column col = actualCols[index];
+-					final String sqlType = col.columnDefinition().equals( "" )
+-							? null
+-							: nameNormalizer.normalizeIdentifierQuoting( col.columnDefinition() );
+-					final String tableName = nameNormalizer.normalizeIdentifierQuoting( col.table() );
+-					final String columnName = nameNormalizer.normalizeIdentifierQuoting( col.name() );
+-					Ejb3Column column = new Ejb3Column();
+-					column.setImplicit( false );
+-					column.setSqlType( sqlType );
+-					column.setLength( col.length() );
+-					column.setPrecision( col.precision() );
+-					column.setScale( col.scale() );
+-					if ( StringHelper.isEmpty( columnName ) && ! StringHelper.isEmpty( suffixForDefaultColumnName ) ) {
+-						column.setLogicalColumnName( inferredData.getPropertyName() + suffixForDefaultColumnName );
+-					}
+-					else {
+-						column.setLogicalColumnName( columnName );
+-					}
++			
++            String columnNamePrefix = "";
++            if (actualCols == null) {
++                BasicType basicType = mappings.getTypeResolver().basic(inferredData.getClassOrElementName());
++                if (basicType != null && CompositeCustomType.class.isAssignableFrom(basicType.getClass())) {
++                    // get column definition from CustomUserType implementation
++                    CompositeUserType compositeUserType = ((CompositeCustomType) basicType).getUserType();
++                    if (compositeUserType.getClass().isAnnotationPresent(Columns.class)) {
++                        columnNamePrefix = inferredData.getPropertyName() + "_";
++                        actualCols = compositeUserType.getClass().getAnnotation(Columns.class).columns();
++                    }
++                }
++            }
+ 
+-					column.setPropertyName(
+-							BinderHelper.getRelativePath( propertyHolder, inferredData.getPropertyName() )
+-					);
+-			 		column.setNullable(
+-						col.nullable()
+-					); //TODO force to not null if available? This is a (bad) user choice.
+-					column.setUnique( col.unique() );
+-					column.setInsertable( col.insertable() );
+-					column.setUpdatable( col.updatable() );
+-					column.setSecondaryTableName( tableName );
+-					column.setPropertyHolder( propertyHolder );
+-					column.setJoins( secondaryTables );
+-					column.setMappings( mappings );
+-					column.extractDataFromPropertyData(inferredData);
+-					column.bind();
+-					columns[index] = column;
+-				}
++            if (actualCols == null) {
++                columns = buildImplicitColumn(
++                        inferredData,
++                        suffixForDefaultColumnName,
++                        secondaryTables,
++                        propertyHolder,
++                        nullability,
++                        mappings
++                );
++            }
++            else {
++                final int length = actualCols.length;
++                columns = new Ejb3Column[length];
++                for (int index = 0; index < length; index++) {
++                    final ObjectNameNormalizer nameNormalizer = mappings.getObjectNameNormalizer();
++                    javax.persistence.Column col = actualCols[index];
++                    final String sqlType = col.columnDefinition().equals("")
++                            ? null
++                            : nameNormalizer.normalizeIdentifierQuoting(col.columnDefinition());
++                    final String tableName = nameNormalizer.normalizeIdentifierQuoting( col.table() );
++                    final String columnName = nameNormalizer.normalizeIdentifierQuoting( columnNamePrefix + col.name() );
++                    Ejb3Column column = new Ejb3Column();
++                    column.setImplicit(false);
++                    column.setSqlType(sqlType);
++                    column.setLength(col.length());
++                    column.setPrecision(col.precision());
++                    column.setScale(col.scale());
++                    if (StringHelper.isEmpty(columnName) && !StringHelper.isEmpty(suffixForDefaultColumnName)) {
++                        column.setLogicalColumnName(inferredData.getPropertyName() + suffixForDefaultColumnName);
++                    }
++                    else {
++                        column.setLogicalColumnName(columnName);
++                    }
++
++                    column.setPropertyName(
++                            BinderHelper.getRelativePath(propertyHolder, inferredData.getPropertyName())
++                            );
++                    column.setNullable(
++                            col.nullable()
++                            ); // TODO force to not null if available? This is a (bad) user choice.
++                    column.setUnique(col.unique());
++                    column.setInsertable(col.insertable());
++                    column.setUpdatable(col.updatable());
++                    column.setSecondaryTableName(tableName);
++                    column.setPropertyHolder(propertyHolder);
++                    column.setJoins(secondaryTables);
++                    column.setMappings(mappings);
++                    column.extractDataFromPropertyData(inferredData);
++                    column.bind();
++                    columns[index] = column;
++                }
+ 			}
+ 		}
+ 		return columns;

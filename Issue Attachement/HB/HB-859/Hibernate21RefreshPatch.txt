@@ -1,0 +1,140 @@
+Index: net/sf/hibernate/Query.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Query.java,v
+retrieving revision 1.13.2.12
+diff -u -r1.13.2.12 Query.java
+--- net/sf/hibernate/Query.java	24 Apr 2004 11:42:40 -0000	1.13.2.12
++++ net/sf/hibernate/Query.java	20 May 2004 21:21:17 -0000
+@@ -131,6 +131,15 @@
+ 	 * Enable caching of this query result set.
+ 	 */
+ 	public Query setCacheable(boolean cacheable);
++	
++	/**
++	 * If set to true, this forces the engine to go to the underlying 
++	 * database instead of the cache. The results obtained from the 
++	 * db will replace any earlier results. In effect, this forces the
++	 * cache to be refreshed from the database. 
++	 */
++	public Query setForceCacheRefresh(boolean forceCacheRefresh);
++
+ 	/**
+ 	 * Set the name of the cache region.
+ 	 * @param cacheRegion the name of a query cache region, or <tt>null</tt>
+Index: net/sf/hibernate/engine/QueryParameters.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Attic/QueryParameters.java,v
+retrieving revision 1.1.2.5
+diff -u -r1.1.2.5 QueryParameters.java
+--- net/sf/hibernate/engine/QueryParameters.java	22 Feb 2004 18:11:45 -0000	1.1.2.5
++++ net/sf/hibernate/engine/QueryParameters.java	20 May 2004 21:21:17 -0000
+@@ -25,6 +25,7 @@
+ 	private RowSelection rowSelection;
+ 	private boolean cacheable;
+ 	private String cacheRegion;
++	private boolean forceCacheRefresh;
+ 	
+ 	public QueryParameters(Type[] positionalParameterTypes, Object[] postionalParameterValues) {
+ 		this(positionalParameterTypes, postionalParameterValues, null, null);
+@@ -48,6 +49,19 @@
+ 		final boolean cacheable,
+ 		final String cacheRegion
+ 	) {
++		this(positionalParameterTypes, positionalParameterValues, namedParameters, lockModes, rowSelection, cacheable, cacheRegion, false);
++	}
++	
++	public QueryParameters(
++		final Type[] positionalParameterTypes, 
++		final Object[] positionalParameterValues, 
++		final Map namedParameters, 
++		final Map lockModes, 
++		final RowSelection rowSelection,
++		final boolean cacheable,
++		final String cacheRegion,
++		final boolean forceCacheRefresh
++	) {
+ 		this.positionalParameterTypes = positionalParameterTypes;
+ 		this.positionalParameterValues = positionalParameterValues;
+ 		this.namedParameters = namedParameters;
+@@ -55,8 +69,10 @@
+ 		this.rowSelection = rowSelection;
+ 		this.cacheable = cacheable;
+ 		this.cacheRegion = cacheRegion;
++		this.forceCacheRefresh = forceCacheRefresh ;
+ 	}
+ 	
++	
+ 	public boolean hasRowSelection() {
+ 		return rowSelection!=null;
+ 	}
+@@ -118,6 +134,14 @@
+ 	public void setCacheable(boolean b) {
+ 		cacheable = b;
+ 	}
++	
++	public boolean isForceCacheRefreshEnabled() {
++		return forceCacheRefresh;
++	}
++
++	public void setForceCacheRefresh(boolean b) {
++		forceCacheRefresh = b;
++	}	
+ 
+ 	public String getCacheRegion() {
+ 		return cacheRegion;
+Index: net/sf/hibernate/impl/AbstractQueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/Attic/AbstractQueryImpl.java,v
+retrieving revision 1.1.2.25
+diff -u -r1.1.2.25 AbstractQueryImpl.java
+--- net/sf/hibernate/impl/AbstractQueryImpl.java	17 May 2004 17:39:21 -0000	1.1.2.25
++++ net/sf/hibernate/impl/AbstractQueryImpl.java	20 May 2004 21:21:17 -0000
+@@ -59,6 +59,7 @@
+ 	private Map namedParameterLists = new HashMap(4);
+ 	private boolean cacheable;
+ 	private String cacheRegion;
++	private boolean forceCacheRefresh;
+ 	private static final Object UNSET_PARAMETER = new Object() {};
+ 	private static final Object UNSET_TYPE = new Object() {};
+ 
+@@ -572,7 +573,8 @@
+ 			getLockModes(), 
+ 			getSelection(), 
+ 			cacheable, 
+-			cacheRegion
++			cacheRegion,
++			forceCacheRefresh
+ 		);
+ 	}
+ 
+@@ -581,6 +583,11 @@
+ 		return this;
+ 	}
+ 	
++	public Query setForceCacheRefresh(boolean forceCacheRefresh) {
++		this.forceCacheRefresh = forceCacheRefresh;
++		return this;
++	}
++	
+ 	public Query setCacheRegion(String cacheRegion) {
+ 		if (cacheRegion != null)
+ 			this.cacheRegion = cacheRegion.trim();
+Index: net/sf/hibernate/loader/Loader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/Loader.java,v
+retrieving revision 1.33.2.31
+diff -u -r1.33.2.31 Loader.java
+--- net/sf/hibernate/loader/Loader.java	24 Apr 2004 11:42:42 -0000	1.33.2.31
++++ net/sf/hibernate/loader/Loader.java	20 May 2004 21:21:17 -0000
+@@ -935,7 +935,10 @@
+ 		if (cacheable) {
+ 			QueryCache queryCache = factory.getQueryCache( queryParameters.getCacheRegion() );
+ 			QueryKey key = new QueryKey( getSQLString(), queryParameters );
+-			List result = queryCache.get(key, resultTypes, querySpaces, session);
++			List result = null;
++			if( !queryParameters.isForceCacheRefreshEnabled() ) {
++				result = queryCache.get(key, resultTypes, querySpaces, session);
++			}
+ 			if (result==null) {
+ 				result = doList(session, queryParameters);
+ 				if (cacheable) queryCache.put(key, resultTypes, result, session);

@@ -1,0 +1,1030 @@
+Index: main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java
+===================================================================
+--- main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(revision 15845)
++++ main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(working copy)
+@@ -1,26 +1,31 @@
+ package org.hibernate.envers.configuration.metadata.reader;
+ 
++import static org.hibernate.envers.tools.Tools.newHashSet;
++
++import java.lang.annotation.Annotation;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Set;
++
++import javax.persistence.JoinColumn;
++import javax.persistence.MapKey;
++import javax.persistence.Version;
++
++import org.hibernate.annotations.common.reflection.XClass;
++import org.hibernate.annotations.common.reflection.XProperty;
++import org.hibernate.envers.AuditJoinTable;
++import org.hibernate.envers.AuditingOverride;
++import org.hibernate.envers.AuditingOverrides;
++import org.hibernate.envers.Audited;
+ import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.NotAudited;
+-import org.hibernate.envers.Audited;
+-import org.hibernate.envers.AuditJoinTable;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+-import static org.hibernate.envers.tools.Tools.*;
+ import org.hibernate.envers.tools.MappingTools;
++import org.hibernate.mapping.Component;
+ import org.hibernate.mapping.Property;
+-import org.hibernate.mapping.Component;
+ import org.hibernate.mapping.Value;
+-import org.hibernate.annotations.common.reflection.XProperty;
+-import org.hibernate.annotations.common.reflection.XClass;
+ import org.jboss.envers.Versioned;
+ 
+-import javax.persistence.Version;
+-import javax.persistence.MapKey;
+-import javax.persistence.JoinColumn;
+-import java.util.Iterator;
+-import java.util.Set;
+-import java.lang.annotation.Annotation;
+-
+ /**
+  * Reads persistent properties form a
+  * {@link org.hibernate.envers.configuration.metadata.reader.PersistentPropertiesSource}
+@@ -164,6 +169,10 @@
+ 		propertyData.setAccessType(accessType);
+ 
+ 		addPropertyJoinTables(property, propertyData);
++		addPropertyAuditingOverrides(property, propertyData);
++		if (!processPropertyAuditingOverrides(property, propertyData)) {
++			return false; // not audited due to AuditingOverride annotation
++		}
+ 		addPropertyMapKey(property, propertyData);
+ 
+ 		return true;
+@@ -177,6 +186,7 @@
+ 	}
+ 
+ 	private void addPropertyJoinTables(XProperty property, PropertyAuditingData propertyData) {
++		// first set the join table based on the AuditJoinTable annotation
+ 		AuditJoinTable joinTable = property.getAnnotation(AuditJoinTable.class);
+ 		if (joinTable != null) {
+ 			propertyData.setJoinTable(joinTable);
+@@ -185,6 +195,54 @@
+ 		}
+ 	}
+ 
++	/***
++	 * Add the {@link AuditingOverride} annotations.
++	 * 
++	 * @param property the property being processed
++	 * @param propertyData the Envers auditing data for this property
++	 */
++	private void addPropertyAuditingOverrides(XProperty property, PropertyAuditingData propertyData) {
++		AuditingOverride annotationOverride = property.getAnnotation(AuditingOverride.class);
++		if (annotationOverride != null) {
++			propertyData.addAuditingOverride(annotationOverride);
++		}
++		AuditingOverrides annotationOverrides = property.getAnnotation(AuditingOverrides.class);
++		if (annotationOverrides != null) {
++			propertyData.addAuditingOverrides(annotationOverrides);
++		}
++	}
++
++	/**
++	 * Process the {@link AuditingOverride} annotations for this property.
++	 * 
++	 * @param property
++	 *            the property for which the {@link AuditingOverride}
++	 *            annotations are being processed
++	 * @param propertyData
++	 *            the Envers auditing data for this property
++	 * @return {@code false} if isAudited() of the override annotation was set to 
++	 */
++	private boolean processPropertyAuditingOverrides(XProperty property, PropertyAuditingData propertyData) {
++		// if this property is part of a component, process all override annotations
++		if (this.auditedPropertiesHolder instanceof ComponentAuditingData) {
++			List<AuditingOverride> overrides = ((ComponentAuditingData) this.auditedPropertiesHolder).getAuditingOverrides();
++			for (AuditingOverride override : overrides) {
++				if (property.getName().equals(override.name())) {
++					// the override applies to this property
++					if (!override.isAudited()) {
++						return false; 
++					} else {
++						if (override.auditJoinTable() != null) {
++							propertyData.setJoinTable(override.auditJoinTable());
++						}
++					}
++				}
++			}
++			
++		}
++		return true;
++	}
++
+ 	private static AuditJoinTable DEFAULT_AUDIT_JOIN_TABLE = new AuditJoinTable() {
+ 		public String name() { return ""; }
+ 		public String schema() { return ""; }
+Index: main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java
+===================================================================
+--- main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java	(revision 15845)
++++ main/java/org/hibernate/envers/configuration/metadata/reader/PropertyAuditingData.java	(working copy)
+@@ -24,6 +24,11 @@
+  */
+ package org.hibernate.envers.configuration.metadata.reader;
+ 
++import java.util.List;
++import java.util.ArrayList;
++
++import org.hibernate.envers.AuditingOverride;
++import org.hibernate.envers.AuditingOverrides;
+ import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.AuditJoinTable;
+ import org.hibernate.envers.entities.PropertyData;
+@@ -38,6 +43,7 @@
+     private String mapKey;
+     private AuditJoinTable joinTable;
+     private String accessType;
++    private final List<AuditingOverride> auditJoinTableOverrides = new ArrayList<AuditingOverride>(0);
+ 
+     public PropertyAuditingData() {
+     }
+@@ -100,4 +106,32 @@
+     public PropertyData getPropertyData() {
+         return new PropertyData(name, beanName, accessType, store);
+     }
++
++
++	public List<AuditingOverride> getAuditingOverrides() {
++		return auditJoinTableOverrides; 
++	}
++
++	public void addAuditingOverride(AuditingOverride annotation) {
++		if ( annotation != null ) {
++			String overrideName = annotation.name();
++			boolean present = false;
++			for (AuditingOverride current : auditJoinTableOverrides) {
++				if ( current.name().equals( overrideName ) ) {
++					present = true;
++					break;
++				}
++			}
++			if ( !present ) auditJoinTableOverrides.add( annotation );
++		}
++	}
++
++	public void addAuditingOverrides(AuditingOverrides annotationOverrides) {
++		if ( annotationOverrides != null ) {
++			for (AuditingOverride annotation : annotationOverrides.value()) {
++				addAuditingOverride(annotation);
++			}
++		}
++	}
++
+ }
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponent.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponent.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponent.java	(revision 0)
+@@ -0,0 +1,81 @@
++package org.hibernate.envers.test.integration.naming;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Embeddable;
++import javax.persistence.FetchType;
++import javax.persistence.JoinColumn;
++import javax.persistence.OneToMany;
++
++import org.hibernate.annotations.FetchMode;
++
++/**
++ * An embeddable component containing a list of
++ * {@link VersionsJoinTableRangeTestEntitySuperClass}-instances
++ * 
++ * @author Erik-Berndt Scheper
++ * @param <T>
++ */
++@Embeddable
++public final class VersionsJoinTableRangeComponent<T extends VersionsJoinTableRangeTestEntitySuperClass> {
++
++	@OneToMany(fetch = FetchType.EAGER, cascade = CascadeType.ALL)
++	@org.hibernate.annotations.Fetch(value = FetchMode.SUBSELECT) 
++	@org.hibernate.annotations.Cascade(org.hibernate.annotations.CascadeType.DELETE_ORPHAN)
++	@JoinColumn(name = "VJTRCTE_ID", insertable = true, updatable = false, nullable = false)
++//	Note:	If this is processed without override annotation, then we should get a 
++//			org.hibernate.DuplicateMappingException: 
++//			Duplicate class/entity mapping JOIN_TABLE_COMPONENT_1_AUD
++	@org.hibernate.envers.AuditJoinTable(name = "JOIN_TABLE_COMPONENT_1_AUD", inverseJoinColumns = @JoinColumn(name = "VJTRTE_ID"))
++	private List<T> range = new ArrayList<T>();
++
++	// ********************** Accessor Methods ********************** //
++
++	protected List<T> getRange() {
++		return this.range;
++	}
++
++	// ********************** Common Methods ********************** //
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result + ((range == null) ? 0 : range.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		VersionsJoinTableRangeComponent<?> other = (VersionsJoinTableRangeComponent<?>) obj;
++		if (range == null) {
++			if (other.range != null)
++				return false;
++		} else if (!range.equals(other.range))
++			return false;
++		return true;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++
++		output.append("VersionsJoinTableRangeComponent {");
++		output.append(" range = \"");
++		for (T instance : range) {
++			output.append(instance).append("\n");
++		}
++		output.append("\"}");
++
++		return output.toString();
++	}
++
++}
+\ No newline at end of file
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentNamingTest.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentNamingTest.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentNamingTest.java	(revision 0)
+@@ -0,0 +1,300 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.naming;
++
++import java.util.Arrays;
++import java.util.Iterator;
++import java.util.List;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.AuditingOverride;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.entities.components.Component1;
++import org.hibernate.envers.test.integration.properties.UnversionedOptimisticLockingFieldEntity;
++import org.hibernate.mapping.Column;
++import org.hibernate.mapping.PersistentClass;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * Test class for {@link VersionsJoinTableRangeComponentTestEntity}, to test
++ * various {@link AuditingOverride} annotations.
++ * 
++ * @author Erik-Berndt Scheper
++ */
++public class VersionsJoinTableRangeComponentNamingTest extends
++		AbstractEntityTest {
++	private Integer vjrcte_id;
++	private Integer vjtrte_id;
++	private Integer vjtrtae_id1;
++
++	public void configure(Ejb3Configuration cfg) {
++		cfg.addAnnotatedClass(VersionsJoinTableRangeComponentTestEntity.class);
++		cfg.addAnnotatedClass(VersionsJoinTableRangeTestEntitySuperClass.class);
++		cfg.addAnnotatedClass(VersionsJoinTableRangeTestEntity.class);
++		cfg.addAnnotatedClass(VersionsJoinTableRangeTestAlternateEntity.class);
++	}
++
++	@BeforeClass(dependsOnMethods = "init")
++	public void initData() {
++
++		// Revision 1
++		EntityManager em = getEntityManager();
++		em.getTransaction().begin();
++
++		// create an instance of the test entity
++		VersionsJoinTableRangeComponentTestEntity vjrcte = new VersionsJoinTableRangeComponentTestEntity();
++		em.persist(vjrcte);
++		em.getTransaction().commit();
++
++		// Revision 2
++		em.getTransaction().begin();
++
++		vjrcte = em.find(VersionsJoinTableRangeComponentTestEntity.class,
++				vjrcte.getId());
++
++		// create a component containing a list of
++		// VersionsJoinTableRangeTestEntity-instances
++		VersionsJoinTableRangeTestEntity vjtrte = new VersionsJoinTableRangeTestEntity();
++		vjtrte.setGenericValue("generic1");
++		vjtrte.setValue("value1");
++		// and add it to the test entity
++		vjrcte.getComponent1().getRange().add(vjtrte);
++
++		// create a second component containing a list of
++		// VersionsJoinTableRangeTestAlternateEntity-instances
++		VersionsJoinTableRangeTestAlternateEntity vjtrtae1 = new VersionsJoinTableRangeTestAlternateEntity();
++		vjtrtae1.setGenericValue("generic2");
++		vjtrtae1.setAlternateValue("alternateValue2");
++		// and add it to the test entity
++		vjrcte.getComponent2().getRange().add(vjtrtae1);
++
++		// create a third component, and add it to the test entity
++		Component1 simpleComponent = new Component1("string1", "string2");
++		vjrcte.setComponent3(simpleComponent);
++
++		em.persist(vjtrte);
++		em.persist(vjtrtae1);
++		em.persist(vjrcte);
++
++		em.getTransaction().commit();
++
++		// Revision 2
++		em.getTransaction().begin();
++
++		vjrcte = em.find(VersionsJoinTableRangeComponentTestEntity.class,
++				vjrcte.getId());
++		vjtrte = em
++				.find(VersionsJoinTableRangeTestEntity.class, vjtrte.getId());
++		vjtrtae1 = em.find(VersionsJoinTableRangeTestAlternateEntity.class,
++				vjtrtae1.getId());
++
++		assert vjrcte != null;
++		assert vjtrte != null;
++		assert vjtrtae1 != null;
++
++		List<VersionsJoinTableRangeTestEntity> ent1List = vjrcte
++				.getComponent1().getRange();
++		assert ent1List.size() == 1;
++		assert vjtrte.equals(ent1List.get(0));
++
++		List<VersionsJoinTableRangeTestAlternateEntity> ent2List = vjrcte
++				.getComponent2().getRange();
++		assert ent2List.size() == 1;
++		assert vjtrtae1.equals(ent2List.get(0));
++
++		em.getTransaction().commit();
++
++		vjrcte_id = vjrcte.getId();
++		vjtrte_id = vjtrte.getId();
++		vjtrtae_id1 = vjtrtae1.getId();
++	}
++
++	@Test
++	public void testRevisionsCounts() {
++		assert Arrays.asList(1, 2).equals(
++				getAuditReader().getRevisions(
++						VersionsJoinTableRangeComponentTestEntity.class,
++						vjrcte_id));
++		assert Arrays.asList(2).equals(
++				getAuditReader().getRevisions(
++						VersionsJoinTableRangeTestEntity.class, vjtrte_id));
++		assert Arrays.asList(2).equals(
++				getAuditReader().getRevisions(
++						VersionsJoinTableRangeTestAlternateEntity.class,
++						vjtrtae_id1));
++	}
++
++	@Test
++	public void testHistoryOfUniId1() {
++		VersionsJoinTableRangeTestEntity vjtrte = getEntityManager().find(
++				VersionsJoinTableRangeTestEntity.class, vjtrte_id);
++		VersionsJoinTableRangeTestAlternateEntity vjtrtae = getEntityManager()
++				.find(VersionsJoinTableRangeTestAlternateEntity.class,
++						vjtrtae_id1);
++
++		VersionsJoinTableRangeComponentTestEntity rev1 = getAuditReader().find(
++				VersionsJoinTableRangeComponentTestEntity.class, vjrcte_id, 1);
++		VersionsJoinTableRangeComponentTestEntity rev2 = getAuditReader().find(
++				VersionsJoinTableRangeComponentTestEntity.class, vjrcte_id, 2);
++
++		assert rev1.getComponent1().getRange().size() == 0;
++		assert rev1.getComponent2().getRange().size() == 0;
++
++		assert rev2.getComponent1().getRange().size() == 1;
++		assert rev2.getComponent1().getRange().get(0).equals(vjtrte);
++		assert rev2.getComponent2().getRange().size() == 1;
++		assert rev2.getComponent2().getRange().get(0).equals(vjtrtae);
++	}
++
++	/* The Audit tables we expect */
++	private final static String TEST_ENTITY_AUDIT_TABLE_NAME = "COMPONENT_TEST_ENTITY_AUD";
++
++	/* The Audit join tables we expect */
++	private final static String COMPONENT_1_AUDIT_JOIN_TABLE_NAME = "JOIN_TABLE_COMPONENT_1_AUD";
++	private final static String COMPONENT_2_AUDIT_JOIN_TABLE_NAME = "JOIN_TABLE_COMPONENT_2_AUD";
++
++	/* The Audit join tables that should NOT be there */
++	private final static String UNMODIFIED_COMPONENT_1_AUDIT_JOIN_TABLE_NAME = "VersionsJoinTableRangeComponentTestEntity_VersionsJoinTableRangeTestEntity_AUD";
++	private final static String UNMODIFIED_COMPONENT_2_AUDIT_JOIN_TABLE_NAME = "VersionsJoinTableRangeComponentTestEntity_VersionsJoinTableRangeTestAlternateEntity_AUD";
++
++	@Test
++	public void testExpectedTableNameComponent1() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				COMPONENT_1_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass != null;
++		assert COMPONENT_1_AUDIT_JOIN_TABLE_NAME.equals(auditClass.getTable()
++				.getName());
++	}
++
++	@Test
++	public void testExpectedTableNameComponent2() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				COMPONENT_2_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass != null;
++		assert COMPONENT_2_AUDIT_JOIN_TABLE_NAME.equals(auditClass.getTable()
++				.getName());
++	}
++
++	@Test
++	public void testWrongTableNameComponent1() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				UNMODIFIED_COMPONENT_1_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass == null;
++	}
++
++	@Test
++	public void testWrongTableNameComponent2() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				UNMODIFIED_COMPONENT_2_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass == null;
++	}
++
++	@Test
++	public void testJoinColumnNamesComponent1() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				COMPONENT_1_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass != null;
++
++		@SuppressWarnings( { "unchecked" })
++		Iterator<Column> columns = auditClass.getTable().getColumnIterator();
++
++		boolean id1Found = false;
++		boolean id2Found = false;
++
++		while (columns.hasNext()) {
++			Column column = columns.next();
++			if ("VJTRCTE1_ID".equals(column.getName())) {
++				id1Found = true;
++			}
++
++			if ("VJTRTE_ID".equals(column.getName())) {
++				id2Found = true;
++			}
++		}
++
++		assert id1Found && id2Found;
++	}
++
++	@Test
++	public void testJoinColumnNamesComponent2() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				COMPONENT_2_AUDIT_JOIN_TABLE_NAME);
++		assert auditClass != null;
++
++		@SuppressWarnings( { "unchecked" })
++		Iterator<Column> columns = auditClass.getTable().getColumnIterator();
++
++		boolean id1Found = false;
++		boolean id2Found = false;
++
++		while (columns.hasNext()) {
++			Column column = columns.next();
++			if ("VJTRCTE2_ID".equals(column.getName())) {
++				id1Found = true;
++			}
++
++			if ("VJTRTAE_ID".equals(column.getName())) {
++				id2Found = true;
++			}
++		}
++
++		assert id1Found && id2Found;
++	}
++
++	/**
++	 * Verify that
++	 * {@link VersionsJoinTableRangeComponentTestEntity#getComponent3()} is
++	 * partially audited.
++	 */
++	@Test
++	public void testOverrideNotAudited() {
++		PersistentClass auditClass = getCfg().getClassMapping(
++				VersionsJoinTableRangeComponentTestEntity.class.getName()
++						+ "_AUD");
++		assert auditClass != null;
++
++		@SuppressWarnings( { "unchecked" })
++		Iterator<Column> columns = auditClass.getTable().getColumnIterator();
++
++		boolean auditColumn1Found = false;
++		boolean auditColumn2Found = false;
++
++		while (columns.hasNext()) {
++			Column column = columns.next();
++			if ("STR1".equals(column.getName())) {
++				auditColumn1Found = true;
++			}
++
++			if ("STR2".equals(column.getName())) {
++				auditColumn2Found = true;
++			}
++		}
++
++		assert auditColumn1Found && !auditColumn2Found;
++	}
++
++}
+\ No newline at end of file
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentTestEntity.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentTestEntity.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeComponentTestEntity.java	(revision 0)
+@@ -0,0 +1,189 @@
++package org.hibernate.envers.test.integration.naming;
++
++import javax.persistence.AssociationOverride;
++import javax.persistence.AttributeOverride;
++import javax.persistence.AttributeOverrides;
++import javax.persistence.Column;
++import javax.persistence.Embedded;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.Table;
++
++import org.hibernate.envers.test.entities.components.Component1;
++
++/**
++ * Test entity, containing two embedded components, which each contain a list of
++ * {@link VersionsJoinTableRangeTestEntitySuperClass}-instances
++ * 
++ * @author Erik-Berndt Scheper
++ * @param <T>
++ */
++@Entity
++@Table(name = "COMPONENT_TEST_ENTITY")
++public class VersionsJoinTableRangeComponentTestEntity {
++	@Id
++	@GeneratedValue
++	@Column(name = "ID")
++	private Integer id;
++
++	/**
++	 * An embedded component, containing a list of
++	 * {@link VersionsJoinTableRangeTestEntity}-instances.
++	 */
++	@Embedded
++	@AssociationOverride(name = "range", joinColumns = { @JoinColumn(name = "VJTRCTE1_ID", insertable = true, updatable = false, nullable = false) })
++	@org.hibernate.envers.Audited
++	@org.hibernate.envers.AuditingOverride(name = "range", auditJoinTable = @org.hibernate.envers.AuditJoinTable(name = "JOIN_TABLE_COMPONENT_1_AUD", inverseJoinColumns = @JoinColumn(name = "VJTRTE_ID")))
++	private VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestEntity> component1 = new VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestEntity>();
++
++	/**
++	 * An embedded component, containing a list of
++	 * {@link VersionsJoinTableRangeTestAlternateEntity}-instances.
++	 */
++	@Embedded
++	@AssociationOverride(name = "range", joinColumns = { @JoinColumn(name = "VJTRCTE2_ID", insertable = true, updatable = false, nullable = false) })
++	@org.hibernate.envers.Audited
++	@org.hibernate.envers.AuditingOverrides(value = { @org.hibernate.envers.AuditingOverride(name = "range", auditJoinTable = @org.hibernate.envers.AuditJoinTable(name = "JOIN_TABLE_COMPONENT_2_AUD", inverseJoinColumns = @JoinColumn(name = "VJTRTAE_ID"))) })
++	private VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestAlternateEntity> component2 = new VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestAlternateEntity>();
++
++	/**
++	 * An embedded component, containing a list of NOT AUDITED
++	 * {@link VersionsJoinTableRangeTestAlternateEntity}-instances.
++	 */
++    @Embedded
++    @AttributeOverrides(value={@AttributeOverride(name="str1", column=@Column(name="STR1")), @AttributeOverride(name="str2", column=@Column(name="STR2"))})
++	@org.hibernate.envers.Audited
++	@org.hibernate.envers.AuditingOverrides(value={@org.hibernate.envers.AuditingOverride(name="str2", isAudited = false)})
++    private Component1 component3;
++
++	/**
++	 * Default constructor
++	 */
++	public VersionsJoinTableRangeComponentTestEntity() {
++		super();
++	}
++
++	/**
++	 * @return the id
++	 */
++	public Integer getId() {
++		return id;
++	}
++
++	/**
++	 * @param id
++	 *            the id to set
++	 */
++	protected void setId(Integer id) {
++		this.id = id;
++	}
++
++	/**
++	 * @return the component1
++	 */
++	public VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestEntity> getComponent1() {
++		return component1;
++	}
++
++	/**
++	 * @param component1
++	 *            the component1 to set
++	 */
++	public void setComponent1(
++			VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestEntity> component1) {
++		this.component1 = component1;
++	}
++
++	/**
++	 * @return the component2
++	 */
++	public VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestAlternateEntity> getComponent2() {
++		return component2;
++	}
++
++	/**
++	 * @param component2
++	 *            the component2 to set
++	 */
++	public void setComponent2(
++			VersionsJoinTableRangeComponent<VersionsJoinTableRangeTestAlternateEntity> component2) {
++		this.component2 = component2;
++	}
++
++	/**
++	 * @return the component3
++	 */
++	public Component1 getComponent3() {
++		return component3;
++	}
++
++	/**
++	 * @param component3
++	 *            the component3 to set
++	 */
++	public void setComponent3(Component1 component3) {
++		this.component3 = component3;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result
++				+ ((component1 == null) ? 0 : component1.hashCode());
++		result = prime * result
++				+ ((component2 == null) ? 0 : component2.hashCode());
++		result = prime * result
++				+ ((component3 == null) ? 0 : component3.hashCode());
++		result = prime * result + ((id == null) ? 0 : id.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		VersionsJoinTableRangeComponentTestEntity other = (VersionsJoinTableRangeComponentTestEntity) obj;
++		if (component1 == null) {
++			if (other.component1 != null)
++				return false;
++		} else if (!component1.equals(other.component1))
++			return false;
++		if (component2 == null) {
++			if (other.component2 != null)
++				return false;
++		} else if (!component2.equals(other.component2))
++			return false;
++		if (component3 == null) {
++			if (other.component3 != null)
++				return false;
++		} else if (!component3.equals(other.component3))
++			return false;
++		if (id == null) {
++			if (other.id != null)
++				return false;
++		} else if (!id.equals(other.id))
++			return false;
++		return true;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++
++		output.append("VersionsJoinTableRangeComponentTestEntity {");
++		output.append(" id = \"").append(this.getId()).append("\",");
++		output.append(" component1 = \"").append(this.component1)
++				.append("\", ");
++		output.append(" component2 = \"").append(this.component2).append("\"}");
++		output.append(" component3 = \"").append(this.component3).append("\"}");
++		return output.toString();
++	}
++
++}
+\ No newline at end of file
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestAlternateEntity.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestAlternateEntity.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestAlternateEntity.java	(revision 0)
+@@ -0,0 +1,82 @@
++package org.hibernate.envers.test.integration.naming;
++
++import javax.persistence.Entity;
++import javax.persistence.Table;
++
++/**
++ * Alternate implementation of mapped superclass for Audit join table test.
++ * 
++ * @author Erik-Berndt Scheper
++ * @see VersionsJoinTableRangeTestEntity
++ * @see VersionsJoinTableRangeTestEntitySuperClass
++ */
++@Entity
++@Table(name = "RANGE_TEST_ALTERNATE_ENTITY")
++@org.hibernate.envers.Audited
++public class VersionsJoinTableRangeTestAlternateEntity extends
++		VersionsJoinTableRangeTestEntitySuperClass {
++
++	private String alternateValue;
++
++	/**
++	 * Default constructor
++	 */
++	public VersionsJoinTableRangeTestAlternateEntity() {
++		super();
++	}
++
++	/**
++	 * @return the alternateValue
++	 */
++	public String getAlternateValue() {
++		return alternateValue;
++	}
++
++	/**
++	 * @param alternateValue
++	 *            the alternateValue to set
++	 */
++	public void setAlternateValue(String alternateValue) {
++		this.alternateValue = alternateValue;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = super.hashCode();
++		result = prime * result
++				+ ((alternateValue == null) ? 0 : alternateValue.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (!super.equals(obj))
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		VersionsJoinTableRangeTestAlternateEntity other = (VersionsJoinTableRangeTestAlternateEntity) obj;
++		if (alternateValue == null) {
++			if (other.alternateValue != null)
++				return false;
++		} else if (!alternateValue.equals(other.alternateValue))
++			return false;
++		return true;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++
++		output.append("VersionsJoinTableRangeComponentTestEntity {");
++		output.append(" id = \"").append(getId()).append("\", ");
++		output.append(" genericValue = \"").append(getGenericValue()).append(
++				"\", ");
++		output.append(" alternateValue = \"").append(this.alternateValue)
++				.append("\"}");
++		return output.toString();
++	}
++
++}
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntity.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntity.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntity.java	(revision 0)
+@@ -0,0 +1,80 @@
++package org.hibernate.envers.test.integration.naming;
++
++import javax.persistence.Entity;
++import javax.persistence.Table;
++
++/**
++ * Concrete implementation of mapped superclass for Audit join table test.
++ * 
++ * @author Erik-Berndt Scheper
++ * @see VersionsJoinTableRangeTestAlternateEntity
++ * @see VersionsJoinTableRangeTestEntitySuperClass
++ */
++@Entity
++@Table(name = "RANGE_TEST_ENTITY")
++@org.hibernate.envers.Audited
++public class VersionsJoinTableRangeTestEntity extends
++		VersionsJoinTableRangeTestEntitySuperClass {
++
++	private String value;
++
++	/**
++	 * Default constructor
++	 */
++	public VersionsJoinTableRangeTestEntity() {
++		super();
++	}
++
++	/**
++	 * @return the value
++	 */
++	public String getValue() {
++		return value;
++	}
++
++	/**
++	 * @param value
++	 *            the value to set
++	 */
++	public void setValue(String value) {
++		this.value = value;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = super.hashCode();
++		result = prime * result + ((value == null) ? 0 : value.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (!super.equals(obj))
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		VersionsJoinTableRangeTestEntity other = (VersionsJoinTableRangeTestEntity) obj;
++		if (value == null) {
++			if (other.value != null)
++				return false;
++		} else if (!value.equals(other.value))
++			return false;
++		return true;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++
++		output.append("VersionsJoinTableRangeComponentTestEntity {");
++		output.append(" id = \"").append(getId()).append("\", ");
++		output.append(" genericValue = \"").append(getGenericValue()).append(
++				"\", ");
++		output.append(" value = \"").append(this.value).append("\"}");
++		return output.toString();
++	}
++
++}
+Index: test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntitySuperClass.java
+===================================================================
+--- test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntitySuperClass.java	(revision 0)
++++ test/java/org/hibernate/envers/test/integration/naming/VersionsJoinTableRangeTestEntitySuperClass.java	(revision 0)
+@@ -0,0 +1,85 @@
++package org.hibernate.envers.test.integration.naming;
++
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.MappedSuperclass;
++
++/**
++ * Mapped superclass for Audit join table test.
++ * 
++ * @author Erik-Berndt Scheper
++ */
++@MappedSuperclass
++@org.hibernate.annotations.ForceDiscriminator
++@org.hibernate.envers.Audited
++public abstract class VersionsJoinTableRangeTestEntitySuperClass {
++
++	@Id
++	@GeneratedValue
++	private Integer id;
++
++	private String genericValue;
++
++	/**
++	 * @return the id
++	 */
++	public Integer getId() {
++		return id;
++	}
++
++	/**
++	 * @param id
++	 *            the id to set
++	 */
++	protected void setId(Integer id) {
++		this.id = id;
++	}
++
++	/**
++	 * @return the genericValue
++	 */
++	public String getGenericValue() {
++		return genericValue;
++	}
++
++	/**
++	 * @param genericValue
++	 *            the genericValue to set
++	 */
++	public void setGenericValue(String genericValue) {
++		this.genericValue = genericValue;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result
++				+ ((genericValue == null) ? 0 : genericValue.hashCode());
++		result = prime * result + ((id == null) ? 0 : id.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		VersionsJoinTableRangeTestEntitySuperClass other = (VersionsJoinTableRangeTestEntitySuperClass) obj;
++		if (genericValue == null) {
++			if (other.genericValue != null)
++				return false;
++		} else if (!genericValue.equals(other.genericValue))
++			return false;
++		if (id == null) {
++			if (other.id != null)
++				return false;
++		} else if (!id.equals(other.id))
++			return false;
++		return true;
++	}
++
++}

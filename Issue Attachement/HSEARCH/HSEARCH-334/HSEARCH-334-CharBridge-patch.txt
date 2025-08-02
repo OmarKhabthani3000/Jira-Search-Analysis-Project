@@ -1,0 +1,135 @@
+### Eclipse Workspace Patch 1.0
+#P hibernate-search
+Index: src/test/java/org/hibernate/search/test/bridge/Cloud.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/Cloud.java	(revision 17187)
++++ src/test/java/org/hibernate/search/test/bridge/Cloud.java	(working copy)
+@@ -44,6 +44,8 @@
+     private Date dateMillisecond;
+     private String customFieldBridge;
+     private String customStringBridge;
++    private Character char1;
++    private char char2;
+ 	private CloudType type;
+ 	private boolean storm;
+ 	private Class clazz;
+@@ -285,4 +287,23 @@
+ 	public void setStorm(boolean storm) {
+ 		this.storm = storm;
+ 	}
++	
++	@Field(index = Index.TOKENIZED, store = Store.YES)
++	public Character getChar1() {
++		return char1;
++	}
++
++	public void setChar1(Character char1) {
++		this.char1 = char1;
++	}
++
++	@Field(index = Index.TOKENIZED, store = Store.YES)
++	public char getChar2() {
++		return char2;
++	}
++
++	public void setChar2(char char2) {
++		this.char2 = char2;
++	}
++	
+ }
+Index: src/main/java/org/hibernate/search/bridge/BridgeFactory.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/BridgeFactory.java	(revision 17187)
++++ src/main/java/org/hibernate/search/bridge/BridgeFactory.java	(working copy)
+@@ -22,6 +22,7 @@
+ import org.hibernate.search.bridge.builtin.BigDecimalBridge;
+ import org.hibernate.search.bridge.builtin.BigIntegerBridge;
+ import org.hibernate.search.bridge.builtin.BooleanBridge;
++import org.hibernate.search.bridge.builtin.CharacterBridge;
+ import org.hibernate.search.bridge.builtin.DateBridge;
+ import org.hibernate.search.bridge.builtin.DoubleBridge;
+ import org.hibernate.search.bridge.builtin.EnumBridge;
+@@ -45,6 +46,8 @@
+ 	private BridgeFactory() {
+ 	}
+ 
++	public static final TwoWayFieldBridge CHARACTER = new TwoWayString2FieldBridgeAdaptor( new CharacterBridge() );
++
+ 	public static final TwoWayFieldBridge DOUBLE = new TwoWayString2FieldBridgeAdaptor( new DoubleBridge() );
+ 
+ 	public static final TwoWayFieldBridge FLOAT = new TwoWayString2FieldBridgeAdaptor( new FloatBridge() );
+@@ -79,6 +82,8 @@
+ 			new TwoWayString2FieldBridgeAdaptor( DateBridge.DATE_MILLISECOND );
+ 
+ 	static {
++		builtInBridges.put( Character.class.getName(), CHARACTER );
++		builtInBridges.put( char.class.getName(), CHARACTER );
+ 		builtInBridges.put( Double.class.getName(), DOUBLE );
+ 		builtInBridges.put( double.class.getName(), DOUBLE );
+ 		builtInBridges.put( Float.class.getName(), FLOAT );
+Index: src/main/java/org/hibernate/search/bridge/builtin/CharacterBridge.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/builtin/CharacterBridge.java	(revision 0)
++++ src/main/java/org/hibernate/search/bridge/builtin/CharacterBridge.java	(revision 0)
+@@ -0,0 +1,26 @@
++// $Id$
++package org.hibernate.search.bridge.builtin;
++
++import org.hibernate.util.StringHelper;
++
++/**
++ * Map a character element
++ * 
++ * @author Davide D'Alto
++ */
++public class CharacterBridge implements org.hibernate.search.bridge.TwoWayStringBridge {
++
++	public Object stringToObject(String stringValue) {
++		if ( StringHelper.isEmpty( stringValue ) )
++			return null;
++		if ( stringValue.length() > 1 )
++			throw new IllegalArgumentException( "<" + stringValue + "> is not a char" );
++		return new Character( stringValue.charAt( 0 ) );
++	}
++
++	public String objectToString(Object object) {
++		return object == null 
++				? null 
++				: object.toString();
++	}
++}
+
+Property changes on: src/main/java/org/hibernate/search/bridge/builtin/CharacterBridge.java
+___________________________________________________________________
+Added: svn:keywords
+   + Id
+
+Index: src/test/java/org/hibernate/search/test/bridge/BridgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(revision 17187)
++++ src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(working copy)
+@@ -42,6 +42,8 @@
+         cloud.setLong2( 2l );
+         cloud.setString(null);
+ 		cloud.setType( CloudType.DOG );
++		cloud.setChar1( null );
++		cloud.setChar2( 'P' );
+ 		cloud.setStorm( false );
+ 		cloud.setClazz( Cloud.class );
+ 		cloud.setUri( new URI("http://www.hibernate.org") );
+@@ -84,6 +86,15 @@
+ 		result = session.createFullTextQuery(bQuery).setProjection( "clazz" ).list();
+         assertEquals( "Clazz projection works", 1, result.size() );
+ 
++        query = parser.parse("char1:[" + String.valueOf( Character.MIN_VALUE )  + " TO " + String.valueOf( Character.MAX_VALUE ) + "]");
++        result = session.createFullTextQuery(query).setProjection( "char1" ).list();
++        assertEquals( "Null elements should not be stored, CharacterBridge is not working", 0, result.size() );
++
++        query = parser.parse("char2:P");
++        result = session.createFullTextQuery(query).setProjection( "char2" ).list();
++        assertEquals( "Wrong results number, CharacterBridge is not working", 1, result.size() );
++        assertEquals( "Wrong result, CharacterBridge is not working", new Character('P'), (Character) ((Object[])result.get(0))[0]);
++
+ 		s.delete( s.get( Cloud.class, cloud.getId() ) );
+         tx.commit();
+         s.close();

@@ -1,0 +1,144 @@
+Index: src/main/java/org/hibernate/loader/BasicLoader.java
+===================================================================
+--- src/main/java/org/hibernate/loader/BasicLoader.java	(revision 19514)
++++ src/main/java/org/hibernate/loader/BasicLoader.java	(working copy)
+@@ -117,7 +117,7 @@
+ 
+ 		String[] suffixes = new String[length];
+ 		for ( int i = 0; i < length; i++ ) {
+-			suffixes[i] = Integer.toString( i + seed ) + "_";
++			suffixes[i] = (Integer.toString( i + seed ) + "_").intern();
+ 		}
+ 		return suffixes;
+ 	}
+Index: src/main/java/org/hibernate/loader/DefaultEntityAliases.java
+===================================================================
+--- src/main/java/org/hibernate/loader/DefaultEntityAliases.java	(revision 19514)
++++ src/main/java/org/hibernate/loader/DefaultEntityAliases.java	(working copy)
+@@ -39,6 +39,8 @@
+  */
+ public class DefaultEntityAliases implements EntityAliases {
+ 
++	private static final String[][] EMPTY_ARRAY_OF_ARRAY_OF_STRINGS = new String[0][];
++	
+ 	private final String[] suffixedKeyColumns;
+ 	private final String[] suffixedVersionColumn;
+ 	private final String[][] suffixedPropertyColumns;
+@@ -58,14 +60,14 @@
+ 			Map userProvidedAliases,
+ 			Loadable persister,
+ 			String suffix) {
+-		this.suffix = suffix;
++		this.suffix = suffix.intern();
+ 		this.userProvidedAliases = userProvidedAliases;
+ 
+ 		suffixedKeyColumns = determineKeyAlias( persister, suffix );
+ 		suffixedPropertyColumns = determinePropertyAliases( persister );
+ 		suffixedDiscriminatorColumn = determineDiscriminatorAlias( persister, suffix );
+ 		suffixedVersionColumn = determineVersionAlias( persister );
+-		rowIdAlias = Loadable.ROWID_ALIAS + suffix; // TODO: not visible to the user!
++		rowIdAlias = (Loadable.ROWID_ALIAS + suffix).intern(); // TODO: not visible to the user!
+ 	}
+ 
+ 	public DefaultEntityAliases(Loadable persister, String suffix) {
+@@ -95,7 +97,8 @@
+ 
+ 	private String determineDiscriminatorAlias(Loadable persister, String suffix) {
+ 		String alias = getUserProvidedAlias( "class", getDiscriminatorAlias( persister, suffix ) );
+-		return StringHelper.unquote( alias, persister.getFactory().getDialect() );
++		String discriminatorAlias =  StringHelper.unquote( alias, persister.getFactory().getDialect() );
++		return discriminatorAlias == null ? null : discriminatorAlias.intern();
+ 	}
+ 
+ 	private String[] determineVersionAlias(Loadable persister) {
+@@ -141,15 +144,20 @@
+ 	 */
+ 	public String[][] getSuffixedPropertyAliases(Loadable persister) {
+ 		final int size = persister.getPropertyNames().length;
+-		final String[][] suffixedPropertyAliases = new String[size][];
+-		for ( int j = 0; j < size; j++ ) {
+-			suffixedPropertyAliases[j] = getUserProvidedAliases(
+-					persister.getPropertyNames()[j],
+-					getPropertyAliases( persister, j )
+-			);
+-			suffixedPropertyAliases[j] = StringHelper.unquote( suffixedPropertyAliases[j], persister.getFactory().getDialect() );
+-			intern( suffixedPropertyAliases[j] );
+-		}			
++		String[][] suffixedPropertyAliases;
++		if ( size > 0 ) {
++			suffixedPropertyAliases = new String[size][];
++			for ( int j = 0; j < size; j++ ) {
++				suffixedPropertyAliases[j] = getUserProvidedAliases(
++						persister.getPropertyNames()[j],
++						getPropertyAliases( persister, j )
++				);
++				suffixedPropertyAliases[j] = StringHelper.unquote( suffixedPropertyAliases[j], persister.getFactory().getDialect() );
++				intern( suffixedPropertyAliases[j] );
++			}	
++		} else {
++			suffixedPropertyAliases = EMPTY_ARRAY_OF_ARRAY_OF_STRINGS;
++		}
+ 		return suffixedPropertyAliases;
+ 	}
+ 
+Index: src/main/java/org/hibernate/loader/JoinWalker.java
+===================================================================
+--- src/main/java/org/hibernate/loader/JoinWalker.java	(revision 19514)
++++ src/main/java/org/hibernate/loader/JoinWalker.java	(working copy)
+@@ -1010,7 +1010,7 @@
+ 			if ( !oj.isCollection() ) {
+ 				
+ 				persisters[i] = (Loadable) oj.getJoinable();
+-				aliases[i] = oj.getRHSAlias();
++				aliases[i] = oj.getRHSAlias().intern();
+ 				owners[i] = oj.getOwner(associations);
+ 				ownerAssociationTypes[i] = (EntityType) oj.getJoinableType();
+ 				i++;
+@@ -1028,7 +1028,7 @@
+ 	
+ 				if ( collPersister.isOneToMany() ) {
+ 					persisters[i] = (Loadable) collPersister.getElementPersister();
+-					aliases[i] = oj.getRHSAlias();
++					aliases[i] = oj.getRHSAlias().intern();
+ 					i++;
+ 				}
+ 			}
+Index: src/main/java/org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+--- src/main/java/org/hibernate/loader/hql/QueryLoader.java	(revision 19514)
++++ src/main/java/org/hibernate/loader/hql/QueryLoader.java	(working copy)
+@@ -177,7 +177,7 @@
+ 			entityAliases[i] = element.getClassAlias();
+ 			sqlAliasByEntityAlias.put( entityAliases[i], sqlAliases[i] );
+ 			// TODO should we just collect these like with the collections above?
+-			sqlAliasSuffixes[i] = ( size == 1 ) ? "" : Integer.toString( i ) + "_";
++			sqlAliasSuffixes[i] = ( size == 1 ) ? "" : (Integer.toString( i ) + "_").intern();
+ //			sqlAliasSuffixes[i] = element.getColumnAliasSuffix();
+ 			includeInSelect[i] = !element.isFetch();
+ 			if ( includeInSelect[i] ) {
+Index: src/main/java/org/hibernate/mapping/SimpleValue.java
+===================================================================
+--- src/main/java/org/hibernate/mapping/SimpleValue.java	(revision 19514)
++++ src/main/java/org/hibernate/mapping/SimpleValue.java	(working copy)
+@@ -115,7 +115,7 @@
+ 		return typeName;
+ 	}
+ 	public void setTypeName(String type) {
+-		this.typeName = type;
++		this.typeName = type.intern();
+ 	}
+ 	public void setTable(Table table) {
+ 		this.table = table;
+Index: src/main/java/org/hibernate/sql/Alias.java
+===================================================================
+--- src/main/java/org/hibernate/sql/Alias.java	(revision 19514)
++++ src/main/java/org/hibernate/sql/Alias.java	(working copy)
+@@ -105,7 +105,7 @@
+ 	public String[] toAliasStrings(String[] sqlIdentifiers) {
+ 		String[] aliases = new String[ sqlIdentifiers.length ];
+ 		for ( int i=0; i<sqlIdentifiers.length; i++ ) {
+-			aliases[i] = toAliasString(sqlIdentifiers[i]);
++			aliases[i] = toAliasString(sqlIdentifiers[i]).intern();
+ 		}
+ 		return aliases;
+ 	}

@@ -1,0 +1,218 @@
+Index: src/test/java/org/hibernate/envers/test/entities/manytomany/unidirectional/M2MIndexedListTargetNotAuditedEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/entities/manytomany/unidirectional/M2MIndexedListTargetNotAuditedEntity.java	(revision )
++++ src/test/java/org/hibernate/envers/test/entities/manytomany/unidirectional/M2MIndexedListTargetNotAuditedEntity.java	(revision )
+@@ -0,0 +1,85 @@
++package org.hibernate.envers.test.entities.manytomany.unidirectional;
++
++import org.hibernate.envers.Audited;
++import org.hibernate.envers.RelationTargetAuditMode;
++import org.hibernate.envers.test.entities.UnversionedStrTestEntity;
++
++import javax.persistence.*;
++import java.util.List;
++
++/**
++ * @author Vladimir Klyushnikov
++ */
++@Entity
++public class M2MIndexedListTargetNotAuditedEntity {
++
++    @Id
++    private Integer id;
++
++    @Audited
++    private String data;
++
++    @Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
++    @OrderColumn(name = "sortOrder")
++    @ManyToMany(fetch = FetchType.LAZY)
++    private List<UnversionedStrTestEntity> references;
++
++
++    public M2MIndexedListTargetNotAuditedEntity() {
++    }
++
++    public M2MIndexedListTargetNotAuditedEntity(Integer id, String data, List<UnversionedStrTestEntity> references) {
++        this.id = id;
++        this.data = data;
++        this.references = references;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getData() {
++        return data;
++    }
++
++    public void setData(String data) {
++        this.data = data;
++    }
++
++    public List<UnversionedStrTestEntity> getReferences() {
++        return references;
++    }
++
++    public void setReferences(List<UnversionedStrTestEntity> references) {
++        this.references = references;
++    }
++
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (o == null || getClass() != o.getClass()) return false;
++
++        M2MIndexedListTargetNotAuditedEntity that = (M2MIndexedListTargetNotAuditedEntity) o;
++
++        //noinspection RedundantIfStatement
++        if (data != null ? !data.equals(that.data) : that.data != null) return false;
++
++        return true;
++    }
++
++    @Override
++    public int hashCode() {
++        return data != null ? data.hashCode() : 0;
++    }
++
++
++    @Override
++    public String toString() {
++		return "M2MIndexedListTargetNotAuditedEntity(id = " + id + ", data = " + data + ")";
++    }
++}
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/initializor/ListCollectionInitializor.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/initializor/ListCollectionInitializor.java	(revision 15460)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/lazy/initializor/ListCollectionInitializor.java	(revision )
+@@ -23,15 +23,15 @@
+  */
+ package org.hibernate.envers.entities.mapper.relation.lazy.initializor;
+ 
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.Map;
+-
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.query.RelationQueryGenerator;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+ 
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Map;
++
+ /**
+  * Initializes a map.
+  * @author Adam Warski (adam at warski dot org)
+@@ -64,8 +64,10 @@
+     @SuppressWarnings({"unchecked"})
+     protected void addToCollection(List collection, Object collectionRow) {
+         Object elementData = ((List) collectionRow).get(elementComponentData.getComponentIndex());
+-        Object element = elementComponentData.getComponentMapper().mapToObjectFromFullMap(entityInstantiator,
+-                (Map<String, Object>) elementData, null, revision);
++        Object element = elementData instanceof Map ?
++                elementComponentData.getComponentMapper().mapToObjectFromFullMap(entityInstantiator,
++                (Map<String, Object>) elementData, null, revision)
++                : elementData ;
+ 
+         Object indexData = ((List) collectionRow).get(indexComponentData.getComponentIndex());
+         Object indexObj = indexComponentData.getComponentMapper().mapToObjectFromFullMap(entityInstantiator,
+Index: src/test/java/org/hibernate/envers/test/integration/manytomany/unidirectional/M2MRelationNotAuditedTarget.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/manytomany/unidirectional/M2MRelationNotAuditedTarget.java	(revision 18207)
++++ src/test/java/org/hibernate/envers/test/integration/manytomany/unidirectional/M2MRelationNotAuditedTarget.java	(revision )
+@@ -23,22 +23,23 @@
+  */
+ package org.hibernate.envers.test.integration.manytomany.unidirectional;
+ 
+-import java.util.Arrays;
+-import java.util.List;
+-import java.util.ArrayList;
+-
+-import javax.persistence.EntityManager;
+-
+ import org.hibernate.ejb.Ejb3Configuration;
+ import org.hibernate.envers.test.AbstractEntityTest;
+-import static org.hibernate.envers.test.tools.TestTools.*;
+ import org.hibernate.envers.test.entities.UnversionedStrTestEntity;
++import org.hibernate.envers.test.entities.manytomany.unidirectional.M2MIndexedListTargetNotAuditedEntity;
+ import org.hibernate.envers.test.entities.manytomany.unidirectional.M2MTargetNotAuditedEntity;
+-
+ import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+-import static org.testng.Assert.*;
+ 
++import javax.persistence.EntityManager;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.List;
++
++import static org.hibernate.envers.test.tools.TestTools.checkList;
++import static org.testng.Assert.assertEquals;
++import static org.testng.Assert.assertTrue;
++
+ /**
+  * A test for auditing a many-to-many relation where the target entity is not audited.
+  * @author Adam Warski
+@@ -49,10 +50,12 @@
+ 
+ 	private Integer uste1_id;
+ 	private Integer uste2_id;
++    private Integer itnae1_id;
+ 
+-	public void configure(Ejb3Configuration cfg) {
++    public void configure(Ejb3Configuration cfg) {
+ 		cfg.addAnnotatedClass(M2MTargetNotAuditedEntity.class);
+ 		cfg.addAnnotatedClass(UnversionedStrTestEntity.class);
++        cfg.addAnnotatedClass(M2MIndexedListTargetNotAuditedEntity.class);
+ 	}
+ 
+ 	@BeforeClass(dependsOnMethods = "init")
+@@ -78,11 +81,14 @@
+ 
+ 		M2MTargetNotAuditedEntity tnae1 = new M2MTargetNotAuditedEntity(1, "tnae1", new ArrayList<UnversionedStrTestEntity>());
+ 		M2MTargetNotAuditedEntity tnae2 = new M2MTargetNotAuditedEntity(2, "tnae2", new ArrayList<UnversionedStrTestEntity>());
++        M2MIndexedListTargetNotAuditedEntity itnae1 = new M2MIndexedListTargetNotAuditedEntity(1, "tnae1", Arrays.asList(uste1));
++
+         tnae2.getReferences().add(uste1);
+         tnae2.getReferences().add(uste2);
++
+-		em.persist(tnae1);
++        em.persist(tnae1);
+ 		em.persist(tnae2);
+-
++        em.persist(itnae1);
+ 		em.getTransaction().commit();
+ 
+ 		// Revision 2
+@@ -124,7 +130,8 @@
+ 		tnae2_id = tnae2.getId();
+ 		uste1_id = uste1.getId();
+ 		uste2_id = uste2.getId();
++        itnae1_id = itnae1.getId();
+-	}
++    }
+ 
+ 	@Test
+ 	public void testRevisionsCounts() {
+@@ -165,4 +172,11 @@
+ 		assertTrue(checkList(rev3.getReferences()));
+ 		assertTrue(checkList(rev4.getReferences(), uste1));
+ 	}
++
++
++    @Test
++    public void testIndexedList() throws Exception {
++        M2MIndexedListTargetNotAuditedEntity rev = getAuditReader().find(M2MIndexedListTargetNotAuditedEntity.class, itnae1_id, 1);
++        assertEquals(1, rev.getReferences().size());
+-}
++    }
++}

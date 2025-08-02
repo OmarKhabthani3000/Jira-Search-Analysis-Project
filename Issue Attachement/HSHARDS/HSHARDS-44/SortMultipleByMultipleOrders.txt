@@ -1,0 +1,139 @@
+Index: /HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java
+===================================================================
+--- /HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java	(revision 3880)
++++ /HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java	(working copy)
+@@ -153,9 +153,9 @@
+       result = new DistinctExitOperation(distinct).apply(result);
+     }
+ 
+-    for(Order order : orders) {
+-      result = new OrderExitOperation(order).apply(result);
+-    }
++//    for(Order order : orders) {
++      result = new OrderExitOperation(orders).apply(result);
++//    }
+     if (firstResult != null) {
+       result = new FirstResultExitOperation(firstResult).apply(result);
+     }
+
+Index: /HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java
+===================================================================
+--- /HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java	(revision 3880)
++++ /HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java	(working copy)
+@@ -21,6 +21,7 @@
+ import org.hibernate.criterion.Order;
+ import org.hibernate.shards.util.Preconditions;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.Comparator;
+ import java.util.List;
+@@ -30,9 +31,22 @@
+  */
+ public class OrderExitOperation implements ExitOperation {
+ 
+-  private final Order order;
+-  private final String propertyName;
++//  private final Order order;
++//  private final String propertyName;
++    private final List<OrderProperty> orderProperties = new ArrayList<OrderProperty>();
+ 
++  public OrderExitOperation(List<Order> orders) {
++      for (Order order : orders) {
++    //TODO(maulik) support Ignore case!
++    Preconditions.checkState(order.toString().endsWith("asc") ||
++                             order.toString().endsWith("desc"));
++
++    orderProperties.add(new OrderProperty(getSortingProperty(order),order.toString().endsWith("asc")));
++//    this.order = order;
++//    this.propertyName = getSortingProperty(order);
++      }
++  }
++  
+   public OrderExitOperation(Order order) {
+     //TODO(maulik) support Ignore case!
+     Preconditions.checkState(order.toString().endsWith("asc") ||
+@@ -38,8 +52,9 @@
+     Preconditions.checkState(order.toString().endsWith("asc") ||
+                              order.toString().endsWith("desc"));
+ 
+-    this.order = order;
+-    this.propertyName = getSortingProperty(order);
++    orderProperties.add(new OrderProperty(getSortingProperty(order),order.toString().endsWith("asc")));
++//    this.order = order;
++//    this.propertyName = getSortingProperty(order);
+   }
+ 
+   public List<Object> apply(List<Object> results) {
+@@ -46,15 +61,28 @@
+     List<Object> nonNullList = ExitOperationUtils.getNonNullList(results);
+     Comparator<Object> comparator = new Comparator<Object>() {
+       public int compare(Object o1, Object o2) {
++          for (OrderProperty ordProp : orderProperties) {
+         if (o1 == o2) {
+           return 0;
+         }
+-        Comparable<Object> o1Value = ExitOperationUtils.getPropertyValue(o1, propertyName);
+-        Comparable<Object> o2Value = ExitOperationUtils.getPropertyValue(o2, propertyName);
++        Comparable<Object> o1Value = ExitOperationUtils.getPropertyValue(o1, ordProp.getProperty());
++        Comparable<Object> o2Value = ExitOperationUtils.getPropertyValue(o2, ordProp.getProperty());
+         if (o1Value == null) {
+           return -1;
+         }
+-        return o1Value.compareTo(o2Value);
++        int cmp =  0;
++        if (ordProp.isAsc()){
++            cmp = o1Value.compareTo(o2Value);
++        } else {
++            cmp = o1Value.compareTo(o2Value)*(-1);
++        }
++        if (cmp == 0){
++            continue;
++        } else {
++            return cmp;
++        }
++          }
++          return 0;
+       }
+     };
+ 
+@@ -59,9 +87,9 @@
+     };
+ 
+     Collections.sort(nonNullList, comparator);
+-    if (order.toString().endsWith("desc")) {
+-      Collections.reverse(nonNullList);
+-    }
++//    if (order.toString().endsWith("desc")) {
++//      Collections.reverse(nonNullList);
++//    }
+ 
+     return nonNullList;
+   }
+@@ -75,5 +103,26 @@
+     return str.substring(0, str.indexOf(' '));
+   }
+ 
++  private class OrderProperty { 
++      private final String property;
++      private final boolean asc;
++      
++      private OrderProperty(String propety, boolean asc){
++          this.property = propety;
++          this.asc = asc;
++      }
++      public boolean isAsc()
++    {
++        return asc;
++    }
++
++    public String getProperty()
++    {
++        return property;
++    }
++
++      
++  }
++  
+   
+ }

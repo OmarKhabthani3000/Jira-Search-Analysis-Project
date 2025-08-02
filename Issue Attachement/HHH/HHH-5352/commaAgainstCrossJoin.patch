@@ -1,0 +1,82 @@
+Index: OrphanTest.java
+===================================================================
+--- OrphanTest.java	(revision 20876)
++++ OrphanTest.java	(working copy)
+@@ -11,23 +11,76 @@
+ import org.hibernate.testing.junit.functional.FunctionalTestClassTestSuite;
+ import org.hibernate.util.SerializationHelper;
+ 
++import org.hibernate.hql.ast.SqlGenerator;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
+ /**
+  * @author Gavin King
+  */
+ public class OrphanTest extends FunctionalTestCase {
++
++	private static final Logger log = LoggerFactory.getLogger( OrphanTest.class );
+ 	
+ 	public OrphanTest(String str) {
+ 		super(str);
+ 	}
+ 
+ 	public String[] getMappings() {
+-		return new String[] { "orphan/Product.hbm.xml" };
++		return new String[] { "orphan/Product.hbm.xml", "orphan/User.hbm.xml", "orphan/Mail.hbm.xml" };
+ 	}
+ 
+ 	public static Test suite() {
+ 		return new FunctionalTestClassTestSuite( OrphanTest.class );
+ 	}
+ 	
++	public void testCommaAgainstCrossJoin() {
++		Session session = openSession();
++		Transaction t = session.beginTransaction();
++		Product prod1 = new Product();
++		prod1.setName("prod1");
++		session.persist(prod1);
++		Product prod2 = new Product();
++		prod2.setName("prod2");
++		session.persist(prod2);
++		User user = new User();
++		user.setUserid("user");
++		session.persist(user);
++		t.commit();
++		session.close();
++		
++				
++		SqlGenerator.REGRESSION_STYLE_CROSS_JOINS = true;
++		
++		session = openSession();
++		t = session.beginTransaction();
++		log.info("Running with comma");
++		
++		//when REGRESSION_STYLE_CROSS_JOINS is true, commas in hql are translated to commas is SQl and this will work as expected.
++		//the condition "where 1=1" is added so the queries are different, otherwise the next one will be taken from cache.
++		
++		assertEquals(2, session.createQuery("from Product, Mail m right join m.user where 1=1").list().size());						
++		
++		t.commit();
++		session.close();
++		
++		SqlGenerator.REGRESSION_STYLE_CROSS_JOINS = false;
++		
++		session = openSession();
++		t = session.beginTransaction();
++		
++		//when REGRESSION_STYLE_CROSS_JOINS is true, commas in hql are translated a dialect specific string, usually "cross join"
++		//this fails on H2 with "unsupported outer join condition" - it seems H2 doesn't even support this
++		//on MySQL and MS Sql the assert will fail because the query only returns one result
++		
++		log.info("Running with cross join");			
++		assertEquals(2, session.createQuery("from Product, Mail m right join m.user where 2=2").list().size());						
++		
++		t.commit();
++		session.close();
++	}
++	
+ 	public void testOrphanDeleteOnDelete() {
+ 		Session session = openSession();
+ 		Transaction t = session.beginTransaction();

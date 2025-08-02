@@ -1,0 +1,117 @@
+Only in src/net/sf/hibernate/impl/: .nbattrs
+diff -u ../original/hibernate-2.1/src/net/sf/hibernate/impl/CriteriaImpl.java src/net/sf/hibernate/impl/CriteriaImpl.java
+--- ../original/hibernate-2.1/src/net/sf/hibernate/impl/CriteriaImpl.java	2003-12-17 14:07:12.000000000 +1000
++++ src/net/sf/hibernate/impl/CriteriaImpl.java	2004-01-06 15:03:41.000000000 +1000
+@@ -172,6 +172,30 @@
+ 		this.session = session;
+ 		this.classByAlias.put(Criteria.ROOT_ALIAS, persistentClass);
+ 	}
++    
++    /** 
++     * Ctor that will copy all the internal attributes of the given CrtieriaImpl
++     * except it will alter the root persistenct class type to be the given one.
++     */
++    public CriteriaImpl(Class _persistentClass, CriteriaImpl original) {
++        this.persistentClass = _persistentClass;
++
++        this.classByAlias = original.classByAlias;
++        this.classByAlias.put(Criteria.ROOT_ALIAS, _persistentClass);
++        
++        this.criteria = original.criteria;
++        this.orderings = original.orderings;
++        this.fetchModes = original.fetchModes;
++        this.associationPathByAlias = original.associationPathByAlias;
++        this.aliasByAssociationPath = original.aliasByAssociationPath;
++        this.lockModes = original.lockModes;
++        this.maxResults = original.maxResults;
++        this.firstResult = original.firstResult;
++        this.timeout = original.timeout;
++        this.session = original.session;
++        this.returnMap = original.returnMap;
++        this.counter = original.counter;
++    }
+ 	
+ 	public List list() throws HibernateException {
+ 		return session.find(this);
+diff -u ../original/hibernate-2.1/src/net/sf/hibernate/impl/SessionImpl.java src/net/sf/hibernate/impl/SessionImpl.java
+--- ../original/hibernate-2.1/src/net/sf/hibernate/impl/SessionImpl.java	2003-12-17 14:07:12.000000000 +1000
++++ src/net/sf/hibernate/impl/SessionImpl.java	2004-01-06 15:00:14.000000000 +1000
+@@ -85,9 +85,11 @@
+ import net.sf.hibernate.util.EmptyIterator;
+ import net.sf.hibernate.util.IdentityMap;
+ import net.sf.hibernate.util.JoinedIterator;
++import net.sf.hibernate.util.ReflectHelper;
+ import net.sf.hibernate.util.StringHelper;
+ 
+ import org.apache.commons.collections.SequencedHashMap;
++import org.apache.commons.lang.StringUtils;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
+@@ -3425,8 +3427,64 @@
+ 		return new CriteriaImpl(persistentClass, this);
+ 	}
+ 
+-
+-	public List find(CriteriaImpl criteria) throws HibernateException {
++    public List find(CriteriaImpl criteria) throws HibernateException {
++        return polymorphicFind(criteria);
++    }
++    
++    private Class getImportedClass(String name) {
++        log.debug("getImportedClass");
++        try {
++            return ReflectHelper.classForName( factory.getImportedClassName(name) );
++        }
++        catch (Throwable e) {
++            return null;
++        }
++    }
++    
++    public List polymorphicFind(CriteriaImpl criteria) throws HibernateException {
++        Class clazz= getImportedClass(criteria.getCriteriaClass().getName());
++        if( clazz == null ){
++            // I dunno what to do here, so revert to old behaviour
++            return doOldFind(criteria);
++        }
++        
++        String[] implementors = factory.getImplementors(clazz);
++        if( implementors == null ){
++            // I dunno what to do here, so revert to old behaviour
++            return doOldFind(criteria);
++        }
++        
++        List results = new ArrayList();
++        for( int i=0; i < implementors.length; i++ ){
++            
++            Class newCriteriaClazz = getImportedClass(implementors[i]); 
++            
++            CriteriaLoader loader = 
++                new CriteriaLoader(
++                    getOuterJoinLoadable( newCriteriaClazz ), 
++                    factory, 
++                    new CriteriaImpl(newCriteriaClazz, criteria) );
++            
++            autoFlushIfRequired( loader.getQuerySpaces() );
++            
++            dontFlushFromFind++;
++            try {
++                results.add( loader.list(this) );
++            }
++            catch (SQLException sqle) {
++                throw new JDBCException(sqle);
++            }
++            finally {
++                dontFlushFromFind--;
++            }
++            
++        }
++        return results;
++        
++    }
++    
++    /** The old find method **/
++    private List doOldFind(CriteriaImpl criteria) throws HibernateException {
+ 
+ 		if ( log.isTraceEnabled() ) log.trace( "find by criteria: " + criteria );
+ 

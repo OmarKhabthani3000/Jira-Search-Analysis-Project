@@ -1,0 +1,82 @@
+Index: testsuite/src/test/java/org/hibernate/test/proxy/Identifiable.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/proxy/Identifiable.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/proxy/Identifiable.java	(revision 0)
+@@ -0,0 +1,7 @@
++package org.hibernate.test.proxy;
++
++public interface Identifiable<S extends Number> {
++    public S getId();
++
++    public void setId(S id);
++}
+Index: testsuite/src/test/java/org/hibernate/test/proxy/ProxyTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/proxy/ProxyTest.java	(revision 21102)
++++ testsuite/src/test/java/org/hibernate/test/proxy/ProxyTest.java	(working copy)
+@@ -222,7 +222,36 @@
+ 		s.close();
+ 	}
+ 
+-	public void testSubsequentNonExistentProxyAccess() {
++    public void testReferenceProxy() {
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        Container container = new Container( "container" );
++        container.setOwner( new Owner( "owner" ) );
++        container.setInfo( new Info( "blah blah blah" ) );
++        s.save( container );
++        t.commit();
++        s.close();
++
++        s = openSession();
++        t = s.beginTransaction();
++        Container c = ( Container ) s.load( Container.class, container.getId() );
++
++        Info referenceProxy = c.getInfo();
++        assertFalse( Hibernate.isInitialized(referenceProxy) );
++
++        referenceProxy.getId();
++        assertFalse( Hibernate.isInitialized(referenceProxy) );
++
++        ((Identifiable)referenceProxy).getId();
++        assertFalse( Hibernate.isInitialized(referenceProxy) );
++
++        s.delete( c );
++
++        t.commit();
++        s.close();
++    }
++
++  public void testSubsequentNonExistentProxyAccess() {
+ 		Session s = openSession();
+ 		Transaction t = s.beginTransaction();
+ 
+Index: testsuite/src/test/java/org/hibernate/test/proxy/DataPoint.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/proxy/DataPoint.hbm.xml	(revision 21102)
++++ testsuite/src/test/java/org/hibernate/test/proxy/DataPoint.hbm.xml	(working copy)
+@@ -27,8 +27,8 @@
+     </class>
+ 
+     <class name="Info">
+-        <id name="id">
+-            <generator class="increment"/>
++        <id name="id" type="long" column="INFO_ID">
++            <generator class="native"/>
+         </id>
+         <property name="details"/>
+     </class>
+Index: testsuite/src/test/java/org/hibernate/test/proxy/Info.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/proxy/Info.java	(revision 21102)
++++ testsuite/src/test/java/org/hibernate/test/proxy/Info.java	(working copy)
+@@ -5,7 +5,7 @@
+  *
+  * @author Steve Ebersole
+  */
+-public class Info {
++public class Info implements Identifiable<Long> {
+ 	private Long id;
+ 	private String details;
+ 

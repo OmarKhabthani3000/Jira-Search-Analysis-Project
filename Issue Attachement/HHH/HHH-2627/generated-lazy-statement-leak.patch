@@ -1,0 +1,116 @@
+--- Hibernate3/src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 11544)
++++ Hibernate3/src/org/hibernate/persister/entity/AbstractEntityPersister.java	Mon May 21 18:19:22 CDT 2007
+@@ -776,31 +776,35 @@
+ 
+ 			Object result = null;
+ 			PreparedStatement ps = null;
+-			ResultSet rs = null;
+ 			try {
+ 				final String lazySelect = getSQLLazySelectString();
++				ResultSet rs = null;
++				try {
+-				if ( lazySelect != null ) {
+-					// null sql means that the only lazy properties
+-					// are shared PK one-to-one associations which are
+-					// handled differently in the Type#nullSafeGet code...
+-					ps = session.getBatcher().prepareSelectStatement(lazySelect);
+-					getIdentifierType().nullSafeSet( ps, id, 1, session );
++					if ( lazySelect != null ) {
++						// null sql means that the only lazy properties
++						// are shared PK one-to-one associations which are
++						// handled differently in the Type#nullSafeGet code...
++						ps = session.getBatcher().prepareSelectStatement(lazySelect);
++						getIdentifierType().nullSafeSet( ps, id, 1, session );
+-					rs = session.getBatcher().getResultSet( ps );
++						rs = ps.executeQuery();
+-					rs.next();
+-				}
+-				final Object[] snapshot = entry.getLoadedState();
+-				for ( int j = 0; j < lazyPropertyNames.length; j++ ) {
+-					Object propValue = lazyPropertyTypes[j].nullSafeGet( rs, lazyPropertyColumnAliases[j], session, entity );
+-					if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
+-						result = propValue;
+-					}
+-				}
+-			}
+-			finally {
+-				if ( rs != null ) {
++						rs.next();
++					}
++					final Object[] snapshot = entry.getLoadedState();
++					for ( int j = 0; j < lazyPropertyNames.length; j++ ) {
++						Object propValue = lazyPropertyTypes[j].nullSafeGet( rs, lazyPropertyColumnAliases[j], session, entity );
++						if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
++							result = propValue;
++						}
++					}
++				}
++				finally {
++					if ( rs != null ) {
+-					session.getBatcher().closeQueryStatement( ps, rs );
++						rs.close();
+-				}
++					}
+-				else if ( ps != null ) {
++				}
++			}
++			finally {
++				if ( ps != null ) {
+ 					session.getBatcher().closeStatement( ps );
+ 				}
+ 			}
+@@ -3694,28 +3698,34 @@
+ 
+ 		try {
+ 			PreparedStatement ps = session.getBatcher().prepareSelectStatement( selectionSQL );
+-			ResultSet rs = null;
+ 			try {
+ 				getIdentifierType().nullSafeSet( ps, id, 1, session );
+-				rs = session.getBatcher().getResultSet( ps );
++				ResultSet rs = ps.executeQuery();
++				try {
+-				if ( !rs.next() ) {
+-					throw new HibernateException(
+-							"Unable to locate row for retrieval of generated properties: " +
+-							MessageHelper.infoString( this, id, getFactory() )
+-						);
+-				}
+-				for ( int i = 0; i < getPropertySpan(); i++ ) {
+-					if ( includeds[i] != ValueInclusion.NONE ) {
+-						Object hydratedState = getPropertyTypes()[i].hydrate( rs, getPropertyAliases( "", i ), session, entity );
+-						state[i] = getPropertyTypes()[i].resolve( hydratedState, session, entity );
+-						setPropertyValue( entity, i, state[i], session.getEntityMode() );
+-					}
+-				}
+-			}
+-			finally {
++					if ( !rs.next() ) {
++						throw new HibernateException(
++								"Unable to locate row for retrieval of generated properties: " +
++								MessageHelper.infoString( this, id, getFactory() )
++							);
++					}
++					for ( int i = 0; i < getPropertySpan(); i++ ) {
++						if ( includeds[i] != ValueInclusion.NONE ) {
++							Object hydratedState = getPropertyTypes()[i].hydrate( rs, getPropertyAliases( "", i ), session, entity );
++							state[i] = getPropertyTypes()[i].resolve( hydratedState, session, entity );
++							setPropertyValue( entity, i, state[i], session.getEntityMode() );
++						}
++					}
++				}
++				finally {
+-				session.getBatcher().closeQueryStatement( ps, rs );
++					if ( rs != null ) {
++						rs.close();
+-			}
+-		}
++					}
++				}
++			}
++			finally {
++				session.getBatcher().closeStatement( ps );
++			}
++		}
+ 		catch( SQLException sqle ) {
+ 			JDBCExceptionHelper.convert(
+ 					getFactory().getSQLExceptionConverter(),

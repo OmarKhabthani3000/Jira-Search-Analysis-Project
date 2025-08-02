@@ -1,0 +1,349 @@
+Index: testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/HHH5559Test.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/HHH5559Test.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/HHH5559Test.java	(revision 0)
+@@ -0,0 +1,214 @@
++package org.hibernate.test.annotations.onetoone.hhh5559;
++
++import java.util.List;
++
++import org.hibernate.Query;
++import org.hibernate.Session;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.test.annotations.TestCase;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++/**
++ * @author Erik-Berndt Scheper
++ */
++public class HHH5559Test extends TestCase {
++	public static final Logger log = LoggerFactory.getLogger(HHH5559Test.class);
++
++	/**
++	 * Test that one-to-one orphan removal works by updating a reference.
++	 * 
++	 * @throws Exception
++	 */
++	public void testOneToOneOrphanRemovalUpdateReference() throws Exception {
++		Session session;
++		Query query;
++
++		session = openSession();
++		session.beginTransaction();
++
++		OwnerChild ownerChild1 = new OwnerChild();
++		ownerChild1.setName("child1");
++
++		Owner owner = new Owner();
++		owner.setName("owner");
++		owner.setOwnerChild(ownerChild1);
++
++		try {
++			session.persist(owner);
++			session.getTransaction().commit();
++		} finally {
++			session.close();
++		}
++
++		Long idOwner = owner.getId();
++		Long idChild1 = ownerChild1.getId();
++
++		session = openSession();
++		session.beginTransaction();
++
++		// update the reference
++		OwnerChild ownerChild2 = new OwnerChild();
++		ownerChild2.setName("child2");
++		owner.setOwnerChild(ownerChild2);
++
++		try {
++			session.saveOrUpdate(owner);
++			session.getTransaction().commit();
++		} finally {
++			session.close();
++		}
++
++		Long idChild2 = ownerChild2.getId();
++
++		// verify: idOwner, idChild1 and idChild2 not null
++		// verify: idChild1 and idChild2 not equal to each other
++		assertNotNull(idOwner);
++		assertNotNull(idChild1);
++		assertNotNull(idChild2);
++		assertTrue(!idChild1.equals(idChild2));
++
++		// verify: owner and child2 exist in db;
++		// owner.getOwnerChild.equals(child2)
++		session = openSession();
++		session.beginTransaction();
++		query = session
++				.createQuery("select o from Owner o where o.id = :idOwner");
++		query.setLong("idOwner", idOwner);
++		Owner foundOwner = (Owner) query.uniqueResult();
++		assertNotNull(foundOwner);
++		assertNotNull(foundOwner.getOwnerChild());
++		assertEquals(ownerChild2.getName(), foundOwner.getOwnerChild()
++				.getName());
++
++		log.error("ownerChild2 : " + ownerChild2.getClass());
++		log.error("foundOwner.getOwnerChild() : "
++				+ foundOwner.getOwnerChild().getClass());
++
++		try {
++			session.getTransaction().rollback();
++		} finally {
++			session.close();
++		}
++
++		// verify: orphaned child1 has been removed (i.e. list should be empty)
++		session = openSession();
++		session.beginTransaction();
++		query = session
++				.createQuery("select c from OwnerChild c where c.id in(:idChild1)");
++		query.setLong("idChild1", idChild1);
++
++		try {
++			@SuppressWarnings("unchecked")
++			List<OwnerChild> childList = query.list();
++
++			log.error("found ownerchilds = " + childList);
++			// list should be empty
++			assertTrue(childList.size() == 0);
++
++		} finally {
++			session.getTransaction().rollback();
++			session.close();
++		}
++
++	}
++
++	/**
++	 * Test that one-to-one orphan removal works by setting the reference to
++	 * {@code null}.
++	 * 
++	 * @throws Exception
++	 */
++	public void testOneToOneOrphanRemovalSetNull() throws Exception {
++		Session session;
++		Query query;
++
++		session = openSession();
++		session.beginTransaction();
++
++		OwnerChild ownerChild1 = new OwnerChild();
++		ownerChild1.setName("child1");
++
++		Owner owner = new Owner();
++		owner.setName("owner");
++		owner.setOwnerChild(ownerChild1);
++
++		try {
++			session.persist(owner);
++			session.getTransaction().commit();
++		} finally {
++			session.close();
++		}
++
++		Long idOwner = owner.getId();
++		Long idChild1 = ownerChild1.getId();
++
++		// set the reference to null
++		session = openSession();
++		session.beginTransaction();
++
++		try {
++			owner = (Owner) session.load(Owner.class, idOwner);
++			owner.setOwnerChild(null);
++			session.saveOrUpdate(owner);
++			session.getTransaction().commit();
++		} finally {
++			session.close();
++		}
++
++		// verify: idOwner, idChild1 and idChild2 not null
++		// verify: idChild1 and idChild2 not equal to each other
++		assertNotNull(idOwner);
++		assertNotNull(idChild1);
++
++		// verify: owner and child2 exist in db;
++		// owner.getOwnerChild.equals(child2)
++		session = openSession();
++		session.beginTransaction();
++		query = session
++				.createQuery("select o from Owner o where o.id = :idOwner");
++		query.setLong("idOwner", idOwner);
++		Owner foundOwner = (Owner) query.uniqueResult();
++		assertNotNull(foundOwner);
++		assertNull(foundOwner.getOwnerChild());
++
++		try {
++			session.getTransaction().rollback();
++		} finally {
++			session.close();
++		}
++
++		// verify: orphaned child1 has been removed
++		// verify: orphaned child1 has been removed (i.e. list should be empty)
++		session = openSession();
++		session.beginTransaction();
++		query = session
++				.createQuery("select c from OwnerChild c where c.id in(:idChild1)");
++		query.setLong("idChild1", idChild1);
++
++		try {
++			@SuppressWarnings("unchecked")
++			List<OwnerChild> childList = query.list();
++
++			log.error("found ownerchilds = " + childList);
++			// list should be empty
++			assertTrue(childList.size() == 0);
++
++		} finally {
++			session.getTransaction().rollback();
++			session.close();
++		}
++
++	}
++
++	@Override
++	protected void configure(Configuration cfg) {
++		super.configure(cfg);
++	}
++
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] { Owner.class, OwnerChild.class, };
++	}
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/Owner.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/Owner.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/Owner.java	(revision 0)
+@@ -0,0 +1,67 @@
++package org.hibernate.test.annotations.onetoone.hhh5559;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.OneToOne;
++import javax.persistence.Table;
++import javax.persistence.Version;
++
++@Entity
++@Table
++public class Owner {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++
++	@Version
++	private Integer version;
++
++	@Column
++	private String name;
++
++	@OneToOne(fetch = FetchType.LAZY, cascade = CascadeType.ALL, optional = true, orphanRemoval = true)
++	@JoinColumn(name = "OCD_ID")
++	private OwnerChild ownerChild;
++
++	public Owner() {
++	}
++
++	public Long getId() {
++		return this.id;
++	}
++
++	public Integer getVersion() {
++		return version;
++	}
++
++	public String getName() {
++		return this.name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public OwnerChild getOwnerChild() {
++		return this.ownerChild;
++	}
++
++	public void setOwnerChild(OwnerChild ownerChild) {
++		this.ownerChild = ownerChild;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++		output.append("Owner {");
++		output.append(" name = \"").append(this.name).append("\", ");
++		output.append(" ownerChild = \"").append(this.ownerChild).append("\"}");
++		return output.toString();
++	}
++}
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/OwnerChild.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/OwnerChild.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/annotations/onetoone/hhh5559/OwnerChild.java	(revision 0)
+@@ -0,0 +1,51 @@
++package org.hibernate.test.annotations.onetoone.hhh5559;
++
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.Table;
++import javax.persistence.Version;
++
++@Entity
++@Table
++public class OwnerChild {
++
++	@Id
++	@GeneratedValue
++	private Long id;
++
++	@Version
++	private Integer version;
++
++	@Column
++	private String name;
++
++	public OwnerChild() {
++	}
++
++	public Long getId() {
++		return this.id;
++	}
++
++	public Integer getVersion() {
++		return version;
++	}
++
++	public String getName() {
++		return this.name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	@Override
++	public String toString() {
++		StringBuilder output = new StringBuilder();
++		output.append("OwnerChild {");
++		output.append(" name = \"").append(this.name).append("\"}");
++		return output.toString();
++	}
++
++}
+\ No newline at end of file

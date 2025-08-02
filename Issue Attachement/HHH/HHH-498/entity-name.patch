@@ -1,0 +1,125 @@
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.77
+diff -u -r1.77 SessionFactoryImpl.java
+--- src/org/hibernate/impl/SessionFactoryImpl.java	18 May 2005 13:07:10 -0000	1.77
++++ src/org/hibernate/impl/SessionFactoryImpl.java	18 May 2005 21:05:26 -0000
+@@ -114,6 +114,7 @@
+ 	private final String uuid;
+ 
+ 	private final transient Map entityPersisters;
++	private final transient Map classEntity;
+ 	private final transient Map classMetadata;
+ 	private final transient Map collectionPersisters;
+ 	private final transient Map collectionMetadata;
+@@ -191,6 +192,7 @@
+ 
+ 		Map caches = new HashMap();
+ 		entityPersisters = new HashMap();
++		classEntity = new HashMap();
+ 		Map classMeta = new HashMap();
+ 		classes = cfg.getClassMappings();
+ 		while ( classes.hasNext() ) {
+@@ -213,6 +215,35 @@
+ 			EntityPersister cp = PersisterFactory.createClassPersister(model, cache, this, mapping);
+ 			entityPersisters.put( model.getEntityName(), cp );
+ 			classMeta.put( model.getEntityName(), cp.getClassMetadata() );
++			
++			// When using entity-name to set a different name of the entity than the
++			// class name it is neccesary to build a map class-name -> entity to be
++			// able to look it up later. However, if there are multiple entity names
++			// mapped to the same class it is not possibly to find an unique entity
++			// by the class name. In that case the entity name must be given as parameter 
++			// to methods lite load, save etc
++			
++			// First check if there is already exsist a mappting for this class
++			Object obj = classEntity.get(model.getClassName());
++			if(obj == null) {
++				// New entry
++				classEntity.put( model.getClassName(), model.getEntityName() );
++			} else {
++				// There is already a map for this class. Store the different mappings
++				// in a collection to be able to throw an exception with a relevant
++				// message later
++				if(obj instanceof java.util.Collection) {
++					// There is already a Collection
++					((java.util.Collection)obj).add(model.getEntityName());
++				} else {
++					// Add the new entity name and the previous to a newly 
++					// created Collection which is stored in the map
++					java.util.Collection c = new java.util.ArrayList();
++					c.add(obj);
++					c.add(model.getEntityName());
++					classEntity.put( model.getClassName(), c);
++				}
++			}
+ 		}
+ 		classMetadata = Collections.unmodifiableMap(classMeta);
+ 
+@@ -573,6 +604,34 @@
+ 		return result;
+ 	}
+ 
++	/**
++	 * Look up Entity name as specified by mapping attribute entity-name by using
++	 * the classname it maps to
++	 * 
++	 * @param className
++	 * @return The corresponding Entity name
++	 * @throws MappingException Thrown if this class name has multiple entity name mappings
++	 */
++	public String getEntityNameByClassName(String className) throws MappingException {
++		Object obj = classEntity.get(className);
++		if(obj instanceof java.util.Collection) {
++			StringBuffer msg = new StringBuffer();
++			msg.append("There are multiple entity names mapping to the class ");
++			msg.append(className);
++			msg.append(". Please use the specific entity name as parameter to methods like Session.load(), Session.save() etc. ");
++			msg.append("The entity names mapped to this class name are: ");
++			Iterator it = ((java.util.Collection) obj).iterator();
++			String first = (String) it.next();
++			msg.append(first);
++			while(it.hasNext()){
++				msg.append(", ");
++				msg.append((String) it.next());
++			}
++			throw new MappingException(msg.toString());
++		}
++		return (String) classEntity.get(className);
++	}
++	
+ 	public CollectionPersister getCollectionPersister(String role) throws MappingException {
+ 		CollectionPersister result = (CollectionPersister) collectionPersisters.get(role);
+ 		if (result==null) {
+Index: src/org/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.138
+diff -u -r1.138 SessionImpl.java
+--- src/org/hibernate/impl/SessionImpl.java	11 May 2005 15:26:03 -0000	1.138
++++ src/org/hibernate/impl/SessionImpl.java	16 May 2005 22:24:57 -0000
+@@ -593,7 +593,11 @@
+ 	}
+ 
+ 	public Object load(Class entityClass, Serializable id) throws HibernateException {
+-		return load( entityClass.getName(), id );
++		String entityName = factory.getEntityNameByClassName(entityClass.getName());
++		if(entityName == null) {
++			entityName = entityClass.getName();
++		}
++		return load( entityName, id );
+ 	}
+ 
+ 	public Object load(String entityName, Serializable id) throws HibernateException {
+@@ -1471,7 +1475,11 @@
+ 				return ( (Element) object ).getName();
+ 			}
+ 			else {
+-				entity = object.getClass().getName();
++				String className = object.getClass().getName();
++				entity = factory.getEntityNameByClassName(className);
++				if(entity == null) {
++					entity = className;
++				}
+ 			}
+ 		}
+ 		return entity;

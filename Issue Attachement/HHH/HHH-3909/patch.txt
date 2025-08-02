@@ -1,0 +1,106 @@
+Index: FieldInterceptionHelper.java
+===================================================================
+--- FieldInterceptionHelper.java	(revision 16526)
++++ FieldInterceptionHelper.java	(working copy)
+@@ -24,6 +24,9 @@
+  */
+ package org.hibernate.intercept;
+ 
++import net.sf.cglib.transform.impl.InterceptFieldEnabled;
++
++import org.hibernate.bytecode.javassist.FieldHandled;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.intercept.cglib.CGLIBHelper;
+ import org.hibernate.intercept.javassist.JavassistHelper;
+@@ -44,39 +47,30 @@
+ 	// Another option here would be to remove the Hibernate.isPropertyInitialized()
+ 	// method and have the users go through the SessionFactory to get this information.
+ 
++	private static final boolean CGLIB_AVAILABLE = classExists("net.sf.cglib.transform.impl.InterceptFieldEnabled");
++	private static final boolean JAVASSIST_AVAILABLE = classExists("org.hibernate.bytecode.javassist.FieldHandled");
++
+ 	private FieldInterceptionHelper() {
+ 	}
+ 
+ 	public static boolean isInstrumented(Class entityClass) {
+-		Class[] definedInterfaces = entityClass.getInterfaces();
+-		for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-			if ( "net.sf.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() )
+-			     || "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-				return true;
+-			}
+-		}
+-		return false;
++		return (JAVASSIST_AVAILABLE && FieldHandled.class.isAssignableFrom(entityClass))
++				|| (CGLIB_AVAILABLE && InterceptFieldEnabled.class.isAssignableFrom(entityClass));
+ 	}
+ 
+ 	public static boolean isInstrumented(Object entity) {
+-		return entity != null && isInstrumented( entity.getClass() );
++		return (JAVASSIST_AVAILABLE && entity instanceof FieldHandled)
++				|| (CGLIB_AVAILABLE && entity instanceof InterceptFieldEnabled);
+ 	}
+ 
+ 	public static FieldInterceptor extractFieldInterceptor(Object entity) {
+-		if ( entity == null ) {
+-			return null;
++		if (JAVASSIST_AVAILABLE && entity instanceof FieldHandled) {
++			// we have a Javassist enhanced entity
++			return JavassistHelper.extractFieldInterceptor( entity );
++		} else if (CGLIB_AVAILABLE && entity instanceof InterceptFieldEnabled) {
++			// we have a CGLIB enhanced entity
++			return CGLIBHelper.extractFieldInterceptor( entity );
+ 		}
+-		Class[] definedInterfaces = entity.getClass().getInterfaces();
+-		for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-			if ( "net.sf.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() ) ) {
+-				// we have a CGLIB enhanced entity
+-				return CGLIBHelper.extractFieldInterceptor( entity );
+-			}
+-			else if ( "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-				// we have a Javassist enhanced entity
+-				return JavassistHelper.extractFieldInterceptor( entity );
+-			}
+-		}
+ 		return null;
+ 	}
+ 
+@@ -85,18 +79,12 @@
+ 	        String entityName,
+ 	        Set uninitializedFieldNames,
+ 	        SessionImplementor session) {
+-		if ( entity != null ) {
+-			Class[] definedInterfaces = entity.getClass().getInterfaces();
+-			for ( int i = 0; i < definedInterfaces.length; i++ ) {
+-				if ( "net.sf.cglib.transform.impl.InterceptFieldEnabled".equals( definedInterfaces[i].getName() ) ) {
+-					// we have a CGLIB enhanced entity
+-					return CGLIBHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
+-				}
+-				else if ( "org.hibernate.bytecode.javassist.FieldHandled".equals( definedInterfaces[i].getName() ) ) {
+-					// we have a Javassist enhanced entity
+-					return JavassistHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
+-				}
+-			}
++		if (JAVASSIST_AVAILABLE && entity instanceof FieldHandled) {
++			// we have a Javassist enhanced entity
++			return JavassistHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
++		} else if (CGLIB_AVAILABLE && entity instanceof InterceptFieldEnabled) {
++			// we have a CGLIB enhanced entity
++			return CGLIBHelper.injectFieldInterceptor( entity, entityName, uninitializedFieldNames, session );
+ 		}
+ 		return null;
+ 	}
+@@ -114,4 +102,13 @@
+ 			interceptor.dirty();
+ 		}
+ 	}
++
++	private static boolean classExists(String className) {
++		try {
++			Class.forName(className);
++			return true;
++		} catch (ClassNotFoundException e) {
++			return false;
++		}
++	}
+ }

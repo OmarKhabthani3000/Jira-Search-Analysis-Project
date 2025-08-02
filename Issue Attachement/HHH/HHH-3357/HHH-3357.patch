@@ -1,0 +1,377 @@
+Index: src/org/hibernate/proxy/AbstractLazyInitializer.java
+===================================================================
+--- src/org/hibernate/proxy/AbstractLazyInitializer.java	(revision 15292)
++++ src/org/hibernate/proxy/AbstractLazyInitializer.java	Wed Jan 07 09:58:25 CST 2009
+@@ -4,59 +4,104 @@
+ 
+ import org.hibernate.HibernateException;
+ import org.hibernate.LazyInitializationException;
+-import org.hibernate.ObjectNotFoundException;
+ import org.hibernate.engine.EntityKey;
+ import org.hibernate.engine.SessionImplementor;
+ 
+ /**
+- * Convenience base class for lazy initialization handlers.  Centralizes the
+- * basic plumbing of doing lazy initialization freeing subclasses to
+- * acts as essentially adapters to their intended entity mode and/or
++ * Convenience base class for lazy initialization handlers.  Centralizes the basic plumbing of doing lazy
++ * initialization freeing subclasses to acts as essentially adapters to their intended entity mode and/or
+  * proxy generation strategy.
+  *
+  * @author Gavin King
+  */
+ public abstract class AbstractLazyInitializer implements LazyInitializer {
+-	
+-	private Object target;
+-	private boolean initialized;
+ 	private String entityName;
+ 	private Serializable id;
+-	private transient SessionImplementor session;
++	private Object target;
++	private boolean initialized;
+ 	private boolean unwrap;
+ 
++	private transient SessionImplementor session;
++
+ 	/**
+ 	 * For serialization from the non-pojo initializers (HHH-3309)
+ 	 */
+ 	protected AbstractLazyInitializer() {
+ 	}
+ 
++	/**
++	 * Main constructor.
++	 *
++	 * @param entityName The name of the entity being proxied.
++	 * @param id The identifier of the entity being proxied.
++	 * @param session The session owning the proxy.
++	 */
+ 	protected AbstractLazyInitializer(String entityName, Serializable id, SessionImplementor session) {
++		this.entityName = entityName;
+ 		this.id = id;
+ 		this.session = session;
+-		this.entityName = entityName;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
++	public final String getEntityName() {
++		return entityName;
++	}
++
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public final Serializable getIdentifier() {
+ 		return id;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public final void setIdentifier(Serializable id) {
+ 		this.id = id;
+ 	}
+ 
+-	public final String getEntityName() {
+-		return entityName;
+-	}
+-
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public final boolean isUninitialized() {
+ 		return !initialized;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public final SessionImplementor getSession() {
+ 		return session;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
++	public final void setSession(SessionImplementor s) throws HibernateException {
++		if (s!=session) {
++			if ( isConnectedToSession() ) {
++				//TODO: perhaps this should be some other RuntimeException...
++				throw new HibernateException("illegally attempted to associate a proxy with two open Sessions");
++			}
++			else {
++				session = s;
++			}
++		}
++	}
++
++	/**
++	 * {@inheritDoc}
++	 */
++	public void unsetSession() {
++		session = null;
++	}
++
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public final void initialize() throws HibernateException {
+ 		if (!initialized) {
+ 			if ( session==null ) {
+@@ -87,29 +132,17 @@
+ 		}
+ 	}
+ 
+-	public final void setSession(SessionImplementor s) throws HibernateException {
+-		if (s!=session) {
+-			if ( isConnectedToSession() ) {
+-				//TODO: perhaps this should be some other RuntimeException...
+-				throw new HibernateException("illegally attempted to associate a proxy with two open Sessions");
+-			}
+-			else {
+-				session = s;
+-			}
+-		}
+-	}
+-
++	/**
++	 * Getter for property 'connectedToSession'.
++	 *
++	 * @return Value for property 'connectedToSession'.
++	 */
+ 	protected final boolean isConnectedToSession() {
+ 		return session!=null && 
+ 				session.isOpen() && 
+ 				session.getPersistenceContext().containsProxy(this);
+ 	}
+-	
++
+-	public final void setImplementation(Object target) {
+-		this.target = target;
+-		initialized = true;
+-	}
+-
+ 	/**
+ 	 * Return the underlying persistent object, initializing if necessary
+ 	 */
+@@ -117,8 +150,16 @@
+ 		initialize();
+ 		return target;
+ 	}
+-
++	
+ 	/**
++	 * {@inheritDoc}
++	 */
++	public final void setImplementation(Object target) {
++		this.target = target;
++		initialized = true;
++	}
++
++	/**
+ 	 * Return the underlying persistent object in the given <tt>Session</tt>, or null,
+ 	 * do not initialize the proxy
+ 	 */
+@@ -127,18 +168,31 @@
+ 				getIdentifier(),
+ 				s.getFactory().getEntityPersister( getEntityName() ),
+ 				s.getEntityMode()
+-			);
++		);
+ 		return s.getPersistenceContext().getEntity( entityKey );
+ 	}
+ 
++	/**
++	 * Getter for property 'target'.
++	 * <p/>
++	 * Same as {@link #getImplementation()} except that this method will not force initialization.
++	 *
++	 * @return Value for property 'target'.
++	 */
+ 	protected final Object getTarget() {
+ 		return target;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public boolean isUnwrap() {
+ 		return unwrap;
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public void setUnwrap(boolean unwrap) {
+ 		this.unwrap = unwrap;
+ 	}
+Index: src/org/hibernate/event/def/DefaultEvictEventListener.java
+===================================================================
+--- src/org/hibernate/event/def/DefaultEvictEventListener.java	(revision 15292)
++++ src/org/hibernate/event/def/DefaultEvictEventListener.java	Wed Jan 07 09:59:21 CST 2009
+@@ -58,7 +58,7 @@
+ 					doEvict( entity, key, e.getPersister(), event.getSession() );
+ 				}
+ 			}
+-			li.setSession( null );
++			li.unsetSession();
+ 		}
+ 		else {
+ 			EntityEntry e = persistenceContext.removeEntry( object );
+Index: src/org/hibernate/proxy/LazyInitializer.java
+===================================================================
+--- src/org/hibernate/proxy/LazyInitializer.java	(revision 15292)
++++ src/org/hibernate/proxy/LazyInitializer.java	Wed Jan 07 09:56:31 CST 2009
+@@ -11,65 +11,104 @@
+  * @author Gavin King
+  */
+ public interface LazyInitializer {
+-	
+ 	/**
+-	 * Initialize the proxy, fetching the target
+-	 * entity if necessary
++	 * Initialize the proxy, fetching the target entity if necessary.
++	 *
++	 * @throws HibernateException Indicates a problem initializing the proxy.
+ 	 */
+-	public abstract void initialize() throws HibernateException;
++	public void initialize() throws HibernateException;
+-	
++
+ 	/**
+-	 * Get the identifier held by the proxy
++	 * Retrieve the identifier value for the enity our owning proxy represents.
++	 *
++	 * @return The identifier value.
+ 	 */
+-	public abstract Serializable getIdentifier();
++	public Serializable getIdentifier();
+ 
+ 	/**
+-	 * Set the identifier property of the proxy
++	 * Set the identifier value for the enity our owning proxy represents.
++	 *
++	 * @param id The identifier value.
+ 	 */
+-	public abstract void setIdentifier(Serializable id);
++	public void setIdentifier(Serializable id);
+-	
++
+ 	/**
+-	 * Get the entity name
++	 * The entity-name of the entity our owning proxy represents.
++	 *
++	 * @return The entity-name.
+ 	 */
+-	public abstract String getEntityName();
++	public String getEntityName();
+-	
++
+ 	/**
+-	 * Get the actual class of the entity (don't
+-	 * use this, use the entityName)
++	 * Get the actual class of the entity.  Generally, {@link #getEntityName()} should be used instead.
++	 *
++	 * @return The actual entity class.
+ 	 */
+-	public abstract Class getPersistentClass();
++	public Class getPersistentClass();
+-	
++
+ 	/**
+ 	 * Is the proxy uninitialzed?
++	 *
++	 * @return True if uninitialized; false otherwise.
+ 	 */
+-	public abstract boolean isUninitialized();
++	public boolean isUninitialized();
+-	
++
+ 	/**
+-	 * Initialize the proxy manually
++	 * Return the underlying persistent object, initializing if necessary
++	 *
++	 * @return The underlying target entity.
+ 	 */
+-	public abstract void setImplementation(Object target);
++	public Object getImplementation();
+-	
++
+ 	/**
+-	 * Get the session, if this proxy is attached
++	 * Return the underlying persistent object in the given session, or null if not contained in this session's
++	 * persistence context.
++	 *
++	 * @param session The session to check
++	 *
++	 * @return The target, or null.
++	 *
++	 * @throws HibernateException Indicates problem locating the target.
+ 	 */
+-	public abstract SessionImplementor getSession();
++	public abstract Object getImplementation(SessionImplementor session) throws HibernateException;
+-	
++
+ 	/**
+-	 * Attach the proxy to a session
++	 * Initialize the proxy manually by injecting its target.
++	 *
++	 * @param target The proxy target (the actual entity being proxied).
+ 	 */
+-	public abstract void setSession(SessionImplementor s) throws HibernateException;
++	public void setImplementation(Object target);
+ 
+ 	/**
+-	 * Return the underlying persistent object, initializing if necessary
++	 * Get the session to which this proxy is associated, or null if it is not attached.
++	 *
++	 * @return The associated session.
+ 	 */
+-	public abstract Object getImplementation();
++	public SessionImplementor getSession();
+ 
+ 	/**
+-	 * Return the underlying persistent object in the given <tt>Session</tt>, or null
++	 * Associate the proxy with the given session.
++	 * <p/>
++	 * Care should be given to make certain that the proxy is added to the session's persistence context as well
++	 * to maintain the symetry of the association.  That must be done seperately as this method simply sets an
++	 * internal reference.  We do also check that if there is already an associated session that the proxy
++	 * reference was removed from that previous session's persistence contet.
++	 *
++	 * @param session The session
++	 * @throws HibernateException Indicates that the proxy was still contained in the persistence context of the
++	 * "previous session".
+ 	 */
+-	public abstract Object getImplementation(SessionImplementor s)
+-			throws HibernateException;
++	public void setSession(SessionImplementor session) throws HibernateException;
+-	
++
++	/**
++	 * Unset this initializer's reference to session.  It is assumed that the caller is also taking care or
++	 * cleaning up the owning proxy's reference in the persistence context.
++	 * <p/>
++	 * Generally speaking this is intended to be called only during {@link org.hibernate.Session#evict} and
++	 * {@link org.hibernate.Session#clear} processing; most other use-cases should call {@link #setSession} instead.
++	 */
++	public void unsetSession();
++	
+ 	public void setUnwrap(boolean unwrap);
+ 	public boolean isUnwrap();
+ }
+Index: src/org/hibernate/engine/StatefulPersistenceContext.java
+===================================================================
+--- src/org/hibernate/engine/StatefulPersistenceContext.java	(revision 15292)
++++ src/org/hibernate/engine/StatefulPersistenceContext.java	Wed Jan 07 09:59:21 CST 2009
+@@ -181,7 +181,7 @@
+ 		Iterator itr = proxiesByKey.values().iterator();
+ 		while ( itr.hasNext() ) {
+ 			final LazyInitializer li = ( ( HibernateProxy ) itr.next() ).getHibernateLazyInitializer();
+-			li.setSession( null );
++			li.unsetSession();
+ 		}
+ 		Map.Entry[] collectionEntryArray = IdentityMap.concurrentEntries( collectionEntries );
+ 		for ( int i = 0; i < collectionEntryArray.length; i++ ) {

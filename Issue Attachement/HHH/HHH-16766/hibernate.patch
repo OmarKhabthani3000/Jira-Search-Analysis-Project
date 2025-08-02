@@ -1,0 +1,674 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/event/internal/DefaultLoadEventListener.java b/hibernate-core/src/main/java/org/hibernate/event/internal/DefaultLoadEventListener.java
+index 9c0bb79922..1a87d98af4 100644
+--- a/hibernate-core/src/main/java/org/hibernate/event/internal/DefaultLoadEventListener.java
++++ b/hibernate-core/src/main/java/org/hibernate/event/internal/DefaultLoadEventListener.java
+@@ -146,7 +146,7 @@ public class DefaultLoadEventListener implements LoadEventListener {
+ 						return false;
+ 					}
+ 					else {
+-						return true;
++						return !idClass.isInstance( event.getEntityId() );
+ 					}
+ 				}
+ 				else {
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Flight.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Flight.java
+new file mode 100644
+index 0000000000..23185a7bbb
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Flight.java
+@@ -0,0 +1,39 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import jakarta.persistence.*;
++
++import java.util.List;
++
++@Entity
++@Table(name = "flight")
++public class Flight {
++
++    @Id
++    @Column(name = "id")
++    private Integer id;
++
++    @OneToMany(mappedBy = "flight", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
++    private List<FlightSegment> segments;
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public List<FlightSegment> getSegments() {
++        return segments;
++    }
++
++    public void setSegments(List<FlightSegment> segments) {
++        this.segments = segments;
++    }
++
++    public void addSegment(FlightSegment segment) {
++        segment.setFlight(this);
++        segments.add(segment);
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegment.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegment.java
+new file mode 100644
+index 0000000000..d55fbb39b1
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegment.java
+@@ -0,0 +1,47 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import jakarta.persistence.*;
++
++@Entity
++@IdClass(FlightSegmentId.class)
++@Table(name = "flight_segment")
++public class FlightSegment {
++
++    @Id
++    @ManyToOne
++    @JoinColumn(name = "flight_id")
++    private Flight flight;
++
++    @Id
++    @Column(name = "segment_number")
++    private Integer segmentNumber;
++
++    @OneToOne(mappedBy = "segment", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
++    private FlightSegmentConfiguration configuration;
++
++    public Flight getFlight() {
++        return flight;
++    }
++
++    public void setFlight(Flight flight) {
++        this.flight = flight;
++    }
++
++    public Integer getSegmentNumber() {
++        return segmentNumber;
++    }
++
++    public void setSegmentNumber(Integer segmentNumber) {
++        this.segmentNumber = segmentNumber;
++    }
++
++    public FlightSegmentConfiguration getConfiguration() {
++        return configuration;
++    }
++
++    public void setConfiguration(FlightSegmentConfiguration configuration) {
++        configuration.setSegment(this);
++        this.configuration = configuration;
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfiguration.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfiguration.java
+new file mode 100644
+index 0000000000..7c127dfaf3
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfiguration.java
+@@ -0,0 +1,24 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import jakarta.persistence.*;
++
++@Entity
++@IdClass(FlightSegmentConfigurationId.class)
++@Table(name = "flight_segment_configuration")
++public class FlightSegmentConfiguration {
++
++    @Id
++    @OneToOne(fetch = FetchType.LAZY)
++    @JoinColumn(name = "flight_id", referencedColumnName = "flight_id", nullable = false)
++    @JoinColumn(name = "segment_number", referencedColumnName = "segment_number", nullable = false)
++    private FlightSegment segment;
++
++    public FlightSegment getSegment() {
++        return segment;
++    }
++
++    public void setSegment(FlightSegment segment) {
++        this.segment = segment;
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfigurationId.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfigurationId.java
+new file mode 100644
+index 0000000000..f7909a74c0
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentConfigurationId.java
+@@ -0,0 +1,38 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import java.io.Serializable;
++import java.util.Objects;
++
++public class FlightSegmentConfigurationId implements Serializable {
++
++    private FlightSegmentId segment;
++
++    public FlightSegmentConfigurationId() {
++    }
++
++    public FlightSegmentConfigurationId(FlightSegmentId segment) {
++        this.segment = segment;
++    }
++
++    public FlightSegmentId getSegment() {
++        return segment;
++    }
++
++    public void setSegment(FlightSegmentId segment) {
++        this.segment = segment;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (o == null || getClass() != o.getClass()) return false;
++        FlightSegmentConfigurationId that = (FlightSegmentConfigurationId) o;
++        return Objects.equals(segment, that.segment);
++    }
++
++    @Override
++    public int hashCode() {
++        return Objects.hash(segment);
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentId.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentId.java
+new file mode 100644
+index 0000000000..3c862ac807
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/FlightSegmentId.java
+@@ -0,0 +1,48 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import java.io.Serializable;
++import java.util.Objects;
++
++public class FlightSegmentId implements Serializable {
++
++    private Integer flight;
++    private Integer segmentNumber;
++
++    public FlightSegmentId() {
++    }
++
++    public FlightSegmentId(Integer flight, Integer segmentNumber) {
++        this.flight = flight;
++        this.segmentNumber = segmentNumber;
++    }
++
++    public Integer getFlight() {
++        return flight;
++    }
++
++    public void setFlight(Integer flight) {
++        this.flight = flight;
++    }
++
++    public Integer getSegmentNumber() {
++        return segmentNumber;
++    }
++
++    public void setSegmentNumber(Integer segmentNumber) {
++        this.segmentNumber = segmentNumber;
++    }
++
++    @Override
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (o == null || getClass() != o.getClass()) return false;
++        FlightSegmentId that = (FlightSegmentId) o;
++        return Objects.equals(flight, that.flight) && Objects.equals(segmentNumber, that.segmentNumber);
++    }
++
++    @Override
++    public int hashCode() {
++        return Objects.hash(flight, segmentNumber);
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Freight.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Freight.java
+new file mode 100644
+index 0000000000..9f66332111
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/Freight.java
+@@ -0,0 +1,34 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import jakarta.persistence.*;
++
++@Entity
++@Table(name = "freight")
++public class Freight {
++
++    @Id
++    @Column(name = "freight_number")
++    private Integer freightNumber;
++
++    @ManyToOne(fetch = FetchType.LAZY)
++    @JoinColumn(name = "flight_id", referencedColumnName = "flight_id")
++    @JoinColumn(name = "segment_number", referencedColumnName = "segment_number")
++    private FlightSegment flightSegment;
++
++    public Integer getFreightNumber() {
++        return freightNumber;
++    }
++
++    public void setFreightNumber(Integer freightNumber) {
++        this.freightNumber = freightNumber;
++    }
++
++    public FlightSegment getFlightSegment() {
++        return flightSegment;
++    }
++
++    public void setFlightSegment(FlightSegment flightSegment) {
++        this.flightSegment = flightSegment;
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdLazyTest.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdLazyTest.java
+new file mode 100644
+index 0000000000..ec640cd36d
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdLazyTest.java
+@@ -0,0 +1,190 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import org.hibernate.testing.orm.junit.EntityManagerFactoryScope;
++import org.hibernate.testing.orm.junit.Jpa;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++
++import java.util.ArrayList;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++
++@Jpa(
++        annotatedClasses = {
++                Flight.class,
++                FlightSegment.class,
++                FlightSegmentConfiguration.class,
++                Freight.class
++        }
++)
++public class HierarchicalCompositeIdLazyTest {
++
++    @Test
++    void testFetchFlightSegmentFromFlight(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    Flight flight = entityManager.find(Flight.class, 1);
++                    assertNotNull(flight);
++                    assertEquals(1, flight.getSegments().get(0).getSegmentNumber());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegment(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment segment = entityManager.find(FlightSegment.class, new FlightSegmentId(1, 1));
++                    assertNotNull(segment);
++                    assertEquals(1, segment.getFlight().getId());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegmentConfiguration(EntityManagerFactoryScope scope) throws Exception {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfiguration flightSegmentConfiguration = new FlightSegmentConfiguration();
++
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++                    flightSegment.setConfiguration(flightSegmentConfiguration);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfigurationId id = new FlightSegmentConfigurationId(new FlightSegmentId(1, 1));
++                    FlightSegmentConfiguration configuration = entityManager.find(FlightSegmentConfiguration.class, id);
++                    assertNotNull(configuration);
++                    assertEquals(1, configuration.getSegment().getFlight().getId());
++                    assertNotNull(configuration.getSegment().getConfiguration());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegmentConfigurationViaQuery(EntityManagerFactoryScope scope) throws Exception {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfiguration flightSegmentConfiguration = new FlightSegmentConfiguration();
++
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++                    flightSegment.setConfiguration(flightSegmentConfiguration);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfigurationId id = new FlightSegmentConfigurationId(new FlightSegmentId(1, 1));
++                    FlightSegmentConfiguration configuration = entityManager
++                            .createQuery("from FlightSegmentConfiguration where id = :id", FlightSegmentConfiguration.class)
++                            .setParameter("id", id)
++                            .getSingleResult();
++                    assertNotNull(configuration);
++                    assertEquals(1, configuration.getSegment().getFlight().getId());
++                    assertNotNull(configuration.getSegment().getConfiguration());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFreight(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++
++                    Freight freight = new Freight();
++                    freight.setFreightNumber(1);
++                    freight.setFlightSegment(flightSegment);
++
++                    entityManager.persist(freight);
++
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    Freight freight = entityManager.find(Freight.class, 1);
++                    assertNotNull(freight);
++                    assertEquals(1, freight.getFlightSegment().getFlight().getId());
++                }
++        );
++    }
++
++    @AfterEach
++    public void cleanUp(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    entityManager.createQuery("delete from Freight").executeUpdate();
++                    entityManager.createQuery("delete from FlightSegmentConfiguration").executeUpdate();
++                    entityManager.createQuery("delete from FlightSegment").executeUpdate();
++                    entityManager.createQuery("delete from Flight").executeUpdate();
++                }
++        );
++    }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdMaxDepthTest.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdMaxDepthTest.java
+new file mode 100644
+index 0000000000..fe82cd4e16
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/cid/HierarchicalCompositeIdMaxDepthTest.java
+@@ -0,0 +1,193 @@
++package org.hibernate.orm.test.annotations.cid;
++
++import org.hibernate.cfg.AvailableSettings;
++import org.hibernate.testing.orm.junit.EntityManagerFactoryScope;
++import org.hibernate.testing.orm.junit.Jpa;
++import org.hibernate.testing.orm.junit.Setting;
++import org.junit.jupiter.api.AfterEach;
++import org.junit.jupiter.api.Test;
++
++import java.util.ArrayList;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNotNull;
++
++@Jpa(
++        annotatedClasses = {
++                Flight.class,
++                FlightSegment.class,
++                FlightSegmentConfiguration.class,
++                Freight.class
++        },
++        properties = @Setting(name = AvailableSettings.MAX_FETCH_DEPTH, value = "0")
++)
++public class HierarchicalCompositeIdMaxDepthTest {
++
++    @Test
++    void testFetchFlightSegmentFromFlight(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    Flight flight = entityManager.find(Flight.class, 1);
++                    assertNotNull(flight);
++                    assertEquals(1, flight.getSegments().get(0).getSegmentNumber());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegment(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment segment = entityManager.find(FlightSegment.class, new FlightSegmentId(1, 1));
++                    assertNotNull(segment);
++                    assertEquals(1, segment.getFlight().getId());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegmentConfiguration(EntityManagerFactoryScope scope) throws Exception {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfiguration flightSegmentConfiguration = new FlightSegmentConfiguration();
++
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++                    flightSegment.setConfiguration(flightSegmentConfiguration);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfigurationId id = new FlightSegmentConfigurationId(new FlightSegmentId(1, 1));
++                    FlightSegmentConfiguration configuration = entityManager.find(FlightSegmentConfiguration.class, id);
++                    assertNotNull(configuration);
++                    assertEquals(1, configuration.getSegment().getFlight().getId());
++                    assertNotNull(configuration.getSegment().getConfiguration());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFlightSegmentConfigurationViaQuery(EntityManagerFactoryScope scope) throws Exception {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfiguration flightSegmentConfiguration = new FlightSegmentConfiguration();
++
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++                    flightSegment.setConfiguration(flightSegmentConfiguration);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegmentConfigurationId id = new FlightSegmentConfigurationId(new FlightSegmentId(1, 1));
++                    FlightSegmentConfiguration configuration = entityManager
++                            .createQuery("from FlightSegmentConfiguration where id = :id", FlightSegmentConfiguration.class)
++                            .setParameter("id", id)
++                            .getSingleResult();
++                    assertNotNull(configuration);
++                    assertEquals(1, configuration.getSegment().getFlight().getId());
++                    assertNotNull(configuration.getSegment().getConfiguration());
++                }
++        );
++    }
++
++    @Test
++    void testFetchFlightFromFreight(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    FlightSegment flightSegment = new FlightSegment();
++                    flightSegment.setSegmentNumber(1);
++
++                    Flight flight = new Flight();
++                    flight.setId(1);
++                    flight.setSegments(new ArrayList<>());
++                    flight.addSegment(flightSegment);
++
++                    entityManager.persist(flight);
++
++                    Freight freight = new Freight();
++                    freight.setFreightNumber(1);
++                    freight.setFlightSegment(flightSegment);
++
++                    entityManager.persist(freight);
++
++                    entityManager.flush();
++                    entityManager.clear();
++                }
++        );
++
++        scope.inTransaction(
++                entityManager -> {
++                    Freight freight = entityManager.find(Freight.class, 1);
++                    assertNotNull(freight);
++                    assertEquals(1, freight.getFlightSegment().getFlight().getId());
++                }
++        );
++    }
++
++    @AfterEach
++    public void cleanUp(EntityManagerFactoryScope scope) {
++        scope.inTransaction(
++                entityManager -> {
++                    entityManager.createQuery("delete from Freight").executeUpdate();
++                    entityManager.createQuery("delete from FlightSegmentConfiguration").executeUpdate();
++                    entityManager.createQuery("delete from FlightSegment").executeUpdate();
++                    entityManager.createQuery("delete from Flight").executeUpdate();
++                }
++        );
++    }
++
++}

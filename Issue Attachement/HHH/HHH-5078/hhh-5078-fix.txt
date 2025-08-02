@@ -1,0 +1,51 @@
+Index: src/main/java/org/hibernate/ejb/criteria/expression/BinaryArithmeticOperation.java
+===================================================================
+--- src/main/java/org/hibernate/ejb/criteria/expression/BinaryArithmeticOperation.java	(revision 19240)
++++ src/main/java/org/hibernate/ejb/criteria/expression/BinaryArithmeticOperation.java	(working copy)
+@@ -198,9 +198,9 @@
+ 	}
+ 
+ 	public String render(CriteriaQueryCompiler.RenderingContext renderingContext) {
+-		return getOperator().apply(
++		return "(" + getOperator().apply(
+ 				( (Renderable) getLeftHandOperand() ).render( renderingContext ),
+-				( (Renderable) getRightHandOperand() ).render( renderingContext )
++				( (Renderable) getRightHandOperand() ).render( renderingContext ) + ")"
+ 		);
+ 	}
+ 
+Index: src/test/java/org/hibernate/ejb/criteria/basic/ExpressionsTest.java
+===================================================================
+--- src/test/java/org/hibernate/ejb/criteria/basic/ExpressionsTest.java	(revision 19240)
++++ src/test/java/org/hibernate/ejb/criteria/basic/ExpressionsTest.java	(working copy)
+@@ -153,4 +153,30 @@
+ 		em.getTransaction().commit();
+ 		em.close();
+ 	}
++	
++
++	/**
++	 * @author Christoph Gerkens 
++	 */
++	public void testArithmeticGrouping() {
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		try {
++			CriteriaBuilder cb = em.getCriteriaBuilder();
++			CriteriaQuery<Number> query = cb.createQuery(Number.class);
++			query.from(Product.class); // entity type doesn't matter, but must contain at least one entry for this test case. 
++			query.select( // (2 - 1) / 2
++					cb.quot(
++							cb.diff(
++									cb.literal(BigDecimal.valueOf(2.0)), 
++									cb.literal(BigDecimal.valueOf(1.0))), 
++									BigDecimal.valueOf(2.0))).distinct(true);
++			Number result = em.createQuery(query).getSingleResult();
++			assertEquals(0.5d, result.doubleValue(), 0.1d); // (2 - 1) / 2 = 0.5
++		} finally {
++			em.getTransaction().rollback();
++			em.close();
++		}
++	}	
++
+ }

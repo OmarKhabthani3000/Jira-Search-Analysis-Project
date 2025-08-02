@@ -1,0 +1,79 @@
+Index: net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.33.2.36
+diff -u -r1.33.2.36 AbstractEntityPersister.java
+--- net/sf/hibernate/persister/AbstractEntityPersister.java	27 Sep 2003 14:10:35 -0000	1.33.2.36
++++ net/sf/hibernate/persister/AbstractEntityPersister.java	19 Oct 2003 20:06:26 -0000
+@@ -809,8 +809,18 @@
+ 		// aliases for identifier
+ 		if ( hasIdentifierProperty() ) {
+ 			subclassPropertyAliases.put( getIdentifierPropertyName(), getIdentifierColumnNames() );
++			subclassPropertyAliases.put( ENTITY_ID, getIdentifierColumnNames() );
++		} else if (hasEmbeddedIdentifier()) {
++			// Fetch embedded identifiers propertynames from the "virtual" identifier component
++			ComponentType componentId = (ComponentType) getIdentifierType();
++			String[] idPropertyNames = componentId.getPropertyNames();
++			String[] idColumns = getIdentifierColumnNames();
++									
++			for (int i = 0; i < idPropertyNames.length; i++) {
++				subclassPropertyAliases.put(idColumns[i], new String[] { idPropertyNames[i] } );
++			}			
+ 		}
+-		subclassPropertyAliases.put( ENTITY_ID, getIdentifierColumnNames() );
++		
+ 		
+ 		if ( isPolymorphic() ) subclassPropertyAliases.put( 
+ 			ENTITY_CLASS, 
+Index: net/sf/hibernate/test/SQLLoaderTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/test/Attic/SQLLoaderTest.java,v
+retrieving revision 1.1.2.7
+diff -u -r1.1.2.7 SQLLoaderTest.java
+--- net/sf/hibernate/test/SQLLoaderTest.java	29 Sep 2003 12:06:30 -0000	1.1.2.7
++++ net/sf/hibernate/test/SQLLoaderTest.java	19 Oct 2003 20:06:40 -0000
+@@ -229,8 +229,33 @@
+ 	}
+ 
+ 	// TODO: compositeid's - how ? (SingleSeveral.hbm.xml test)
+-	public void testCompositeProperties() throws HibernateException, SQLException {
+-	   // NYI!
++	public void testEmbeddedCompositeProperties() throws HibernateException, SQLException {
++	   Session session = sessions.openSession();
++	   
++	   Single s = new Single();
++	   s.setId("my id");
++	   s.setString("string 1");
++	   session.save(s);
++	   session.flush();
++	   session.connection().commit();
++	   
++	   session.clear();
++	   
++	   Query query = session.createSQLQuery("select {sing.*} from Single {sing}", "sing", Single.class);
++	   
++	   List list = query.list();
++	   
++	   assertTrue(list.size()==1);
++	   
++	   session.clear();
++	   
++	   query = session.createSQLQuery("select {sing.*} from Single {sing} where sing.id = ?", "sing", Single.class);
++	   query.setString(0, "my id");
++	   list = query.list();
++	   
++	   assertTrue(list.size()==1);
++	   
++	   
+ 	}
+ 
+ 	public void testFindSimpleBySQL() throws Exception {
+@@ -336,7 +361,7 @@
+ 
+ 	public void setUp() throws Exception {
+ 		if (sessions == null) {
+-			TestCase.buildSessionFactory(new String[] { "ABC.hbm.xml", "Category.hbm.xml", "Simple.hbm.xml", "Fo.hbm.xml" });
++			TestCase.buildSessionFactory(new String[] { "ABC.hbm.xml", "Category.hbm.xml", "Simple.hbm.xml", "Fo.hbm.xml" , "SingleSeveral.hbm.xml"});
+ 		}
+ 	}
+ 

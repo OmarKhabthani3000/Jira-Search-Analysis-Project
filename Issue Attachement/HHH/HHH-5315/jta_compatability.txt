@@ -1,0 +1,75 @@
+### Eclipse Workspace Patch 1.0 for JTA compatability
+#P envers-trunk
+Index: src/main/java/org/hibernate/envers/synchronization/AuditProcess.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/AuditProcess.java	(revision 19908)
++++ src/main/java/org/hibernate/envers/synchronization/AuditProcess.java	(working copy)
+@@ -28,19 +28,20 @@
+ import java.util.Map;
+ import java.util.Queue;
+ 
++import javax.transaction.Synchronization;
++
++import org.hibernate.FlushMode;
++import org.hibernate.Session;
+ import org.hibernate.action.BeforeTransactionCompletionProcess;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.envers.revisioninfo.RevisionInfoGenerator;
+ import org.hibernate.envers.synchronization.work.AuditWorkUnit;
+ import org.hibernate.envers.tools.Pair;
+ 
+-import org.hibernate.FlushMode;
+-import org.hibernate.Session;
+-
+ /**
+  * @author Adam Warski (adam at warski dot org)
+  */
+-public class AuditProcess implements BeforeTransactionCompletionProcess {
++public class AuditProcess implements BeforeTransactionCompletionProcess, Synchronization {
+     private final RevisionInfoGenerator revisionInfoGenerator;
+ 
+     private final LinkedList<AuditWorkUnit> workUnits;
+@@ -48,9 +49,11 @@
+     private final Map<Pair<String, Object>, AuditWorkUnit> usedIds;
+ 
+     private Object revisionData;
++    private SessionImplementor sessionImplementor;
+ 
+-    public AuditProcess(RevisionInfoGenerator revisionInfoGenerator) {
++    public AuditProcess(RevisionInfoGenerator revisionInfoGenerator, SessionImplementor sessionImplementor) {
+         this.revisionInfoGenerator = revisionInfoGenerator;
++        this.sessionImplementor = sessionImplementor;
+ 
+         workUnits = new LinkedList<AuditWorkUnit>();
+         undoQueue = new LinkedList<AuditWorkUnit>();
+@@ -153,4 +156,12 @@
+             session.flush();
+         }
+     }
++
++    public void beforeCompletion(){
++    	doBeforeTransactionCompletion(this.sessionImplementor);
++    }
++
++    public void afterCompletion(int i){
++    	
++    }
+ }
+Index: src/main/java/org/hibernate/envers/synchronization/AuditProcessManager.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/AuditProcessManager.java	(revision 19908)
++++ src/main/java/org/hibernate/envers/synchronization/AuditProcessManager.java	(working copy)
+@@ -52,10 +52,11 @@
+         AuditProcess auditProcess = auditProcesses.get(transaction);
+         if (auditProcess == null) {
+             // No worries about registering a transaction twice - a transaction is single thread
+-            auditProcess = new AuditProcess(revisionInfoGenerator);
++            auditProcess = new AuditProcess(revisionInfoGenerator, session);
+             auditProcesses.put(transaction, auditProcess);
+ 
+-            session.getActionQueue().registerProcess(auditProcess);
++            //session.getActionQueue().registerProcess(auditProcess);
++            session.getTransaction().registerSynchronization(auditProcess);
+             session.getActionQueue().registerProcess(new AfterTransactionCompletionProcess() {
+                 public void doAfterTransactionCompletion(boolean success, SessionImplementor session) {
+                     auditProcesses.remove(transaction);

@@ -1,0 +1,40 @@
+Index: src/org/hibernate/event/def/AbstractSaveEventListener.java
+===================================================================
+--- src/org/hibernate/event/def/AbstractSaveEventListener.java	(revision 4318)
++++ src/org/hibernate/event/def/AbstractSaveEventListener.java	(revision 4749)
+@@ -7,6 +7,7 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
++import org.hibernate.FlushMode;
+ import org.hibernate.LockMode;
+ import org.hibernate.NonUniqueObjectException;
+ import org.hibernate.action.EntityIdentityInsertAction;
+@@ -118,7 +120,10 @@
+ 				);
+ 			}
+ 
+-			return performSave( entity, generatedId, persister, false, anything, source, true );
++			// JAL Fix for always-inserting even if id was generated and flushmode is manual.
++			return performSave( entity, generatedId, persister, false, anything, source, requiresImmediateIdAccess );
++
++//			return performSave( entity, generatedId, persister, false, anything, source, true );
+ 		}
+ 	}
+ 
+@@ -238,8 +243,14 @@
+ 		Serializable id = key == null ? null : key.getIdentifier();
+ 
+ 		boolean inTxn = source.getJDBCContext().isTransactionInProgress();
+-		boolean shouldDelayIdentityInserts = !inTxn && !requiresImmediateIdAccess;
+ 
++// jal see http://jboss.com/index.html?module=bb&op=viewtopic&t=98478&postdays=0&postorder=asc&start=10
++// try to fix stupid insert
++//		boolean shouldDelayIdentityInserts = !inTxn && !requiresImmediateIdAccess;
++		boolean shouldDelayIdentityInserts = !requiresImmediateIdAccess &&
++        ( !inTxn || FlushMode.isManualFlushMode( source.getFlushMode() ) );
++		System.out.println("*** fix: shouldDelayetc="+shouldDelayIdentityInserts+", fm="+source.getFlushMode()+", ria="+requiresImmediateIdAccess);
++		
+ 		if ( useIdentityColumn && !shouldDelayIdentityInserts ) {
+ 			log.trace( "executing insertions" );
+ 			source.getActionQueue().executeInserts();

@@ -1,0 +1,505 @@
+Index: src/main/java/org/hibernate/search/annotations/CalendarBridge.java
+===================================================================
+--- src/main/java/org/hibernate/search/annotations/CalendarBridge.java	(revision 0)
++++ src/main/java/org/hibernate/search/annotations/CalendarBridge.java	(revision 0)
+@@ -0,0 +1,11 @@
++package org.hibernate.search.annotations;
++
++import java.lang.annotation.*;
++
++
++@Retention( RetentionPolicy.RUNTIME )
++@Target( {ElementType.FIELD, ElementType.METHOD} )
++@Documented
++public @interface CalendarBridge {
++    Resolution resolution();
++}
+Index: src/main/java/org/hibernate/search/bridge/BridgeFactory.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/BridgeFactory.java	(revision 17820)
++++ src/main/java/org/hibernate/search/bridge/BridgeFactory.java	(working copy)
+@@ -31,6 +31,8 @@
+ import java.util.Date;
+ import java.util.HashMap;
+ import java.util.Map;
++import java.util.Calendar;
++import java.lang.annotation.Annotation;
+ 
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.HibernateException;
+@@ -42,20 +44,9 @@
+ import org.hibernate.search.annotations.Field;
+ import org.hibernate.search.annotations.Parameter;
+ import org.hibernate.search.annotations.Resolution;
+-import org.hibernate.search.bridge.builtin.BigDecimalBridge;
+-import org.hibernate.search.bridge.builtin.BigIntegerBridge;
+-import org.hibernate.search.bridge.builtin.BooleanBridge;
+-import org.hibernate.search.bridge.builtin.CharacterBridge;
+-import org.hibernate.search.bridge.builtin.DateBridge;
+-import org.hibernate.search.bridge.builtin.DoubleBridge;
+-import org.hibernate.search.bridge.builtin.EnumBridge;
+-import org.hibernate.search.bridge.builtin.FloatBridge;
+-import org.hibernate.search.bridge.builtin.IntegerBridge;
+-import org.hibernate.search.bridge.builtin.LongBridge;
+-import org.hibernate.search.bridge.builtin.ShortBridge;
++import org.hibernate.search.bridge.builtin.*;
+ import org.hibernate.search.bridge.builtin.StringBridge;
+-import org.hibernate.search.bridge.builtin.UriBridge;
+-import org.hibernate.search.bridge.builtin.UrlBridge;
++import com.sun.xml.internal.rngom.ast.builder.Annotations;
+ 
+ /**
+  * This factory is responsible for creating and initializing build-in and custom <i>FieldBridges</i>.
+@@ -101,9 +92,21 @@
+ 	public static final FieldBridge DATE_HOUR = new TwoWayString2FieldBridgeAdaptor( DateBridge.DATE_HOUR );
+ 	public static final FieldBridge DATE_MINUTE = new TwoWayString2FieldBridgeAdaptor( DateBridge.DATE_MINUTE );
+ 	public static final FieldBridge DATE_SECOND = new TwoWayString2FieldBridgeAdaptor( DateBridge.DATE_SECOND );
+-	public static final TwoWayFieldBridge DATE_MILLISECOND =
++
++    public static final FieldBridge CALENDAR_YEAR = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_YEAR );
++	public static final FieldBridge CALENDAR_MONTH = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_MONTH );
++	public static final FieldBridge CALENDAR_DAY = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_DAY );
++	public static final FieldBridge CALENDAR_HOUR = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_HOUR );
++	public static final FieldBridge CALENDAR_MINUTE = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_MINUTE );
++	public static final FieldBridge CALENDAR_SECOND = new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_SECOND );
++
++    public static final TwoWayFieldBridge DATE_MILLISECOND =
+ 			new TwoWayString2FieldBridgeAdaptor( DateBridge.DATE_MILLISECOND );
+ 
++    public static final TwoWayFieldBridge CALENDAR_MILLISECOND =
++			new TwoWayString2FieldBridgeAdaptor( CalendarBridge.CALENDAR_MILLISECOND );
++
++
+ 	static {
+ 		builtInBridges.put( Character.class.getName(), CHARACTER );
+ 		builtInBridges.put( char.class.getName(), CHARACTER );
+@@ -127,6 +130,7 @@
+ 		builtInBridges.put( URI.class.getName(), Uri );
+ 
+ 		builtInBridges.put( Date.class.getName(), DATE_MILLISECOND );
++        builtInBridges.put( Calendar.class.getName(), CALENDAR_MILLISECOND);
+ 	}
+ 
+ 	/**
+@@ -192,11 +196,16 @@
+ 		if ( bridgeAnn != null ) {
+ 			bridge = doExtractType( bridgeAnn, memberName );
+ 		}
+-		else if ( member.isAnnotationPresent( org.hibernate.search.annotations.DateBridge.class ) ) {
+-			Resolution resolution =
+-					member.getAnnotation( org.hibernate.search.annotations.DateBridge.class ).resolution();
+-			bridge = getDateField( resolution );
+-		}
++		else if ( member.isAnnotationPresent( org.hibernate.search.annotations.DateBridge.class ) || member.isAnnotationPresent(org.hibernate.search.annotations.CalendarBridge.class) ) {
++            Resolution resolution = null;
++            if (member.getAnnotation(org.hibernate.search.annotations.DateBridge.class) != null) {
++                resolution = member.getAnnotation( org.hibernate.search.annotations.DateBridge.class ).resolution();
++                bridge = getDateField( resolution );
++			} else {
++                resolution = member.getAnnotation( org.hibernate.search.annotations.CalendarBridge.class ).resolution();
++                bridge = getCalendarField( resolution );
++			}
++       	}
+ 		else {
+ 			//find in built-ins
+ 			XClass returnType = member.getType();
+@@ -272,6 +281,28 @@
+ 		}
+ 	}
+ 
++
++    public static FieldBridge getCalendarField(Resolution resolution) {
++		switch (resolution) {
++			case YEAR:
++				return CALENDAR_YEAR;
++			case MONTH:
++				return CALENDAR_MONTH;
++			case DAY:
++				return CALENDAR_DAY;
++			case HOUR:
++				return CALENDAR_HOUR;
++			case MINUTE:
++				return CALENDAR_MINUTE;
++			case SECOND:
++				return CALENDAR_SECOND;
++			case MILLISECOND:
++				return CALENDAR_MILLISECOND;
++			default:
++				throw new AssertionFailure( "Unknown Resolution: " + resolution );
++		}
++	}
++
+ 	/**
+ 	 * Takes in a fieldBridge and will return you a TwoWayFieldBridge instance.
+ 	 *
+Index: src/main/java/org/hibernate/search/bridge/builtin/CalendarBridge.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/builtin/CalendarBridge.java	(revision 0)
++++ src/main/java/org/hibernate/search/bridge/builtin/CalendarBridge.java	(revision 0)
+@@ -0,0 +1,73 @@
++package org.hibernate.search.bridge.builtin;
++
++import org.hibernate.search.annotations.Resolution;
++import org.hibernate.search.bridge.ParameterizedBridge;
++import org.hibernate.search.bridge.TwoWayStringBridge;
++import org.hibernate.util.StringHelper;
++import org.hibernate.AssertionFailure;
++import org.hibernate.HibernateException;
++import org.apache.lucene.document.DateTools;
++
++import java.util.Date;
++import java.util.Calendar;
++import java.util.Locale;
++import java.util.Map;
++import java.text.ParseException;
++
++
++public class CalendarBridge implements TwoWayStringBridge, ParameterizedBridge {
++    
++	private DateTools.Resolution resolution;
++	public static final TwoWayStringBridge CALENDAR_YEAR = new CalendarBridge( Resolution.YEAR );
++	public static final TwoWayStringBridge CALENDAR_MONTH = new CalendarBridge( Resolution.MONTH );
++	public static final TwoWayStringBridge CALENDAR_DAY = new CalendarBridge( Resolution.DAY );
++	public static final TwoWayStringBridge CALENDAR_HOUR = new CalendarBridge( Resolution.HOUR );
++	public static final TwoWayStringBridge CALENDAR_MINUTE = new CalendarBridge( Resolution.MINUTE );
++	public static final TwoWayStringBridge CALENDAR_SECOND = new CalendarBridge( Resolution.SECOND );
++	public static final TwoWayStringBridge CALENDAR_MILLISECOND = new CalendarBridge( Resolution.MILLISECOND );
++
++
++	public CalendarBridge() {
++	}
++
++	public CalendarBridge(Resolution resolution) {
++		this.resolution = DateResolutionUtil.getLuceneResolution( resolution);
++	}
++
++	public void setParameterValues(Map parameters) {
++		Object resolution = parameters.get( "resolution" );
++		Resolution hibResolution;
++		if ( resolution instanceof String ) {
++			hibResolution = Resolution.valueOf( ( (String) resolution ).toUpperCase( Locale.ENGLISH ) );
++		}
++		else {
++			hibResolution = (Resolution) resolution;
++		}
++		resolution = DateResolutionUtil.getLuceneResolution( hibResolution );
++	}
++
++	
++	
++    public Object stringToObject(String stringValue) {
++        if ( StringHelper.isEmpty( stringValue )) {
++            return null;
++        }
++        try {
++            Date date = DateTools.stringToDate(stringValue);
++            Calendar calendar =  Calendar.getInstance();
++            calendar.setTime(date);
++            return calendar;
++        } catch (ParseException e) {
++            throw new HibernateException( "Unable to parse into calendar: " + stringValue, e );
++        }
++	}
++
++	public String objectToString(Object object) {
++        if (object == null) {
++            return null;
++        }
++        Calendar calendar = (Calendar)object;
++        return DateTools.dateToString(calendar.getTime(),resolution);
++    }
++
++}
+Index: src/main/java/org/hibernate/search/bridge/builtin/DateBridge.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/builtin/DateBridge.java	(revision 17820)
++++ src/main/java/org/hibernate/search/bridge/builtin/DateBridge.java	(working copy)
+@@ -69,7 +69,7 @@
+ 	}
+ 
+ 	public DateBridge(Resolution resolution) {
+-		setResolution( resolution );
++		this.resolution = DateResolutionUtil.getLuceneResolution(resolution);
+ 	}
+ 
+ 	public Object stringToObject(String stringValue) {
+@@ -97,35 +97,8 @@
+ 		else {
+ 			hibResolution = (Resolution) resolution;
+ 		}
+-		setResolution( hibResolution );
++		this.resolution = DateResolutionUtil.getLuceneResolution(hibResolution );
+ 	}
+ 
+-	private void setResolution(Resolution hibResolution) {
+-		switch (hibResolution) {
+-			case YEAR:
+-				this.resolution = DateTools.Resolution.YEAR;
+-				break;
+-			case MONTH:
+-				this.resolution = DateTools.Resolution.MONTH;
+-				break;
+-			case DAY:
+-				this.resolution = DateTools.Resolution.DAY;
+-				break;
+-			case HOUR:
+-				this.resolution = DateTools.Resolution.HOUR;
+-				break;
+-			case MINUTE:
+-				this.resolution = DateTools.Resolution.MINUTE;
+-				break;
+-			case SECOND:
+-				this.resolution = DateTools.Resolution.SECOND;
+-				break;
+-			case MILLISECOND:
+-				this.resolution = DateTools.Resolution.MILLISECOND;
+-				break;
+-			default:
+-				throw new AssertionFailure( "Unknown Resolution: " + hibResolution );
+-
+-		}
+-	}
++	
+ }
+Index: src/main/java/org/hibernate/search/bridge/builtin/DateResolutionUtil.java
+===================================================================
+--- src/main/java/org/hibernate/search/bridge/builtin/DateResolutionUtil.java	(revision 0)
++++ src/main/java/org/hibernate/search/bridge/builtin/DateResolutionUtil.java	(revision 0)
+@@ -0,0 +1,41 @@
++package org.hibernate.search.bridge.builtin;
++
++import org.apache.lucene.document.DateTools;
++import org.apache.lucene.document.DateTools.Resolution;
++import org.hibernate.AssertionFailure;
++
++public class DateResolutionUtil {
++	
++	private DateResolutionUtil() {}
++	
++	
++	public static Resolution getLuceneResolution(org.hibernate.search.annotations.Resolution hibResolution) {
++		Resolution resolution = null;
++		switch (hibResolution) {
++			case YEAR:
++				resolution = DateTools.Resolution.YEAR;
++				break;
++			case MONTH:
++				resolution = DateTools.Resolution.MONTH;
++				break;
++			case DAY:
++				resolution = DateTools.Resolution.DAY;
++				break;
++			case HOUR:
++				resolution = DateTools.Resolution.HOUR;
++				break;
++			case MINUTE:
++				resolution = DateTools.Resolution.MINUTE;
++				break;
++			case SECOND:
++				resolution = DateTools.Resolution.SECOND;
++				break;
++			case MILLISECOND:
++				resolution = DateTools.Resolution.MILLISECOND;
++				break;
++			default:
++				throw new AssertionFailure( "Unknown Resolution: " + hibResolution );
++		}
++		return resolution;
++	}
++}
+Index: src/test/java/org/hibernate/search/test/bridge/BridgeTest.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(revision 17820)
++++ src/test/java/org/hibernate/search/test/bridge/BridgeTest.java	(working copy)
+@@ -207,6 +207,55 @@
+ 
+ 	}
+ 
++
++    public void testCalendarBridge() throws Exception {
++		Cloud cloud = new Cloud();
++		Calendar c = GregorianCalendar.getInstance();
++		c.setTimeZone( TimeZone.getTimeZone( "GMT" ) ); //for the sake of tests
++		c.set( 2000, 11, 15, 3, 43, 2 );
++		c.set( Calendar.MILLISECOND, 5 );
++
++
++		cloud.setMyCalendar(c); //5 millisecond
++		cloud.setCalendarDay(c);
++		cloud.setCalendarHour( c );
++		cloud.setCalendarMillisecond( c );
++		cloud.setCalendarMinute( c );
++		cloud.setCalendarMonth( c );
++		cloud.setCalendarSecond( c );
++		cloud.setCalendarYear( c );
++		org.hibernate.Session s = openSession();
++		Transaction tx = s.beginTransaction();
++		s.persist( cloud );
++		s.flush();
++		tx.commit();
++
++		tx = s.beginTransaction();
++		FullTextSession session = Search.getFullTextSession( s );
++		QueryParser parser = new QueryParser( "id", new StandardAnalyzer() );
++		Query query;
++		List result;
++
++		query = parser.parse(
++				"myCalendar:[19900101 TO 20060101]"
++						+ " AND calendarDay:[20001214 TO 2000121501]"
++						+ " AND calendarMonth:[200012 TO 20001201]"
++						+ " AND calendarYear:[2000 TO 200001]"
++						+ " AND calendarHour:[20001214 TO 2000121503]"
++						+ " AND calendarMinute:[20001214 TO 200012150343]"
++						+ " AND calendarSecond:[20001214 TO 20001215034302]"
++						+ " AND calendarMillisecond:[20001214 TO 20001215034302005]"
++		);
++		result = session.createFullTextQuery( query ).list();
++		assertEquals( "Calendar not found or not property truncated", 1, result.size() );
++
++		s.delete( s.get( Cloud.class, cloud.getId() ) );
++		tx.commit();
++		s.close();
++
++	}
++
++
+ 	protected Class[] getMappings() {
+ 		return new Class[] {
+ 				Cloud.class
+Index: src/test/java/org/hibernate/search/test/bridge/Cloud.java
+===================================================================
+--- src/test/java/org/hibernate/search/test/bridge/Cloud.java	(revision 17820)
++++ src/test/java/org/hibernate/search/test/bridge/Cloud.java	(working copy)
+@@ -25,21 +25,14 @@
+ package org.hibernate.search.test.bridge;
+ 
+ import java.util.Date;
++import java.util.Calendar;
+ import java.net.URL;
+ import java.net.URI;
+ import javax.persistence.Entity;
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.Id;
+ 
+-import org.hibernate.search.annotations.DateBridge;
+-import org.hibernate.search.annotations.DocumentId;
+-import org.hibernate.search.annotations.Field;
+-import org.hibernate.search.annotations.FieldBridge;
+-import org.hibernate.search.annotations.Index;
+-import org.hibernate.search.annotations.Indexed;
+-import org.hibernate.search.annotations.Parameter;
+-import org.hibernate.search.annotations.Resolution;
+-import org.hibernate.search.annotations.Store;
++import org.hibernate.search.annotations.*;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -74,7 +67,18 @@
+ 	private Class clazz;
+ 	private URL url;
+ 	private URI uri;
++    private Calendar myCalendar;
++    private Calendar calendarYear;
++    private Calendar calendarMonth;
++    private Calendar calendarDay;
++    private Calendar calendarMinute;
++    private Calendar calendarSecond;
++    private Calendar calendarHour;
++    private Calendar calendarMillisecond;
+ 
++
++
++
+ 	@Field(index=Index.UN_TOKENIZED, store=Store.YES)
+ 	public URL getUrl() {
+ 		return url;
+@@ -328,4 +332,88 @@
+ 	public void setChar2(char char2) {
+ 		this.char2 = char2;
+ 	}
++
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    public Calendar getMyCalendar() {
++        return myCalendar;
++    }
++
++    public void setMyCalendar(Calendar myCalendar) {
++        this.myCalendar = myCalendar;
++    }
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge(resolution = Resolution.YEAR )
++    public Calendar getCalendarYear() {
++        return calendarYear;
++    }
++
++    public void setCalendarYear(Calendar calendarYear) {
++        this.calendarYear = calendarYear;
++    }
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.MONTH )
++    public Calendar getCalendarMonth() {
++        return calendarMonth;
++    }
++
++    public void setCalendarMonth(Calendar calendarMonth) {
++        this.calendarMonth = calendarMonth;
++    }
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.DAY )
++    public Calendar getCalendarDay() {
++        return calendarDay;
++    }
++
++    public void setCalendarDay(Calendar calendarDay) {
++        this.calendarDay = calendarDay;
++    }
++
++
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.MINUTE )
++    public Calendar getCalendarMinute() {
++        return calendarMinute;
++    }
++
++    public void setCalendarMinute(Calendar calendarMinute) {
++        this.calendarMinute = calendarMinute;
++    }
++
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.HOUR )
++    public Calendar getCalendarHour() {
++        return calendarHour;
++    }
++
++    public void setCalendarHour(Calendar calendarHour) {
++        this.calendarHour = calendarHour;
++    }
++
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.MILLISECOND )
++    public Calendar getCalendarMillisecond() {
++        return calendarMillisecond;
++    }
++
++    public void setCalendarMillisecond(Calendar calendarMillisecond) {
++        this.calendarMillisecond = calendarMillisecond;
++    }
++
++    @Field(index=Index.UN_TOKENIZED, store=Store.YES)
++    @CalendarBridge( resolution = Resolution.SECOND )
++    public Calendar getCalendarSecond() {
++        return calendarSecond;
++    }
++
++    public void setCalendarSecond(Calendar calendarSecond) {
++        this.calendarSecond = calendarSecond;
++    }
+ }

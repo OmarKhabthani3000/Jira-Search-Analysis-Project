@@ -1,0 +1,107 @@
+Index: net/sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.25
+diff -u -r1.25 Dialect.java
+--- net/sf/hibernate/dialect/Dialect.java	4 Jun 2004 01:27:38 -0000	1.25
++++ net/sf/hibernate/dialect/Dialect.java	11 Jul 2004 18:04:35 -0000
+@@ -533,6 +533,20 @@
+ 	public boolean hasDataTypeInIdentityColumn() {
+ 		return true;
+ 	}
++	
++	/**
++	 * Is the token a dialect-specific boolean operator
++	 */
++	public boolean isBooleanOperator(String token) {
++		return false;
++	}
++	
++	/**
++	 * Gets the dialect-specific negation for the specified operator
++	 */
++	public String getNegation(String operator) {
++		return null;
++	}
+ }
+ 
+ 
+Index: net/sf/hibernate/dialect/MySQLDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/MySQLDialect.java,v
+retrieving revision 1.16
+diff -u -r1.16 MySQLDialect.java
+--- net/sf/hibernate/dialect/MySQLDialect.java	24 Jun 2004 20:42:52 -0000	1.16
++++ net/sf/hibernate/dialect/MySQLDialect.java	11 Jul 2004 18:04:35 -0000
+@@ -2,6 +2,10 @@
+ package net.sf.hibernate.dialect;
+ 
+ import java.sql.Types;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Map;
++import java.util.Set;
+ 
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.cfg.Environment;
+@@ -209,6 +213,29 @@
+ 	  return StringHelper.UNDERSCORE;
+ 	}
+ 
++	
++	static final Set BOOLEAN_OPERATORS = new HashSet();
++	static final Map NEGATIONS = new HashMap();
++	
++	static {
++		BOOLEAN_OPERATORS.add("regexp");
++		BOOLEAN_OPERATORS.add("not regexp");
++		BOOLEAN_OPERATORS.add("rlike");
++		BOOLEAN_OPERATORS.add("not rlike");
++		
++		NEGATIONS.put("regexp", "not regexp");
++		NEGATIONS.put("not regexp", "regexp");
++		NEGATIONS.put("rlike", "not rlike");
++		NEGATIONS.put("not rlike", "rlike");
++	}
++	
++	public boolean isBooleanOperator(String token) {
++		return BOOLEAN_OPERATORS.contains(token);
++	}
++	
++	public String getNegation(String operator) {
++		return (String)NEGATIONS.get(operator);
++	}
+ }
+ 
+ 
+Index: net/sf/hibernate/hql/WhereParser.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/hql/WhereParser.java,v
+retrieving revision 1.21
+diff -u -r1.21 WhereParser.java
+--- net/sf/hibernate/hql/WhereParser.java	19 Jun 2004 18:45:02 -0000	1.21
++++ net/sf/hibernate/hql/WhereParser.java	11 Jul 2004 18:04:36 -0000
+@@ -234,7 +234,7 @@
+ 		}
+ 		
+ 		//take note when this is a boolean expression
+-		if ( BOOLEAN_OPERATORS.contains(lcToken) ) {
++		if ( BOOLEAN_OPERATORS.contains(lcToken) || q.getFactory().getDialect().isBooleanOperator(lcToken) ) {
+ 			booleanTests.removeLast();
+ 			booleanTests.addLast(Boolean.TRUE);
+ 		}
+@@ -401,7 +401,13 @@
+ 				}
+ 				else { //anything else
+ 					
+-					String negatedToken = negated ? (String) NEGATIONS.get( token.toLowerCase() ) : null;
++					String negatedToken = null;
++					if (negated) {
++						String lToken = token.toLowerCase();
++						negatedToken = (String) NEGATIONS.get( lToken );
++						if (negatedToken == null)
++							negatedToken = q.getFactory().getDialect().getNegation( lToken );
++					}
+ 					if ( negatedToken!=null && ( !betweenSpecialCase || !"or".equals(negatedToken) ) ) {
+ 						appendToken(q, negatedToken);
+ 					}

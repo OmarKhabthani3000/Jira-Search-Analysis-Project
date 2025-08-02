@@ -1,0 +1,138 @@
+Index: src/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/AnnotationBinder.java,v
+retrieving revision 1.80
+diff -u -r1.80 AnnotationBinder.java
+--- src/java/org/hibernate/cfg/AnnotationBinder.java	3 May 2005 09:15:23 -0000	1.80
++++ src/java/org/hibernate/cfg/AnnotationBinder.java	3 May 2005 22:36:04 -0000
+@@ -674,8 +674,9 @@
+ 		}
+ 		else if ( annotedElt.isAnnotationPresent(ManyToOne.class) ) {
+ 			ManyToOne ann = (ManyToOne) annotedElt.getAnnotation(ManyToOne.class);
++			OrphanDelete orphanDelete = annotedElt.getAnnotation(OrphanDelete.class);
+ 			Ejb3JoinColumn.checkIfJoinColumn(columns, propertyHolder, inferredData);
+-			bindManyToOne( getCascadeStrategy( ann.cascade() ),
++			bindManyToOne( getCascadeStrategy( ann.cascade(), orphanDelete != null && orphanDelete.value() ),
+ 				(Ejb3JoinColumn[]) columns,
+ 				ann.optional(), 
+ 				getFetchMode( ann.fetch() ), 
+@@ -693,7 +694,7 @@
+ //				columns = new Ejb3JoinColumn[0];
+ //			}
+ 			Ejb3JoinColumn.checkIfJoinColumn(columns, propertyHolder, inferredData);
+-			bindOneToOne( getCascadeStrategy( ann.cascade() ),
++			bindOneToOne( getCascadeStrategy( ann.cascade(), false ),
+ 				(Ejb3JoinColumn[]) columns,
+ 				ann.optional(), 
+ 				getFetchMode( ann.fetch() ), 
+@@ -740,8 +741,9 @@
+ 				}
+ 			}
+ 			collectionBinder.setPropertyHolder(propertyHolder);
+			Where whereAnn = annotedElt.getAnnotation( Where.class );
+ 			collectionBinder.setWhere(whereAnn);
++			OrphanDelete deleteOrphan = annotedElt.getAnnotation( OrphanDelete.class );
+ 			collectionBinder.setCollectionType( inferredData.getCollectionType() );
+ 			collectionBinder.setMappings(mappings);
+ 			collectionBinder.setPropertyAccessorName( inferredData.getDefaultAccess() );
+@@ -758,18 +760,18 @@
+ 					}
+ 				}
+ 				collectionBinder.setJoinColumns( ( Ejb3JoinColumn[] ) columns );
+				mappedBy = oneToManyAnn.mappedBy();
+ 				collectionBinder.setUnique(true);
+ 				collectionBinder.setTargetEntity( oneToManyAnn.targetEntity() );
+ 				collectionBinder.setFetchType( oneToManyAnn.fetch() );
+-				collectionBinder.setCascadeStrategy( getCascadeStrategy( oneToManyAnn.cascade() ) );
++				collectionBinder.setCascadeStrategy( getCascadeStrategy( oneToManyAnn.cascade(), deleteOrphan != null && deleteOrphan.value() ) );
+ 			}
+ 			else if (manyToManyAnn != null) {
+ 				mappedBy = manyToManyAnn.mappedBy();
+ 				collectionBinder.setUnique(false);
+ 				collectionBinder.setTargetEntity( manyToManyAnn.targetEntity() );
+ 				collectionBinder.setFetchType( manyToManyAnn.fetch() );
+-				collectionBinder.setCascadeStrategy( getCascadeStrategy( manyToManyAnn.cascade() ) );
++				collectionBinder.setCascadeStrategy( getCascadeStrategy( manyToManyAnn.cascade(), false ) );
+ 			}
+ 			collectionBinder.setMappedBy( mappedBy );
+ 			if (isForeignKey) {
+@@ -1293,8 +1295,8 @@
+ 		} 
+ 		throw new AssertionFailure("Unknown GeneratorType: " + generatorEnum);
+ 	}
+-
+-	private static String getCascadeStrategy(CascadeType[] cascades) {
++	
++	private static String getCascadeStrategy(CascadeType[] cascades, boolean orphanDelete) {
+ 		if (cascades.length == 0) {
+ 			return "none";
+ 		}
+@@ -1327,9 +1329,11 @@
+ 		//if (!all) all = persist && merge && remove;
+ 		//refresh is before all because it is not part of all
+ 		if (refresh) cascade.append("refresh,");
++		if (orphanDelete) cascade.append("delete-orphan,");
+ 		if (all) {
+			cascade.append("all,");
+ 			cascade.deleteCharAt(cascade.length() - 1); //remove extra ','
++			
+ 			return cascade.toString();
+ 		}
+         if (persist || merge) cascade.append("save-update,"); //HBX-47
+Index: src/java/org/hibernate/cfg/annotations/AbstractCollectionBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/annotations/AbstractCollectionBinder.java,v
+retrieving revision 1.4
+diff -u -r1.4 AbstractCollectionBinder.java
+--- src/java/org/hibernate/cfg/annotations/AbstractCollectionBinder.java	2 May 2005 14:55:24 -0000	1.4
++++ src/java/org/hibernate/cfg/annotations/AbstractCollectionBinder.java	3 May 2005 22:36:04 -0000
+@@ -8,6 +8,7 @@
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.annotations.BatchSize;
+ import org.hibernate.annotations.Cache;
++import org.hibernate.annotations.OrphanDelete;
+ import org.hibernate.annotations.Where;
+ import org.hibernate.cfg.AnnotationBinder;
+ import org.hibernate.cfg.Ejb3JoinColumn;
+@@ -164,6 +165,7 @@
+ 		collection.setFetchMode(fetchMode);
+ 		collection.setLazy(fetchMode == FetchMode.SELECT);
+ 		collection.setBatchSize(batchSize);
++		
+ 		if ( StringHelper.isNotEmpty(where) ) collection.setWhere(where);
+ 		if ( StringHelper.isNotEmpty( cacheConcurrencyStrategy ) ) {
+ 			collection.setCacheConcurrencyStrategy(cacheConcurrencyStrategy);
+@@ -280,7 +282,7 @@
+ 			where = whereAnn.clause();
+ 		}
+ 	}
+-
++	
+ 	public void setOneToMany(boolean oneToMany) {
+ 		this.oneToMany = oneToMany;
+ 	}
+Index: src/java/org/hibernate/annotations/OrphanDelete.java
+===================================================================
+RCS file: src/java/org/hibernate/annotations/OrphanDelete.java
+diff -N src/java/org/hibernate/annotations/OrphanDelete.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/java/org/hibernate/annotations/OrphanDelete.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,18 @@
++//$Id: Entity.java,v 1.2 2005/02/28 21:42:17 epbernard Exp $
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++/**
++ * 
++ * @author Pablo Nussembaum
++ */
++@Target(METHOD) @Retention(RUNTIME)
++public @interface OrphanDelete {
++	/** delete orphans in collections */
++	boolean value() default true;
++}

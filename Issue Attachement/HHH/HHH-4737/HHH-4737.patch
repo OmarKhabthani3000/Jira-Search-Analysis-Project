@@ -1,0 +1,89 @@
+Index: core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java	(revision 18325)
++++ core/src/main/java/org/hibernate/engine/StatefulPersistenceContext.java	(working copy)
+@@ -698,8 +698,7 @@
+ 	 */
+ 	public Object proxyFor(Object impl) throws HibernateException {
+ 		EntityEntry e = getEntry(impl);
+-		EntityPersister p = e.getPersister();
+-		return proxyFor( p, new EntityKey( e.getId(), p, session.getEntityMode() ), impl );
++		return proxyFor( e.getPersister(), e.getEntityKey(), impl );
+ 	}
+ 
+ 	/**
+Index: core/src/main/java/org/hibernate/engine/EntityEntry.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/EntityEntry.java	(revision 18325)
++++ core/src/main/java/org/hibernate/engine/EntityEntry.java	(working copy)
+@@ -56,6 +56,7 @@
+ 	private transient EntityPersister persister; // for convenience to save some lookups
+ 	private final EntityMode entityMode;
+ 	private final String entityName;
++	private transient EntityKey cachedEntityKey; // cached EntityKey (lazy-initialized)
+ 	private boolean isBeingReplicated;
+ 	private boolean loadedWithLazyPropertiesUnfetched; //NOTE: this is not updated when properties are fetched lazily!
+ 	private final transient Object rowId;
+@@ -165,6 +166,21 @@
+ 		return persister;
+ 	}
+ 
++	/**
++	 * Get the EntityKey based on this EntityEntry.
++	 * @return the EntityKey
++	 * @throws  IllegalStateException if getId() is null
++	 */
++	public EntityKey getEntityKey() {
++		if ( cachedEntityKey == null ) {
++			if ( getId() == null ) {
++				throw new IllegalStateException( "cannot generate an EntityKey when id is null.");
++			}
++			cachedEntityKey = new EntityKey( getId(), getPersister(), entityMode );
++		}
++		return cachedEntityKey;
++	}
++
+ 	void afterDeserialize(SessionFactoryImplementor factory) {
+ 		persister = factory.getEntityPersister( entityName );
+ 	}
+@@ -225,7 +241,7 @@
+ 				earlyInsert ?
+ 						!isExistsInDatabase() :
+ 						session.getPersistenceContext().getNullifiableEntityKeys()
+-							.contains( new EntityKey( getId(), getPersister(), entityMode ) )
++							.contains( getEntityKey() )
+ 				);
+ 	}
+ 	
+Index: core/src/main/java/org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(revision 18325)
++++ core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -108,9 +108,8 @@
+ 		}
+ 		entry.postDelete();
+ 
+-		EntityKey key = new EntityKey( entry.getId(), entry.getPersister(), session.getEntityMode() );
+-		persistenceContext.removeEntity(key);
+-		persistenceContext.removeProxy(key);
++		persistenceContext.removeEntity( entry.getEntityKey() );
++		persistenceContext.removeProxy( entry.getEntityKey() );
+ 		
+ 		if ( persister.hasCache() ) {
+ 			persister.getCacheAccessStrategy().remove( ck );
+Index: core/src/main/java/org/hibernate/event/def/DefaultEvictEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/def/DefaultEvictEventListener.java	(revision 18325)
++++ core/src/main/java/org/hibernate/event/def/DefaultEvictEventListener.java	(working copy)
+@@ -88,9 +88,8 @@
+ 		else {
+ 			EntityEntry e = persistenceContext.removeEntry( object );
+ 			if ( e != null ) {
+-				EntityKey key = new EntityKey( e.getId(), e.getPersister(), source.getEntityMode()  );
+-				persistenceContext.removeEntity( key );
+-				doEvict( object, key, e.getPersister(), source );
++				persistenceContext.removeEntity( e.getEntityKey() );
++				doEvict( object, e.getEntityKey(), e.getPersister(), source );
+ 			}
+ 		}
+ 	}

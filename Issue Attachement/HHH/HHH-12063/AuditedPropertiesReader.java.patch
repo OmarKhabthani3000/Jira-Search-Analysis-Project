@@ -1,0 +1,100 @@
+--- hibernate-envers-5.2.12.Final-sources/org/hibernate/envers/configuration/internal/metadata/reader/AuditedPropertiesReader.java	2017-09-23 20:09:56.000000000 -0700
++++ hibernate-envers-5.2.12.Final-sources-patched/org/hibernate/envers/configuration/internal/metadata/reader/AuditedPropertiesReader.java	2017-10-24 15:16:15.198929835 -0700
+@@ -12,7 +12,9 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Map.Entry;
+ import java.util.Set;
++import java.util.function.Function;
+ 
+ import javax.persistence.ElementCollection;
+ import javax.persistence.JoinColumn;
+@@ -75,7 +77,7 @@
+ 	private final ReflectionManager reflectionManager;
+ 	private final String propertyNamePrefix;
+ 
+-	private final Set<String> propertyAccessedPersistentProperties;
++	private final Map<String, String> propertyAccessedPersistentProperties;
+ 	private final Set<String> fieldAccessedPersistentProperties;
+ 	// Mapping class field to corresponding <properties> element.
+ 	private final Map<String, String> propertiesGroupMapping;
+@@ -100,7 +102,7 @@
+ 		this.reflectionManager = reflectionManager;
+ 		this.propertyNamePrefix = propertyNamePrefix;
+ 
+-		propertyAccessedPersistentProperties = newHashSet();
++		propertyAccessedPersistentProperties = newHashMap();
+ 		fieldAccessedPersistentProperties = newHashSet();
+ 		propertiesGroupMapping = newHashMap();
+ 
+@@ -268,7 +270,7 @@
+ 			fieldAccessedPersistentProperties.add( property.getName() );
+ 		}
+ 		else {
+-			propertyAccessedPersistentProperties.add( property.getName() );
++			propertyAccessedPersistentProperties.put( property.getName(), property.getPropertyAccessorName() );
+ 		}
+ 	}
+ 
+@@ -317,8 +319,9 @@
+ 					"Audited dynamic component cannot have properties with access=\"field\" for properties: " + fieldAccessedPersistentProperties + ". \n Change properties access=\"property\", to make it work)"
+ 			);
+ 		}
+-		for ( String property : propertyAccessedPersistentProperties ) {
+-			String accessType = AccessType.PROPERTY.getType();
++		for ( Entry<String, String> entry : propertyAccessedPersistentProperties.entrySet() ) {
++			String property = entry.getKey();
++			String accessType = entry.getValue();
+ 			if ( !auditedPropertiesHolder.contains( property ) ) {
+ 				final Value propertyValue = persistentPropertiesSource.getProperty( property ).getValue();
+ 				if ( propertyValue instanceof Component ) {
+@@ -351,14 +354,14 @@
+ 		//look in the class
+ 		addFromProperties(
+ 				clazz.getDeclaredProperties( "field" ),
+-				"field",
++				it -> "field",
+ 				fieldAccessedPersistentProperties,
+ 				allClassAudited
+ 		);
+ 		addFromProperties(
+ 				clazz.getDeclaredProperties( "property" ),
+-				"property",
+-				propertyAccessedPersistentProperties,
++				propertyAccessedPersistentProperties::get,
++				propertyAccessedPersistentProperties.keySet(),
+ 				allClassAudited
+ 		);
+ 
+@@ -372,7 +375,7 @@
+ 
+ 	private void addFromProperties(
+ 			Iterable<XProperty> properties,
+-			String accessType,
++			Function<String, String> accessTypeProvider,
+ 			Set<String> persistentProperties,
+ 			Audited allClassAudited) {
+ 		for ( XProperty property : properties ) {
+@@ -383,10 +386,10 @@
+ 					&& !auditedPropertiesHolder.contains( property.getName() ) ) {
+ 				final Value propertyValue = persistentPropertiesSource.getProperty( property.getName() ).getValue();
+ 				if ( propertyValue instanceof Component ) {
+-					this.addFromComponentProperty( property, accessType, (Component) propertyValue, allClassAudited );
++					this.addFromComponentProperty( property, accessTypeProvider.apply( property.getName() ), (Component) propertyValue, allClassAudited );
+ 				}
+ 				else {
+-					this.addFromNotComponentProperty( property, accessType, allClassAudited );
++					this.addFromNotComponentProperty( property, accessTypeProvider.apply( property.getName() ), allClassAudited );
+ 				}
+ 			}
+ 			else if ( propertiesGroupMapping.containsKey( property.getName() ) ) {
+@@ -398,7 +401,7 @@
+ 					this.addFromPropertiesGroup(
+ 							embeddedName,
+ 							property,
+-							accessType,
++							accessTypeProvider.apply( property.getName() ),
+ 							(Component) propertyValue,
+ 							allClassAudited
+ 					);

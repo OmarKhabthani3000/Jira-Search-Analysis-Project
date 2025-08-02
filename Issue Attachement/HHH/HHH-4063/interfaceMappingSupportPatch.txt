@@ -1,0 +1,1812 @@
+Index: src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(revision 18418)
++++ src/main/java/org/hibernate/envers/configuration/metadata/reader/AuditedPropertiesReader.java	(working copy)
+@@ -81,7 +81,7 @@
+ 
+ 	private void addPropertiesFromClass(XClass clazz)  {
+ 		XClass superclazz = clazz.getSuperclass();
+-		if (!"java.lang.Object".equals(superclazz.getName())) {
++		if (!clazz.isInterface() && !"java.lang.Object".equals(superclazz.getName())) {
+ 			addPropertiesFromClass(superclazz);
+ 		}
+ 
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AbstractAllAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AbstractAllAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AbstractAllAuditedTest.java	(revision 0)
+@@ -0,0 +1,96 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.envers.exception.NotAuditedException;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++public abstract class AbstractAllAuditedTest extends AbstractEntityTest {
++
++	private long ai_id;
++	private long nai_id;
++	
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        EntityManager em = getEntityManager();
++
++        AuditedImplementor ai = new AuditedImplementor();
++        ai.setData("La data");
++        ai.setAuditedImplementorData("audited implementor data");
++        
++        NonAuditedImplementor nai = new NonAuditedImplementor();
++        nai.setData("info");
++        nai.setNonAuditedImplementorData("sttring");
++        
++        // Revision 1
++        em.getTransaction().begin();
++
++        em.persist(ai);
++        
++        em.persist(nai);
++
++        em.getTransaction().commit();
++
++        // Revision 2
++
++
++        // Revision 3
++
++        ai_id = ai.getId();
++        nai_id = nai.getId();
++    }
++
++
++    @Test
++    public void testRetrieveAudited() {
++    	// levanto las versiones actuales
++    	AuditedImplementor ai = getEntityManager().find(AuditedImplementor.class, ai_id);
++    	assert ai != null;
++    	SimpleInterface si = getEntityManager().find(SimpleInterface.class, ai_id);
++    	assert si != null;
++
++    	// levanto las de la revisión 1, ninguna debe ser null
++    	AuditedImplementor ai_rev1 = getAuditReader().find(AuditedImplementor.class, ai_id, 1);
++    	assert ai_rev1 != null;
++    	SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class, ai_id, 1);
++    	assert si_rev1 != null;
++    		
++    	// data de las actuales no debe ser null
++    	assert ai.getData() != null;
++    	assert si.getData() != null;
++    	// la data de las revisiones no debe ser null
++    	assert ai_rev1.getData() != null;
++    	assert si_rev1.getData() != null;
++    }
++    
++    @Test
++    public void testRetrieveNonAudited() {
++    	// levanto las versiones actuales
++    	NonAuditedImplementor nai = getEntityManager().find(NonAuditedImplementor.class, nai_id);
++    	assert nai != null;
++    	SimpleInterface si = getEntityManager().find(SimpleInterface.class, nai_id);
++    	assert si != null;
++    	
++    	assert si.getData().equals(nai.getData());
++
++    	try {
++    		// levanto la revision  
++    		getAuditReader().find(NonAuditedImplementor.class, nai_id, 1);
++    		assert false;
++    	} catch (Exception e) {
++    		// no es auditable!!!
++    		assert (e instanceof NotAuditedException);
++		}
++    	
++    	// levanto la revision que no es auditable pero con la interfaz, el resultado debe ser null
++   		SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class, nai_id, 1);
++   		assert si_rev1 == null;
++   		
++    }    
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/AuditedImplementor.java	(revision 0)
+@@ -0,0 +1,47 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++@Audited
++public class AuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String auditedImplementorData;
++
++	
++	protected AuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getAuditedImplementorData() {
++		return auditedImplementorData;
++	}
++
++	public void setAuditedImplementorData(String implementorData) {
++		this.auditedImplementorData = implementorData;
++	}
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/NonAuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/NonAuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/NonAuditedImplementor.java	(revision 0)
+@@ -0,0 +1,45 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited;
++
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++public class NonAuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String nonAuditedImplementorData;
++
++	
++	protected NonAuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getNonAuditedImplementorData() {
++		return nonAuditedImplementorData;
++	}
++
++	public void setNonAuditedImplementorData(String implementorData) {
++		this.nonAuditedImplementorData = implementorData;
++	}
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/SimpleInterface.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/SimpleInterface.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/SimpleInterface.java	(revision 0)
+@@ -0,0 +1,20 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++@Audited
++public interface SimpleInterface {
++	
++	long getId();
++	
++	void setId(long id);
++	
++	String getData();
++	
++	void setData(String data);
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/JoinedAllAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/JoinedAllAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/JoinedAllAuditedTest.java	(revision 0)
+@@ -0,0 +1,30 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited.joined;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AbstractAllAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++public class JoinedAllAuditedTest extends AbstractAllAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/joinedAllAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/joinedAllAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/joinedAllAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/joined/joinedAllAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,39 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="INTERFACE" abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</joined-subclass>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</joined-subclass>
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/SubclassAllAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/SubclassAllAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/SubclassAllAuditedTest.java	(revision 0)
+@@ -0,0 +1,32 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited.subclass;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AbstractAllAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++public class SubclassAllAuditedTest extends AbstractAllAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/subclassAllAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }    
++    
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/subclassAllAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/subclassAllAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/subclass/subclassAllAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,39 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="SIMPLES_interface" discriminator-value="SIMPLE_INTERFACE">
++
++		<id name="id" column="ID" type="long">
++			<generator class="native" />
++		</id>
++
++		<discriminator column="DISCRIMINATOR" />
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		discriminator-value="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</subclass>
++	
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		discriminator-value="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</subclass>	
++	
++	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/UnionAllAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/UnionAllAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/UnionAllAuditedTest.java	(revision 0)
+@@ -0,0 +1,30 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.allAudited.union;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AbstractAllAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++public class UnionAllAuditedTest extends AbstractAllAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/unionAllAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/unionAllAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/unionAllAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/allAudited/union/unionAllAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,35 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</union-subclass>
++	
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</union-subclass>	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AbstractPropertiesAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AbstractPropertiesAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AbstractPropertiesAuditedTest.java	(revision 0)
+@@ -0,0 +1,109 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.envers.exception.NotAuditedException;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ * 
++ */
++
++public abstract class AbstractPropertiesAuditedTest extends AbstractEntityTest {
++
++	private long ai_id;
++	private long nai_id;
++
++	private static int NUMERITO = 555;
++
++	@BeforeClass(dependsOnMethods = "init")
++	public void initData() {
++		EntityManager em = getEntityManager();
++
++		AuditedImplementor ai = new AuditedImplementor();
++		ai.setData("La data");
++		ai.setAuditedImplementorData("audited implementor data");
++		ai.setNumerito(NUMERITO);
++
++		NonAuditedImplementor nai = new NonAuditedImplementor();
++		nai.setData("info");
++		nai.setNonAuditedImplementorData("sttring");
++		nai.setNumerito(NUMERITO);
++
++		// Revision 1
++		em.getTransaction().begin();
++
++		em.persist(ai);
++
++		em.persist(nai);
++
++		em.getTransaction().commit();
++
++		// Revision 2
++
++		// Revision 3
++
++		ai_id = ai.getId();
++		nai_id = nai.getId();
++	}
++
++	@Test
++	public void testRetrieveAudited() {
++		// levanto las versiones actuales
++		AuditedImplementor ai = getEntityManager().find(
++				AuditedImplementor.class, ai_id);
++		assert ai != null;
++		SimpleInterface si = getEntityManager().find(SimpleInterface.class,
++				ai_id);
++		assert si != null;
++
++		// levanto las de la revisión 1, ninguna debe ser null
++		AuditedImplementor ai_rev1 = getAuditReader().find(
++				AuditedImplementor.class, ai_id, 1);
++		assert ai_rev1 != null;
++		SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class,
++				ai_id, 1);
++		assert si_rev1 != null;
++
++		// data de las actuales no debe ser null
++		assert ai.getData() != null;
++		assert si.getData() != null;
++		// data de las revisiones No está auditada
++		assert ai_rev1.getData() == null;
++		assert si_rev1.getData() == null;
++		// numerito de las revisiones está auditada, debe ser igual a NUMERITO
++		assert ai_rev1.getNumerito() == NUMERITO;
++		assert si_rev1.getNumerito() == NUMERITO;
++	}
++
++	@Test
++	public void testRetrieveNonAudited() {
++		// levanto las versiones actuales
++		NonAuditedImplementor nai = getEntityManager().find(
++				NonAuditedImplementor.class, nai_id);
++		assert nai != null;
++		SimpleInterface si = getEntityManager().find(SimpleInterface.class,
++				nai_id);
++		assert si != null;
++
++		assert si.getData().equals(nai.getData());
++
++		try {
++			// levanto la revision
++			getAuditReader().find(NonAuditedImplementor.class, nai_id, 1);
++			assert false;
++		} catch (Exception e) {
++			// no es auditable!!!
++			assert (e instanceof NotAuditedException);
++		}
++
++		// levanto la revision que no es auditable pero con la interfaz, el
++		// resultado debe ser null
++		SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class,
++				nai_id, 1);
++		assert si_rev1 == null;
++	}
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/AuditedImplementor.java	(revision 0)
+@@ -0,0 +1,58 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++@Audited
++public class AuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String auditedImplementorData;
++
++	private int numerito;
++
++	
++	protected AuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getAuditedImplementorData() {
++		return auditedImplementorData;
++	}
++
++	public void setAuditedImplementorData(String implementorData) {
++		this.auditedImplementorData = implementorData;
++	}
++	
++	public int getNumerito() {
++		return numerito;
++	}
++
++	public void setNumerito(int numerito) {
++		this.numerito = numerito;
++	}
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/NonAuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/NonAuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/NonAuditedImplementor.java	(revision 0)
+@@ -0,0 +1,54 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class NonAuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String nonAuditedImplementorData;
++	
++	private int numerito;
++
++	
++	protected NonAuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getNonAuditedImplementorData() {
++		return nonAuditedImplementorData;
++	}
++
++	public void setNonAuditedImplementorData(String implementorData) {
++		this.nonAuditedImplementorData = implementorData;
++	}
++	
++	public int getNumerito() {
++		return numerito;
++	}
++
++	public void setNumerito(int numerito) {
++		this.numerito = numerito;
++	}
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/SimpleInterface.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/SimpleInterface.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/SimpleInterface.java	(revision 0)
+@@ -0,0 +1,25 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public interface SimpleInterface {
++	
++	long getId();
++	
++	void setId(long id);
++	
++	String getData();
++	
++	void setData(String data);
++	
++	@Audited
++	int getNumerito();
++	
++	void setNumerito(int num);
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AbstractPropertiesAudited2Test.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AbstractPropertiesAudited2Test.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AbstractPropertiesAudited2Test.java	(revision 0)
+@@ -0,0 +1,109 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.envers.exception.NotAuditedException;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ * 
++ */
++
++public abstract class AbstractPropertiesAudited2Test extends AbstractEntityTest {
++
++	private long ai_id;
++	private long nai_id;
++
++	private static int NUMERITO = 555;
++
++	@BeforeClass(dependsOnMethods = "init")
++	public void initData() {
++		EntityManager em = getEntityManager();
++
++		AuditedImplementor ai = new AuditedImplementor();
++		ai.setData("La data");
++		ai.setAuditedImplementorData("audited implementor data");
++		ai.setNumerito(NUMERITO);
++
++		NonAuditedImplementor nai = new NonAuditedImplementor();
++		nai.setData("info");
++		nai.setNonAuditedImplementorData("sttring");
++		nai.setNumerito(NUMERITO);
++
++		// Revision 1
++		em.getTransaction().begin();
++
++		em.persist(ai);
++
++		em.persist(nai);
++
++		em.getTransaction().commit();
++
++		// Revision 2
++
++		// Revision 3
++
++		ai_id = ai.getId();
++		nai_id = nai.getId();
++	}
++
++	@Test
++	public void testRetrieveAudited() {
++		// levanto las versiones actuales
++		AuditedImplementor ai = getEntityManager().find(
++				AuditedImplementor.class, ai_id);
++		assert ai != null;
++		SimpleInterface si = getEntityManager().find(SimpleInterface.class,
++				ai_id);
++		assert si != null;
++
++		// levanto las de la revisión 1, ninguna debe ser null
++		AuditedImplementor ai_rev1 = getAuditReader().find(
++				AuditedImplementor.class, ai_id, 1);
++		assert ai_rev1 != null;
++		SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class,
++				ai_id, 1);
++		assert si_rev1 != null;
++
++		// data de las actuales no debe ser null
++		assert ai.getData() != null;
++		assert si.getData() != null;
++		// data de las revisiones está auditada
++		assert ai_rev1.getData() != null;
++		assert si_rev1.getData() != null;
++		// numerito de las revisiones está auditada, debe ser igual a NUMERITO
++		assert ai_rev1.getNumerito() == NUMERITO;
++		assert si_rev1.getNumerito() == NUMERITO;
++	}
++
++	@Test
++	public void testRetrieveNonAudited() {
++		// levanto las versiones actuales
++		NonAuditedImplementor nai = getEntityManager().find(
++				NonAuditedImplementor.class, nai_id);
++		assert nai != null;
++		SimpleInterface si = getEntityManager().find(SimpleInterface.class,
++				nai_id);
++		assert si != null;
++
++		assert si.getData().equals(nai.getData());
++
++		try {
++			// levanto la revision
++			getAuditReader().find(NonAuditedImplementor.class, nai_id, 1);
++			assert false;
++		} catch (Exception e) {
++			// no es auditable!!!
++			assert (e instanceof NotAuditedException);
++		}
++
++		// levanto la revision que no es auditable pero con la interfaz, el
++		// resultado debe ser null
++		SimpleInterface si_rev1 = getAuditReader().find(SimpleInterface.class,
++				nai_id, 1);
++		assert si_rev1 == null;
++	}
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/AuditedImplementor.java	(revision 0)
+@@ -0,0 +1,58 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++@Audited
++public class AuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String auditedImplementorData;
++
++	private int numerito;
++
++	
++	protected AuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getAuditedImplementorData() {
++		return auditedImplementorData;
++	}
++
++	public void setAuditedImplementorData(String implementorData) {
++		this.auditedImplementorData = implementorData;
++	}
++	
++	public int getNumerito() {
++		return numerito;
++	}
++
++	public void setNumerito(int numerito) {
++		this.numerito = numerito;
++	}
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/NonAuditedImplementor.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/NonAuditedImplementor.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/NonAuditedImplementor.java	(revision 0)
+@@ -0,0 +1,54 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class NonAuditedImplementor implements SimpleInterface {
++
++	private long id;
++
++	private String data;
++
++	private String nonAuditedImplementorData;
++	
++	private int numerito;
++
++	
++	protected NonAuditedImplementor() {
++
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public String getData() {
++		return data;
++	}
++
++	public void setData(String data) {
++		this.data = data;
++	}
++
++	public String getNonAuditedImplementorData() {
++		return nonAuditedImplementorData;
++	}
++
++	public void setNonAuditedImplementorData(String implementorData) {
++		this.nonAuditedImplementorData = implementorData;
++	}
++	
++	public int getNumerito() {
++		return numerito;
++	}
++
++	public void setNumerito(int numerito) {
++		this.numerito = numerito;
++	}
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/SimpleInterface.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/SimpleInterface.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/SimpleInterface.java	(revision 0)
+@@ -0,0 +1,26 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public interface SimpleInterface {
++	
++	long getId();
++	
++	void setId(long id);
++	
++	@Audited
++	String getData();
++	
++	void setData(String data);
++	
++	@Audited
++	int getNumerito();
++	
++	void setNumerito(int num);
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/JoinedPropertiesAudited2Test.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/JoinedPropertiesAudited2Test.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/JoinedPropertiesAudited2Test.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.joined;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AbstractPropertiesAudited2Test;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class JoinedPropertiesAudited2Test extends AbstractPropertiesAudited2Test {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/joinedPropertiesAudited2Mappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/joinedPropertiesAudited2Mappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/joinedPropertiesAudited2Mappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/joined/joinedPropertiesAudited2Mappings.hbm.xml	(revision 0)
+@@ -0,0 +1,43 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="INTERFACE" abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</joined-subclass>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</joined-subclass>
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/SubclassPropertiesAudited2Test.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/SubclassPropertiesAudited2Test.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/SubclassPropertiesAudited2Test.java	(revision 0)
+@@ -0,0 +1,33 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.subclass;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AbstractPropertiesAudited2Test;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class SubclassPropertiesAudited2Test extends AbstractPropertiesAudited2Test {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/subclassPropertiesAudited2Mappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }    
++    
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/subclassPropertiesAudited2Mappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/subclassPropertiesAudited2Mappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/subclass/subclassPropertiesAudited2Mappings.hbm.xml	(revision 0)
+@@ -0,0 +1,41 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="SIMPLES_interface" discriminator-value="SIMPLE_INTERFACE">
++
++		<id name="id" column="ID" type="long">
++			<generator class="native" />
++		</id>
++
++		<discriminator column="DISCRIMINATOR" />
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		discriminator-value="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</subclass>
++	
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		discriminator-value="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</subclass>	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/UnionPropertiesAudited2Test.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/UnionPropertiesAudited2Test.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/UnionPropertiesAudited2Test.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.union;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AbstractPropertiesAudited2Test;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class UnionPropertiesAudited2Test extends AbstractPropertiesAudited2Test {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/unionPropertiesAudited2Mappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/unionPropertiesAudited2Mappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/unionPropertiesAudited2Mappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited2/union/unionPropertiesAudited2Mappings.hbm.xml	(revision 0)
+@@ -0,0 +1,39 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++	</class>
++
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</union-subclass>
++	
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</union-subclass>	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/JoinedPropertiesAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/JoinedPropertiesAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/JoinedPropertiesAuditedTest.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.joined;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AbstractPropertiesAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class JoinedPropertiesAuditedTest extends AbstractPropertiesAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/joinedPropertiesAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/joinedPropertiesAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/joinedPropertiesAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/joined/joinedPropertiesAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,41 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="INTERFACE" abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</class>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</joined-subclass>
++
++	<joined-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++		
++		<key column="ID"/>
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</joined-subclass>
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/SubclassPropertiesAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/SubclassPropertiesAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/SubclassPropertiesAuditedTest.java	(revision 0)
+@@ -0,0 +1,33 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.subclass;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AbstractPropertiesAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class SubclassPropertiesAuditedTest extends AbstractPropertiesAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/subclassPropertiesAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }    
++    
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/subclassPropertiesAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/subclassPropertiesAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/subclass/subclassPropertiesAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,39 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="SIMPLES_interface" discriminator-value="SIMPLE_INTERFACE">
++
++		<id name="id" column="ID" type="long">
++			<generator class="native" />
++		</id>
++
++		<discriminator column="DISCRIMINATOR" />
++
++		<property name="data" column="DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</class>
++
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		discriminator-value="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</subclass>
++	
++	<subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		discriminator-value="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</subclass>	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/UnionPropertiesAuditedTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/UnionPropertiesAuditedTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/UnionPropertiesAuditedTest.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.union;
++
++import java.io.File;
++import java.net.URISyntaxException;
++import java.net.URL;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AbstractPropertiesAuditedTest;
++import org.testng.annotations.Test;
++
++/**
++ * @author Hernán Chanfreau
++ *
++ */
++
++public class UnionPropertiesAuditedTest extends AbstractPropertiesAuditedTest {
++
++    public void configure(Ejb3Configuration cfg) {
++        try {
++            URL url = Thread.currentThread().getContextClassLoader().getResource("org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/unionPropertiesAuditedMappings.hbm.xml");
++	        cfg.addFile(new File(url.toURI()));
++		} catch (URISyntaxException e) {
++			e.printStackTrace();
++		}
++    }
++
++    @Test
++    public void testRetrieveAudited() {
++    	super.testRetrieveAudited();
++    }  
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/unionPropertiesAuditedMappings.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/unionPropertiesAuditedMappings.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/interfaces/hbm/propertiesAudited/union/unionPropertiesAuditedMappings.hbm.xml	(revision 0)
+@@ -0,0 +1,37 @@
++<?xml version="1.0" encoding="WINDOWS-1251"?>
++<!DOCTYPE hibernate-mapping PUBLIC "-//Hibernate/Hibernate Mapping DTD//EN" "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping>
++
++	<class
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		abstract="true" >
++
++		<id name="id" column="ID" type="long">
++			<generator class="increment" />
++		</id>
++
++		<property name="data" column="DATA" />
++
++		<property name="numerito" column="NUMERITO" />
++
++	</class>
++
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.AuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="AUDITED_IMPLEMENTOR" >
++
++		<property name="auditedImplementorData" column="IMPLEMENTOR_DATA" />
++
++	</union-subclass>
++	
++	<union-subclass
++		name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.NonAuditedImplementor"
++		extends="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.SimpleInterface"
++		table="NON_AUDITED_IMPLEMENTOR" >
++
++		<property name="nonAuditedImplementorData" column="NON_IMPLEMENTOR_DATA" />
++
++	</union-subclass>	
++
++</hibernate-mapping>
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/MappedSubclassing2.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/MappedSubclassing2.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/MappedSubclassing2.java	(revision 0)
+@@ -0,0 +1,84 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.superclass.auditedAtSuperclassLevel;
++
++import java.util.Arrays;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * @author Adam Warski (adam at warski dot org)
++ * 
++ * @author Hernán Chanfreau
++ * 
++ *         Same test from package
++ *         org.hibernate.envers.test.integration.superclass changing the Audited
++ *         annotation in MappedSuperclass from property str to class level
++ */
++public class MappedSubclassing2 extends AbstractEntityTest {
++	private Integer id1;
++
++	public void configure(Ejb3Configuration cfg) {
++		cfg.addAnnotatedClass(SubclassEntity2.class);
++	}
++
++	@BeforeClass(dependsOnMethods = "init")
++	public void initData() {
++		// Revision 1
++		EntityManager em = getEntityManager();
++		em.getTransaction().begin();
++		SubclassEntity2 se1 = new SubclassEntity2("x");
++		em.persist(se1);
++		id1 = se1.getId();
++		em.getTransaction().commit();
++
++		// Revision 2
++		em.getTransaction().begin();
++		se1 = em.find(SubclassEntity2.class, id1);
++		se1.setStr("y");
++		em.getTransaction().commit();
++	}
++
++	@Test
++	public void testRevisionsCounts() {
++		assert Arrays.asList(1, 2).equals(
++				getAuditReader().getRevisions(SubclassEntity2.class, id1));
++	}
++
++	@Test
++	public void testHistoryOfId1() {
++		SubclassEntity2 ver1 = new SubclassEntity2(id1, "x");
++		SubclassEntity2 ver2 = new SubclassEntity2(id1, "y");
++
++		assert getAuditReader().find(SubclassEntity2.class, id1, 1)
++				.equals(ver1);
++		assert getAuditReader().find(SubclassEntity2.class, id1, 2)
++				.equals(ver2);
++	}
++}
+Index: src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SubclassEntity2.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SubclassEntity2.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SubclassEntity2.java	(revision 0)
+@@ -0,0 +1,86 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.superclass.auditedAtSuperclassLevel;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++/**
++ * @author Adam Warski (adam at warski dot org)
++ * 
++ * @author Hernán Chanfreau
++ * 
++ *         Same class from package
++ *         org.hibernate.envers.test.integration.superclass changing the
++ *         superclass to MappedSuperclass2
++ */
++@Entity
++public class SubclassEntity2 extends SuperclassOfEntity2 {
++	@Id
++	@GeneratedValue
++	private Integer id;
++
++	public SubclassEntity2() {
++	}
++
++	public SubclassEntity2(Integer id, String str) {
++		super(str);
++		this.id = id;
++	}
++
++	public SubclassEntity2(String str) {
++		super(str);
++	}
++
++	public Integer getId() {
++		return id;
++	}
++
++	public void setId(Integer id) {
++		this.id = id;
++	}
++
++	public boolean equals(Object o) {
++		if (this == o)
++			return true;
++		if (!(o instanceof SubclassEntity2))
++			return false;
++		if (!super.equals(o))
++			return false;
++
++		SubclassEntity2 that = (SubclassEntity2) o;
++
++		if (id != null ? !id.equals(that.id) : that.id != null)
++			return false;
++
++		return true;
++	}
++
++	public int hashCode() {
++		int result = super.hashCode();
++		result = 31 * result + (id != null ? id.hashCode() : 0);
++		return result;
++	}
++}
+Index: src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SuperclassOfEntity2.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SuperclassOfEntity2.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/superclass/auditedAtSuperclassLevel/SuperclassOfEntity2.java	(revision 0)
+@@ -0,0 +1,77 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.superclass.auditedAtSuperclassLevel;
++
++import javax.persistence.MappedSuperclass;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Adam Warski (adam at warski dot org)
++ * 
++ * @author Hernán Chanfreau
++ * 
++ *         Same class from package
++ *         org.hibernate.envers.test.integration.superclass changing the Audited
++ *         annotation from property str to class level
++ */
++@MappedSuperclass
++@Audited
++public class SuperclassOfEntity2 {
++
++	private String str;
++
++	public SuperclassOfEntity2() {
++	}
++
++	public SuperclassOfEntity2(String str) {
++		this.str = str;
++	}
++
++	public String getStr() {
++		return str;
++	}
++
++	public void setStr(String str) {
++		this.str = str;
++	}
++
++	public boolean equals(Object o) {
++		if (this == o)
++			return true;
++		if (!(o instanceof SuperclassOfEntity2))
++			return false;
++
++		SuperclassOfEntity2 that = (SuperclassOfEntity2) o;
++
++		if (str != null ? !str.equals(that.str) : that.str != null)
++			return false;
++
++		return true;
++	}
++
++	public int hashCode() {
++		return (str != null ? str.hashCode() : 0);
++	}
++}
+Index: src/test/resources/testng.xml
+===================================================================
+--- src/test/resources/testng.xml	(revision 18418)
++++ src/test/resources/testng.xml	(working copy)
+@@ -4,6 +4,7 @@
+     <test name="All">
+         <packages>
+             <package name="org.hibernate.envers.test.integration.accesstype" />
++            <package name="org.hibernate.envers.test.integration.auditReader" />
+             <package name="org.hibernate.envers.test.integration.basic" />
+             <package name="org.hibernate.envers.test.integration.cache" />
+             <package name="org.hibernate.envers.test.integration.collection" />
+@@ -31,6 +32,17 @@
+             <package name="org.hibernate.envers.test.integration.inheritance.tableperclass.relation" />
+             <package name="org.hibernate.envers.test.integration.interfaces.components" />
+             <package name="org.hibernate.envers.test.integration.interfaces.relation" />
++            
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.subclass" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.joined" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.allAudited.union" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.subclass" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.joined" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited.union" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.subclass" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.joined" />
++            <package name="org.hibernate.envers.test.integration.interfaces.hbm.propertiesAudited2.union" />
++            
+             <package name="org.hibernate.envers.test.integration.manytomany" />
+             <package name="org.hibernate.envers.test.integration.manytomany.biowned" />
+             <package name="org.hibernate.envers.test.integration.manytomany.sametable" />

@@ -1,0 +1,346 @@
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Inventory2.java b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Inventory2.java
+new file mode 100644
+index 0000000..5822969
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Inventory2.java
+@@ -0,0 +1,89 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2012, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.ondemandload;
++
++import java.math.BigDecimal;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.ManyToOne;
++
++import org.hibernate.annotations.GenericGenerator;
++
++@Entity
++public class Inventory2 {
++	private int id = -1;
++	private Product product;
++	private Long quantity;
++	private BigDecimal storePrice;
++
++	public Inventory2() {
++	}
++
++	public Inventory2(Product product) {
++		this.product = product;
++	}
++
++	@Id
++	@GeneratedValue
++	@GenericGenerator( name = "increment", strategy = "increment" )
++	public int getId() {
++		return id;
++	}
++
++	public void setId(int id) {
++		this.id = id;
++	}
++
++	@ManyToOne
++	@JoinColumn( name = "prod_id" )
++	public Product getProduct() {
++		return product;
++	}
++
++	public Inventory2 setProduct(Product product) {
++		this.product = product;
++		return this;
++	}
++
++	public Long getQuantity() {
++		return quantity;
++	}
++
++	public Inventory2 setQuantity(Long quantity) {
++		this.quantity = quantity;
++		return this;
++	}
++
++	public BigDecimal getStorePrice() {
++		return storePrice;
++	}
++
++	public Inventory2 setStorePrice(BigDecimal storePrice) {
++		this.storePrice = storePrice;
++		return this;
++	}
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/ondemandload/LazyLoadingTest.java b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/LazyLoadingTest.java
+index 0e60548..f1b7a4c 100644
+--- a/hibernate-core/src/test/java/org/hibernate/test/ondemandload/LazyLoadingTest.java
++++ b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/LazyLoadingTest.java
+@@ -22,23 +22,21 @@
+ 
+ package org.hibernate.test.ondemandload;
+ 
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertTrue;
++
+ import java.math.BigDecimal;
+ 
+ import org.hibernate.Hibernate;
+ import org.hibernate.Session;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+-
++import org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
+-
+-import org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;
+-
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.assertFalse;
+-import static org.junit.Assert.assertNotNull;
+-import static org.junit.Assert.assertTrue;
+ 
+ public class LazyLoadingTest extends BaseCoreFunctionalTestCase {
+ 
+@@ -50,6 +48,10 @@
+ 				.setName( "Acme Super Outlet" );
+ 		s.persist( store );
+ 
++		Store2 store2 = new Store2( 1 )
++		.setName( "Acme Super Outlet2" );
++		s.persist( store2 );
++
+ 		Product product = new Product( "007" )
+ 				.setName( "widget" )
+ 				.setDescription( "FooBar" );
+@@ -58,6 +60,10 @@
+ 		store.addInventoryProduct( product )
+ 				.setQuantity( 10L )
+ 				.setStorePrice( new BigDecimal( 500 ) );
++
++		store2.addInventoryProduct( product )
++		.setQuantity( 20L )
++		.setStorePrice( new BigDecimal( 520 ) );
+ 
+ 		s.getTransaction().commit();
+ 		s.close();
+@@ -68,6 +74,7 @@
+ 		Session s = openSession();
+ 		s.beginTransaction();
+ 		s.delete( s.get( Store.class, 1 ) );
++		s.delete( s.get( Store2.class, 1 ) );
+ 		s.delete( s.get( Product.class, "007" ) );
+ 		s.getTransaction().commit();
+ 		s.close();
+@@ -143,6 +150,75 @@
+ 	}
+ 
+ 	@Test
++	public void testLazyUnidirectionalCollectionLoadingWithClearedSession() {
++		sessionFactory().getStatistics().clear();
++
++		Session s = openSession();
++		s.beginTransaction();
++		// first load the store, making sure collection is not initialized
++		Store2 store = (Store2) s.get( Store2.class, 1 );
++		assertNotNull( store );
++		assertFalse( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 1, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 0, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		// then clear session and try to initialize collection
++		s.clear();
++		store.getInventories().size();
++		assertTrue( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 2, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 1, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		s.clear();
++		store = (Store2) s.get( Store2.class, 1 );
++		assertNotNull( store );
++		assertFalse( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 2, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 1, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		s.clear();
++		store.getInventories().iterator();
++		assertTrue( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 3, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 2, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		s.getTransaction().commit();
++		s.close();
++	}
++
++	@Test
++	public void testLazyUnidirectionalCollectionLoadingWithClosedSession() {
++		sessionFactory().getStatistics().clear();
++
++		Session s = openSession();
++		s.beginTransaction();
++		// first load the store, making sure collection is not initialized
++		Store2 store = (Store2) s.get( Store2.class, 1 );
++		assertNotNull( store );
++		assertFalse( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 1, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 0, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		// close the session and try to initialize collection
++		s.getTransaction().commit();
++		s.close();
++
++		assertEquals( 1, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 1, sessionFactory().getStatistics().getSessionCloseCount() );
++
++		store.getInventories().size();
++		assertTrue( Hibernate.isInitialized( store.getInventories() ) );
++
++		assertEquals( 2, sessionFactory().getStatistics().getSessionOpenCount() );
++		assertEquals( 2, sessionFactory().getStatistics().getSessionCloseCount() );
++	}
++
++	@Test
+ 	public void testLazyEntityLoadingWithClosedSession() {
+ 		sessionFactory().getStatistics().clear();
+ 
+@@ -181,7 +257,9 @@
+ 	protected Class[] getAnnotatedClasses() {
+ 		return new Class[] {
+ 				Store.class,
++				Store2.class,
+ 				Inventory.class,
++				Inventory2.class,
+ 				Product.class
+ 		};
+ 	}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Store2.java b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Store2.java
+new file mode 100644
+index 0000000..93381d2
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/ondemandload/Store2.java
+@@ -0,0 +1,95 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2010, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.ondemandload;
++
++import java.io.Serializable;
++import java.util.ArrayList;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++import javax.persistence.Version;
++
++@Entity
++public class Store2 implements Serializable {
++	private int id;
++	private String name;
++	private List<Inventory2> inventories = new ArrayList<Inventory2>();
++	private int version;
++
++	protected Store2() {
++	}
++
++	public Store2(int id) {
++		this.id = id;
++	}
++
++	@Id
++	@Column(name = "ID")
++	public Integer getId() {
++		return id;
++	}
++
++	private void setId(int id) {
++		this.id = id;
++	}
++
++	@Column(name = "NAME")
++	public String getName() {
++		return name;
++	}
++
++	public Store2 setName(String name) {
++		this.name = name;
++		return this;
++	}
++
++	@OneToMany(cascade = CascadeType.ALL, fetch = FetchType.LAZY, orphanRemoval = true)
++	public List<Inventory2> getInventories() {
++		return inventories;
++	}
++
++	public void setInventories(List<Inventory2> inventories) {
++		this.inventories = inventories;
++	}
++
++	public Inventory2 addInventoryProduct(Product product) {
++		final Inventory2 inventory = new Inventory2(product );
++		this.inventories.add( inventory );
++		return inventory;
++	}
++
++	@Version
++	public int getVersion() {
++		return version;
++	}
++
++	private void setVersion(int version) {
++		this.version = version;
++	}
++}

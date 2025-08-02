@@ -1,0 +1,411 @@
+Index: src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java,v
+retrieving revision 1.5
+diff -u -r1.5 Hbm2JavaGeneratorTask.java
+--- src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	7 Jun 2005 11:09:38 -0000	1.5
++++ src/java/org/hibernate/tool/ant/Hbm2JavaGeneratorTask.java	8 Sep 2005 09:05:05 -0000
+@@ -4,6 +4,7 @@
+  */
+ package org.hibernate.tool.ant;
+ 
++import org.apache.tools.ant.BuildException;
+ import org.hibernate.tool.hbm2x.Exporter;
+ import org.hibernate.tool.hbm2x.POJOExporter;
+ 
+@@ -17,6 +18,12 @@
+ 
+ 	boolean generics = false;
+ 
++    private String exporter = null;
++    
++    private String template;
++
++    private String namePattern;
++    
+   /**
+ 	 * @param parent
+ 	 */
+@@ -28,22 +35,65 @@
+ 		ejb3 = b;
+ 	}
+ 	
+-  public void setGenerics(boolean b) {
+-    generics = b;
+-  }  
++    public void setGenerics(boolean b) {
++        generics = b;
++    }  
++  
++    public void setTemplate(String template) {
++        this.template = template;
++    }  
++  
++    public void setNamePattern(String pattern) {
++        this.namePattern = pattern;
++    }  
++  
++  /**
++   * @param exporter The exporter to set.
++   */
++  public void setExporter(String exporter) {
++      this.exporter = exporter;
++  }
+   
+ 	protected Exporter configureExporter(Exporter exp) {
+ 		POJOExporter exporter = (POJOExporter) exp;
+ 		super.configureExporter(exp);
+ 		exporter.setEjb3(ejb3);
+ 		exporter.setGenerics(generics);
++        if(template != null)
++            exporter.setTemplateName(template);
++        if(namePattern != null)
++            exporter.setClassNamePattern(namePattern);
+ 		return exporter;
+ 	}
+ 
+ 	protected Exporter createExporter() {
+-		return new POJOExporter();
++        if(exporter == null)
++            return new POJOExporter();
++        
++        return createCustomExporter();
+ 	}
+-	public String getName() {
++
++	private Exporter createCustomExporter() {
++        try {
++            return (Exporter) Class.forName(exporter).newInstance();
++        } catch (Exception e) {
++            throw new BuildException("Couldn't instantiate custom exporter " + exporter + ". It must be added to the class path.", e);
++        }
++    }
++
++    public String getName() {
+ 		return "hbm2java (Generates a set of .java files)";
+ 	}
++
++    /* (non-Javadoc)
++     * @see org.hibernate.tool.ant.GeneratorTask#validateParameters()
++     */
++    public void validateParameters() {
++        super.validateParameters();
++
++        // we instantiate one, as this will throw a BuildException,
++        // if sth goes wrong
++        if(exporter != null)
++            createCustomExporter();
++    }
+ }
+Index: src/java/org/hibernate/tool/hbm2x/AbstractExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/AbstractExporter.java,v
+retrieving revision 1.5
+diff -u -r1.5 AbstractExporter.java
+--- src/java/org/hibernate/tool/hbm2x/AbstractExporter.java	7 Jun 2005 11:09:37 -0000	1.5
++++ src/java/org/hibernate/tool/hbm2x/AbstractExporter.java	8 Sep 2005 09:05:05 -0000
+@@ -44,6 +44,8 @@
+      */
+ 	protected static File getFileForClassName(File baseDir, String className, String extension) {
+     	String filename = StringHelper.unqualify(className) + extension;
++        if(!filename.endsWith(extension))
++            filename = filename + extension;
+     	String packagename = StringHelper.qualifier(className);
+     	
+     	return new File(getDirForPackage(baseDir, packagename), filename);
+Index: src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java,v
+retrieving revision 1.33
+diff -u -r1.33 Cfg2JavaTool.java
+--- src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	25 Aug 2005 07:03:04 -0000	1.33
++++ src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	8 Sep 2005 09:05:07 -0000
+@@ -47,7 +47,8 @@
+ 
+ 	private static final Log log = LogFactory.getLog(Cfg2JavaTool.class);
+ 	private boolean globalPreferRawTypes;
+-	
++	private String classNamePattern = null;
++
+ 	public Cfg2JavaTool() {
+ 		this(false);
+ 	}
+@@ -268,7 +269,14 @@
+ 			generatedName = pc.getClassName();
+ 		} 
+ 		//TODO: handle user wanting to change package
+-		return generatedName;
++        
++        if(classNamePattern == null)
++            return generatedName;
++        
++        String packageName = StringHelper.qualifier(generatedName);
++        String className = StringHelper.unqualify(generatedName);
++        String modifiedClassName = classNamePattern.replaceAll("#class#", className);
++		return packageName + '.' + modifiedClassName;
+ 	}
+ 	
+ 	/**
+@@ -283,12 +291,22 @@
+ 		
+ 		generatedName  = generatedName.replace('$', '.');
+ 		String qualifier = StringHelper.qualifier(component.getComponentClassName() );
++        String result;
+ 		if("".equals(qualifier) ) {
+-			return qualifier + "." + generatedName;
++			result = qualifier + "." + generatedName;
+ 		} 
+ 		else {
+-			return generatedName;
+-		}	
++			result = generatedName;
++		}
++
++        if(classNamePattern == null)
++            return generatedName;
++
++        String packageName = StringHelper.qualifier(result);
++        String className = StringHelper.unqualify(result);
++        String modifiedClassName = classNamePattern.replaceAll("#class#", className);
++        return packageName + '.' + modifiedClassName;
++
+ 	}
+ 	
+ 	public String getExtendsDeclaration(PersistentClass pc) {
+@@ -1094,5 +1112,13 @@
+ 		}
+ 		return buf.toString();
+ 	}
+-    
++
++    public void setClassNamePattern(String pattern)
++    {
++        int ind = pattern.lastIndexOf(".java");
++        if(ind != -1)
++            this.classNamePattern = pattern.substring(0, ind);
++        else
++            this.classNamePattern = pattern;
++    }
+ }
+Index: src/java/org/hibernate/tool/hbm2x/POJOExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/POJOExporter.java,v
+retrieving revision 1.17
+diff -u -r1.17 POJOExporter.java
+--- src/java/org/hibernate/tool/hbm2x/POJOExporter.java	12 Jul 2005 23:12:48 -0000	1.17
++++ src/java/org/hibernate/tool/hbm2x/POJOExporter.java	8 Sep 2005 09:05:08 -0000
+@@ -27,9 +27,10 @@
+ 	
+ 	private StringWriter tempWriter;
+     String templateName = POJO_JAVACLASS_VM;
+-    
++
+ 	private boolean ejb3;
+     private boolean generics;
++    private String classNamePattern;
+ 
+     public POJOExporter(Configuration cfg, File outputdir) {
+     	super(cfg, outputdir);
+@@ -52,6 +53,11 @@
+ 	public void setGenerics(boolean generics) {
+ 		this.generics = generics;
+ 	}
++    
++    public void setClassNamePattern(String pattern)
++    {
++        this.classNamePattern = pattern;
++    }
+ 
+ 	protected String getNameForClass(PersistentClass clazz) {
+ 		return getTemplateHelper().getCfg2JavaTool().getQualifiedDeclarationName(clazz);
+@@ -105,17 +111,26 @@
+         
+         Map components = new HashMap();
+         
+-        for (Iterator classes = getConfiguration().getClassMappings(); classes.hasNext(); ) {
+-		        PersistentClass clazz = (PersistentClass) classes.next();
+-		        ConfigurationNavigator.collectComponents(components, clazz);
+-		        exportPersistentClass(clazz);
++        try
++        {
++            for (Iterator classes = getConfiguration().getClassMappings(); classes.hasNext(); ) {
++    		        PersistentClass clazz = (PersistentClass) classes.next();
++    		        ConfigurationNavigator.collectComponents(components, clazz);
++    		        exportPersistentClass(clazz);
++            }
++            
++            for(Iterator comps = components.values().iterator(); comps.hasNext(); ) {
++            	Component component = (Component)comps.next();
++            	exportComponent(component);
++            }
+         }
+-        
+-        for(Iterator comps = components.values().iterator(); comps.hasNext(); ) {
+-        	Component component = (Component)comps.next();
+-        	exportComponent(component);
++        catch(ExporterException e)
++        {
++            log.error(e.getMessage());
++            if(e.getCause() != null)
++                log.error(e.getCause().getMessage(), e.getCause());
++            throw e;
+         }
+-        
+         setTemplateHelper(null);
+         
+ 	}
+@@ -124,6 +139,8 @@
+ 		getTemplateHelper().putInContext("cfg", getConfiguration() );
+         getTemplateHelper().putInContext("ejb3", Boolean.valueOf(ejb3) );
+         getTemplateHelper().putInContext("generics", Boolean.valueOf(generics) );
++        if(classNamePattern != null)
++            getTemplateHelper().getCfg2JavaTool().setClassNamePattern(classNamePattern);
+ 	}
+ 
+ 	public void setTemplateName(String string) {
+Index: src/test/org/hibernate/tool/ant/HibernateToolTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/ant/HibernateToolTest.java,v
+retrieving revision 1.11
+diff -u -r1.11 HibernateToolTest.java
+--- src/test/org/hibernate/tool/ant/HibernateToolTest.java	5 Sep 2005 08:27:28 -0000	1.11
++++ src/test/org/hibernate/tool/ant/HibernateToolTest.java	8 Sep 2005 09:05:08 -0000
+@@ -40,10 +40,31 @@
+ 		executeTarget("testanthbm2java");
+ 	}*/
+ 	
+-	public void testHbm2JavaEJB3Configuration() {
+-		executeTarget("testantejb3hbm2java");
+-	}
+-	
++    public void testHbm2JavaEJB3Configuration() {
++        executeTarget("testantejb3hbm2java");
++    }
++    
++    public void testHbm2JavaCustomExporter() {
++        executeTarget("testanthbm2javacustomexporter");
++    }
++
++    public void testHbm2JavaCustomExporterNotFound() {
++        expectBuildExceptionContaining("testanthbm2javacustomexportererror",
++        "Custom exporter was not found.", "instantiate custom exporter");
++    }
++    
++    public void testHbm2JavaTemplateName() {
++        executeTarget("testanthbm2javatemplatename");
++    }
++
++    public void testHbm2JavaTemplateNameError() {
++        expectBuildExceptionContaining("testanthbm2javatemplatenameerror", "template file doesn't exist", "Error while processing template");
++    }
++
++    public void testHbm2JavaNamePattern() {
++        executeTarget("testanthbm2java-namepattern");
++    }
++
+     public void testCfg2HbmNoError() {
+         executeTarget("testantcfg2hbm1");
+     }
+Index: src/testsupport/anttest-build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/testsupport/anttest-build.xml,v
+retrieving revision 1.12
+diff -u -r1.12 anttest-build.xml
+--- src/testsupport/anttest-build.xml	5 Sep 2005 08:27:28 -0000	1.12
++++ src/testsupport/anttest-build.xml	8 Sep 2005 09:05:09 -0000
+@@ -77,15 +77,84 @@
+  <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
+  <hibernatetool destdir="${build.dir}/bottomup">
+   <configuration propertyfile="../../etc/hibernate.properties">
+-   <fileset dir=".">
+-       <include name="SomeClasses.hbm.xml"/>
+-    </fileset> 
++   <fileset dir="src/test/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
+   </configuration>
+ 
+   <hbm2java generics="true"/>
+  </hibernatetool>
+ </target>
+ 
++<target name="testanthbm2javacustomexporter">
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++ <hibernatetool destdir="${build.dir}/bottomup">
++  <configuration propertyfile="../../etc/hibernate.properties">
++   <fileset dir="../../src/java/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
++  </configuration>
++
++  <hbm2java generics="true" exporter="org.hibernate.tool.ant.CustomPojoExporter" />
++ </hibernatetool>
++</target>
++
++<target name="testanthbm2javacustomexportererror">
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++ <hibernatetool destdir="${build.dir}/bottomup">
++  <configuration propertyfile="../../etc/hibernate.properties">
++   <fileset dir="../../src/test/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
++  </configuration>
++
++  <hbm2java generics="true" exporter="UndefinedExporterLeadingToAnException" />
++ </hibernatetool>
++</target>
++
++<target name="testanthbm2javatemplatename">
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++ <hibernatetool destdir="${build.dir}/bottomup">
++  <configuration propertyfile="../../etc/hibernate.properties">
++   <fileset dir="../../src/test/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
++  </configuration>
++
++  <hbm2java generics="true" template="templates/pojo/javaclass.vm" />
++ </hibernatetool>
++</target>
++
++<target name="testanthbm2javatemplatenameerror">
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++ <hibernatetool destdir="${build.dir}/bottomup">
++  <configuration propertyfile="../../etc/hibernate.properties">
++   <fileset dir="../../src/test/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
++  </configuration>
++
++  <hbm2java generics="true" template="templates/pojo/does_not_exist.vm" />
++ </hibernatetool>
++</target>
++
++<target name="testanthbm2java-namepattern">
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++ <!-- remove the files generated by other tasks -->
++ <delete dir="${build.dir}/bottomup" />
++ <hibernatetool destdir="${build.dir}/bottomup"> 
++  <configuration propertyfile="../../etc/hibernate.properties">
++   <fileset dir="../../src/test/org/hibernate/tool/hbm2x">
++    <include name="**/*.hbm.xml"/>
++   </fileset>
++  </configuration>
++
++  <hbm2java generics="true" namepattern="#class#DAO.java" />
++ </hibernatetool>
++ <available file="${build.dir}/bottomup/HelloUniverseDAO.java" type="file" property="result.available"/>
++ <fail unless="result.available" message="File ${build.dir}/bottomup/HelloUniverseDAO.java was not generated!"/>
++</target>
++
+ <target name="testantannotationcfg">
+  <taskdef name="hibernatetoolx" classname="org.hibernate.tool.ant.HibernateToolTask" classpath="${hibernate-core.jar};build/classes;../metadata/build/classes"/>
+  <hibernatetoolx destdir="${build.dir}/bottomup">
+@@ -127,6 +196,7 @@
+   userid="${hibernate.connection.username}"
+   password="${hibernate.connection.password}"
+   classpath="${hibernate-core.lib.dir}/hsqldb-1.7.3.3.jar">
++ drop table VeriSimplyTable if exists;
+  create table VeriSimplyTable ( id bigint not null, name varchar(255), primary key (id) )
+  </sql>
+ 

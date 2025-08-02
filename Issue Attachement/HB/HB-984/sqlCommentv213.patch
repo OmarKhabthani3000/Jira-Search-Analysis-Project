@@ -1,0 +1,240 @@
+? --help
+? -v
+? build
+? classes
+? hibernate-v21.iml
+? hibernate-v21.ipr
+? hibernate-v21.iws
+Index: src/net/sf/hibernate/Query.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Query.java,v
+retrieving revision 1.13.2.12
+diff -u -r1.13.2.12 Query.java
+--- src/net/sf/hibernate/Query.java	24 Apr 2004 11:42:40 -0000	1.13.2.12
++++ src/net/sf/hibernate/Query.java	26 May 2004 15:25:23 -0000
+@@ -307,6 +307,12 @@
+      * @deprecated Support for PersistentEnums will be removed in 2.2
+ 	 */
+ 	public Query setEnum(String name, Object val) throws MappingException; // use setParameter for null values
++
++    /**
++     * Add a comment to the generated SQL
++     * @param comment a human-readable string
++     */
++    public Query setComment(String comment);
+ }
+ 
+ 
+Index: src/net/sf/hibernate/engine/QueryParameters.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Attic/QueryParameters.java,v
+retrieving revision 1.1.2.5
+diff -u -r1.1.2.5 QueryParameters.java
+--- src/net/sf/hibernate/engine/QueryParameters.java	22 Feb 2004 18:11:45 -0000	1.1.2.5
++++ src/net/sf/hibernate/engine/QueryParameters.java	26 May 2004 15:25:24 -0000
+@@ -25,18 +25,20 @@
+ 	private RowSelection rowSelection;
+ 	private boolean cacheable;
+ 	private String cacheRegion;
+-	
++    private String comment;
++
+ 	public QueryParameters(Type[] positionalParameterTypes, Object[] postionalParameterValues) {
+-		this(positionalParameterTypes, postionalParameterValues, null, null);
++		this(positionalParameterTypes, postionalParameterValues, null, null, null);
+ 	}
+ 	
+ 	public QueryParameters(
+ 		final Type[] positionalParameterTypes, 
+ 		final Object[] positionalParameterValues,
+ 		final Map lockModes, 
+-		final RowSelection rowSelection
++		final RowSelection rowSelection,
++        String comment
+ 	) {
+-		this(positionalParameterTypes, positionalParameterValues, null, lockModes, rowSelection, false, null);
++		this(positionalParameterTypes, positionalParameterValues, null, lockModes, rowSelection, false, null, comment);
+ 	}
+ 	
+ 	public QueryParameters(
+@@ -46,7 +48,8 @@
+ 		final Map lockModes, 
+ 		final RowSelection rowSelection,
+ 		final boolean cacheable,
+-		final String cacheRegion
++		final String cacheRegion,
++        String comment
+ 	) {
+ 		this.positionalParameterTypes = positionalParameterTypes;
+ 		this.positionalParameterValues = positionalParameterValues;
+@@ -55,6 +58,7 @@
+ 		this.rowSelection = rowSelection;
+ 		this.cacheable = cacheable;
+ 		this.cacheRegion = cacheRegion;
++        this.comment = comment;
+ 	}
+ 	
+ 	public boolean hasRowSelection() {
+@@ -134,4 +138,12 @@
+ 			throw new QueryException("Number of positional parameter types (" + types + " does not match number of positional parameters (" + values + ")");	
+ 		}			
+ 	}
++
++    public String getComment() {
++        return comment;
++    }
++
++    public void setComment(String comment) {
++        this.comment = comment;
++    }
+ }
+Index: src/net/sf/hibernate/impl/AbstractQueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/Attic/AbstractQueryImpl.java,v
+retrieving revision 1.1.2.24
+diff -u -r1.1.2.24 AbstractQueryImpl.java
+--- src/net/sf/hibernate/impl/AbstractQueryImpl.java	24 Apr 2004 11:42:41 -0000	1.1.2.24
++++ src/net/sf/hibernate/impl/AbstractQueryImpl.java	26 May 2004 15:25:24 -0000
+@@ -59,6 +59,7 @@
+ 	private Map namedParameterLists = new HashMap(4);
+ 	private boolean cacheable;
+ 	private String cacheRegion;
++    private String comment;
+ 	private static final Object UNSET_PARAMETER = new Object() {};
+ 	private static final Object UNSET_TYPE = new Object() {};
+ 
+@@ -565,14 +566,15 @@
+ 	}
+ 	
+ 	public QueryParameters getQueryParameters(Map namedParams) {
+-		return new QueryParameters( 
+-			typeArray(), 
+-			valueArray(), 
+-			namedParams, 
+-			getLockModes(), 
+-			getSelection(), 
+-			cacheable, 
+-			cacheRegion
++		return new QueryParameters(
++			typeArray(),
++			valueArray(),
++			namedParams,
++			getLockModes(),
++			getSelection(),
++			cacheable,
++			cacheRegion,
++            comment
+ 		);
+ 	}
+ 
+@@ -586,4 +588,13 @@
+ 		return this;
+ 	}
+ 
++    public String getComment() {
++        return comment;
++    }
++
++    public Query setComment(String comment) {
++        this.comment = comment;
++        return this;
++    }
++
+ }
+Index: src/net/sf/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.4.2.19
+diff -u -r1.4.2.19 CriteriaImpl.java
+--- src/net/sf/hibernate/impl/CriteriaImpl.java	24 Apr 2004 11:42:42 -0000	1.4.2.19
++++ src/net/sf/hibernate/impl/CriteriaImpl.java	26 May 2004 15:25:24 -0000
+@@ -45,6 +45,7 @@
+ 	private ResultTransformer resultTransformer = new RootEntityResultTransformer();
+ 	private boolean cacheable;
+ 	private String cacheRegion;
++    private String comment;
+ 
+ 	private int counter=0;
+ 	
+@@ -445,4 +446,12 @@
+ 		this.cacheRegion = cacheRegion.trim();
+ 		return this;
+ 	}
++
++    public String getComment() {
++        return comment;
++    }
++
++    public void setComment(String comment) {
++        this.comment = comment;
++    }
+ }
+Index: src/net/sf/hibernate/loader/CriteriaLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/CriteriaLoader.java,v
+retrieving revision 1.8.2.28
+diff -u -r1.8.2.28 CriteriaLoader.java
+--- src/net/sf/hibernate/loader/CriteriaLoader.java	24 Apr 2004 11:42:42 -0000	1.8.2.28
++++ src/net/sf/hibernate/loader/CriteriaLoader.java	26 May 2004 15:25:24 -0000
+@@ -115,7 +115,7 @@
+ 		selection.setTimeout( criteria.getTimeout() );
+ 		selection.setFetchSize( criteria.getFetchSize() );
+ 		
+-		QueryParameters qp = new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection);
++		QueryParameters qp = new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection, criteria.getComment());
+ 		qp.setCacheable( criteria.getCacheable() );
+ 		qp.setCacheRegion( criteria.getCacheRegion() );
+ 		return list(session, qp, querySpaces, resultTypes);
+Index: src/net/sf/hibernate/loader/Loader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/Loader.java,v
+retrieving revision 1.33.2.31
+diff -u -r1.33.2.31 Loader.java
+--- src/net/sf/hibernate/loader/Loader.java	24 Apr 2004 11:42:42 -0000	1.33.2.31
++++ src/net/sf/hibernate/loader/Loader.java	26 May 2004 15:25:25 -0000
+@@ -701,6 +701,8 @@
+ 
+ 		if (useLimit) sql = dialect.getLimitString( sql.trim(), useOffset, getMaxOrLimit(selection, dialect) );
+ 
++        sql = preprocessSQL(sql, queryParameters, dialect);
++
+ 		PreparedStatement st = session.getBatcher().prepareQueryStatement(sql, scrollable);
+ 
+ 		try {
+@@ -1023,5 +1025,35 @@
+ 			Integer.toString(unique) +
+ 			StringHelper.UNDERSCORE;
+ 	}
+-	
++
++    /**
++     * Converted from hibernate 2.2, used to add SQL comments to generated queries.
++     */
++    protected String preprocessSQL(String sql, QueryParameters parameters, Dialect dialect)
++    throws HibernateException {
++        sql = applyLocks( sql, parameters.getLockModes(), dialect );
++        String comment = parameters.getComment();
++        if (comment==null) {
++            return sql;
++        }
++        else {
++            if (sql.startsWith("select")) {
++                return new StringBuffer( comment.length() + sql.length() + 5 )
++                    .append("select ")
++                    .append("/*")
++                    .append(comment)
++                    .append("*/ ")
++                    .append(sql.substring("select".length()+1))
++                    .toString();
++            } else {
++                return new StringBuffer( comment.length() + sql.length() + 5 )
++                    .append("/*")
++                    .append(comment)
++                    .append("*/ ")
++                    .append(sql)
++                    .toString();
++            }
++        }
++    }
++
+ }

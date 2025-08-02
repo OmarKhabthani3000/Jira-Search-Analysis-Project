@@ -1,0 +1,42 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/internal/SessionFactoryImpl.java b/hibernate-core/src/main/java/org/hibernate/internal/SessionFactoryImpl.java
+index b265bdf..7a549f0 100644
+--- a/hibernate-core/src/main/java/org/hibernate/internal/SessionFactoryImpl.java
++++ b/hibernate-core/src/main/java/org/hibernate/internal/SessionFactoryImpl.java
+@@ -218,7 +218,8 @@
+ 	private final transient SessionFactoryOptions sessionFactoryOptions;
+ 	private final transient CustomEntityDirtinessStrategy customEntityDirtinessStrategy;
+ 	private final transient CurrentTenantIdentifierResolver currentTenantIdentifierResolver;
+-
++	private final transient ConcurrentHashMap<String, String[]> implementorsCache = new ConcurrentHashMap<String, String[]>();
++	
+ 	@SuppressWarnings( {"unchecked", "ThrowableResultOfMethodCallIgnored"})
+ 	public SessionFactoryImpl(
+ 			final Configuration cfg,
+@@ -1232,7 +1233,12 @@
+ 	 * @throws MappingException
+ 	 */
+ 	public String[] getImplementors(String className) throws MappingException {
+-
++        // Cache implementors. BWise Extension to improve performance.
++	    String[] implementors = implementorsCache.get(className);
++	    if (implementors != null) {
++	        return implementors;
++	    }
++	    
+ 		final Class clazz;
+ 		try {
+ 			clazz = serviceRegistry.getService( ClassLoaderService.class ).classForName( className );
+@@ -1276,7 +1282,12 @@
+ 				}
+ 			}
+ 		}
+-		return results.toArray( new String[results.size()] );
++		
++		implementors = results.toArray( new String[results.size()] );
++		
++		implementorsCache.put(className, implementors);
++		
++		return implementors;
+ 	}
+ 
+ 	@Override

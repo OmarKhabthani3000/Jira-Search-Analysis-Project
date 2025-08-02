@@ -1,0 +1,179 @@
+Index: src/org/hibernate/sql/OracleJoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/OracleJoinFragment.java	(revision 10717)
++++ src/org/hibernate/sql/OracleJoinFragment.java	(working copy)
+@@ -1,8 +1,6 @@
+ //$Id$
+ package org.hibernate.sql;
+ 
+-import java.util.HashSet;
+-import java.util.Set;
+ 
+ /**
+  * An Oracle-style (theta) join
+@@ -99,29 +97,52 @@
+ 	 * This method is a bit of a hack, and assumes
+ 	 * that the column on the "right" side of the
+ 	 * join appears on the "left" side of the
+-	 * operator, which is extremely wierd if this
++	 * operator, which is extremely weird if this
+ 	 * was a normal join condition, but is natural
+ 	 * for a filter.
+ 	 */
+ 	private void addLeftOuterJoinCondition(String on) {
+ 		StringBuffer buf = new StringBuffer( on );
++		boolean inQuote = false;
+ 		for ( int i = 0; i < buf.length(); i++ ) {
+ 			char character = buf.charAt( i );
+-			boolean isInsertPoint = OPERATORS.contains( new Character( character ) ) ||
+-					( character == ' ' && buf.length() > i + 3 && "is ".equals( buf.substring( i + 1, i + 4 ) ) );
+-			if ( isInsertPoint ) {
+-				buf.insert( i, "(+)" );
+-				i += 3;
++			if ( inQuote ) {
++				if ( character == '\'' ) {
++					inQuote = false;
++				}
++				continue;
+ 			}
++			if ( character == '\'' ) {
++				inQuote = true;
++				continue;
++			}
++			for ( int j = 0; j < OPERATORS.length; j++ ) {
++				String operator = OPERATORS[j];
++				if ( ( i + operator.length() < buf.length() ) &&
++						operator.equals( buf.substring( i, i + operator.length() ) ) ) {
++					buf.insert( i, "(+)" );
++					i += 2 + operator.length();
++					break;
++				}
++			}
+ 		}
+ 		addCondition( buf.toString() );
+ 	}
+-
+-	private static final Set OPERATORS = new HashSet();
+-
+-	static {
+-		OPERATORS.add( new Character( '=' ) );
+-		OPERATORS.add( new Character( '<' ) );
+-		OPERATORS.add( new Character( '>' ) );
+-	}
++	
++	private static final String[] OPERATORS = {
++		" is null",
++		" is not null",
++		" between",
++		" not between",
++		" in",
++		" not in",
++		" like",
++		" not like",
++		"<=",               // Two-char operators must precede single char ones. 
++		">=",
++		"<>",
++		"<",
++		">",
++		"="
++	};
+ }
+Index: test/org/hibernate/test/sql/OracleJoinFragmentTest.java
+===================================================================
+--- test/org/hibernate/test/sql/OracleJoinFragmentTest.java	(revision 0)
++++ test/org/hibernate/test/sql/OracleJoinFragmentTest.java	(revision 0)
+@@ -0,0 +1,94 @@
++package org.hibernate.test.sql;
++
++import org.hibernate.sql.JoinFragment;
++import org.hibernate.sql.OracleJoinFragment;
++
++import junit.framework.Test;
++import junit.framework.TestCase;
++import junit.framework.TestSuite;
++
++/**
++ * Tests OracleJoinFragment's where fragment generation.
++ * 
++ * @author Milosz Tylenda
++ */
++public class OracleJoinFragmentTest extends TestCase {
++
++	private OracleJoinFragment fragment;
++	private String tableName = "Child";
++	private String alias = "children1_";
++	private String[] fkColumns = {"parent0_.id"};
++	private String[] pkColumns = {"parent_id"};
++	private int joinType = JoinFragment.LEFT_OUTER_JOIN;
++	
++	public OracleJoinFragmentTest(String x) {
++		super(x);
++	}
++	
++	public void testLeftOuterJoinIsNullCondition() {
++		String on = " and (children1_.value is null)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+) is null)", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinIsNotNullCondition() {
++		String on = " and (children1_.value is not null)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+) is not null)", fragment.toWhereFragmentString());
++	}
++	
++	public void testLeftOuterJoinLECondition() {
++		String on = " and (children1_.value<=100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)<=100)", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinGECondition() {
++		String on = " and (children1_.value>=100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)>=100)", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinNECondition() {
++		String on = " and (children1_.value<>100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)<>100)", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinLTCondition() {
++		String on = " and (children1_.value<100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)<100)", fragment.toWhereFragmentString());
++	}
++	public void testLeftOuterJoinGTCondition() {
++		String on = " and (children1_.value>100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)>100)", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinEQCondition() {
++		String on = " and (children1_.value=100)";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)=100)", fragment.toWhereFragmentString());
++	}
++	
++	public void testLeftOuterJoinWithQuotesCondition() {
++		String on = " and (children1_.value='life is null')";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and (children1_.value(+)='life is null')", fragment.toWhereFragmentString());
++	}
++
++	public void testLeftOuterJoinTwoConditions() {
++		String on = " and ((children1_.value like 'b%') and children1_.value<>'bob')";
++		fragment.addJoin(tableName, alias, fkColumns, pkColumns, joinType, on);
++		assertEquals(" and parent0_.id=children1_.parent_id(+) and ((children1_.value(+) like 'b%') and children1_.value(+)<>'bob')", fragment.toWhereFragmentString());
++	}
++	
++	protected void setUp() throws Exception {
++		fragment = new OracleJoinFragment();
++	}
++
++	public static Test suite() {
++		return new TestSuite(OracleJoinFragmentTest.class);
++	}
++}

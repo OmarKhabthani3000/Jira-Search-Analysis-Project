@@ -1,0 +1,397 @@
+Index: src/java/org/hibernate/search/filter/AndDocIdSet.java
+===================================================================
+--- src/java/org/hibernate/search/filter/AndDocIdSet.java	(revision 0)
++++ src/java/org/hibernate/search/filter/AndDocIdSet.java	(revision 0)
+@@ -0,0 +1,141 @@
++package org.hibernate.search.filter;
++
++import java.io.IOException;
++import java.util.BitSet;
++import java.util.List;
++import static java.lang.Math.max;
++
++import org.apache.lucene.search.DocIdSet;
++import org.apache.lucene.search.DocIdSetIterator;
++import org.apache.lucene.util.DocIdBitSet;
++
++/**
++ * A DocIdSet built as applying "AND" operation to a list of other DocIdSet.
++ * The DocIdSetIterator returned will return only document ids contained
++ * in all DocIdSet handed to the constructor.
++ * 
++ * @author Sanne Grinovero
++ */
++public class AndDocIdSet extends DocIdSet {
++	
++	private DocIdBitSet docIdBitSet;
++	private final List<DocIdSet> andedDocIdSets;
++	
++	public AndDocIdSet(List<DocIdSet> andedDocIdSets) {
++		if ( andedDocIdSets == null || andedDocIdSets.size() < 2 )
++			throw new IllegalArgumentException( "To \"and\" some DocIdSet they should be at least 2" );
++		this.andedDocIdSets = andedDocIdSets;
++	}
++	
++	private synchronized void buildBitset() throws IOException {
++		if ( docIdBitSet != null ) return; // double check for concurrent initialization
++		//TODO if all andedDocIdSets are actually DocIdBitSet, use their internal BitSet instead of next algo.
++		//TODO if some andedDocIdSets are DocIdBitSet, merge them first.
++		int size = andedDocIdSets.size();
++		DocIdSetIterator[] iterators = new DocIdSetIterator[size];
++		int[] positions = new int[size];
++		boolean valuesExist = true;
++		int maxIndex = 0;
++		for (int i=0; i<size; i++) {
++			// build all iterators
++			DocIdSetIterator iterator = andedDocIdSets.get(i).iterator();
++			iterators[i] = iterator;
++			// and move to first position
++			boolean nextExists = iterator.next();
++			if ( ! nextExists ) {
++				valuesExist = false;
++				break;
++			}
++			int currentFilterValue = iterator.doc();
++			positions[i] = currentFilterValue;
++			// find the initial maximum position
++			maxIndex = max( maxIndex, currentFilterValue );
++		}
++		BitSet bitSet = new BitSet();
++		if ( valuesExist ) { // skip further processing if some idSet is empty
++			do {
++				if ( allSame( positions ) ) {
++					// enable a bit if all idSets agree on it:
++					bitSet.set( maxIndex );
++					maxIndex++;
++				}
++				maxIndex = advance( iterators, positions, maxIndex );
++			} while ( maxIndex != -1 ); // -1 means the end of some bitSet has been reached (end condition)
++		}
++		docIdBitSet = new DocIdBitSet( bitSet );
++	}
++
++	/**
++	 * Have all DocIdSetIterator having current doc id minor than currentMaxPosition
++	 * skip to at least this position.
++	 * @param iterators
++	 * @param positions
++	 * @return maximum position of all DocIdSetIterator after the operation, or -1 when at least one reached the end.
++	 * @throws IOException 
++	 */
++	private final int advance(final DocIdSetIterator[] iterators, final int[] positions, int currentMaxPosition) throws IOException {
++		for (int i=0; i<positions.length; i++) {
++			if ( positions[i] != currentMaxPosition ) {
++				boolean validPosition = iterators[i].skipTo( currentMaxPosition );
++				if ( ! validPosition )
++					return -1;
++				positions[i] = iterators[i].doc();
++				currentMaxPosition = max( currentMaxPosition, positions[i] );
++			}
++		}
++		return currentMaxPosition;
++	}
++
++	/**
++	 * see if all DocIdSetIterator stopped at the same position.
++	 * @param positions the array of current positions.
++	 * @return true if all DocIdSetIterator agree on the current docId.
++	 */
++	private final boolean allSame(final int[] positions) {
++		int base = positions[0];
++		for (int i=1; i<positions.length; i++) {
++			if ( base != positions[i] )
++				return false;
++		}
++		return true;
++	}
++
++	@Override
++	public DocIdSetIterator iterator() {
++		return new AndingDocIdSetIterator();
++	}
++	
++	private class AndingDocIdSetIterator extends DocIdSetIterator {
++
++		private DocIdSetIterator iterator;
++
++		@Override
++		public int doc() {
++			// should never happen when respecting interface contract; otherwise I
++			// prefer a NPE than a hard to debug return 0.
++			assert iterator != null : "Illegal state, can't be called before next() or skipTo(int)";
++			return iterator.doc();
++		}
++
++		@Override
++		public boolean next() throws IOException {
++			ensureInitialized(); //can't initialize before as it would not be allowed to throw IOException
++			return iterator.next();
++		}
++
++		@Override
++		public boolean skipTo(int target) throws IOException {
++			ensureInitialized(); //can't initialize before as it would not be allowed to throw IOException
++			return iterator.skipTo( target );
++		}
++		
++		private void ensureInitialized() throws IOException {
++			if ( docIdBitSet == null ) buildBitset();
++			if ( iterator == null ) {
++				iterator = docIdBitSet.iterator();
++			}
++		}
++		
++	}
++	
++}
+
+Property changes on: src/java/org/hibernate/search/filter/AndDocIdSet.java
+___________________________________________________________________
+Added: svn:executable
+   + *
+
+Index: src/java/org/hibernate/search/filter/CachingWrapperFilter.java
+===================================================================
+--- src/java/org/hibernate/search/filter/CachingWrapperFilter.java	(revision 15534)
++++ src/java/org/hibernate/search/filter/CachingWrapperFilter.java	(working copy)
+@@ -5,6 +5,7 @@
+ import java.util.BitSet;
+ 
+ import org.apache.lucene.index.IndexReader;
++import org.apache.lucene.search.DocIdSet;
+ import org.apache.lucene.search.Filter;
+ import org.slf4j.Logger;
+ 
+@@ -27,53 +28,56 @@
+ 	
+ 	public static final int DEFAULT_SIZE = 5;
+ 	
+-	private final int size;
+-	
+ 	/**
+ 	 * The cache using soft references in order to store the filter bit sets.
+ 	 */
+-	private transient SoftLimitMRUCache cache;
++	private final SoftLimitMRUCache cache;
+ 	
+ 	private final Filter filter;
+ 
+ 	/**
+-	 * @param filter
+-	 *            Filter to cache results of
++	 * @param filter Filter to cache results of
+ 	 */
+ 	public CachingWrapperFilter(Filter filter) {
+ 		this(filter, DEFAULT_SIZE);
+ 	}
+ 	
+ 	/**
+-	 * @param filter
+-	 *            Filter to cache results of
++	 * @param filter Filter to cache results of
+ 	 */
+ 	public CachingWrapperFilter(Filter filter, int size) {
+ 		this.filter = filter;
+-		this.size = size;
++		log.debug( "Initialising SoftLimitMRUCache with hard ref size of {}", size );
++		this.cache = new SoftLimitMRUCache( size );
+ 	}	
+ 
++	@Override
+ 	public BitSet bits(IndexReader reader) throws IOException {
+-		if (cache == null) {
+-			log.debug("Initialising SoftLimitMRUCache with hard ref size of {}", size);
+-			cache = new SoftLimitMRUCache(size);
++		throw new UnsupportedOperationException();
++		/* BitSet cached = (BitSet) cache.get(reader);
++		if (cached != null) {
++			return cached;
+ 		}
+-
+-		//memory barrier ensure cache == null will not always stay true on concurrent threads
+-		synchronized (cache) { // check cache
+-			BitSet cached = (BitSet) cache.get(reader);
+-			if (cached != null) {
++		final BitSet bits = filter.bits(reader);
++		cache.put(reader, bits);
++		return bits; */
++	}
++	
++	@Override
++	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
++		DocIdSet cached = (DocIdSet) cache.get( reader );
++		if ( cached != null ) {
++			return cached;
++		}
++		synchronized (cache) {
++			cached = (DocIdSet) cache.get( reader );
++			if ( cached != null ) {
+ 				return cached;
+ 			}
++			final DocIdSet docIdSet = filter.getDocIdSet( reader );
++			cache.put( reader, docIdSet );
++			return docIdSet;
+ 		}
+-
+-		final BitSet bits = filter.bits(reader);
+-
+-		synchronized (cache) { // update cache
+-			cache.put(reader, bits);
+-		}
+-
+-		return bits;
+ 	}
+ 
+ 	public String toString() {
+Index: src/java/org/hibernate/search/filter/ChainedFilter.java
+===================================================================
+--- src/java/org/hibernate/search/filter/ChainedFilter.java	(revision 15534)
++++ src/java/org/hibernate/search/filter/ChainedFilter.java	(working copy)
+@@ -6,6 +6,7 @@
+ import java.util.ArrayList;
+ import java.io.IOException;
+ 
++import org.apache.lucene.search.DocIdSet;
+ import org.apache.lucene.search.Filter;
+ import org.apache.lucene.index.IndexReader;
+ import org.hibernate.annotations.common.AssertionFailure;
+@@ -14,6 +15,7 @@
+  * @author Emmanuel Bernard
+  */
+ public class ChainedFilter extends Filter {
++	
+ 	private static final long serialVersionUID = -6153052295766531920L;
+ 	
+ 	private final List<Filter> chainedFilters = new ArrayList<Filter>();
+@@ -23,6 +25,8 @@
+ 	}
+ 
+ 	public BitSet bits(IndexReader reader) throws IOException {
++		throw new UnsupportedOperationException();
++		/*
+ 		if (chainedFilters.size() == 0) throw new AssertionFailure("Chainedfilter has no filters to chain for");
+ 		//we need to copy the first BitSet because BitSet is modified by .logicalOp
+ 		Filter filter = chainedFilters.get( 0 );
+@@ -31,6 +35,25 @@
+ 			result.and( chainedFilters.get( index ).bits( reader ) );
+ 		}
+ 		return result;
++		*/
++	}
++	
++	@Override
++	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
++		int size = chainedFilters.size();
++		if ( size == 0 ) {
++			throw new AssertionFailure( "Chainedfilter has no filters to chain for" );
++		}
++		else if ( size == 1 ) {
++			return chainedFilters.get(0).getDocIdSet(reader);
++		}
++		else {
++			List<DocIdSet> subSets = new ArrayList<DocIdSet>( size );
++			for ( Filter f : chainedFilters ) {
++				subSets.add( f.getDocIdSet( reader ) );
++			}
++			return new AndDocIdSet( subSets );
++		}
+ 	}
+ 
+ 	public String toString() {
+Index: src/java/org/hibernate/search/filter/EmptyDocIdBitSet.java
+===================================================================
+--- src/java/org/hibernate/search/filter/EmptyDocIdBitSet.java	(revision 0)
++++ src/java/org/hibernate/search/filter/EmptyDocIdBitSet.java	(revision 0)
+@@ -0,0 +1,46 @@
++package org.hibernate.search.filter;
++
++import java.io.IOException;
++
++import org.apache.lucene.search.DocIdSet;
++import org.apache.lucene.search.DocIdSetIterator;
++
++public class EmptyDocIdBitSet extends DocIdSet {
++
++	public static final DocIdSet instance = new EmptyDocIdBitSet();
++	
++	private final DocIdSetIterator iterator = new EmptyDocIdSetIterator();
++	
++	private EmptyDocIdBitSet(){
++		// is singleton
++	}
++
++	@Override
++	public DocIdSetIterator iterator() {
++		return iterator;
++	}
++
++	/**
++	 * implements a DocIdSetIterator for an empty DocIdSet
++	 * As it is empty it also is stateless and so it can be reused.
++	 */
++	private static class EmptyDocIdSetIterator extends DocIdSetIterator {
++
++		@Override
++		public int doc() {
++			throw new IllegalStateException("Should never be called");
++		}
++
++		@Override
++		public boolean next() throws IOException {
++			return false;
++		}
++
++		@Override
++		public boolean skipTo(int target) throws IOException {
++			return false;
++		}
++
++	}
++	
++}
+\ No newline at end of file
+
+Property changes on: src/java/org/hibernate/search/filter/EmptyDocIdBitSet.java
+___________________________________________________________________
+Added: svn:executable
+   + *
+
+Index: src/test/org/hibernate/search/test/filter/ExcludeAllFilter.java
+===================================================================
+--- src/test/org/hibernate/search/test/filter/ExcludeAllFilter.java	(revision 15534)
++++ src/test/org/hibernate/search/test/filter/ExcludeAllFilter.java	(working copy)
+@@ -4,20 +4,33 @@
+ import java.util.BitSet;
+ import java.io.IOException;
+ 
++import org.apache.lucene.search.DocIdSet;
+ import org.apache.lucene.search.Filter;
+ import org.apache.lucene.index.IndexReader;
++import org.hibernate.search.filter.EmptyDocIdBitSet;
+ 
+ /**
+  * @author Emmanuel Bernard
+  */
+ @SuppressWarnings("serial")
+ public class ExcludeAllFilter extends Filter {
++	
++	//ugly but useful for test purposes
+ 	private static volatile boolean done = false;
+ 
++	@Override
+ 	public BitSet bits(IndexReader reader) throws IOException {
+-		if (done) throw new IllegalStateException("Called twice");
++		if ( done ) throw new IllegalStateException( "Called twice" );
+ 		BitSet bitSet = new BitSet( reader.maxDoc() );
+ 		done = true;
+ 		return bitSet;
+ 	}
++
++	@Override
++	public DocIdSet getDocIdSet(IndexReader reader) throws IOException {
++		if ( done ) throw new IllegalStateException( "Called twice" );
++		done = true;
++		return EmptyDocIdBitSet.instance;
++	}
++	
+ }

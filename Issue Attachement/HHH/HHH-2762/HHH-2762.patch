@@ -1,0 +1,973 @@
+Index: core/src/main/java/org/hibernate/engine/SessionImplementor.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/SessionImplementor.java	(revision 17332)
++++ core/src/main/java/org/hibernate/engine/SessionImplementor.java	(working copy)
+@@ -287,6 +287,22 @@
+ 	 */
+ 	int executeNativeUpdate(NativeSQLQuerySpecification specification, QueryParameters queryParameters) throws HibernateException;
+ 
++
++	/**
++	 * Return changes to this session that have not been flushed yet.
++	 *
++	 * @return The non-flushed changes.
++	 */
++	public NonFlushedChanges getNonFlushedChanges() throws HibernateException;
++
++	/**
++	 * Apply non-flushed changes from a different session to this session.
++	 * <p/>
++	 * @param nonFlushedChanges the non-flushed changes
++	 * @throws HibernateException
++	 */
++	public void applyNonFlushedChanges(NonFlushedChanges nonFlushedChanges) throws HibernateException;	
++
+ 	// copied from Session:
+ 	
+ 	public EntityMode getEntityMode();
+Index: core/src/main/java/org/hibernate/engine/ActionQueue.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/ActionQueue.java	(revision 17332)
++++ core/src/main/java/org/hibernate/engine/ActionQueue.java	(working copy)
+@@ -158,6 +158,23 @@
+ 		executeActions( insertions );
+ 	}
+ 
++	public void visitActions(ActionVisitor visitor) {
++		visitActionList( visitor, insertions );
++		visitActionList( visitor, updates );
++		visitActionList( visitor, collectionRemovals );
++		visitActionList( visitor, collectionUpdates );
++		visitActionList( visitor, collectionCreations );
++		visitActionList( visitor, deletions );
++		visitActionList( visitor, executions );
++	}
++
++	private void visitActionList(ActionVisitor visitor, List actions) {
++		for ( Iterator it=actions.iterator(); it.hasNext(); ) {
++			Executable executable = ( Executable ) it.next();
++			executable.accept( visitor );
++		}
++	}
++
+ 	/**
+ 	 * Perform all currently queued actions.
+ 	 *
+Index: core/src/main/java/org/hibernate/engine/ActionVisitor.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/ActionVisitor.java	(revision 0)
++++ core/src/main/java/org/hibernate/engine/ActionVisitor.java	(revision 0)
+@@ -0,0 +1,59 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.engine;
++
++import org.hibernate.action.CollectionRecreateAction;
++import org.hibernate.action.CollectionRemoveAction;
++import org.hibernate.action.CollectionUpdateAction;
++import org.hibernate.action.EntityDeleteAction;
++import org.hibernate.action.EntityIdentityInsertAction;
++import org.hibernate.action.EntityInsertAction;
++import org.hibernate.action.EntityUpdateAction;
++import org.hibernate.action.Executable;
++import org.hibernate.action.BulkOperationCleanupAction;
++
++/**
++ * @author Gail Badner
++ */
++public interface ActionVisitor {
++
++	void accept(EntityInsertAction action);
++
++	void accept(EntityDeleteAction action);
++
++	void accept(EntityUpdateAction action);
++
++	void accept(CollectionRecreateAction action);
++
++	void accept(CollectionRemoveAction action);
++
++	void accept(CollectionUpdateAction action);
++
++	void accept(EntityIdentityInsertAction action);
++
++	void accept(BulkOperationCleanupAction action);
++
++	void accept(Executable action);
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/engine/NonFlushedChanges.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/NonFlushedChanges.java	(revision 0)
++++ core/src/main/java/org/hibernate/engine/NonFlushedChanges.java	(revision 0)
+@@ -0,0 +1,41 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.engine;
++
++import org.hibernate.event.EventSource;
++import org.hibernate.EntityMode;
++
++import java.io.Serializable;
++
++public interface NonFlushedChanges extends Serializable {
++
++	EntityMode getEntityMode();
++
++	void add(NonFlushedChanges nonFlushedChanges);
++
++	boolean hasChanges();
++
++	void apply(EventSource source);
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/action/EntityInsertAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityInsertAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/EntityInsertAction.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.Versioning;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.event.PostInsertEvent;
+ import org.hibernate.event.PostInsertEventListener;
+ import org.hibernate.event.PreInsertEvent;
+@@ -63,6 +64,14 @@
+ 		return state;
+ 	}
+ 
++	public Object getVersion() {
++		return version;
++	}
++
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}
++
+ 	public void execute() throws HibernateException {
+ 		EntityPersister persister = getPersister();
+ 		SessionImplementor session = getSession();
+Index: core/src/main/java/org/hibernate/action/Executable.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/Executable.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/Executable.java	(working copy)
+@@ -25,6 +25,7 @@
+ package org.hibernate.action;
+ 
+ import org.hibernate.HibernateException;
++import org.hibernate.engine.ActionVisitor;
+ 
+ import java.io.Serializable;
+ 
+@@ -59,4 +60,6 @@
+ 	 * What spaces (tables) are affected by this action?
+ 	 */
+ 	public Serializable[] getPropertySpaces();
++
++	public void accept(ActionVisitor actionVisitor);
+ }
+Index: core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java	(working copy)
+@@ -33,6 +33,7 @@
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionVisitor;
+ 
+ import java.io.Serializable;
+ import java.util.Map;
+@@ -214,6 +215,10 @@
+ 		// nothing to do		
+ 	}
+ 
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}
++
+ 	private static class EntityCleanup {
+ 		private final EntityRegionAccessStrategy cacheAccess;
+ 		private final SoftLock cacheLock;
+Index: core/src/main/java/org/hibernate/action/CollectionRecreateAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/CollectionRecreateAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/CollectionRecreateAction.java	(working copy)
+@@ -33,6 +33,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.persister.collection.CollectionPersister;
+ 
+ import java.io.Serializable;
+@@ -48,6 +49,10 @@
+ 		super( persister, collection, id, session );
+ 	}
+ 
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}
++	
+ 	public void execute() throws HibernateException {
+ 		// this method is called when a new non-null collection is persisted
+ 		// or when an existing (non-null) collection is moved to a new owner
+Index: core/src/main/java/org/hibernate/action/CollectionRemoveAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/CollectionRemoveAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/CollectionRemoveAction.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.persister.collection.CollectionPersister;
+ 
+ import java.io.Serializable;
+@@ -95,7 +96,11 @@
+ 		this.emptySnapshot = emptySnapshot;
+ 		this.affectedOwner = affectedOwner;
+ 	}
+-	
++
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}	
++
+ 	public void execute() throws HibernateException {
+ 		preRemove();
+ 
+@@ -124,6 +129,10 @@
+ 		}
+ 	}
+ 
++	public Object getAffectedOwner() {
++		return affectedOwner;
++	}
++
+ 	private void preRemove() {
+ 		PreCollectionRemoveEventListener[] preListeners = getSession().getListeners()
+ 				.getPreCollectionRemoveEventListeners();
+Index: core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(working copy)
+@@ -30,6 +30,7 @@
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.EntityKey;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.event.PostInsertEvent;
+ import org.hibernate.event.PostInsertEventListener;
+ import org.hibernate.event.PreInsertEvent;
+@@ -56,6 +57,10 @@
+ 		delayedEntityKey = isDelayed ? generateDelayedEntityKey() : null;
+ 	}
+ 
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}
++
+ 	public void execute() throws HibernateException {
+ 		
+ 		final EntityPersister persister = getPersister();
+Index: core/src/main/java/org/hibernate/action/CollectionUpdateAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/CollectionUpdateAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/CollectionUpdateAction.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.cache.CacheException;
+ import org.hibernate.collection.PersistentCollection;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.pretty.MessageHelper;
+ 
+@@ -54,6 +55,10 @@
+ 		this.emptySnapshot = emptySnapshot;
+ 	}
+ 
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}
++
+ 	public void execute() throws HibernateException {
+ 		final Serializable id = getKey();
+ 		final SessionImplementor session = getSession();
+@@ -99,7 +104,7 @@
+ 					updateCollection( getPersister().getRole() );
+ 		}
+ 	}
+-	
++
+ 	private void preUpdate() {
+ 		PreCollectionUpdateEventListener[] preListeners = getSession().getListeners()
+ 				.getPreCollectionUpdateEventListeners();
+Index: core/src/main/java/org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -34,6 +34,7 @@
+ import org.hibernate.engine.EntityKey;
+ import org.hibernate.engine.PersistenceContext;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.event.PostDeleteEvent;
+ import org.hibernate.event.PostDeleteEventListener;
+ import org.hibernate.event.PreDeleteEvent;
+@@ -62,6 +63,10 @@
+ 		this.state = state;
+ 	}
+ 
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}	
++
+ 	public void execute() throws HibernateException {
+ 		Serializable id = getId();
+ 		EntityPersister persister = getPersister();
+Index: core/src/main/java/org/hibernate/action/EntityUpdateAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityUpdateAction.java	(revision 17332)
++++ core/src/main/java/org/hibernate/action/EntityUpdateAction.java	(working copy)
+@@ -37,6 +37,7 @@
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.engine.Status;
+ import org.hibernate.engine.Versioning;
++import org.hibernate.engine.ActionVisitor;
+ import org.hibernate.event.PostUpdateEvent;
+ import org.hibernate.event.PostUpdateEventListener;
+ import org.hibernate.event.PreUpdateEvent;
+@@ -79,6 +80,18 @@
+ 		this.rowId = rowId;
+ 	}
+ 
++	public Object getNextVersion() {
++		return nextVersion;
++	}
++
++	public int[] getDirtyFields() {
++		return dirtyFields;
++	}
++
++	public void accept(ActionVisitor actionVisitor) {
++		actionVisitor.accept( this );
++	}	
++
+ 	public void execute() throws HibernateException {
+ 		Serializable id = getId();
+ 		EntityPersister persister = getPersister();
+Index: core/src/main/java/org/hibernate/impl/SessionImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/SessionImpl.java	(revision 17332)
++++ core/src/main/java/org/hibernate/impl/SessionImpl.java	(working copy)
+@@ -77,6 +77,7 @@
+ import org.hibernate.engine.StatefulPersistenceContext;
+ import org.hibernate.engine.Status;
+ import org.hibernate.engine.LoadQueryInfluencers;
++import org.hibernate.engine.NonFlushedChanges;
+ import org.hibernate.engine.query.FilterQueryPlan;
+ import org.hibernate.engine.query.HQLQueryPlan;
+ import org.hibernate.engine.query.NativeSQLQueryPlan;
+@@ -110,6 +111,8 @@
+ import org.hibernate.event.ReplicateEventListener;
+ import org.hibernate.event.SaveOrUpdateEvent;
+ import org.hibernate.event.SaveOrUpdateEventListener;
++import org.hibernate.event.FindNonFlushedChangesEvent;
++import org.hibernate.event.FindNonFlushedChangesEventListener;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.jdbc.Batcher;
+ import org.hibernate.jdbc.JDBCContext;
+@@ -376,6 +379,53 @@
+ 		}
+ 	}
+ 
++	/**
++	 * Return changes to this session and its child sessions that have not been flushed yet.
++	 * <p/>
++	 * @return The non-flushed changes.
++	 */
++	public NonFlushedChanges getNonFlushedChanges() throws HibernateException {
++		errorIfClosed();
++		checkTransactionSynchStatus();
++		NonFlushedChanges nonFlushedChanges = fireFindNonFlushedChanges();
++		if ( childSessionsByEntityMode != null ) {
++			Iterator it = childSessionsByEntityMode.values().iterator();
++			while ( it.hasNext() ) {
++				nonFlushedChanges.add( ( ( SessionImpl ) it.next() ).fireFindNonFlushedChanges() );
++			}
++		}
++		return nonFlushedChanges;
++	}
++
++	private NonFlushedChanges fireFindNonFlushedChanges() throws HibernateException {
++		log.debug("finding non-flushed changes for entityMode: " + entityMode );
++		NonFlushedChanges nonFlushedChanges = new NonFlushedChangesImpl( entityMode );
++		FindNonFlushedChangesEvent event = new FindNonFlushedChangesEvent( this, nonFlushedChanges );
++		FindNonFlushedChangesEventListener[] findNonFlushedChangesEventListeners = listeners.getFindNonFlushedChangesEventListeners();
++		for ( int i = 0; i < findNonFlushedChangesEventListeners.length; i++ ) {
++			findNonFlushedChangesEventListeners[i].onFindNonFlushedChanges( event );
++		}
++		return event.getNonFlushedChanges();
++	}
++
++	/**
++	 * Apply non-flushed changes from a different session to this session.
++	 * <p/>
++	 * @param nonFlushedChanges the non-flushed changes
++	 * @throws HibernateException
++	 */
++	public void applyNonFlushedChanges(NonFlushedChanges nonFlushedChanges) throws HibernateException {
++		errorIfClosed();
++		checkTransactionSynchStatus();
++		nonFlushedChanges.apply( this );
++		if ( childSessionsByEntityMode != null ) {
++			Iterator it = childSessionsByEntityMode.values().iterator();
++			while ( it.hasNext() ) {
++				( ( SessionImpl ) it.next() ).applyNonFlushedChanges( nonFlushedChanges );
++			}
++		}
++	}
++
+ 	public boolean shouldAutoClose() {
+ 		return isAutoCloseSessionEnabled() && !isClosed();
+ 	}
+Index: core/src/main/java/org/hibernate/impl/NonFlushedChangesImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/NonFlushedChangesImpl.java	(revision 0)
++++ core/src/main/java/org/hibernate/impl/NonFlushedChangesImpl.java	(revision 0)
+@@ -0,0 +1,74 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.impl;
++
++import org.hibernate.engine.NonFlushedChanges;
++import org.hibernate.event.EventSource;
++import org.hibernate.AssertionFailure;
++import org.hibernate.EntityMode;
++
++import java.util.Map;
++import java.util.HashMap;
++
++public final class NonFlushedChangesImpl implements NonFlushedChanges {
++
++	private static final int INIT_LIST_SIZE = 5;
++
++	private final EntityMode entityMode;
++
++	private final Map childNonFlushedChangesByEntityMode = new HashMap();
++
++	public NonFlushedChangesImpl(EntityMode entityMode) {
++		this.entityMode = entityMode;
++	}
++
++	public EntityMode getEntityMode() {
++		return entityMode;
++	}
++
++	public void add(NonFlushedChanges nonFlushedChanges) {
++		if ( nonFlushedChanges.getEntityMode() == entityMode ) {
++			if ( nonFlushedChanges == this ) {
++				throw new AssertionFailure( "cannot add nonFlushedChanges to itself." );
++			}
++			throw new UnsupportedOperationException( "NonFlushedChanges must be for a child EventSource" );
++		}
++		else if ( childNonFlushedChangesByEntityMode.containsKey( entityMode ) ) {
++			throw new UnsupportedOperationException(
++					"NonFlushedChanges have already been added for entity mode: " + nonFlushedChanges.getEntityMode()
++			);
++		}
++		else {
++			childNonFlushedChangesByEntityMode.put( nonFlushedChanges.getEntityMode(), nonFlushedChanges );
++		}
++	}
++
++	public boolean hasChanges() {
++		throw new UnsupportedOperationException( "Not implemented." );
++	}
++
++	public void apply(EventSource source) {
++		throw new UnsupportedOperationException( "Not implemented." ); 
++	}
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/StatelessSessionImpl.java	(revision 17332)
++++ core/src/main/java/org/hibernate/impl/StatelessSessionImpl.java	(working copy)
+@@ -55,6 +55,7 @@
+ import org.hibernate.engine.StatefulPersistenceContext;
+ import org.hibernate.engine.Versioning;
+ import org.hibernate.engine.LoadQueryInfluencers;
++import org.hibernate.engine.NonFlushedChanges;
+ import org.hibernate.engine.query.HQLQueryPlan;
+ import org.hibernate.engine.query.NativeSQLQueryPlan;
+ import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
+@@ -621,6 +622,12 @@
+ 
+ 	public void flush() {}
+ 
++	public NonFlushedChanges getNonFlushedChanges() {
++		return null;
++	}
++
++	public void applyNonFlushedChanges(NonFlushedChanges nonFlushedChanges) {}
++
+ 	public String getFetchProfile() {
+ 		return null;
+ 	}
+Index: core/src/main/java/org/hibernate/event/FindNonFlushedChangesEvent.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/FindNonFlushedChangesEvent.java	(revision 0)
++++ core/src/main/java/org/hibernate/event/FindNonFlushedChangesEvent.java	(revision 0)
+@@ -0,0 +1,43 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.event;
++
++import org.hibernate.engine.NonFlushedChanges;
++
++/**
++ * @author Gail Badner
++ */
++public class FindNonFlushedChangesEvent extends FlushEvent {
++
++	private NonFlushedChanges nonflushedChanges;
++
++	public FindNonFlushedChangesEvent(EventSource source, NonFlushedChanges nonflushedChanges) {
++		super(source);
++		this.nonflushedChanges = nonflushedChanges;
++	}
++
++	public NonFlushedChanges getNonFlushedChanges() {
++		return nonflushedChanges;
++	}
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/event/EventListeners.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/EventListeners.java	(revision 17332)
++++ core/src/main/java/org/hibernate/event/EventListeners.java	(working copy)
+@@ -20,7 +20,6 @@
+  * Free Software Foundation, Inc.
+  * 51 Franklin Street, Fifth Floor
+  * Boston, MA  02110-1301  USA
+- *
+  */
+ package org.hibernate.event;
+ 
+@@ -44,6 +43,7 @@
+ import org.hibernate.event.def.DefaultLockEventListener;
+ import org.hibernate.event.def.DefaultMergeEventListener;
+ import org.hibernate.event.def.DefaultPersistEventListener;
++import org.hibernate.event.def.DefaultPersistOnFlushEventListener;
+ import org.hibernate.event.def.DefaultPostLoadEventListener;
+ import org.hibernate.event.def.DefaultPreLoadEventListener;
+ import org.hibernate.event.def.DefaultRefreshEventListener;
+@@ -52,7 +52,6 @@
+ import org.hibernate.event.def.DefaultSaveOrUpdateCopyEventListener;
+ import org.hibernate.event.def.DefaultSaveOrUpdateEventListener;
+ import org.hibernate.event.def.DefaultUpdateEventListener;
+-import org.hibernate.event.def.DefaultPersistOnFlushEventListener;
+ import org.hibernate.util.Cloneable;
+ 
+ /**
+@@ -76,7 +75,8 @@
+ 	private LockEventListener[] lockEventListeners = { new DefaultLockEventListener() };
+ 	private RefreshEventListener[] refreshEventListeners = { new DefaultRefreshEventListener() };
+ 	private FlushEntityEventListener[] flushEntityEventListeners = { new DefaultFlushEntityEventListener() };
+-	private InitializeCollectionEventListener[] initializeCollectionEventListeners = 
++	private FindNonFlushedChangesEventListener[] findNonFlushedChangesEventListeners = { };
++	private InitializeCollectionEventListener[] initializeCollectionEventListeners =
+ 			{ new DefaultInitializeCollectionEventListener() };
+ 
+ 	private PostLoadEventListener[] postLoadEventListeners = { new DefaultPostLoadEventListener() };
+@@ -117,6 +117,7 @@
+ 		eventInterfaceFromType.put("evict", EvictEventListener.class);
+ 		eventInterfaceFromType.put("flush", FlushEventListener.class);
+ 		eventInterfaceFromType.put("flush-entity", FlushEntityEventListener.class);
++		eventInterfaceFromType.put("find-nonflushed-changes", FindNonFlushedChangesEventListener.class);
+ 		eventInterfaceFromType.put("load", LoadEventListener.class);
+ 		eventInterfaceFromType.put("load-collection", InitializeCollectionEventListener.class);
+ 		eventInterfaceFromType.put("lock", LockEventListener.class);
+@@ -314,7 +315,15 @@
+ 	public void setFlushEntityEventListeners(FlushEntityEventListener[] flushEntityEventListener) {
+ 		this.flushEntityEventListeners = flushEntityEventListener;
+ 	}
+-	
++
++	public FindNonFlushedChangesEventListener[] getFindNonFlushedChangesEventListeners() {
++		return findNonFlushedChangesEventListeners;
++	}
++
++	public void setFindNonFlushedChangesEventListeners(FindNonFlushedChangesEventListener[] findNonFlushedChangesEventListener) {
++		this.findNonFlushedChangesEventListeners = findNonFlushedChangesEventListener;
++	}
++
+ 	public SaveOrUpdateEventListener[] getSaveOrUpdateEventListeners() {
+ 		return saveOrUpdateEventListeners;
+ 	}
+Index: core/src/main/java/org/hibernate/event/FindNonFlushedChangesEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/FindNonFlushedChangesEventListener.java	(revision 0)
++++ core/src/main/java/org/hibernate/event/FindNonFlushedChangesEventListener.java	(revision 0)
+@@ -0,0 +1,35 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.event;
++
++import java.io.Serializable;
++
++import org.hibernate.HibernateException;
++
++/**
++ * @author Gail Badner
++ */
++public interface FindNonFlushedChangesEventListener extends Serializable {
++	public void onFindNonFlushedChanges(FindNonFlushedChangesEvent event) throws HibernateException;
++}
+\ No newline at end of file
+Index: core/src/main/resources/org/hibernate/hibernate-configuration-3.0.dtd
+===================================================================
+--- core/src/main/resources/org/hibernate/hibernate-configuration-3.0.dtd	(revision 17332)
++++ core/src/main/resources/org/hibernate/hibernate-configuration-3.0.dtd	(working copy)
+@@ -34,10 +34,10 @@
+ <!ATTLIST collection-cache usage (read-only|read-write|nonstrict-read-write|transactional) #REQUIRED>
+ 
+ <!ELEMENT event (listener*)>
+-<!ATTLIST event type (auto-flush|merge|create|create-onflush|delete|dirty-check|evict|flush|flush-entity|load|load-collection|lock|refresh|replicate|save-update|save|update|pre-load|pre-update|pre-insert|pre-delete|pre-collection-recreate|pre-collection-remove|pre-collection-update|post-load|post-update|post-insert|post-delete|post-collection-recreate|post-collection-remove|post-collection-update|post-commit-update|post-commit-insert|post-commit-delete) #REQUIRED>
++<!ATTLIST event type (auto-flush|merge|create|create-onflush|delete|dirty-check|evict|flush|flush-entity|load|load-collection|lock|refresh|replicate|save-update|save|update|pre-load|pre-update|pre-insert|pre-delete|pre-collection-recreate|pre-collection-remove|pre-collection-update|post-load|post-update|post-insert|post-delete|post-collection-recreate|post-collection-remove|post-collection-update|post-commit-update|post-commit-insert|post-commit-delete|find-nonflushed-changes) #REQUIRED>
+ 
+ <!ELEMENT listener EMPTY>
+-<!ATTLIST listener type (auto-flush|merge|create|create-onflush|delete|dirty-check|evict|flush|flush-entity|load|load-collection|lock|refresh|replicate|save-update|save|update|pre-load|pre-update|pre-insert|pre-delete|pre-collection-recreate|pre-collection-remove|pre-collection-update|post-load|post-update|post-insert|post-delete|post-collection-recreate|post-collection-remove|post-collection-update|post-commit-update|post-commit-insert|post-commit-delete) #IMPLIED>
++<!ATTLIST listener type (auto-flush|merge|create|create-onflush|delete|dirty-check|evict|flush|flush-entity|load|load-collection|lock|refresh|replicate|save-update|save|update|pre-load|pre-update|pre-insert|pre-delete|pre-collection-recreate|pre-collection-remove|pre-collection-update|post-load|post-update|post-insert|post-delete|post-collection-recreate|post-collection-remove|post-collection-update|post-commit-update|post-commit-insert|post-commit-delete|find-nonflushed-changes) #IMPLIED>
+ <!ATTLIST listener class CDATA #REQUIRED>
+ 
+ <!ELEMENT session-factory (property*, mapping*, (class-cache|collection-cache)*, event*, listener*)>
+Index: testsuite/src/test/java/org/hibernate/test/ops/MergeTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/ops/MergeTest.java	(revision 17332)
++++ testsuite/src/test/java/org/hibernate/test/ops/MergeTest.java	(working copy)
+@@ -707,6 +707,8 @@
+ 		Employee gavin = new Employee();
+ 		jboss.setEmployees( new ArrayList() );
+ 		jboss.getEmployees().add(gavin);
++		gavin.setEmployers( new ArrayList() );
++		gavin.getEmployers().add( jboss );
+ 		s.merge(jboss);
+ 		s.flush();
+ 		jboss = (Employer) s.createQuery("from Employer e join fetch e.employees").uniqueResult();
+Index: testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPITest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPITest.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPITest.java	(revision 0)
+@@ -0,0 +1,70 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.nonflushedchanges;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++import org.hibernate.junit.functional.FunctionalTestCase;
++import org.hibernate.Session;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.NonFlushedChanges;
++
++/**
++ * Tests the API for getting and applying non-flushed changes with a Listener configured
++ *
++ * @author Gail Badner
++ */
++public class NonFlushedAPITest extends FunctionalTestCase {
++
++	public NonFlushedAPITest(String name) {
++		super( name );
++	}
++
++	public String[] getMappings() {
++		return new String[] { };
++	}
++
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite( NonFlushedAPITest.class );
++	}
++
++	public void testAPI() {
++		Session s = openSession();
++	    NonFlushedChanges nfc = ( ( SessionImplementor ) s ).getNonFlushedChanges();
++		s.close();
++
++		s = openSession();
++		try {
++			( ( SessionImplementor ) s ).applyNonFlushedChanges( nfc );
++			fail();
++		}
++		catch( UnsupportedOperationException ex) {
++			// expected
++		}
++		s.close();
++	}
++}
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPIWithListenerTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPIWithListenerTest.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/nonflushedchanges/NonFlushedAPIWithListenerTest.java	(revision 0)
+@@ -0,0 +1,124 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.nonflushedchanges;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++import org.hibernate.junit.functional.FunctionalTestCase;
++import org.hibernate.Session;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.action.EntityInsertAction;
++import org.hibernate.action.EntityDeleteAction;
++import org.hibernate.action.EntityUpdateAction;
++import org.hibernate.action.CollectionRecreateAction;
++import org.hibernate.action.CollectionRemoveAction;
++import org.hibernate.action.CollectionUpdateAction;
++import org.hibernate.action.EntityIdentityInsertAction;
++import org.hibernate.action.Executable;
++import org.hibernate.action.BulkOperationCleanupAction;
++import org.hibernate.event.FindNonFlushedChangesEventListener;
++import org.hibernate.event.FindNonFlushedChangesEvent;
++import org.hibernate.event.def.AbstractFlushingEventListener;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.NonFlushedChanges;
++import org.hibernate.engine.ActionVisitor;
++
++/**
++ * Tests the API for getting and applying non-flushed changes
++ *
++ * @author Gail Badner
++ */
++public class NonFlushedAPIWithListenerTest extends FunctionalTestCase {
++
++	public static class FindNonFlushedChangesEventTestListener
++			extends AbstractFlushingEventListener implements FindNonFlushedChangesEventListener {
++
++		public void onFindNonFlushedChanges(FindNonFlushedChangesEvent event) {
++			int oldSize = event.getSession().getActionQueue().numberOfCollectionRemovals();
++
++			try {
++				flushEverythingToExecutions(event);
++				NonFlushedChanges nonFlushedChanges = ( ( FindNonFlushedChangesEvent ) event ).getNonFlushedChanges();
++				NonFlushedChangesActionTestVisitor visitor = new NonFlushedChangesActionTestVisitor( nonFlushedChanges );
++				event.getSession().getActionQueue().visitActions( visitor );			}
++			finally {
++				event.getSession().getActionQueue().clearFromFlushNeededCheck( oldSize );
++			}
++		}
++	}
++
++	public static class NonFlushedChangesActionTestVisitor implements ActionVisitor {
++		NonFlushedChanges nonFlushedChanges;
++		public NonFlushedChangesActionTestVisitor(NonFlushedChanges nonFlushedChanges) {
++			this.nonFlushedChanges = nonFlushedChanges;
++		}
++		public void accept(EntityInsertAction action) {}
++		public void accept(EntityDeleteAction action) {}
++		public void accept(EntityUpdateAction action) {}
++		public void accept(CollectionRecreateAction action) {}
++		public void accept(CollectionRemoveAction action) {}
++		public void accept(CollectionUpdateAction action) {}
++		public void accept(EntityIdentityInsertAction action) {}
++		public void accept(BulkOperationCleanupAction action) {}
++		public void accept(Executable action) {}
++	}
++
++	public NonFlushedAPIWithListenerTest(String name) {
++		super( name );
++	}
++
++	public String[] getMappings() {
++		return new String[] { };
++	}
++
++	public void configure(Configuration cfg) {
++		super.configure( cfg );
++		FindNonFlushedChangesEventTestListener listeners[] =
++				new FindNonFlushedChangesEventTestListener[] { new FindNonFlushedChangesEventTestListener() };
++		cfg.getEventListeners().setFindNonFlushedChangesEventListeners( listeners );
++	}	
++
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite( NonFlushedAPIWithListenerTest.class );
++	}
++
++	public void testAPI() {
++		Session s = openSession();
++	    NonFlushedChanges nfc = ( ( SessionImplementor ) s ).getNonFlushedChanges();
++		s.close();
++
++		s = openSession();
++		try {
++			( ( SessionImplementor ) s ).applyNonFlushedChanges( nfc );
++			fail();
++		}
++		catch( UnsupportedOperationException ex) {
++			// expected
++		}
++		s.close();
++	}
++}
+\ No newline at end of file

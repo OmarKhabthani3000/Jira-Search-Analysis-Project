@@ -1,0 +1,130 @@
+### Eclipse Workspace Patch 1.0
+#P hhh
+Index: src/main/java/org/hibernate/loader/custom/sql/SQLCustomQuery.java
+===================================================================
+--- src/main/java/org/hibernate/loader/custom/sql/SQLCustomQuery.java (revision 17786)
++++ src/main/java/org/hibernate/loader/custom/sql/SQLCustomQuery.java (working copy)
+@@ -129,7 +129,7 @@
+ //
+ //   String[] suffixes = BasicLoader.generateSuffixes(entityPersisters.length);
+ 
+-   SQLQueryParser parser = new SQLQueryParser( sqlQuery, new ParserContext( aliasContext ) );
++   SQLQueryParser parser = new SQLQueryParser( sqlQuery, new ParserContext( aliasContext ), factory );
+    this.sql = parser.process();
+    this.namedParameterBindPoints.putAll( parser.getNamedParameters() );
+ 
+Index: src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java
+===================================================================
+--- src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java (revision 17786)
++++ src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java (working copy)
+@@ -25,6 +25,8 @@
+ package org.hibernate.loader.custom.sql;
+ 
+ import org.hibernate.QueryException;
++import org.hibernate.cfg.Environment;
++import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.query.ParameterParser;
+ import org.hibernate.persister.collection.SQLLoadableCollection;
+ import org.hibernate.persister.entity.SQLLoadable;
+@@ -38,9 +40,11 @@
+  * @author Gavin King
+  * @author Max Andersen
+  * @author Steve Ebersole
++ * @author Paul Benedict
+  */
+ public class SQLQueryParser {
+ 
++    private final SessionFactoryImplementor factory;
+  private final String originalQueryString;
+  private final ParserContext context;
+ 
+@@ -57,9 +61,10 @@
+    Map getPropertyResultsMapByAlias(String alias);
+  }
+ 
+- public SQLQueryParser(String queryString, ParserContext context) {
++    public SQLQueryParser(String queryString, ParserContext context, SessionFactoryImplementor factory) {
+    this.originalQueryString = queryString;
+    this.context = context;
++        this.factory = factory;
+  }
+ 
+  public Map getNamedParameters() {
+@@ -70,9 +75,11 @@
+    return aliasesFound>0;
+  }
+ 
+- public String process() {
+-   return substituteParams( substituteBrackets( originalQueryString ) );
+- }
++    public String process() {
++        String processedSql = substituteBrackets( originalQueryString );
++        processedSql = substituteParams( processedSql );
++        return processedSql;
++    }
+ 
+  // TODO: should "record" how many properties we have reffered to - and if we 
+  //       don't get'em'all we throw an exception! Way better than trial and error ;)
+@@ -111,11 +118,44 @@
+        }
+      }
+      else {
+-       String aliasName = aliasPath.substring(0, firstDot);
+-       boolean isCollection = context.isCollectionAlias( aliasName );
+-       boolean isEntity = context.isEntityAlias( aliasName );
+-       
+-       if ( isCollection ) {
++                String aliasName = aliasPath.substring(0, firstDot);
++                boolean isEnvProperty = aliasPath.startsWith(Environment.PROPERTY_PREFIX);
++                boolean isCollection = context.isCollectionAlias( aliasName );
++                boolean isEntity = context.isEntityAlias( aliasName );
++                
++                if ( isEnvProperty ) {
++                    String envName = aliasPath;
++
++                    // Because some properties are stand-ins for qualified 
++                    // SQL objects (like the schema name), a trailing period 
++                    // tells this engine to also append the period to the 
++                    // substituted value
++                    boolean isTrailingQualified = envName.endsWith(".");
++                    if (isTrailingQualified) {
++                        envName = envName.substring(0, envName.length() - 1);
++                    }
++                    
++                    // Lookup the required property value
++                    String envValue;
++                    if (Environment.DEFAULT_SCHEMA.equals(envName)) {
++                        envValue = factory.getSettings().getDefaultSchemaName();
++                    } 
++                    else if (Environment.DEFAULT_CATALOG.equals(envName)) {
++                        envValue = factory.getSettings().getDefaultCatalogName();
++                    } 
++                    else {
++                        throw new QueryException( "Unknown property substitution", envName );
++                    }
++
++                    // Append the property value when present
++                    if (envValue != null) {
++                        result.append(envValue);
++                        if (isTrailingQualified) {
++                            result.append(".");
++                        }
++                    }
++                }
++                else if ( isCollection ) {
+          // The current alias is referencing the collection to be eagerly fetched
+          String propertyName = aliasPath.substring( firstDot + 1 );
+          result.append( resolveCollectionProperties( aliasName, propertyName ) );
+Index: src/main/java/org/hibernate/cfg/Environment.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Environment.java  (revision 17786)
++++ src/main/java/org/hibernate/cfg/Environment.java  (working copy)
+@@ -177,6 +177,8 @@
+  */
+ public final class Environment {
+ 
++    public static final String PROPERTY_PREFIX = "hibernate.";
++    
+  /**
+   * The Hibernate version.
+   * 

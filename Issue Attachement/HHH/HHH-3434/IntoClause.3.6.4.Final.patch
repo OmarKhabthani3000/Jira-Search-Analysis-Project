@@ -1,0 +1,58 @@
+diff -urN hibernate-distribution-3.6.4.Final-orig/project/hibernate-core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java hibernate-distribution-3.6.4.Final/project/hibernate-core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java
+--- hibernate-distribution-3.6.4.Final-orig/project/hibernate-core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java	2011-05-04 23:44:42.000000000 +0100
++++ hibernate-distribution-3.6.4.Final/project/hibernate-core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java	2011-06-08 12:16:24.656250000 +0100
+@@ -25,11 +25,14 @@
+ package org.hibernate.hql.ast.tree;
+ 
+ import java.util.ArrayList;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ import java.sql.Types;
+ 
+ import org.hibernate.QueryException;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.type.ComponentType;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ 
+@@ -46,6 +49,9 @@
+ 	private Queryable persister;
+ 	private String columnSpec = "";
+ 	private Type[] types;
++	
++	private Set explicitComponentIds;
++	private Set componentIds;
+ 
+ 	private boolean discriminated;
+ 	private boolean explicitIdInsertion;
+@@ -167,8 +173,27 @@
+ 			throw new QueryException( "INSERT statements cannot refer to superclass/joined properties [" + name + "]" );
+ 		}
+ 
+-		if ( name.equals( persister.getIdentifierPropertyName() ) ) {
+-			explicitIdInsertion = true;
++		if ( !explicitIdInsertion ) {
++			if ( persister.getIdentifierType() instanceof ComponentType ) {
++				if ( explicitComponentIds == null ) {
++					explicitComponentIds = new HashSet();
++				}
++				if ( componentIds == null ) {
++					String[] propertyNames = ( (ComponentType) persister.getIdentifierType() ).getPropertyNames();
++					componentIds = new HashSet();
++					for ( int i = 0; i < propertyNames.length; i++ ) {
++						componentIds.add( propertyNames[i] );
++					}
++				}
++				if ( componentIds.contains(name) ) {
++					explicitComponentIds.add(name);
++				}
++				if ( explicitComponentIds.size() == componentIds.size() ) {
++					explicitIdInsertion = true;
++				}
++			} else if ( name.equals( persister.getIdentifierPropertyName() ) ) {
++				explicitIdInsertion = true;
++			}
+ 		}
+ 
+ 		if ( persister.isVersioned() ) {

@@ -1,0 +1,160 @@
+Index: org/hibernate/criterion/BetweenExpression.java
+===================================================================
+--- org/hibernate/criterion/BetweenExpression.java	(revision 11393)
++++ org/hibernate/criterion/BetweenExpression.java	(working copy)
+@@ -27,7 +27,7 @@
+ 	throws HibernateException {
+ 		return StringHelper.join(
+ 			" and ",
+-			StringHelper.suffix( criteriaQuery.getColumnsUsingProjection(criteria, propertyName), " between ? and ?" )
++			StringHelper.suffix( criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false), " between ? and ?" )
+ 		);
+ 
+ 		//TODO: get SQL rendering out of this package!
+Index: org/hibernate/criterion/CriteriaQuery.java
+===================================================================
+--- org/hibernate/criterion/CriteriaQuery.java	(revision 11393)
++++ org/hibernate/criterion/CriteriaQuery.java	(working copy)
+@@ -34,7 +34,7 @@
+ 	/**
+ 	 * Get the names of the columns mapped by a property path
+ 	 */
+-	public String[] getColumnsUsingProjection(Criteria criteria, String propertyPath) 
++	public String[] getColumnsUsingProjection(Criteria criteria, String propertyPath, boolean returnAliases) 
+ 	throws HibernateException;
+ 	
+ 	/**
+Index: org/hibernate/criterion/IlikeExpression.java
+===================================================================
+--- org/hibernate/criterion/IlikeExpression.java	(revision 11393)
++++ org/hibernate/criterion/IlikeExpression.java	(working copy)
+@@ -29,7 +29,7 @@
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+ 		Dialect dialect = criteriaQuery.getFactory().getDialect();
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
+ 		if (columns.length!=1) throw new HibernateException("ilike may only be used with single-column properties");
+ 		if ( dialect instanceof PostgreSQLDialect ) {
+ 			return columns[0] + " ilike ?";
+Index: org/hibernate/criterion/InExpression.java
+===================================================================
+--- org/hibernate/criterion/InExpression.java	(revision 11393)
++++ org/hibernate/criterion/InExpression.java	(working copy)
+@@ -32,7 +32,7 @@
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
+ 		String singleValueParam = StringHelper.repeat( "?, ", columns.length-1 )  + "?";
+ 		if ( columns.length>1 ) singleValueParam = '(' + singleValueParam + ')';
+ 		String params = values.length>0 ?
+Index: org/hibernate/criterion/LikeExpression.java
+===================================================================
+--- org/hibernate/criterion/LikeExpression.java	(revision 11393)
++++ org/hibernate/criterion/LikeExpression.java	(working copy)
+@@ -54,7 +54,7 @@
+ 			Criteria criteria,
+ 			CriteriaQuery criteriaQuery) throws HibernateException {
+ 		Dialect dialect = criteriaQuery.getFactory().getDialect();
+-		String[] columns = criteriaQuery.getColumnsUsingProjection( criteria, propertyName );
++		String[] columns = criteriaQuery.getColumnsUsingProjection( criteria, propertyName, false );
+ 		if ( columns.length != 1 ) {
+ 			throw new HibernateException( "Like may only be used with single-column properties" );
+ 		}
+Index: org/hibernate/criterion/NotNullExpression.java
+===================================================================
+--- org/hibernate/criterion/NotNullExpression.java	(revision 11393)
++++ org/hibernate/criterion/NotNullExpression.java	(working copy)
+@@ -23,7 +23,7 @@
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
+ 		String result = StringHelper.join(
+ 			" or ",
+ 			StringHelper.suffix( columns, " is not null" )
+Index: org/hibernate/criterion/NullExpression.java
+===================================================================
+--- org/hibernate/criterion/NullExpression.java	(revision 11393)
++++ org/hibernate/criterion/NullExpression.java	(working copy)
+@@ -23,7 +23,7 @@
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery) 
+ 	throws HibernateException {
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
+ 		String result = StringHelper.join(
+ 			" and ",
+ 			StringHelper.suffix( columns, " is null" )
+Index: org/hibernate/criterion/Order.java
+===================================================================
+--- org/hibernate/criterion/Order.java	(revision 11393)
++++ org/hibernate/criterion/Order.java	(working copy)
+@@ -42,7 +42,7 @@
+ 	 */
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery) 
+ 	throws HibernateException {
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, true);
+ 		Type type = criteriaQuery.getTypeUsingProjection(criteria, propertyName);
+ 		StringBuffer fragment = new StringBuffer();
+ 		for ( int i=0; i<columns.length; i++ ) {
+Index: org/hibernate/criterion/PropertyExpression.java
+===================================================================
+--- org/hibernate/criterion/PropertyExpression.java	(revision 11393)
++++ org/hibernate/criterion/PropertyExpression.java	(working copy)
+@@ -27,8 +27,8 @@
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery) 
+ 	throws HibernateException {
+-		String[] xcols = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
+-		String[] ycols = criteriaQuery.getColumnsUsingProjection(criteria, otherPropertyName);
++		String[] xcols = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
++		String[] ycols = criteriaQuery.getColumnsUsingProjection(criteria, otherPropertyName, false);
+ 		String result = StringHelper.join(
+ 			" and ",
+ 			StringHelper.add(xcols, getOp(), ycols)
+Index: org/hibernate/criterion/SimpleExpression.java
+===================================================================
+--- org/hibernate/criterion/SimpleExpression.java	(revision 11393)
++++ org/hibernate/criterion/SimpleExpression.java	(working copy)
+@@ -42,7 +42,7 @@
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+ 
+-		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName);
++		String[] columns = criteriaQuery.getColumnsUsingProjection(criteria, propertyName, false);
+ 		Type type = criteriaQuery.getTypeUsingProjection(criteria, propertyName);
+ 		StringBuffer fragment = new StringBuffer();
+ 		if (columns.length>1) fragment.append('(');
+Index: org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+===================================================================
+--- org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(revision 11393)
++++ org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(working copy)
+@@ -379,11 +379,12 @@
+ 	 */
+ 	public String[] getColumnsUsingProjection(
+ 			Criteria subcriteria,
+-	        String propertyName) throws HibernateException {
++	        String propertyName,
++	        boolean returnAliases) throws HibernateException {
+ 
+ 		//first look for a reference to a projection alias
+ 		final Projection projection = rootCriteria.getProjection();
+-		String[] projectionColumns = projection == null ?
++		String[] projectionColumns = ((projection == null) || !returnAliases) ?
+ 		                             null :
+ 		                             projection.getColumnAliases( propertyName, 0 );
+ 
+@@ -396,7 +397,7 @@
+ 			catch ( HibernateException he ) {
+ 				//not found in inner query , try the outer query
+ 				if ( outerQueryTranslator != null ) {
+-					return outerQueryTranslator.getColumnsUsingProjection( subcriteria, propertyName );
++					return outerQueryTranslator.getColumnsUsingProjection( subcriteria, propertyName, returnAliases );
+ 				}
+ 				else {
+ 					throw he;

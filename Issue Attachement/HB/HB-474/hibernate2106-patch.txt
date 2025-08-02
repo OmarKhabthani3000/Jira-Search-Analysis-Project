@@ -1,0 +1,279 @@
+? .cvsignore
+? build
+? patch.txt
+? testout
+? bin/META-INF
+? bin/cache.ccf
+? bin/cvs-dup-eol-fixer
+? bin/ehcache.xml
+? bin/hibernate-service.xml
+? bin/hibernate.cfg.xml
+? bin/hibernate.properties
+? bin/log4j.properties
+? bin/net
+? bin/org
+? bin/oscache.properties
+? bin/treecache.xml
+Index: bin/SchemaExport.bat
+===================================================================
+RCS file: bin/SchemaExport.bat
+diff -N bin/SchemaExport.bat
+--- bin/SchemaExport.bat	4 Jun 2004 01:24:32 -0000	1.6
++++ /dev/null	1 Jan 1970 00:00:00 -0000
+@@ -1,13 +0,0 @@
+-@echo off
+-
+-rem -------------------------------------------------------------------
+-rem Execute SchemaExport tool
+-rem -------------------------------------------------------------------
+-
+-set JDBC_DRIVER=C:\Progra~1\SQLLIB\java\db2java.zip;C:\mm.mysql-2.0.14\mm.mysql-2.0.14-bin.jar
+-set HIBERNATE_HOME=..
+-set LIB=%HIBERNATE_HOME%\lib
+-set PROPS=%HIBERNATE_HOME%\src
+-set CP=%JDBC_DRIVER%;%PROPS%;%HIBERNATE_HOME%\hibernate2.jar;%LIB%\commons-logging-1.0.3.jar;%LIB%\commons-collections-2.1.jar;%LIB%\commons-lang-1.0.1.jar;%LIB%\cglib-2.0-rc2.jar;%LIB%\dom4j-1.4.jar;%LIB%\odmg-3.0.jar;%LIB%\xml-apis.jar;%LIB%\xerces-2.4.0.jar;%LIB%\xalan-2.4.0.jar
+-
+-java -cp %CP% net.sf.hibernate.tool.hbm2ddl.SchemaExport %*
+Index: bin/SchemaUpdate.bat
+===================================================================
+RCS file: bin/SchemaUpdate.bat
+diff -N bin/SchemaUpdate.bat
+--- bin/SchemaUpdate.bat	4 Jun 2004 01:24:32 -0000	1.6
++++ /dev/null	1 Jan 1970 00:00:00 -0000
+@@ -1,13 +0,0 @@
+-@echo off
+-
+-rem -------------------------------------------------------------------
+-rem Execute SchemaExport tool
+-rem -------------------------------------------------------------------
+-
+-set JDBC_DRIVER=C:\Progra~1\SQLLIB\java\db2java.zip;C:\mm.mysql-2.0.14\mm.mysql-2.0.14-bin.jar
+-set HIBERNATE_HOME=..
+-set LIB=%HIBERNATE_HOME%\lib
+-set PROPS=%HIBERNATE_HOME%\src
+-set CP=%JDBC_DRIVER%;%PROPS%;%HIBERNATE_HOME%\hibernate2.jar;%LIB%\commons-logging-1.0.3.jar;%LIB%\commons-collections-2.1.jar;%LIB%\commons-lang-1.0.1.jar;%LIB%\cglib-2.0-rc2.jar;%LIB%\odmg-3.0.jar;%LIB%\xml-apis.jar;%LIB%\dom4j-1.4.jar;%LIB%\xerces-2.4.1.jar;%LIB%\xalan-2.4.1.jar
+-
+-java -cp %CP% net.sf.hibernate.tool.hbm2ddl.SchemaUpdate %*
+Index: src/net/sf/hibernate/Criteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Criteria.java,v
+retrieving revision 1.7
+diff -u -r1.7 Criteria.java
+--- src/net/sf/hibernate/Criteria.java	4 Jun 2004 01:27:36 -0000	1.7
++++ src/net/sf/hibernate/Criteria.java	9 Aug 2004 14:47:53 -0000
+@@ -118,6 +118,13 @@
+ 	 */
+ 	public List list() throws HibernateException;
+ 	
++	/** 
++	 * Method added by Chris Nelson as part of patch 
++	 * @return the count of rows in the query, without
++	 * instantiating any objects
++	 */
++	public long count() throws HibernateException;
++
+ 	/**
+ 	 * Convenience method to return a single instance that matches
+ 	 * the query, or null if the query returns no results.
+Index: src/net/sf/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.9
+diff -u -r1.9 CriteriaImpl.java
+--- src/net/sf/hibernate/impl/CriteriaImpl.java	7 Aug 2004 03:14:56 -0000	1.9
++++ src/net/sf/hibernate/impl/CriteriaImpl.java	9 Aug 2004 14:47:54 -0000
+@@ -84,7 +84,11 @@
+ 		public List list() throws HibernateException {
+ 			return CriteriaImpl.this.list();
+ 		}
+-
++		
++		public long count() throws HibernateException {
++			return CriteriaImpl.this.count();
++		}
++		
+ 		public Object uniqueResult() throws HibernateException {
+ 			return CriteriaImpl.this.uniqueResult();
+ 		}
+@@ -237,6 +241,10 @@
+ 	public List list() throws HibernateException {
+ 		return session.find(this);
+ 	}
++		
++	public long count() throws HibernateException {
++		return session.count(this);
++	}
+ 	
+ 	public Iterator iterateExpressionEntries() {
+ 		return criteria.iterator();
+Index: src/net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.72
+diff -u -r1.72 SessionImpl.java
+--- src/net/sf/hibernate/impl/SessionImpl.java	7 Aug 2004 14:05:39 -0000	1.72
++++ src/net/sf/hibernate/impl/SessionImpl.java	9 Aug 2004 14:47:55 -0000
+@@ -72,6 +72,7 @@
+ import net.sf.hibernate.loader.CriteriaLoader;
+ import net.sf.hibernate.loader.SQLLoader;
+ import net.sf.hibernate.persister.ClassPersister;
++import net.sf.hibernate.persister.Loadable;
+ import net.sf.hibernate.persister.OuterJoinLoadable;
+ import net.sf.hibernate.persister.SQLLoadable;
+ import net.sf.hibernate.persister.UniqueKeyLoadable;
+@@ -3976,6 +3977,19 @@
+ 		nonExists.add(key);
+ 	}
+ 
++	public long count(CriteriaImpl criteria) throws HibernateException {
++		Loadable persister = (Loadable) getClassPersister( criteria.getCriteriaClass() );
++		CriteriaLoader loader = new CriteriaLoader( 
++				getOuterJoinLoadable( criteria.getCriteriaClass() ), factory, criteria 
++		);
++		try {
++			return loader.count(this);
++		}
++		catch (SQLException sqle) {
++			throw new JDBCException(sqle);
++		}			
++	}
++		
+ 	public Object saveOrUpdateCopy(Object object) throws HibernateException {
+ 		return doCopy( object, null, IdentityMap.instantiate(10) );
+ 	}
+Index: src/net/sf/hibernate/loader/AbstractEntityLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/AbstractEntityLoader.java,v
+retrieving revision 1.11
+diff -u -r1.11 AbstractEntityLoader.java
+--- src/net/sf/hibernate/loader/AbstractEntityLoader.java	18 Jul 2004 04:48:51 -0000	1.11
++++ src/net/sf/hibernate/loader/AbstractEntityLoader.java	9 Aug 2004 14:47:55 -0000
+@@ -34,6 +34,8 @@
+ 	private String alias;
+ 	private String[] aliases;
+ 	
++	protected Select select;
++	
+ 	public AbstractEntityLoader(OuterJoinLoadable persister, SessionFactoryImplementor factory) {
+ 		super( factory.getDialect() );
+ 		this.persister = persister;
+@@ -109,7 +111,7 @@
+ 		
+ 		JoinFragment ojf = mergeOuterJoins(associations);
+ 
+-		sql = new Select()
++		select = new Select()
+ 			.setSelectClause(
+ 				persister.selectFragment( alias, suffixes[joins] ) +
+ 				selectString(associations, factory)
+@@ -123,8 +125,8 @@
+ 				ojf.toFromFragmentString(),
+ 				ojf.toWhereFragmentString() + getWhereFragment()
+ 			)
+-			.setOrderByClause(orderBy)
+-			.toStatementString();
++			.setOrderByClause(orderBy);
++		sql = select.toStatementString();
+ 		
+ 	}
+ 	
+Index: src/net/sf/hibernate/loader/CriteriaLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/CriteriaLoader.java,v
+retrieving revision 1.13
+diff -u -r1.13 CriteriaLoader.java
+--- src/net/sf/hibernate/loader/CriteriaLoader.java	18 Jul 2004 04:48:51 -0000	1.13
++++ src/net/sf/hibernate/loader/CriteriaLoader.java	9 Aug 2004 14:47:55 -0000
+@@ -2,6 +2,7 @@
+ package net.sf.hibernate.loader;
+ 
+ import java.io.Serializable;
++import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
+ import java.util.ArrayList;
+@@ -87,6 +88,42 @@
+ 		
+ 	}
+ 	
++	public long count(SessionImplementor session)
++		throws HibernateException, SQLException
++	{
++		List values = new ArrayList();
++		List types = new ArrayList();
++		Iterator iter = criteria.iterateExpressionEntries();
++		while ( iter.hasNext() ) {
++			CriteriaImpl.CriterionEntry ce = (CriteriaImpl.CriterionEntry) iter.next();
++			TypedValue[] tv = ce.getCriterion().getTypedValues( 
++				session.getFactory(), 
++				criteria.getCriteriaClass( ce.getAlias() ),
++				criteria.getAliasClasses()
++			);
++			for ( int i=0; i<tv.length; i++ ) {
++				values.add( tv[i].getValue() );
++				types.add( tv[i].getType() );
++			}
++		}
++		Object[] valueArray = values.toArray();
++		Type[] typeArray = (Type[]) types.toArray(ArrayHelper.EMPTY_TYPE_ARRAY);
++		
++		select.setSelectClause(" count(*) ");
++		select.setOrderByClause("");
++			
++		PreparedStatement ps = null;
++	
++		ps = prepareQueryStatement(
++			select.toStatementString(), 
++			new QueryParameters(typeArray, valueArray, null,  new RowSelection()),
++			false,
++			session);
++		
++		ResultSet rs = session.getBatcher().getResultSet(ps);
++		return (rs.next()) ? rs.getLong(1) : 0;
++	}	
++		
+ 	public List list(SessionImplementor session) throws HibernateException, SQLException {
+ 		List values = new ArrayList();
+ 		List types = new ArrayList();
+Index: test/org/hibernate/test/FumTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/FumTest.java,v
+retrieving revision 1.6
+diff -u -r1.6 FumTest.java
+--- test/org/hibernate/test/FumTest.java	4 Jun 2004 06:42:41 -0000	1.6
++++ test/org/hibernate/test/FumTest.java	9 Aug 2004 14:47:56 -0000
+@@ -82,6 +82,34 @@
+ 		s.close();
+ 	}
+ 	
++	public void testCount() throws Exception {
++		Session s = openSession();
++	
++		One one1 = new One();
++		one1.setValue("one 1");
++			
++		One one2 = new One();
++		one2.setValue("one 2");
++			
++		One one3 = new One();
++		one3.setValue("one 3");
++			
++		s.save(one1);
++		s.save(one2);
++		s.save(one3);
++		
++		Criteria crit = s.createCriteria(One.class);
++			
++		crit.setFirstResult(1);
++		List list = crit.list();
++		assertEquals("3 ones", 3, crit.count());
++		assertEquals("2 in list", 2, list.size());
++		
++		s.flush();
++		s.connection().commit();
++		s.close();
++	}
++	
+ 	public void testCriteria() throws Exception {
+ 		if ( getDialect() instanceof SQLServerDialect ) return;
+ 		Session s = openSession();

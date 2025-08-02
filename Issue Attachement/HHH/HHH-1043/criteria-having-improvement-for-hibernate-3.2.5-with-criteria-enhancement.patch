@@ -1,0 +1,241 @@
+Index: src/org/hibernate/Criteria.java
+===================================================================
+--- src/org/hibernate/Criteria.java	(revision 72987)
++++ src/org/hibernate/Criteria.java	(working copy)
+@@ -107,6 +107,14 @@
+ 	public Criteria addOrder(Order order);
+ 
+ 	/**
++	 * Add a having clause.
++	 * 
++	 * @param criterion
++	 * @return this (for method chaining)
++	 */
++	public Criteria addHaving(Criterion criterion);
++
++	/**
+ 	 * Specify an association fetching strategy for an association or a
+ 	 * collection of values.
+ 	 *
+Index: src/org/hibernate/criterion/DetachedCriteria.java
+===================================================================
+--- src/org/hibernate/criterion/DetachedCriteria.java	(revision 72987)
++++ src/org/hibernate/criterion/DetachedCriteria.java	(working copy)
+@@ -78,6 +78,11 @@
+ 		criteria.addOrder(order);
+ 		return this;
+ 	}
++	
++	public DetachedCriteria addHaving(Criterion criterion) {
++	   criteria.addHaving(criterion);
++      return this;
++   }
+ 
+ 	public DetachedCriteria createAlias(String associationPath, String alias)
+ 	throws HibernateException {
+Index: src/org/hibernate/criterion/SubqueryExpression.java
+===================================================================
+--- src/org/hibernate/criterion/SubqueryExpression.java	(revision 72987)
++++ src/org/hibernate/criterion/SubqueryExpression.java	(working copy)
+@@ -60,6 +60,7 @@
+ 		String sql = new Select( factory.getDialect() )
+ 			.setWhereClause( innerQuery.getWhereCondition() )
+ 			.setGroupByClause( innerQuery.getGroupBy() )
++			.setHavingClause( innerQuery.getHaving() )
+ 			.setSelectClause( innerQuery.getSelect() )
+ 			.setFromClause(
+ 					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+Index: src/org/hibernate/impl/CriteriaImpl.java
+===================================================================
+--- src/org/hibernate/impl/CriteriaImpl.java	(revision 72987)
++++ src/org/hibernate/impl/CriteriaImpl.java	(working copy)
+@@ -36,6 +36,7 @@
+ 
+ 	private List criterionEntries = new ArrayList();
+ 	private List orderEntries = new ArrayList();
++	private List havingEntries = new ArrayList();
+ 	private Projection projection;
+ 	private Criteria projectionCriteria;
+ 
+@@ -118,6 +119,10 @@
+ 	public Iterator iterateOrderings() {
+ 		return orderEntries.iterator();
+ 	}
++	
++	public Iterator iterateHavings() {
++      return havingEntries.iterator();
++   }
+ 
+ 	public Criteria add(Criteria criteriaInst, Criterion expression) {
+ 		criterionEntries.add( new CriterionEntry(expression, criteriaInst) );
+@@ -151,7 +156,17 @@
+ 		orderEntries.add( new OrderEntry( ordering, this ) );
+ 		return this;
+ 	}
++	
++	public Criteria addHaving(Criterion criterion) {
++      addHaving(this, criterion);
++      return this;
++   }
+ 
++   public Criteria addHaving(Criteria criteriaInst, Criterion criterion) {
++      havingEntries.add( new CriterionEntry(criterion, criteriaInst) );
++      return this;
++   }
++
+ 	public FetchMode getFetchMode(String path) {
+ 		return (FetchMode) fetchModes.get(path);
+ 	}
+@@ -422,6 +437,11 @@
+ 		public Criteria createAlias(String associationPath, String alias) {
+ 			return createAlias( associationPath, alias, INNER_JOIN );
+ 		}
++		
++		public Criteria addHaving(Criterion expression) {
++         CriteriaImpl.this.addHaving(this, expression);
++         return this;
++      }
+ 
+ 		public Criteria createAlias(String associationPath, String alias, int joinType) throws HibernateException {
+ 			new Subcriteria( this, associationPath, alias, joinType );
+Index: src/org/hibernate/loader/AbstractEntityJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/AbstractEntityJoinWalker.java	(revision 72987)
++++ src/org/hibernate/loader/AbstractEntityJoinWalker.java	(working copy)
+@@ -63,11 +63,12 @@
+ 		final String whereString,
+ 		final String orderByString,
+ 		final String groupByString,
++		final String havingString,
+ 		final LockMode lockMode)
+ 	throws MappingException {
+ 		walkEntityTree( persister, getAlias() );
+ 		persisters = new Loadable[0];
+-		initStatementString(projectionString, whereString, orderByString, groupByString, lockMode);
++		initStatementString(projectionString, whereString, orderByString, groupByString, havingString, lockMode);
+ 	}
+ 
+ 	private void initStatementString(
+@@ -75,7 +76,7 @@
+ 		final String orderBy,
+ 		final LockMode lockMode)
+ 	throws MappingException {
+-		initStatementString(null, condition, orderBy, "", lockMode);
++		initStatementString(null, condition, orderBy, "", "", lockMode);
+ 	}
+ 
+ 	private void initStatementString(
+@@ -83,6 +84,7 @@
+ 			final String condition,
+ 			final String orderBy,
+ 			final String groupBy,
++			final String having,
+ 			final LockMode lockMode) throws MappingException {
+ 
+ 		final int joins = countEntityPersisters( associations );
+@@ -107,7 +109,8 @@
+ 						ojf.toWhereFragmentString() + getWhereFragment()
+ 				)
+ 				.setOrderByClause( orderBy( associations, orderBy ) )
+-				.setGroupByClause( groupBy );
++				.setGroupByClause( groupBy )
++				.setHavingClause( having );
+ 
+ 		if ( getFactory().getSettings().isCommentsEnabled() ) {
+ 			select.setComment( getComment() );
+Index: src/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+===================================================================
+--- src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	(revision 72987)
++++ src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	(working copy)
+@@ -73,6 +73,7 @@
+ 					translator.getWhereCondition(), 
+ 					translator.getOrderBy(),
+ 					translator.getGroupBy(),
++					translator.getHaving(),
+ 					LockMode.NONE 
+ 				);
+ 		}
+Index: src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+===================================================================
+--- src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(revision 72987)
++++ src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	(working copy)
+@@ -254,6 +254,17 @@
+ 				types.add( tv[i].getType() );
+ 			}
+ 		}
++		
++		iter = rootCriteria.iterateHavings();
++      while ( iter.hasNext() ) {
++         CriteriaImpl.CriterionEntry ce = ( CriteriaImpl.CriterionEntry ) iter.next();
++         TypedValue[] tv = ce.getCriterion().getTypedValues( ce.getCriteria(), this );
++         for ( int i = 0; i < tv.length; i++ ) {
++            values.add( tv[i].getValue() );
++            types.add( tv[i].getType() );
++         }
++      }
++		
+ 		Object[] valueArray = values.toArray();
+ 		Type[] typeArray = ArrayHelper.toTypeArray( types );
+ 
+@@ -305,6 +316,18 @@
+ 			return "";
+ 		}
+ 	}
++	
++	public String getHaving() {
++      StringBuffer condition = new StringBuffer(30);
++      Iterator criterionIterator = rootCriteria.iterateHavings();
++      while ( criterionIterator.hasNext() ) {
++         CriteriaImpl.CriterionEntry entry = (CriteriaImpl.CriterionEntry) criterionIterator.next();
++         String sqlString = entry.getCriterion().toSqlString( entry.getCriteria(), this );
++         condition.append(sqlString);
++         if ( criterionIterator.hasNext() ) condition.append(" and ");
++      }
++      return condition.toString();
++   }
+ 
+ 	public String getSelect() {
+ 		return rootCriteria.getProjection().toSqlString(
+Index: src/org/hibernate/sql/Select.java
+===================================================================
+--- src/org/hibernate/sql/Select.java	(revision 72987)
++++ src/org/hibernate/sql/Select.java	(working copy)
+@@ -19,6 +19,7 @@
+ 	private String outerJoinsAfterWhere;
+ 	private String orderByClause;
+ 	private String groupByClause;
++	private String havingClause;
+ 	private String comment;
+ 	private LockMode lockMode;
+ 	public final Dialect dialect;
+@@ -64,6 +65,10 @@
+ 			buf.append(" group by ").append(groupByClause);
+ 		}
+ 		
++		if ( StringHelper.isNotEmpty(havingClause) ) {
++         buf.append(" having ").append(havingClause);
++      }
++		
+ 		if ( StringHelper.isNotEmpty(orderByClause) ) {
+ 			buf.append(" order by ").append(orderByClause);
+ 		}
+@@ -96,12 +101,18 @@
+ 		this.guesstimatedBufferSize += orderByClause.length();
+ 		return this;
+ 	}
+-
++	
+ 	public Select setGroupByClause(String groupByClause) {
+ 		this.groupByClause = groupByClause;
+ 		this.guesstimatedBufferSize += groupByClause.length();
+ 		return this;
+ 	}
++	
++	public Select setHavingClause(String havingClause) {
++      this.havingClause = havingClause;
++      this.guesstimatedBufferSize += havingClause.length();
++      return this;
++   }
+ 
+ 	public Select setOuterJoins(String outerJoinsAfterFrom, String outerJoinsAfterWhere) {
+ 		this.outerJoinsAfterFrom = outerJoinsAfterFrom;

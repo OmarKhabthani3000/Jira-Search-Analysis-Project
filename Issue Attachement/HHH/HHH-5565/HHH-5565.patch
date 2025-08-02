@@ -1,0 +1,160 @@
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 54945)
++++ pom.xml	(revision )
+@@ -89,7 +89,12 @@
+     </build>
+ 
+     <dependencies>
+-        <dependency>
++      <dependency>
++        <groupId>commons-logging</groupId>
++        <artifactId>commons-logging</artifactId>
++        <version>1.1.1</version>
++      </dependency>
++        <dependency>
+             <groupId>org.hibernate</groupId>
+             <artifactId>hibernate-core</artifactId>
+         </dependency>
+Index: src/main/java/org/hibernate/envers/event/AuditEventListener.java
+===================================================================
+--- src/main/java/org/hibernate/envers/event/AuditEventListener.java	(revision 54935)
++++ src/main/java/org/hibernate/envers/event/AuditEventListener.java	(revision )
+@@ -25,6 +25,8 @@
+ 
+ import java.io.Serializable;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.entities.RelationDescription;
+ import org.hibernate.envers.entities.RelationType;
+@@ -67,6 +69,7 @@
+         PostDeleteEventListener, PreCollectionUpdateEventListener, PreCollectionRemoveEventListener,
+         PostCollectionRecreateEventListener, Initializable {
+ 	private static final long serialVersionUID = -2499904286323112715L;
++    private static final Log log = LogFactory.getLog(AuditEventListener.class);
+ 
+     private AuditConfiguration verCfg;
+ 
+@@ -143,44 +146,56 @@
+     public void onPostInsert(PostInsertEvent event) {
+         String entityName = event.getPersister().getEntityName();
+ 
++        if (event.getSession().isTransactionInProgress()) {
+-        if (verCfg.getEntCfg().isVersioned(entityName)) {
+-            AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
++            if (verCfg.getEntCfg().isVersioned(entityName)) {
++                AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
+ 
+-            verSync.addWorkUnit(new AddWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
+-					event.getId(), event.getPersister(), event.getState()));
++                verSync.addWorkUnit(new AddWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
++                        event.getId(), event.getPersister(), event.getState()));
+ 
+-            generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, event.getState(),
+-                    null, event.getSession());
+-        }
++                generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, event.getState(),
++                        null, event.getSession());
++            }
++        } else {
++            log.warn("Couldn't create revision for entity " + entityName + " because transaction is not active.");
+-    }
++        }
++    }
+ 
+     public void onPostUpdate(PostUpdateEvent event) {
+         String entityName = event.getPersister().getEntityName();
+ 
++        if (event.getSession().isTransactionInProgress()) {
+-        if (verCfg.getEntCfg().isVersioned(entityName)) {
+-            AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
++            if (verCfg.getEntCfg().isVersioned(entityName)) {
++                AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
+ 
+-            verSync.addWorkUnit(new ModWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
+-					event.getId(), event.getPersister(), event.getState(), event.getOldState()));
++                verSync.addWorkUnit(new ModWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
++                        event.getId(), event.getPersister(), event.getState(), event.getOldState()));
+ 
+-            generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, event.getState(),
+-                    event.getOldState(), event.getSession());
+-        }
++                generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, event.getState(),
++                        event.getOldState(), event.getSession());
++            }
++        } else {
++            log.warn("Couldn't create revision for entity " + entityName + " because transaction is not active.");
+-    }
++        }
++    }
+ 
+     public void onPostDelete(PostDeleteEvent event) {
+         String entityName = event.getPersister().getEntityName();
+ 
++        if (event.getSession().isTransactionInProgress()) {
+-        if (verCfg.getEntCfg().isVersioned(entityName)) {
+-            AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
++            if (verCfg.getEntCfg().isVersioned(entityName)) {
++                AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
+ 
+-            verSync.addWorkUnit(new DelWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
+-					event.getId()));
++                verSync.addWorkUnit(new DelWorkUnit(event.getSession(), event.getPersister().getEntityName(), verCfg,
++                        event.getId()));
+ 
+-            generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, null,
+-                    event.getDeletedState(), event.getSession());
+-        }
++                generateBidirectionalCollectionChangeWorkUnits(verSync, event.getPersister(), entityName, null,
++                        event.getDeletedState(), event.getSession());
++            }
++        } else {
++            log.warn("Couldn't create revision for entity " + entityName + " because transaction is not active.");
+-    }
++        }
++    }
+ 
+     private void generateBidirectionalCollectionChangeWorkUnits(AuditSync verSync, AbstractCollectionEvent event,
+                                                                 PersistentCollectionChangeWorkUnit workUnit) {
+@@ -213,22 +228,26 @@
+                                     CollectionEntry collectionEntry) {
+         String entityName = event.getAffectedOwnerEntityName();
+ 
++        if (event.getSession().isTransactionInProgress()) {
+-        if (verCfg.getEntCfg().isVersioned(entityName)) {
+-            AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
++            if (verCfg.getEntCfg().isVersioned(entityName)) {
++                AuditSync verSync = verCfg.getSyncManager().get(event.getSession());
+ 
+-            PersistentCollectionChangeWorkUnit workUnit = new PersistentCollectionChangeWorkUnit(event.getSession(),
+-					entityName, verCfg, newColl, collectionEntry, oldColl, event.getAffectedOwnerIdOrNull());
+-            verSync.addWorkUnit(workUnit);
++                PersistentCollectionChangeWorkUnit workUnit = new PersistentCollectionChangeWorkUnit(event.getSession(),
++                        entityName, verCfg, newColl, collectionEntry, oldColl, event.getAffectedOwnerIdOrNull());
++                verSync.addWorkUnit(workUnit);
+ 
+-            if (workUnit.containsWork()) {
+-                // There are some changes: a revision needs also be generated for the collection owner
+-                verSync.addWorkUnit(new CollectionChangeWorkUnit(event.getSession(), event.getAffectedOwnerEntityName(),
+-						verCfg, event.getAffectedOwnerIdOrNull(), event.getAffectedOwnerOrNull()));
++                if (workUnit.containsWork()) {
++                    // There are some changes: a revision needs also be generated for the collection owner
++                    verSync.addWorkUnit(new CollectionChangeWorkUnit(event.getSession(), event.getAffectedOwnerEntityName(),
++                            verCfg, event.getAffectedOwnerIdOrNull(), event.getAffectedOwnerOrNull()));
+ 
+-                generateBidirectionalCollectionChangeWorkUnits(verSync, event, workUnit);
+-            }
+-        }
++                    generateBidirectionalCollectionChangeWorkUnits(verSync, event, workUnit);
++                }
++            }
++        } else {
++            log.warn("Couldn't create revision for entity " + entityName + " because transaction is not active.");
+-    }
++        }
++    }
+ 
+     private CollectionEntry getCollectionEntry(AbstractCollectionEvent event) {
+         return event.getSession().getPersistenceContext().getCollectionEntry(event.getCollection());

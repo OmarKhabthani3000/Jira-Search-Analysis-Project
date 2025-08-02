@@ -1,0 +1,358 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java b/hibernate-core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
+index 11ef5bf..3f6cc7e 100644
+--- a/hibernate-core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
++++ b/hibernate-core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
+@@ -788,7 +788,10 @@
+ 		int i = 0;
+ 		while ( iter.hasNext() ) {
+ 			String alias = ( isJpaPositionalParam ? 'x' + name : name ) + i++ + '_';
+-			namedParamsCopy.put( alias, new TypedValue( type, iter.next(), session.getEntityMode() ) );
++			Object oldVal = namedParamsCopy.put( alias, new TypedValue( type, iter.next(), session.getEntityMode() ) );
++			if ( oldVal != null ) {
++				throw new QueryException( String.format("Named parameterList [%s] expands into an already existing parameter [%s]", name, alias) );
++			}
+ 			list.append( ParserHelper.HQL_VARIABLE_PREFIX ).append( alias );
+ 			if ( iter.hasNext() ) {
+ 				list.append( ", " );
+diff --git a/hibernate-core/src/test/java/org/hibernate/impl/AbstractQueryImplTest.java b/hibernate-core/src/test/java/org/hibernate/impl/AbstractQueryImplTest.java
+new file mode 100644
+index 0000000..f385f4f
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/impl/AbstractQueryImplTest.java
+@@ -0,0 +1,336 @@
++package org.hibernate.impl;
++
++import java.io.Serializable;
++import java.sql.Connection;
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++import junit.framework.TestCase;
++import org.hibernate.CacheMode;
++import org.hibernate.EntityMode;
++import org.hibernate.FlushMode;
++import org.hibernate.HibernateException;
++import org.hibernate.Interceptor;
++import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
++import org.hibernate.Query;
++import org.hibernate.QueryException;
++import org.hibernate.ScrollMode;
++import org.hibernate.ScrollableResults;
++import org.hibernate.Transaction;
++import org.hibernate.collection.PersistentCollection;
++import org.hibernate.engine.EntityKey;
++import org.hibernate.engine.LoadQueryInfluencers;
++import org.hibernate.engine.NonFlushedChanges;
++import org.hibernate.engine.PersistenceContext;
++import org.hibernate.engine.QueryParameters;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.TypedValue;
++import org.hibernate.engine.query.NamedParameterDescriptor;
++import org.hibernate.engine.query.ParameterMetadata;
++import org.hibernate.engine.query.sql.NativeSQLQuerySpecification;
++import org.hibernate.event.EventListeners;
++import org.hibernate.impl.AbstractQueryImpl;
++import org.hibernate.impl.AbstractSessionImpl;
++import org.hibernate.impl.CriteriaImpl;
++import org.hibernate.jdbc.Batcher;
++import org.hibernate.jdbc.JDBCContext;
++import org.hibernate.loader.custom.CustomQuery;
++import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.type.StringType;
++import org.hibernate.type.Type;
++
++public class AbstractQueryImplTest extends TestCase {
++	private static final int PARAMETER_LISTS = 20;
++	private static final int LIST_SIZE = 11;
++	private AbstractQueryImpl query;
++
++	@Override
++	public void setUp() {
++		query = createQueryImpl( createQueryString(), createMetadata() );
++		List<Integer> parameterList = createParameterList();
++		for (int i = 0; i < PARAMETER_LISTS; i++) {
++			query.setParameterList( "list" + i, parameterList );
++		}
++	}
++
++	public void testExpandParameterLists() {
++		Map<String, TypedValue> map = new HashMap<String, TypedValue>();
++		try {
++			query.expandParameterLists( map );
++			fail( "Expected a named parameter collision from expandParameterList" );
++		} catch (QueryException ex) {}
++	}
++
++	private String createQueryString() {
++		String queryString = "select f from Foo f where";
++
++		for (int i = 0; i < PARAMETER_LISTS; i++) {
++			queryString = String.format( "%s foo.bar in (:list%d) ", queryString, i );
++			if (i + 1 < PARAMETER_LISTS) {
++				queryString = String.format( "%s or ", queryString );
++			}
++		}
++		return queryString;
++	}
++
++	private List<Integer> createParameterList() {
++		List<Integer> list = new ArrayList<Integer>();
++
++		for (int i = 0; i < LIST_SIZE; i++) {
++			list.add( i );
++		}
++
++		return list;
++	}
++
++	private ParameterMetadata createMetadata() {
++		return new ParameterMetadata( null, null ) {
++			@Override
++			public Set getNamedParameterNames() {
++				Set<String> set = new HashSet<String>();
++				for (int i = 0; i < PARAMETER_LISTS; i++) {
++					set.add( "list" + i );
++				}
++				return set;
++			}
++
++			@Override
++			public NamedParameterDescriptor getNamedParameterDescriptor( String name ) {
++				return new NamedParameterDescriptor( name, StringType.INSTANCE, null, false );
++			}
++
++			@Override
++			public Type getNamedParameterExpectedType( String name ) {
++				return StringType.INSTANCE;
++			}
++		};
++	}
++
++	private AbstractQueryImpl createQueryImpl( String queryString, ParameterMetadata metaData ) {
++		return new AbstractQueryImpl( queryString, FlushMode.MANUAL, createSession(), metaData ) {
++
++			public Query setLockOptions( LockOptions lockOptions ) {
++				return null;
++			}
++
++			public Query setLockMode( String alias, LockMode lockMode ) {
++				return null;
++			}
++
++			public ScrollableResults scroll( ScrollMode scrollMode ) throws HibernateException {
++				return null;
++			}
++
++			public ScrollableResults scroll() throws HibernateException {
++				return null;
++			}
++
++			public List list() throws HibernateException {
++				return null;
++			}
++
++			public Iterator iterate() throws HibernateException {
++				return null;
++			}
++
++			public int executeUpdate() throws HibernateException {
++				return 0;
++			}
++
++			@Override
++			public LockOptions getLockOptions() {
++				return null;
++			}
++		};
++	}
++
++	private SessionImplementor createSession() {
++		return new AbstractSessionImpl( null ) {
++
++			public void setFlushMode( FlushMode fm ) {}
++
++			public void setFetchProfile( String name ) {}
++
++			public void setCacheMode( CacheMode cm ) {}
++
++			public void setAutoClear( boolean enabled ) {}
++
++			public ScrollableResults scrollCustomQuery( CustomQuery customQuery, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public ScrollableResults scroll( CriteriaImpl criteria, ScrollMode scrollMode ) {
++				return null;
++			}
++
++			public ScrollableResults scroll( String query, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public List listFilter( Object collection, String filter, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public List listCustomQuery( CustomQuery customQuery, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public List list( CriteriaImpl criteria ) {
++				return null;
++			}
++
++			public List list( String query, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public Iterator iterateFilter( Object collection, String filter, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public Iterator iterate( String query, QueryParameters queryParameters ) throws HibernateException {
++				return null;
++			}
++
++			public boolean isTransactionInProgress() {
++				return false;
++			}
++
++			public boolean isOpen() {
++				return false;
++			}
++
++			public boolean isEventSource() {
++				return false;
++			}
++
++			public boolean isConnected() {
++				return false;
++			}
++
++			public Object internalLoad( String entityName, Serializable id, boolean eager, boolean nullable ) throws HibernateException {
++				return null;
++			}
++
++			public Object instantiate( String entityName, Serializable id ) throws HibernateException {
++				return null;
++			}
++
++			public void initializeCollection( PersistentCollection collection, boolean writing ) throws HibernateException {}
++
++			public Object immediateLoad( String entityName, Serializable id ) throws HibernateException {
++				return null;
++			}
++
++			public String guessEntityName( Object entity ) throws HibernateException {
++				return null;
++			}
++
++			public long getTimestamp() {
++				return 0;
++			}
++
++			public PersistenceContext getPersistenceContext() {
++				return null;
++			}
++
++			public NonFlushedChanges getNonFlushedChanges() throws HibernateException {
++				return null;
++			}
++
++			public LoadQueryInfluencers getLoadQueryInfluencers() {
++				return null;
++			}
++
++			public EventListeners getListeners() {
++				return null;
++			}
++
++			public JDBCContext getJDBCContext() {
++				return null;
++			}
++
++			public Interceptor getInterceptor() {
++				return null;
++			}
++
++			public FlushMode getFlushMode() {
++				return null;
++			}
++
++			public Object getFilterParameterValue( String filterParameterName ) {
++				return null;
++			}
++
++			public Type getFilterParameterType( String filterParameterName ) {
++				return null;
++			}
++
++			public String getFetchProfile() {
++				return null;
++			}
++
++			public Object getEntityUsingInterceptor( EntityKey key ) throws HibernateException {
++				return null;
++			}
++
++			public EntityPersister getEntityPersister( String entityName, Object object ) throws HibernateException {
++				return null;
++			}
++
++			public EntityMode getEntityMode() {
++				return null;
++			}
++
++			public Map getEnabledFilters() {
++				return null;
++			}
++
++			public int getDontFlushFromFind() {
++				return 0;
++			}
++
++			public Serializable getContextEntityIdentifier( Object object ) {
++				return null;
++			}
++
++			public CacheMode getCacheMode() {
++				return null;
++			}
++
++			public Batcher getBatcher() {
++				return null;
++			}
++
++			public void flush() {}
++
++			public int executeUpdate( String query, QueryParameters queryParameters ) throws HibernateException {
++				return 0;
++			}
++
++			public int executeNativeUpdate( NativeSQLQuerySpecification specification, QueryParameters queryParameters ) throws HibernateException {
++				return 0;
++			}
++
++			public Connection connection() {
++				return null;
++			}
++
++			public String bestGuessEntityName( Object object ) {
++				return null;
++			}
++
++			public void beforeTransactionCompletion( Transaction tx ) {}
++
++			public void applyNonFlushedChanges( NonFlushedChanges nonFlushedChanges ) throws HibernateException {}
++
++			public void afterTransactionCompletion( boolean successful, Transaction tx ) {}
++
++			public void afterScrollOperation() {}
++		};
++	}
++}

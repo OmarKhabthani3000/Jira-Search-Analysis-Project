@@ -1,0 +1,344 @@
+Index: src/main/java/org/hibernate/envers/AuditReader.java
+===================================================================
+--- src/main/java/org/hibernate/envers/AuditReader.java	(revision 18224)
++++ src/main/java/org/hibernate/envers/AuditReader.java	(working copy)
+@@ -32,6 +32,8 @@
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
++ * @author Hernán Chanfreau
++ *
+  */
+ public interface AuditReader {
+     /**
+@@ -121,4 +123,13 @@
+      * is closed.
+      */
+     AuditQueryCreator createQuery();
++    
++    
++    /**
++     * Checks if the entityClass was configured to be audited.
++     *  
++     * @param entityClass Class of the entity asking for audit support
++     * @return true if the entityClass is an audited one.
++     */
++    boolean isEntityClassAudited(Class<?> entityClass);
+ }
+Index: src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java
+===================================================================
+--- src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java	(revision 18224)
++++ src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java	(working copy)
+@@ -45,6 +45,7 @@
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
++ * @author Hernán Chanfreau
+  */
+ public class AuditReaderImpl implements AuditReaderImplementor {
+     private final AuditConfiguration verCfg;
+@@ -209,4 +210,13 @@
+ 	public AuditQueryCreator createQuery() {
+         return new AuditQueryCreator(verCfg, this);
+     }
++	
++    public boolean isEntityClassAudited(Class<?> entityClass) {
++        checkNotNull(entityClass, "Entity class");
++        checkSession();
++
++        String entityName = entityClass.getName();
++        
++        return (verCfg.getEntCfg().isVersioned(entityName));
++    }	
+ }
+Index: src/test/java/org/hibernate/envers/test/integration/auditReader/AuditReaderAPITest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/auditReader/AuditReaderAPITest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/auditReader/AuditReaderAPITest.java	(revision 0)
+@@ -0,0 +1,88 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.auditReader;
++
++import java.util.Arrays;
++
++import javax.persistence.EntityManager;
++
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.exception.NotAuditedException;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * A test which checks the correct behavior of AuditReader.isEntityClassAudited(Class entityClass).
++ * 
++ * @author Hernán Chanfreau
++ */
++public class AuditReaderAPITest extends AbstractEntityTest {
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(AuditedTestEntity.class);
++        cfg.addAnnotatedClass(NotAuditedTestEntity.class);
++    }
++
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        EntityManager em = getEntityManager();
++        em.getTransaction().begin();
++        AuditedTestEntity ent1 = new AuditedTestEntity(1, "str1");
++        NotAuditedTestEntity ent2 = new NotAuditedTestEntity(1, "str1");
++
++        em.persist(ent1);
++        em.persist(ent2);
++        em.getTransaction().commit();
++
++        em.getTransaction().begin();
++        
++        ent1 = em.find(AuditedTestEntity.class, 1);
++        ent2 = em.find(NotAuditedTestEntity.class, 1);
++        ent1.setStr1("str2");
++        ent2.setStr1("str2");
++        em.getTransaction().commit();
++    }
++
++    @Test
++    public void testIsEntityClassAuditedForAuditedEntity() {
++        assert getAuditReader().isEntityClassAudited(AuditedTestEntity.class);
++        
++        assert Arrays.asList(1, 2).equals(getAuditReader().getRevisions(AuditedTestEntity.class, 1));
++    }
++
++    @Test
++    public void testIsEntityClassAuditedForNotAuditedEntity() {
++    	
++        assert !getAuditReader().isEntityClassAudited(NotAuditedTestEntity.class);
++        
++        try {
++        	getAuditReader().getRevisions(NotAuditedTestEntity.class, 1);
++        } catch (NotAuditedException nae) {
++			// it's ok because the entity is not audited
++        	assert true;
++		}
++    }
++
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/auditReader/AuditedTestEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/auditReader/AuditedTestEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/auditReader/AuditedTestEntity.java	(revision 0)
+@@ -0,0 +1,88 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.auditReader;
++
++import javax.persistence.Entity;
++import javax.persistence.Id;
++
++import org.hibernate.envers.Audited;
++
++/**
++ * @author Hernán Chanfreau
++ */
++@Entity
++public class AuditedTestEntity {
++    @Id
++    private Integer id;
++
++    @Audited
++    private String str1;
++
++    public AuditedTestEntity() {
++    }
++
++    public AuditedTestEntity(String str1) {
++        this.str1 = str1;
++    }
++
++    public AuditedTestEntity(Integer id, String str1) {
++        this.id = id;
++        this.str1 = str1;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getStr1() {
++        return str1;
++    }
++
++    public void setStr1(String str1) {
++        this.str1 = str1;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof AuditedTestEntity)) return false;
++
++        AuditedTestEntity that = (AuditedTestEntity) o;
++
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++        if (str1 != null ? !str1.equals(that.str1) : that.str1 != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (str1 != null ? str1.hashCode() : 0);
++        return result;
++    }
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/auditReader/NotAuditedTestEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/auditReader/NotAuditedTestEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/auditReader/NotAuditedTestEntity.java	(revision 0)
+@@ -0,0 +1,86 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.auditReader;
++
++import javax.persistence.Entity;
++import javax.persistence.Id;
++
++
++/**
++ * @author Adam Warski (adam at warski dot org)
++ */
++@Entity
++public class NotAuditedTestEntity {
++    @Id
++    private Integer id;
++
++    private String str1;
++
++    public NotAuditedTestEntity() {
++    }
++
++    public NotAuditedTestEntity(String str1) {
++        this.str1 = str1;
++    }
++
++    public NotAuditedTestEntity(Integer id, String str1) {
++        this.id = id;
++        this.str1 = str1;
++    }
++
++    public Integer getId() {
++        return id;
++    }
++
++    public void setId(Integer id) {
++        this.id = id;
++    }
++
++    public String getStr1() {
++        return str1;
++    }
++
++    public void setStr1(String str1) {
++        this.str1 = str1;
++    }
++
++    public boolean equals(Object o) {
++        if (this == o) return true;
++        if (!(o instanceof NotAuditedTestEntity)) return false;
++
++        NotAuditedTestEntity that = (NotAuditedTestEntity) o;
++
++        if (id != null ? !id.equals(that.id) : that.id != null) return false;
++        if (str1 != null ? !str1.equals(that.str1) : that.str1 != null) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = (id != null ? id.hashCode() : 0);
++        result = 31 * result + (str1 != null ? str1.hashCode() : 0);
++        return result;
++    }
++}
+\ No newline at end of file
+Index: src/test/resources/testng.xml
+===================================================================
+--- src/test/resources/testng.xml	(revision 18152)
++++ src/test/resources/testng.xml	(working copy)
+@@ -4,6 +4,7 @@
+     <test name="All">
+         <packages>
+             <package name="org.hibernate.envers.test.integration.accesstype" />
++            <package name="org.hibernate.envers.test.integration.auditReader" />
+             <package name="org.hibernate.envers.test.integration.basic" />
+             <package name="org.hibernate.envers.test.integration.cache" />
+             <package name="org.hibernate.envers.test.integration.collection" />

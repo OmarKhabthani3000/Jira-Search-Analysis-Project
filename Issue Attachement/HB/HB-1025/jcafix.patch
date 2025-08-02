@@ -1,0 +1,157 @@
+Index: changelog.txt
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/changelog.txt,v
+retrieving revision 1.41.2.52
+diff -u -r1.41.2.52 changelog.txt
+--- changelog.txt	2 Jun 2004 13:21:56 -0000	1.41.2.52
++++ changelog.txt	11 Jun 2004 16:20:46 -0000
+@@ -3,6 +3,8 @@
+ Changes in version 2.1.5 (x.x.2004)
+ ------------------------------------
+ 
++* fixed JCA implementation to avoid opening SQL connections outside of a JTA transaction (Attila Lendvai alias 101)
++
+ Changes in version 2.1.4 (2.6.2004)
+ ------------------------------------
+ * improved Session serialization support by adding ability to serialize unflushed sessions (Steve Ebersole)
+Index: src/net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.59.2.138
+diff -u -r1.59.2.138 SessionImpl.java
+--- src/net/sf/hibernate/impl/SessionImpl.java	1 Jun 2004 20:18:56 -0000	1.59.2.138
++++ src/net/sf/hibernate/impl/SessionImpl.java	11 Jun 2004 16:20:51 -0000
+@@ -3299,8 +3299,6 @@
+ 	}
+ 
+ 	private void connect() throws HibernateException {
+-		connection = batcher.openConnection();
+-		connect = false;
+ 		if (!isCurrentTransaction) {
+ 			//if there is no current transaction callback registered
+ 			//when we obtain the connection, try to register one now
+@@ -3321,6 +3319,9 @@
+ 				}
+ 			}
+ 		}
++		log.debug("Asking for SQL connection");
++		connection = batcher.openConnection();
++		connect = false;
+ 	}
+ 
+ 	public boolean isConnected() {
+Index: src/net/sf/hibernate/jca/JCASessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/jca/JCASessionImpl.java,v
+retrieving revision 1.9.2.11
+diff -u -r1.9.2.11 JCASessionImpl.java
+--- src/net/sf/hibernate/jca/JCASessionImpl.java	25 Jan 2004 03:54:14 -0000	1.9.2.11
++++ src/net/sf/hibernate/jca/JCASessionImpl.java	11 Jun 2004 16:20:51 -0000
+@@ -248,7 +248,7 @@
+ 	}
+ 	
+ 	public Transaction beginTransaction() throws HibernateException {
+-		throw new UnsupportedOperationException();
++		return getSession().beginTransaction();
+ 	}
+ 	
+ 	public Query createQuery(String queryString) throws HibernateException {
+Index: src/net/sf/hibernate/jca/ManagedConnectionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/jca/ManagedConnectionImpl.java,v
+retrieving revision 1.5.2.2
+diff -u -r1.5.2.2 ManagedConnectionImpl.java
+--- src/net/sf/hibernate/jca/ManagedConnectionImpl.java	28 Oct 2003 03:19:54 -0000	1.5.2.2
++++ src/net/sf/hibernate/jca/ManagedConnectionImpl.java	11 Jun 2004 16:20:52 -0000
+@@ -66,9 +66,6 @@
+ 	 */
+ 	private final LinkedList handles = new LinkedList();
+ 	
+-	// a (logical handle to) database connection
+-	private Connection connection;
+-	
+ 	// Hibernate session
+ 	private SessionImplementor session;
+ 	
+@@ -126,26 +123,16 @@
+ 			private void initializeSession() throws ResourceException {
+ 				// single threaded, no need to synchronize
+ 				if (session == null) {
+-					initializeConnection();
+-					session = (SessionImplementor)
+-					mcf.getSessionFactory().openSession(connection);
+-				}
+-			}
+-			
+-			/**
+-			 * JDBC connection is lazy-inilialized during this call. A caller must
+-			 * ensure proper thread context, i.e. context of original component
+-			 * called into Hibernate session.
+-			 */
+-			private void initializeConnection() throws ResourceException {
+-				// single threaded, no need to synchronize
+-				if (connection == null) {
+-					try {
+-						connection = mcf.getDatasource().getConnection();
++					try
++					{
++						session = (SessionImplementor)
++						mcf.getSessionFactory().openSession();
+ 					}
+-					catch (SQLException e) {
+-						final String message = "Cannot allocate database connection!";
+-						throw newResourceException(message, e);
++					catch (HibernateException e)
++					{
++						ResourceException re = new ResourceException("Failed to open Hibernate session");
++						re.setLinkedException(e);
++						throw re;
+ 					}
+ 				}
+ 			}
+@@ -208,18 +195,6 @@
+ 					session = null;
+ 				}
+ 				
+-				try {
+-					if( connection != null) connection.close();
+-				}
+-				catch (SQLException e) {
+-					final String message =
+-					"Exception closing database connection " + connection;
+-					re = newResourceException(message, e);
+-				} 
+-				finally {
+-					connection = null;
+-				}
+-				
+ 				if (re != null) {
+ 					throw re;
+ 				}
+@@ -410,8 +385,8 @@
+ 							}
+ 						}
+ 						
+-						Connection getConnection() {
+-							return connection;
+-						}
++//						Connection getConnection() {
++//							return connection;
++//						}
+ 					}
+ 					
+Index: src/net/sf/hibernate/transaction/JTATransaction.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/transaction/JTATransaction.java,v
+retrieving revision 1.6.2.5
+diff -u -r1.6.2.5 JTATransaction.java
+--- src/net/sf/hibernate/transaction/JTATransaction.java	1 Nov 2003 01:20:03 -0000	1.6.2.5
++++ src/net/sf/hibernate/transaction/JTATransaction.java	11 Jun 2004 16:20:52 -0000
+@@ -52,6 +52,7 @@
+ 		if ( session.getFlushMode()!=FlushMode.NEVER ) session.flush();
+ 		if (newTransaction) {
+ 			try {
++				log.debug("Committing transaction opened by us");
+ 				ut.commit();
+ 			}
+ 			catch (Exception e) {

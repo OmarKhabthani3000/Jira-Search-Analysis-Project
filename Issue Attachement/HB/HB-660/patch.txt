@@ -1,0 +1,147 @@
+Index: src/net/sf/hibernate/Criteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Criteria.java,v
+retrieving revision 1.4.2.17
+diff -u -r1.4.2.17 Criteria.java
+--- src/net/sf/hibernate/Criteria.java	27 Dec 2003 07:16:00 -0000	1.4.2.17
++++ src/net/sf/hibernate/Criteria.java	28 Jan 2004 21:36:18 -0000
+@@ -192,5 +192,17 @@
+ 	 * @param lockMode the lock mode
+ 	 */
+ 	public Criteria setLockMode(String alias, LockMode lockMode);
+-	
++
++	/**
++	* Enable caching of this query result set.
++	*/
++	public Criteria setCacheable(boolean cacheable);
++
++	/**
++	* Set the name of the cache region.
++	*
++	* @param cacheRegion the name of a query cache region, or <tt>null</tt>
++	*                    for the default query cache
++	*/
++	public Criteria setCacheRegion(String cacheRegion);
+ }
+Index: src/net/sf/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.4.2.17
+diff -u -r1.4.2.17 CriteriaImpl.java
+--- src/net/sf/hibernate/impl/CriteriaImpl.java	10 Jan 2004 17:24:12 -0000	1.4.2.17
++++ src/net/sf/hibernate/impl/CriteriaImpl.java	28 Jan 2004 21:36:20 -0000
+@@ -42,7 +42,9 @@
+ 	private Class persistentClass;
+ 	private SessionImpl session;
+ 	private ResultTransformer resultTransformer = new RootEntityResultTransformer();
+-	
++	private boolean cacheable;
++	private String cacheRegion;
++
+ 	private int counter=0;
+ 	
+ 	private String generateAlias() {
+@@ -145,6 +147,13 @@
+ 			return this;
+ 		}
+ 
++		public Criteria setCacheable(boolean cacheable) {
++			throw new UnsupportedOperationException("subcriteria cannot be cached");
++		}
++
++		public Criteria setCacheRegion(String cacheRegion) {
++			throw new UnsupportedOperationException("subcriteria cannot be cached");
++		}
+ 	}
+ 
+ 	public Criteria setMaxResults(int maxResults) {
+@@ -179,6 +188,7 @@
+ 		this.persistentClass = persistentClass;
+ 		this.session = session;
+ 		this.classByAlias.put(Criteria.ROOT_ALIAS, persistentClass);
++		this.cacheable = false;
+ 	}
+ 	
+ 	/** 
+@@ -203,6 +213,8 @@
+ 		this.session = original.session;
+ 		this.resultTransformer = original.resultTransformer;
+ 		this.counter = original.counter;
++		this.cacheable = original.cacheable;
++		this.cacheRegion = original.cacheRegion;
+ 	}
+ 	
+ 	public List list() throws HibernateException {
+@@ -399,4 +411,21 @@
+ 		return this;
+ 	}
+ 
++	public boolean getCacheable() {
++		return this.cacheable;
++	}
++
++	public String getCacheRegion() {
++		return this.cacheRegion;
++	}
++
++	public Criteria setCacheable(boolean cacheable) {
++		this.cacheable = cacheable;
++		return this;
++	}
++
++	public Criteria setCacheRegion(String cacheRegion) {
++		this.cacheRegion = cacheRegion.trim();
++		return this;
++	}
+ }
+Index: src/net/sf/hibernate/loader/CriteriaLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/CriteriaLoader.java,v
+retrieving revision 1.8.2.24
+diff -u -r1.8.2.24 CriteriaLoader.java
+--- src/net/sf/hibernate/loader/CriteriaLoader.java	17 Jan 2004 22:35:19 -0000	1.8.2.24
++++ src/net/sf/hibernate/loader/CriteriaLoader.java	28 Jan 2004 21:36:21 -0000
+@@ -13,6 +13,7 @@
+ 
+ import net.sf.hibernate.Criteria;
+ import net.sf.hibernate.FetchMode;
++import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.MappingException;
+@@ -46,13 +47,17 @@
+ 	private Set querySpaces = new HashSet();
+ 	private final List aliases = new ArrayList();
+ 	private final String[] aliasArray;
+-	
++	private Type[] resultTypes;
++
+ 	public CriteriaLoader(OuterJoinLoadable persister, SessionFactoryImplementor factory, CriteriaImpl criteria) throws HibernateException {
+ 		super(persister, factory);
+ 		this.criteria = criteria;
+ 		
+ 		addAllToPropertySpaces( persister.getPropertySpaces() );
+ 
++		resultTypes = new Type[1];
++		resultTypes[0] = Hibernate.entity(persister.getMappedClass());
++
+ 		StringBuffer condition = new StringBuffer(30);
+ 		Iterator iter = criteria.iterateExpressionEntries();
+ 		if ( !iter.hasNext() ) condition.append("1=1"); //TODO: fix this ugliness
+@@ -107,7 +112,14 @@
+ 		selection.setMaxRows( criteria.getMaxResults() );
+ 		selection.setTimeout( criteria.getTimeout() );
+ 		
+-		return getResultList( doList( session, new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection) ) );
++//		return getResultList( doList( session, new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection) ) );
++		QueryParameters qp = new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection);
++		qp.setCacheable(criteria.getCacheable());
++		qp.setCacheRegion(criteria.getCacheRegion());
++		return getResultList(list(session,
++			qp,
++			querySpaces,
++			resultTypes));
+ 	}
+ 
+ 	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session)

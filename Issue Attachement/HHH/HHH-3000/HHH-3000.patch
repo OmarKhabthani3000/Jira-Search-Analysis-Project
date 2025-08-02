@@ -1,0 +1,389 @@
+Index: src/main/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17550)
++++ src/main/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -1365,12 +1365,11 @@
+ 			propBinder.setHolder( propertyHolder ); //PropertyHolderBuilder.buildPropertyHolder(rootClass)
+ 			propBinder.setProperty( property );
+ 			propBinder.setReturnedClass( inferredData.getPropertyClass() );
+-
++ 
+ 			propBinder.setMappings( mappings );
+ 			Property prop = propBinder.bind();
+ 			rootClass.setVersion( prop );
+ 			SimpleValue simpleValue = (SimpleValue) prop.getValue();
+-			if ( !simpleValue.isTypeSpecified() ) simpleValue.setTypeName( "integer" );
+ 			simpleValue.setNullValue( "undefined" );
+ 			rootClass.setOptimisticLockMode( Versioning.OPTIMISTIC_LOCK_VERSION );
+ 			log.debug(
+Index: src/main/java/org/hibernate/cfg/AnnotationConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationConfiguration.java	(revision 17550)
++++ src/main/java/org/hibernate/cfg/AnnotationConfiguration.java	(working copy)
+@@ -283,7 +283,7 @@
+ 			AnnotationBinder.bindDefaults( createExtendedMappings() );
+ 			isDefaultProcessed = true;
+ 		}
+-
++ 
+ 		//process entities
+ 		if ( precedence == null ) precedence = getProperties().getProperty( ARTEFACT );
+ 		if ( precedence == null ) precedence = DEFAULT_PRECEDENCE;
+@@ -312,10 +312,19 @@
+ 		caches.clear();
+ 		try {
+ 			inSecondPass = true;
+-			processFkSecondPassInOrder();
+ 			Iterator iter = secondPasses.iterator();
+ 			while ( iter.hasNext() ) {
+ 				SecondPass sp = (SecondPass) iter.next();
++				//do the second pass of simple value types first and remove them
++				if ( sp instanceof SetSimpleValueTypeSecondPass ) {
++					sp.doSecondPass( classes );
++					iter.remove();
++				}
++			}
++			processFkSecondPassInOrder();
++			iter = secondPasses.iterator();
++			while ( iter.hasNext() ) {
++				SecondPass sp = (SecondPass) iter.next();
+ 				//do the second pass of fk before the others and remove them
+ 				if ( sp instanceof CreateKeySecondPass ) {
+ 					sp.doSecondPass( classes );
+@@ -1111,6 +1120,11 @@
+ 			defaultNamedGenerators.add( generator.getName() );
+ 		}
+ 
++		public boolean isInSecondPass() {
++			return inSecondPass; 
++		}
++		
++		
+ 		public IdGenerator getGenerator(String name) {
+ 			return getGenerator( name, null );
+ 		}
+Index: src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(revision 17550)
++++ src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(working copy)
+@@ -42,6 +42,7 @@
+ import org.hibernate.cfg.Ejb3Column;
+ import org.hibernate.cfg.ExtendedMappings;
+ import org.hibernate.cfg.NotYetImplementedException;
++import org.hibernate.cfg.SetSimpleValueTypeSecondPass;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.type.ByteArrayBlobType;
+@@ -68,6 +69,7 @@
+ 	private Properties typeParameters = new Properties();
+ 	private ExtendedMappings mappings;
+ 	private Table table;
++	private SimpleValue simpleValue;
+ 
+ 	public void setPropertyName(String propertyName) {
+ 		this.propertyName = propertyName;
+@@ -216,7 +218,7 @@
+ 	public void setExplicitType(String explicitType) {
+ 		this.explicitType = explicitType;
+ 	}
+-
++	
+ 	//FIXME raise an assertion failure  if setExplicitType(String) and setExplicitType(Type) are use at the same time
+ 	public void setExplicitType(Type typeAnn) {
+ 		if ( typeAnn != null ) {
+@@ -238,16 +240,35 @@
+ 	}
+ 
+ 	public SimpleValue make() {
++				
+ 		validate();
+ 		log.debug( "building SimpleValue for {}", propertyName );
+ 		if ( table == null ) {
+ 			table = columns[0].getTable();
+ 		}
+-		SimpleValue simpleValue = new SimpleValue( table );
+-		return fillSimpleValue( simpleValue );
++		simpleValue = new SimpleValue( table );
++		
++		for (Ejb3Column column : columns) {
++			column.linkWithValue( simpleValue );
++		}
++		
++		boolean isInSecondPass = mappings.isInSecondPass();
++		if (!isInSecondPass) {
++			//Defer this to the second pass
++			SetSimpleValueTypeSecondPass secondPass = new SetSimpleValueTypeSecondPass(this);
++			mappings.addSecondPass(secondPass);
++		}
++		else {
++			//We are already in second pass
++			fillSimpleValue();
++		}
++		return simpleValue;
+ 	}
+ 
+-	public SimpleValue fillSimpleValue(SimpleValue simpleValue) {
++	public void fillSimpleValue() {
++				
++		log.debug( "setting SimpleValue typeName for {}", propertyName );
++				
+ 		String type = BinderHelper.isDefault( explicitType ) ? returnedClassName : explicitType;
+ 		org.hibernate.mapping.TypeDef typeDef = mappings.getTypeDef( type );
+ 		if ( typeDef != null ) {
+@@ -262,9 +283,8 @@
+ 		if ( persistentClassName != null ) {
+ 			simpleValue.setTypeUsingReflection( persistentClassName, propertyName );
+ 		}
+-		for (Ejb3Column column : columns) {
+-			column.linkWithValue( simpleValue );
+-		}
+-		return simpleValue;
++		
++		if ( !simpleValue.isTypeSpecified() ) simpleValue.setTypeName( "integer" );
++				
+ 	}
+ }
+Index: src/main/java/org/hibernate/cfg/ExtendedMappings.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/ExtendedMappings.java	(revision 17550)
++++ src/main/java/org/hibernate/cfg/ExtendedMappings.java	(working copy)
+@@ -156,4 +156,7 @@
+ 	public void addAnyMetaDef(AnyMetaDef defAnn) throws AnnotationException;
+ 
+ 	public AnyMetaDef getAnyMetaDef(String name);
++	
++	public boolean isInSecondPass(); 
++	
+ }
+\ No newline at end of file
+Index: src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java	(revision 0)
++++ src/main/java/org/hibernate/cfg/SetSimpleValueTypeSecondPass.java	(revision 0)
+@@ -0,0 +1,45 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */package org.hibernate.cfg;
++
++import java.util.Map;
++import org.hibernate.MappingException;
++import org.hibernate.cfg.annotations.SimpleValueBinder;
++
++/**
++ * @author Sharath Reddy
++ *
++ */
++public class SetSimpleValueTypeSecondPass implements SecondPass {
++
++	SimpleValueBinder binder;
++	
++	public SetSimpleValueTypeSecondPass(SimpleValueBinder val) {
++		binder = val;
++	}
++	
++	public void doSecondPass(Map persistentClasses) throws MappingException {
++		binder.fillSimpleValue();
++	}
++
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/BaseClass.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/BaseClass.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/BaseClass.java	(revision 0)
+@@ -0,0 +1,58 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import org.hibernate.annotations.Type;
++
++
++/**
++ * Uses a custom type which is defined in a subclass
++ * @author Sharath Reddy
++ */
++@Entity
++public class BaseClass {
++	
++	@Id
++	@GeneratedValue
++	private int id;
++	@Type(type="definedInDerivedClass")
++	private String name;
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(revision 17550)
++++ src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(working copy)
+@@ -158,7 +158,7 @@
+ 		s.persist(name);
+ 		tx.commit();
+ 		s.close();
+-		
++		 
+ 		s = openSession();
+ 		tx = s.beginTransaction();
+ 		name = (Name) s.get( Name.class, name.getId() );
+@@ -341,6 +341,39 @@
+ 		tx.commit();
+ 		s.close();
+ 	}
++		
++	/**
++	 * A custom type is used in the base class, but defined in the derived class. 
++	 * This would have caused an exception, because the base class is processed 
++	 * BEFORE the derived class, and the custom type is not yet defined. However, 
++	 * it works now because we are setting the typeName for SimpleValue in the second 
++	 * pass. 
++	 * 
++	 * 
++	 * @throws Exception
++	 */
++	public void testSetSimpleValueTypeNameInSecondPass() throws Exception {
++		DerivedClass derived = new DerivedClass();
++		derived.setName("sharath");
++		
++		Session s;
++		Transaction tx;
++		s = openSession();
++		tx = s.beginTransaction();
++		s.persist(derived);
++		tx.commit();
++		s.close();
++		
++		s = openSession();
++		tx = s.beginTransaction();
++		derived = (DerivedClass) s.get( DerivedClass.class, derived.getId() );
++		assertNotNull( derived );
++		assertEquals( "SHARATH", derived.getName() );
++		s.delete(derived);
++		tx.commit();
++		s.close();
++	}
++	
+ 
+ 	public BasicHibernateAnnotationsTest(String x) {
+ 		super( x );
+@@ -353,7 +386,8 @@
+ 				Ransom.class,
+ 				ZipCode.class,
+ 				Flight.class,
+-				Name.class
++				Name.class,
++				DerivedClass.class
+ 		};
+ 	}
+ 
+Index: src/test/java/org/hibernate/test/annotations/entity/DerivedClass.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/DerivedClass.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/DerivedClass.java	(revision 0)
+@@ -0,0 +1,49 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.Entity;
++
++import org.hibernate.annotations.Parameter;
++import org.hibernate.annotations.TypeDef;
++
++@TypeDef(
++		name = "definedInDerivedClass",
++		typeClass = CasterStringType.class,
++		parameters = {
++			@Parameter(name = "cast", value = "upper")
++		}
++)
++
++/**
++ * Defines a custom type that is used in the 
++ * base class. 
++ * @author Sharath Reddy
++ *
++ */
++@Entity
++public class DerivedClass extends BaseClass {
++
++}

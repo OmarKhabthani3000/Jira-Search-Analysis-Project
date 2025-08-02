@@ -1,0 +1,531 @@
+Index: core/src/main/java/org/hibernate/dialect/Dialect.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/Dialect.java	(revision 17916)
++++ core/src/main/java/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -962,13 +962,13 @@
+ 	 * @return The appropriate for update fragment.
+ 	 */
+ 	public String getForUpdateString(LockMode lockMode) {
+-		if ( lockMode==LockMode.UPGRADE ) {
++		if ( lockMode==LockMode.UPGRADE || lockMode==LockMode.PESSIMISTIC_READ || lockMode==LockMode.PESSIMISTIC_WRITE) {
+ 			return getForUpdateString();
+ 		}
+ 		else if ( lockMode==LockMode.UPGRADE_NOWAIT ) {
+ 			return getForUpdateNowaitString();
+ 		}
+-		else if ( lockMode==LockMode.FORCE ) {
++		else if ( lockMode==LockMode.FORCE || lockMode==LockMode.PESSIMISTIC_FORCE_INCREMENT) {
+ 			return getForUpdateNowaitString();
+ 		}
+ 		else {
+Index: core/src/main/java/org/hibernate/LockMode.java
+===================================================================
+--- core/src/main/java/org/hibernate/LockMode.java	(revision 17916)
++++ core/src/main/java/org/hibernate/LockMode.java	(working copy)
+@@ -78,6 +78,7 @@
+ 	 * This is the "default" lock mode.
+ 	 */
+ 	public static final LockMode NONE = new LockMode(0, "NONE");
++
+ 	/**
+ 	 * A shared lock. Objects in this lock mode were read from
+ 	 * the database in the current transaction, rather than being
+@@ -87,6 +88,7 @@
+ 	/**
+ 	 * An upgrade lock. Objects loaded in this lock mode are
+ 	 * materialized using an SQL <tt>select ... for update</tt>.
++	 * @deprecated use PESSIMISTIC_WRITE
+ 	 */
+ 	public static final LockMode UPGRADE = new LockMode(10, "UPGRADE");
+ 	/**
+@@ -103,13 +105,50 @@
+ 	 * of which throw exceptions if WRITE is specified).
+ 	 */
+ 	public static final LockMode WRITE = new LockMode(10, "WRITE");
+-
+ 	/**
+ 	 * Similiar to {@link #UPGRADE} except that, for versioned entities,
+ 	 * it results in a forced version increment.
++	 * @deprecated use PESSIMISTIC_FORCE_INCREMENT
+ 	 */
+ 	public static final LockMode FORCE = new LockMode( 15, "FORCE" );
+ 
++	/**
++	 *  start of javax.persistence.LockModeType modes
++	 */
++
++	/**
++	 * Optimisticly assume that transaction will not experience contention for
++	 * entities.  The entity version will be verified near the transaction end.  
++	 */
++	public static final LockMode OPTIMISTIC = new LockMode(3,"OPTIMISTIC");
++
++	/**
++	 * Optimisticly assume that transaction will not experience contention for entities.
++	 * The entity version will be verified and incremented near the transaction end. 
++	 */
++	public static final LockMode OPTIMISTIC_FORCE_INCREMENT = new LockMode(7,"OPTIMISTIC_FORCE_INCREMENT");
++
++	/**
++	 * Implemented as PESSIMISTIC_WRITE.
++	 * TODO:  introduce separate support for PESSIMISTIC_READ
++	 */
++	public static final LockMode PESSIMISTIC_READ = new LockMode(12,"PESSIMISTIC_READ");
++
++	/**
++	 * Transaction will obtain a database lock immediately.
++	 * TODO:  add PESSIMISTIC_WRITE_NOWAIT
++	 */
++	public static final LockMode PESSIMISTIC_WRITE = new LockMode(13,"PESSIMISTIC_WRITE");
++
++	/**
++	 * Transaction will immediately increment the entity version.
++	 */
++	public static final LockMode PESSIMISTIC_FORCE_INCREMENT = new LockMode(17,"PESSIMISTIC_FORCE_INCREMENT");
++
++	/**
++	 *  end of javax.persistence.LockModeType modes
++	 */
++	
+ 	static {
+ 		INSTANCES.put( NONE.name, NONE );
+ 		INSTANCES.put( READ.name, READ );
+@@ -117,6 +156,11 @@
+ 		INSTANCES.put( UPGRADE_NOWAIT.name, UPGRADE_NOWAIT );
+ 		INSTANCES.put( WRITE.name, WRITE );
+ 		INSTANCES.put( FORCE.name, FORCE );
++		INSTANCES.put( OPTIMISTIC.name, OPTIMISTIC);
++		INSTANCES.put( OPTIMISTIC_FORCE_INCREMENT.name, OPTIMISTIC_FORCE_INCREMENT);
++		INSTANCES.put( PESSIMISTIC_READ. name, PESSIMISTIC_READ);
++		INSTANCES.put( PESSIMISTIC_WRITE.name, PESSIMISTIC_WRITE);
++		INSTANCES.put( PESSIMISTIC_FORCE_INCREMENT.name, PESSIMISTIC_FORCE_INCREMENT);
+ 	}
+ 
+ 	private Object readResolve() {
+Index: core/src/main/java/org/hibernate/cfg/ResultSetMappingBinder.java
+===================================================================
+--- core/src/main/java/org/hibernate/cfg/ResultSetMappingBinder.java	(revision 17916)
++++ core/src/main/java/org/hibernate/cfg/ResultSetMappingBinder.java	(working copy)
+@@ -382,6 +382,21 @@
+ 		else if ( "force".equals( lockMode ) ) {
+ 			return LockMode.FORCE;
+ 		}
++		else if ( "optimistic".equals( lockMode ) ) {
++			return LockMode.OPTIMISTIC;
++		}
++		else if ( "optimistic_force_increment".equals( lockMode ) ) {
++			return LockMode.OPTIMISTIC_FORCE_INCREMENT;
++		}
++		else if ( "pessimistic_read".equals( lockMode ) ) {
++			return LockMode.PESSIMISTIC_READ;
++		}
++		else if ( "pessimistic_write".equals( lockMode ) ) {
++			return LockMode.PESSIMISTIC_WRITE;
++		}
++		else if ( "pessimistic_force_increment".equals( lockMode ) ) {
++			return LockMode.PESSIMISTIC_FORCE_INCREMENT;
++		}
+ 		else {
+ 			throw new MappingException( "unknown lockmode" );
+ 		}
+Index: core/src/main/java/org/hibernate/engine/EntityEntry.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/EntityEntry.java	(revision 17916)
++++ core/src/main/java/org/hibernate/engine/EntityEntry.java	(working copy)
+@@ -252,7 +252,7 @@
+ 	public void forceLocked(Object entity, Object nextVersion) {
+ 		version = nextVersion;
+ 		loadedState[ persister.getVersionProperty() ] = version;
+-		setLockMode( LockMode.FORCE );
++		setLockMode( LockMode.FORCE );  // TODO:  use LockMode.PESSIMISTIC_FORCE_INCREMENT
+ 		persister.setPropertyValue(
+ 				entity,
+ 		        getPersister().getVersionProperty(),
+Index: core/src/main/java/org/hibernate/action/EntityIncrementVersionProcess.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityIncrementVersionProcess.java	(revision 0)
++++ core/src/main/java/org/hibernate/action/EntityIncrementVersionProcess.java	(revision 0)
+@@ -0,0 +1,58 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2009, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.action;
++
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.EntityEntry;
++import org.hibernate.persister.entity.EntityPersister;
++
++/**
++ * Verify/Increment the entity version
++ *
++ * @author Scott Marlow
++ */
++public class EntityIncrementVersionProcess implements BeforeTransactionCompletionProcess
++{
++	private final Object object;
++	private final EntityEntry entry;
++
++	public EntityIncrementVersionProcess(Object object, EntityEntry entry) {
++		this.object = object;
++		this.entry = entry;
++	}
++
++	/**
++	 * Perform whatever processing is encapsulated here before completion of the transaction.
++	 *
++	 * @param session The session on which the transaction is preparing to complete.
++	 */
++	public void doBeforeTransactionCompletion(SessionImplementor session) {
++		final EntityPersister persister = entry.getPersister();
++		Object nextVersion = persister.forceVersionIncrement(
++				entry.getId(), entry.getVersion(), session
++		);
++		entry.forceLocked( object, nextVersion );
++	}
++}
+Index: core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 17916)
++++ core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -1391,6 +1391,11 @@
+ 		lockers.put( LockMode.UPGRADE, generateLocker( LockMode.UPGRADE ) );
+ 		lockers.put( LockMode.UPGRADE_NOWAIT, generateLocker( LockMode.UPGRADE_NOWAIT ) );
+ 		lockers.put( LockMode.FORCE, generateLocker( LockMode.FORCE ) );
++		lockers.put( LockMode.PESSIMISTIC_READ, generateLocker( LockMode.PESSIMISTIC_READ ) );
++		lockers.put( LockMode.PESSIMISTIC_WRITE, generateLocker( LockMode.PESSIMISTIC_WRITE ) );
++		lockers.put( LockMode.PESSIMISTIC_FORCE_INCREMENT, generateLocker( LockMode.PESSIMISTIC_FORCE_INCREMENT ) );
++		lockers.put( LockMode.OPTIMISTIC, generateLocker( LockMode.OPTIMISTIC ) );
++		lockers.put( LockMode.OPTIMISTIC_FORCE_INCREMENT, generateLocker( LockMode.OPTIMISTIC_FORCE_INCREMENT ) );
+ 	}
+ 
+ 	protected LockingStrategy generateLocker(LockMode lockMode) {
+@@ -3129,8 +3134,26 @@
+ 						readLoader :
+ 						createEntityLoader( LockMode.FORCE )
+ 			);
+-
+ 		loaders.put(
++				LockMode.PESSIMISTIC_READ,
++				disableForUpdate ?
++						readLoader :
++						createEntityLoader( LockMode.PESSIMISTIC_READ )
++			);
++		loaders.put(
++				LockMode.PESSIMISTIC_WRITE,
++				disableForUpdate ?
++						readLoader :
++						createEntityLoader( LockMode.PESSIMISTIC_WRITE )
++			);
++		loaders.put(
++				LockMode.PESSIMISTIC_FORCE_INCREMENT,
++				disableForUpdate ?
++						readLoader :
++						createEntityLoader( LockMode.PESSIMISTIC_FORCE_INCREMENT )
++			);
++		
++		loaders.put(
+ 				"merge",
+ 				new CascadeEntityLoader( this, CascadingAction.MERGE, getFactory() )
+ 			);
+Index: core/src/main/java/org/hibernate/event/def/AbstractLockUpgradeEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/def/AbstractLockUpgradeEventListener.java	(revision 17916)
++++ core/src/main/java/org/hibernate/event/def/AbstractLockUpgradeEventListener.java	(working copy)
+@@ -29,6 +29,8 @@
+ 
+ import org.hibernate.LockMode;
+ import org.hibernate.ObjectDeletedException;
++import org.hibernate.event.EventSource;
++import org.hibernate.action.EntityIncrementVersionProcess;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.access.SoftLock;
+ import org.hibernate.engine.EntityEntry;
+@@ -55,7 +57,7 @@
+ 	 * @param requestedLockMode The lock mode being requested for locking.
+ 	 * @param source The session which is the source of the event being processed.
+ 	 */
+-	protected void upgradeLock(Object object, EntityEntry entry, LockMode requestedLockMode, SessionImplementor source) {
++	protected void upgradeLock(Object object, EntityEntry entry, LockMode requestedLockMode, EventSource source) {
+ 
+ 		if ( requestedLockMode.greaterThan( entry.getLockMode() ) ) {
+ 			// The user requested a "greater" (i.e. more restrictive) form of
+@@ -97,13 +99,17 @@
+ 			}
+ 			
+ 			try {
+-				if ( persister.isVersioned() && requestedLockMode == LockMode.FORCE ) {
++				if ( persister.isVersioned() && (requestedLockMode == LockMode.FORCE || requestedLockMode == LockMode.PESSIMISTIC_FORCE_INCREMENT )  ) {
+ 					// todo : should we check the current isolation mode explicitly?
+ 					Object nextVersion = persister.forceVersionIncrement(
+ 							entry.getId(), entry.getVersion(), source
+ 					);
+ 					entry.forceLocked( object, nextVersion );
+ 				}
++				else if ( persister.isVersioned() && requestedLockMode == LockMode.OPTIMISTIC_FORCE_INCREMENT  ) {
++					EntityIncrementVersionProcess incrementVersion = new EntityIncrementVersionProcess(object, entry);
++					source.getActionQueue().registerProcess(incrementVersion);
++				}
+ 				else {
+ 					persister.lock( entry.getId(), entry.getVersion(), object, requestedLockMode, source );
+ 				}
+Index: core/src/main/java/org/hibernate/event/def/DefaultLoadEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/def/DefaultLoadEventListener.java	(revision 17916)
++++ core/src/main/java/org/hibernate/event/def/DefaultLoadEventListener.java	(working copy)
+@@ -485,7 +485,7 @@
+ 					return INCONSISTENT_RTN_CLASS_MARKER;
+ 				}
+ 			}
+-			upgradeLock( old, oldEntry, event.getLockMode(), session );
++			upgradeLock( old, oldEntry, event.getLockMode(), event.getSession() );
+ 		}
+ 
+ 		return old;
+Index: core/src/main/java/org/hibernate/event/def/DefaultLockEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/def/DefaultLockEventListener.java	(revision 17916)
++++ core/src/main/java/org/hibernate/event/def/DefaultLockEventListener.java	(working copy)
+@@ -80,11 +80,11 @@
+ 			}
+ 
+ 			entry = reassociate(event, entity, id, persister);
+-			
++			// TODO:  make cascadeOnLock optional based on SCOPE
+ 			cascadeOnLock(event, persister, entity);
+ 		}
+ 
+-		upgradeLock( entity, entry, event.getLockMode(), source );
++		upgradeLock( entity, entry, event.getLockMode(), event.getSession() );
+ 	}
+ 	
+ 	private void cascadeOnLock(LockEvent event, EntityPersister persister, Object entity) {
+Index: testsuite/src/test/java/org/hibernate/test/jpa/lock/JPALockTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/jpa/lock/JPALockTest.java	(revision 17916)
++++ testsuite/src/test/java/org/hibernate/test/jpa/lock/JPALockTest.java	(working copy)
+@@ -51,7 +51,7 @@
+ 	 * must always prevent the phenomena P1 and P2. Applications that call lock(entity, LockModeType.READ)
+ 	 * on non-versioned objects will not be portable.
+ 	 * <p/>
+-	 * Odd as it may sound, EJB3 LockModeType.READ actually maps to the Hibernate LockMode.UPGRADE
++	 * EJB3 LockModeType.READ actually maps to the Hibernate LockMode.OPTIMISTIC
+ 	 */
+ 	public void testLockModeTypeRead() {
+ 		if ( !readCommittedIsolationMaintained( "ejb3 lock tests" ) ) {
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/lock/LockTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/lock/LockTest.java	(revision 17916)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/lock/LockTest.java	(working copy)
+@@ -80,6 +80,58 @@
+ 		em.close();
+ 	}
+ 
++	public void testLockPessimisticForceIncrement() throws Exception {
++		Lock lock = new Lock();
++		lock.setName( "force" );
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		em.persist( lock );
++		em.getTransaction().commit();
++
++		em.getTransaction().begin();
++		lock = em.getReference( Lock.class, lock.getId() );
++		Integer version = lock.getVersion();
++		em.lock( lock, LockModeType.PESSIMISTIC_FORCE_INCREMENT );
++		em.getTransaction().commit();
++
++		em.getTransaction().begin();
++		lock = em.getReference( Lock.class, lock.getId() );
++		try {
++			assertEquals( "should increase the version number ", 1, lock.getVersion() - version );
++		}
++		finally {
++			em.remove( lock );
++			em.getTransaction().commit();
++		}
++		em.close();
++	}
++
++	public void testLockOptimisticForceIncrement() throws Exception {
++		Lock lock = new Lock();
++		lock.setName( "force" );
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		em.persist( lock );
++		em.getTransaction().commit();
++
++		em.getTransaction().begin();
++		lock = em.getReference( Lock.class, lock.getId() );
++		Integer version = lock.getVersion();
++		em.lock( lock, LockModeType.OPTIMISTIC_FORCE_INCREMENT );
++		em.getTransaction().commit();
++
++		em.getTransaction().begin();
++		lock = em.getReference( Lock.class, lock.getId() );
++		try {
++			assertEquals( "should increase the version number ", 1, lock.getVersion() - version );
++		}
++		finally {
++			em.remove( lock );
++			em.getTransaction().commit();
++		}
++		em.close();
++	}
++	
+ 	public Class[] getAnnotatedClasses() {
+ 		return new Class[]{
+ 				Lock.class,
+Index: entitymanager/src/main/java/org/hibernate/ejb/AbstractQueryImpl.java
+===================================================================
+--- entitymanager/src/main/java/org/hibernate/ejb/AbstractQueryImpl.java	(revision 17916)
++++ entitymanager/src/main/java/org/hibernate/ejb/AbstractQueryImpl.java	(working copy)
+@@ -242,6 +242,17 @@
+ 		return QueryHints.getDefinedHints();
+ 	}
+ 
++	private javax.persistence.LockModeType jpaLockMode = javax.persistence.LockModeType.NONE;
++
++	public TypedQuery<X> setLockMode(javax.persistence.LockModeType lockModeType) {
++		this.jpaLockMode = lockModeType;
++		return this;
++	}
++
++	public javax.persistence.LockModeType getLockMode() {
++		return jpaLockMode;
++	}
++
+ 	private FlushModeType jpaFlushMode;
+ 
+ 	public TypedQuery<X> setFlushMode(FlushModeType jpaFlushMode) {
+Index: entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java
+===================================================================
+--- entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java	(revision 17916)
++++ entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java	(working copy)
+@@ -362,8 +362,7 @@
+ 	}
+ 
+ 	public void refresh(Object o, Map<String, Object> stringObjectMap) {
+-		//FIXME
+-		//To change body of implemented methods use File | Settings | File Templates.
++		refresh(o);
+ 	}
+ 
+ 	public void refresh(Object o, LockModeType lockModeType) {
+@@ -532,19 +531,65 @@
+ 	}
+ 
+ 	public void lock(Object o, LockModeType lockModeType, Map<String, Object> stringObjectMap) {
+-		//FIXME
+-		//To change body of implemented methods use File | Settings | File Templates.
++		// todo:  support different properties passed in stringObjectMap
++		lock(o,lockModeType);
+ 	}
+ 
++/*
++	private LockModeType getLockModeType(LockMode lockMode)
++	{
++		if ( lockMode == LockMode.NONE )
++			return LockModeType.NONE;
++		else if ( lockMode == LockMode.OPTIMISTIC || lockMode == LockMode.READ )
++			return LockModeType.OPTIMISTIC;
++		else if ( lockMode == LockMode.OPTIMISTIC_FORCE_INCREMENT || lockMode == LockMode.WRITE )
++			return LockModeType.OPTIMISTIC_FORCE_INCREMENT;
++		else if ( lockMode == LockMode.PESSIMISTIC_READ )
++			return LockModeType.PESSIMISTIC_READ;
++		else if ( lockMode == LockMode.PESSIMISTIC_WRITE )
++			return LockModeType.PESSIMISTIC_WRITE;
++		else if ( lockMode == LockMode.PESSIMISTIC_FORCE_INCREMENT )
++			return LockModeType.PESSIMISTIC_FORCE_INCREMENT;
++		throw new AssertionFailure("unhandled lock mode " + lockMode );
++	}
++*/
++
+ 	private LockMode getLockMode(LockModeType lockMode) {
+ 		switch ( lockMode ) {
+-			case READ:
+-				return LockMode.UPGRADE; //assuming we are on read-commited and we need to prevent non repeteable read
++			case READ:  
++			case OPTIMISTIC:
++				return LockMode.OPTIMISTIC;
++			// perform version check before commit, throw OptimisticLockException if version mismatch,
++			// force version increment at end of transaction (even if no modifications are made)
++			case OPTIMISTIC_FORCE_INCREMENT:
+ 			case WRITE:
+-				return LockMode.FORCE;
++				// return  LockMode.PESSIMISTIC_FORCE_INCREMENT; 
++				return LockMode.OPTIMISTIC_FORCE_INCREMENT;
++			case PESSIMISTIC_READ:
++				return LockMode.PESSIMISTIC_READ;
++
++			case PESSIMISTIC_WRITE:
++				return LockMode.PESSIMISTIC_WRITE;
++
++			case PESSIMISTIC_FORCE_INCREMENT:
++				return LockMode.PESSIMISTIC_FORCE_INCREMENT;
++
++			case NONE:
++				return LockMode.NONE;
++
+ 			default:
+ 				throw new AssertionFailure( "Unknown LockModeType: " + lockMode );
+ 		}
++
++//		switch ( lockMode ) {
++//			case READ:
++//			case OPTIMISTIC:
++//				return LockMode.UPGRADE; //assuming we are on read-commited and we need to prevent non repeteable read
++//			case WRITE:
++//				return LockMode.FORCE;
++//			default:
++//				throw new AssertionFailure( "Unknown LockModeType: " + lockMode );
++//		}
+ 	}
+ 
+ 	public boolean isTransactionInProgress() {
+Index: entitymanager/src/main/java/org/hibernate/ejb/QueryImpl.java
+===================================================================
+--- entitymanager/src/main/java/org/hibernate/ejb/QueryImpl.java	(revision 17916)
++++ entitymanager/src/main/java/org/hibernate/ejb/QueryImpl.java	(working copy)
+@@ -550,21 +550,6 @@
+ 	/**
+ 	 * {@inheritDoc}
+ 	 */
+-	public TypedQuery<X> setLockMode(LockModeType lockModeType) {
+-		// TODO : aye aye aye
+-		throw new UnsupportedOperationException( "Not yet implemented" );
+-	}
+-
+-	/**
+-	 * {@inheritDoc}
+-	 */
+-	public LockModeType getLockMode() {
+-		return LockModeType.NONE;
+-	}
+-
+-	/**
+-	 * {@inheritDoc}
+-	 */
+ 	@SuppressWarnings({ "unchecked" })
+ 	public <T> T unwrap(Class<T> tClass) {
+ 		if ( org.hibernate.Query.class.isAssignableFrom( tClass ) ) {

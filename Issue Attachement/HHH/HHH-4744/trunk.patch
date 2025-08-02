@@ -1,0 +1,90 @@
+Index: src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java	(revision 18369)
++++ src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java	(working copy)
+@@ -75,7 +75,7 @@
+     private Document generateDefaultRevisionInfoXmlMapping() {
+         Document document = DocumentHelper.createDocument();
+ 
+-        Element class_mapping = MetadataTools.createEntity(document, new AuditTableData(null, null, null, null), null);
++        Element class_mapping = MetadataTools.createEntity(document, new AuditTableData(null, null, null, null), null, false);
+ 
+         class_mapping.addAttribute("name", revisionInfoEntityName);
+         class_mapping.addAttribute("table", "REVINFO");
+Index: src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(revision 18369)
++++ src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(working copy)
+@@ -294,7 +294,7 @@
+             PersistentClass pc, EntityXmlMappingData xmlMappingData, AuditTableData auditTableData,
+             IdMappingData idMapper) {
+         Element class_mapping = MetadataTools.createEntity(xmlMappingData.getMainXmlMapping(), auditTableData,
+-                pc.getDiscriminatorValue());
++                pc.getDiscriminatorValue(), ((pc.isAbstract() != null) && pc.isAbstract()));
+         ExtendedPropertyMapper propertyMapper = new MultiPropertyMapper();
+ 
+         // Checking if there is a discriminator column
+@@ -318,7 +318,8 @@
+             String inheritanceMappingType) {
+         String extendsEntityName = verEntCfg.getAuditEntityName(pc.getSuperclass().getEntityName());
+         Element class_mapping = MetadataTools.createSubclassEntity(xmlMappingData.getMainXmlMapping(),
+-                inheritanceMappingType, auditTableData, extendsEntityName, pc.getDiscriminatorValue());
++                inheritanceMappingType, auditTableData, extendsEntityName, pc.getDiscriminatorValue(),
++                ((pc.isAbstract() != null) && pc.isAbstract()));
+ 
+         // The id and revision type is already mapped in the parent
+ 
+Index: src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(revision 18369)
++++ src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(working copy)
+@@ -512,7 +512,7 @@
+         String catalog = mainGenerator.getCatalog(propertyAuditingData.getJoinTable().catalog(), propertyValue.getCollectionTable());
+ 
+         Element middleEntityXml = MetadataTools.createEntity(xmlMappingData.newAdditionalMapping(),
+-                new AuditTableData(auditMiddleEntityName, auditMiddleTableName, schema, catalog), null);
++                new AuditTableData(auditMiddleEntityName, auditMiddleTableName, schema, catalog), null, false);
+         Element middleEntityXmlId = middleEntityXml.addElement("composite-id");
+ 
+         // If there is a where clause on the relation, adding it to the middle entity.
+Index: src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java	(revision 18369)
++++ src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java	(working copy)
+@@ -113,7 +113,7 @@
+     }
+ 
+     private static Element createEntityCommon(Document document, String type, AuditTableData auditTableData,
+-                                              String discriminatorValue) {
++                                              String discriminatorValue, boolean abstractEntity) {
+         Element hibernate_mapping = document.addElement("hibernate-mapping");
+         hibernate_mapping.addAttribute("auto-import", "false");
+ 
+@@ -138,17 +138,23 @@
+         if (!StringTools.isEmpty(auditTableData.getCatalog())) {
+             class_mapping.addAttribute("catalog", auditTableData.getCatalog());
+         }
++        
++        if (abstractEntity) {
++        	class_mapping.addAttribute("abstract", "true");
++        }
+ 
+         return class_mapping;
+     }
+ 
+-    public static Element createEntity(Document document, AuditTableData auditTableData, String discriminatorValue) {
+-        return createEntityCommon(document, "class", auditTableData, discriminatorValue);
++    public static Element createEntity(Document document, AuditTableData auditTableData, String discriminatorValue,
++    		                           boolean abstractEntity) {
++        return createEntityCommon(document, "class", auditTableData, discriminatorValue, abstractEntity);
+     }
+ 
+     public static Element createSubclassEntity(Document document, String subclassType, AuditTableData auditTableData,
+-                                               String extendsEntityName, String discriminatorValue) {
+-        Element class_mapping = createEntityCommon(document, subclassType, auditTableData, discriminatorValue);
++                                               String extendsEntityName, String discriminatorValue,
++                                               boolean abstractEntity) {
++        Element class_mapping = createEntityCommon(document, subclassType, auditTableData, discriminatorValue, abstractEntity);
+ 
+         class_mapping.addAttribute("extends", extendsEntityName);
+ 

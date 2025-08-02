@@ -1,0 +1,247 @@
+<EricDalquist> hello
+<sebersole> hey, saw your comment earlier
+<sebersole> was going to suggest you come on here to discuss :)
+<EricDalquist> great :) I'm hoping you guys can either save or direct me a bit in my hacking around in the core and entitymanager packages
+<sebersole> well not sure what you want to change in HEM
+<EricDalquist> my specific use case is wanting to be able to capitalize on NaturalId via JPA2
+<EricDalquist> so my first random idea was a new hint
+<sebersole> well "via JPA2" is an oxymoron
+<sebersole> JPA2 has no such notion
+<EricDalquist> right
+<sebersole> the plan was to make this a native API
+<EricDalquist> yup
+<sebersole> as in a Hibernate specific API
+<EricDalquist> which is good as well, just makes me have to use entityManager.unwrap(Session.class);
+<sebersole> yep
+<sebersole> but if you want to use features specific to an impl...
+<EricDalquist> yup
+<EricDalquist> so I was also wondering what direction you were planning on going with the naturalid stuff
+<sebersole> basically we have not started any work on this
+<sebersole> wdym?
+<EricDalquist> so right now the only way to make use of NaturalId is via the Criteria API
+<sebersole> like the issue says i want an actual api for this
+<sebersole> sure
+<EricDalquist> ok
+<sebersole> ideally i see something like:
+<EricDalquist> but that only works part of the time due to the multiple entity fetch bug
+<sebersole> session.for( SomeEntity.class ).loadByNaturalId( theId )
+<sebersole> something like that
+<EricDalquist> got it
+<EricDalquist> would you plan on deprecating the Criteria approach then?
+<EricDalquist> and is there any hope of this making it into 3.6?
+<sebersole> no
+<sebersole> it wont make it into 4.0 either
+<sebersole> 4.1 *maybe*
+<EricDalquist> ok
+<sebersole> depends if you want to help :)
+<EricDalquist> I'd love to
+<EricDalquist> our application makes HEAVY use of naturalIds
+<sebersole> so there are 2 axises here
+<sebersole> 1) get/load
+<sebersole> 2) pk/natural-id
+<sebersole> and i'd like to make it consistenty
+<sebersole> consistent
+<sebersole> talking in terms of api
+<EricDalquist> ok
+<sebersole> so then the best is for you to fork the github repo and start hacking
+<EricDalquist> yeah I have the github repo forked already
+<sebersole> and initiate pull requests when you want us to look
+<sebersole> and obviously when we are done
+<EricDalquist> so in the short term I'd like to help gbadner get HHH-4838 fixed since right now only one of our 11 natural id queries actually gets flagged as a naturalid query correctly
+<jbossbot> jira [HHH-4838] 2L-Querycache ImmutableNaturalKeyLookup not properly recognized as hasImmutableNaturalId() is called on wrong EntityMetamodel [Open (Unresolved) Bug, Major, Gail Badner] https://hibernate.onjira.com/browse/HHH-4838
+<EricDalquist> since I'm thinking that could get into a 3.6.x patch
+<sebersole> so the first decision is whether we have one interface for all 4 combos
+<sebersole> well we will be done doing all 3.6 releases as soon as 4.0 goes final
+<EricDalquist> ok
+<sebersole> which is 3 weeks
+<EricDalquist> ah :)
+<sebersole> wpould have been tomorrow
+<sebersole> but we did a minor change today that warranted a new CR
+<EricDalquist> ah the fun of releases
+<EricDalquist> ok, so that's good to know for my planning
+<sebersole> anyway, did that make sense about the one interface?
+<sebersole> versus 2
+<EricDalquist> I think so ... I've been looking at hibernate internals for all of ~36 hours now so I'm still getting my head around it a little bit
+<sebersole> its a lot to digest
+<sebersole> easiest to start with the api
+<sebersole> and then figuree out the how
+<sebersole> let me gist up my 2 current thoughts
+<EricDalquist> ok
+<EricDalquist> so I should be on the master branch on the git clone for this right?
+<sebersole> https://gist.github.com/1246197
+<sebersole> EricDalquist: ^^ thats the first idea
+<sebersole> EricDalquist: no, create a branch named HHH-2879
+<jbossbot> jira [HHH-2879] add an actual api for loading an entity by natural candidate key (mapped natural-id) [Open (Unresolved) Improvement, Major, Steve Ebersole] https://hibernate.onjira.com/browse/HHH-2879
+<EricDalquist> ok
+<sebersole> note that i took the opp to rename those methods
+<EricDalquist> yup
+<sebersole> we have not all agreed to that yet
+<sebersole> but i think we will :)
+<EricDalquist> so that gist shows getting an object by a single id
+<EricDalquist> what about objects with multi-property natural ids?
+<sebersole> EricDalquist: https://gist.github.com/1246209
+<sebersole> thats the second
+<sebersole> well either varargs or assuming the "bind" value is array in that case
+<EricDalquist> ok, so in the second if an entity has a single naturalId property you could do:
+<EricDalquist> session.entityLoadAccess(SomeEntity.class).getReferenceByNaturalKey("foo")
+<sebersole> might even make sense to make lockOptions "builder style" too
+<EricDalquist> yeah
+<EricDalquist> I'm thinking a simple builder style object for getRef and load by naturalid
+<sebersole> EricDalquist: as for multi0values
+<sebersole> session.entityLoadAccess(SomeEntity.class).getReferenceByNaturalKey( new Object[ "foo", 123 ] )
+<sebersole> or
+<sebersole> we change up the api sig to use varargs
+<EricDalquist> varargs seem problematic with ordering and typing
+<sebersole> wdym?>
+<sebersole> yes, the simple values order has to match what is defined in meta
+<sebersole> but not sure how else you could get around that
+<EricDalquist> https://gist.github.com/1246224
+<EricDalquist> so what happens if I have an entity that looks like that
+<EricDalquist> if I refactor my SomeEntity class and the field ordering changes my query breaks
+<EricDalquist> so my JPA2 comment earlier comes from using the type-safe CriteriaBuilder API
+<sebersole> yep, though there is no type safety here
+<sebersole> but
+<sebersole> we could apply something similar
+<EricDalquist> for a large project we that compile-time type safety is a HUGE benefit
+<EricDalquist> is there a hibernate specific API similar to the JPA2 meta-model?
+<EricDalquist> if so that could be easily used in a builder style API to create a NaturalIdQuery
+<sebersole> yes and no
+<sebersole> obviously Hibernate implements the "JPA2 meta-model"
+<sebersole> Hibernate is the thing (your jpa provider) that populates those shells
+<sebersole> however the big 4.0 -> 4.1 thing is redesigning Hibernate's meta-model
+<EricDalquist> right, I saw in my debugging that hibernate has its own impl of that meta model internally
+<EricDalquist> just wasn't sure if there was a "public" api that developers could use like the jpa2 side has
+<sebersole> "hibernate has its own impl of that meta model internally" ?
+<EricDalquist> well at least that is what I assumed EntityMetamodel was
+<sebersole> no, this stuff all predates jpa
+<sebersole> if you mean "meta model" in the general sense, then yes thats what EntityMetamodel is
+<EricDalquist> ok
+<sebersole> if you mean specifically in the jpa sense, then no
+<EricDalquist> so here is what I, as a type-safe junkie, would love to see: https://gist.github.com/1246245
+<EricDalquist> note that in that example the Attribute<T, V> class is cribbed from the jpa2 meta-model api
+<sebersole> well in that case, i do not think a unified api makes sense
+<EricDalquist> right
+<EricDalquist> since that example is implementer specific
+<EricDalquist> and I'm assuming by unified you mean one api that is used internally and externally
+<sebersole> no
+<EricDalquist> (thanks for your patience with me on this, doing my best to grok what is going on here as quickly as possible)
+<sebersole> i mean one api for both pk and natural-id
+<EricDalquist> ah right
+<sebersole> sec, gisting
+<EricDalquist> can you have multi-property pks in hibernate? We've only ever used single column synthetic ids so I've never really looked into anything more
+* gustavonalle has quit (Read error: Connection reset by peer)
+* gustavonalle (~anonymous@host109-151-82-209.range109-151.btcentralplus.com) has joined #hibernate-dev
+<sebersole> EricDalquist: https://gist.github.com/1246267
+<sebersole> keeping the use of jpa attribute for now
+<EricDalquist> looks great
+<sebersole> EricDalquist: as for "multi-property pks", you *can*
+<sebersole> however
+<sebersole> the preferred approach is to use a composite id class
+<EricDalquist> got it, that makes sense, I was just curious for thinking through the api design
+<sebersole> or at the least what jpa terms an "id class"
+<sebersole> hibernate itself lets you do neither of those though
+<EricDalquist> don't want to be encouraging bad behavior elsewhere by adding the option for multiple pk id values here
+<sebersole> but its implication is that you instantiate the entity and populate those fields and pass that in
+<EricDalquist> so I think the latest gist looks great, it just has that ominous question of how do we do Attribute<T, V> in plain old hibernate?
+<sebersole> EricDalquist: well i forgot that we will also need to support Strings anyway
+<sebersole> https://gist.github.com/1246267
+<sebersole> so maybe we just do that attributeName form for now
+<EricDalquist> yeah
+<EricDalquist> public NaturalIdLoadAccess<T> using(String attributeName, Object value); would be the quickest way to make it happen
+<sebersole> and add the other with 4.1 if that becomes possible
+<EricDalquist> and those type-safe nuts like myself can create a little wrapper that uses the jpa2 MM and make all the project developers use that under pain of public shunning
+<sebersole> so then we have stuff like:
+<EricDalquist> so this would add two new methods to Session for creating a IdentifierLoadAccess or a NaturalIdLoadAccess
+<sebersole> SomeEntity e = session.byId( SomeEntity.class ).with( someLockOptions ).load( 123 );
+<sebersole> or
+<sebersole> User u = session.byNaturalKey( User.class.class ).with( someLockOptions ).using( "username", "steve" ).load();
+<EricDalquist> yep
+<sebersole> pretty nice i think
+<sebersole> now far and away the hardest part of implementing this will be caching
+<sebersole> both
+<sebersole> and
+<EricDalquist> right, since the whole point of natural id lookups is better caching behavior
+<sebersole> if we leave NaturalIdLoadAccess#getReference() we also need proxies to understand this
+<sebersole> unless we "partially resolve" the natural key
+<sebersole> thats probably the better option\
+<sebersole> actually thats the only real option
+<sebersole> we will need to cross-reference the natural key
+<sebersole> to build the proxy
+<sebersole> EricDalquist: still on board?
+<EricDalquist> and this is where I'm a little more lost. My understanding right now is that the naturalid query looks in the query cache for data and then in the 2nd level cache for the partially-assembled object data
+<EricDalquist> and if I'm following when you say "cross-reference the natural key" you're meaning we need to have some cache of "natural id" -> pk
+<EricDalquist> and then we use to pk to load the actual object
+<sebersole> well basically what it does (or tries to do) is to handle this cross ref
+<sebersole> thats the "looks in the query cache" bit
+<sebersole> EricDalquist: exactly what i mean
+<EricDalquist> so are you thinking a whole new cache or continuing to essentially overload the query cache?
+<sebersole> i'd opt for a whole new cache
+<sebersole> using the query cache for this purpose causes problems
+<EricDalquist> I would too from an implementers pov, then I can tune it separately from the query cache
+<sebersole> that too
+<sebersole> like you may or may not want to distribute this cached data
+<EricDalquist> right
+<sebersole> whereas thats frowned upon for query results
+<sebersole> but even more basic, i meant it lets you better handle invalidating the entries
+<EricDalquist> yup
+* gustavonalle has quit (Quit: gustavonalle)
+<EricDalquist> especially if we can just store the base primitives involved in the natural id and pk
+<sebersole> you *have* to in fact
+<EricDalquist> right, I remember seeing the bug a while back about cache keys having references to assembled objects  :/
+<EricDalquist> so the workflow would look like: Lookup pk from NaturalIdCache, On hit load object by PK
+<sebersole> yes, you have to dissassemble the values
+<EricDalquist> or: Lookup pk from NaturalIdCache, On miss query for pk by naturalid?
+<EricDalquist> for that on-miss logic would the code just go through the normal query generation code path?
+<sebersole> Lookup correlated pk from NaturalIdCache.  on miss, query db for related key, add to cache.  load by pk
+<sebersole> and i think we need to decide about invalidity here and immutability
+<EricDalquist> ok, so on miss in that example it could result in 2 queries to load the entity. One to do the NaturalId->PK mapping and then one to load by PK
+<sebersole> EricDalquist: thats the case today too...
+<EricDalquist> really? the code right now looks like it just does a normal criteria query to load the data
+<sebersole> bear in mind this is just for the getReference() case
+<EricDalquist> ok
+<sebersole> EricDalquist: i dont believe thats the case
+<sebersole> though i could be wrong
+<sebersole> been long time since i looked at that code
+<EricDalquist> yeah as far as I can tell in 3.6 the only special treatment that a naturalid query gets is it ignores the timestamp cache
+<sebersole> well i think the other special treatment is to treat the query as a scalar
+<sebersole> which only returns the matching id(s)
+<sebersole> but i may be misremembering
+<sebersole> gbadner: do you remember by any chance?
+<EricDalquist> when I was tracing through the code the only place I found that ever looks at the naturalid info is Loader.getResultFromQueryCache
+<EricDalquist> yeah, just verified that
+<EricDalquist> CriteriaImpl.isLookupByNaturalKey() tells you if a NaturalIdentifier restriction was used
+<EricDalquist> that API is only ever called from
+<EricDalquist> CriteriaQueryTranslator.getQueryParameters
+<EricDalquist> and QueryParameters.isNaturalKeyLookup() is only looked at by Loader.getResultFromQueryCache and Loader.putResultInQueryCache
+<gbadner> sebersole, catching up...
+<sebersole> EricDalquist: ok, but again, that is equaivalent to load
+<sebersole> the question here is relative to getReference()
+<sebersole> which is completely different use case
+<EricDalquist> ah ok, sorry
+<gbadner> sebersole, I don't remember offhand; I'm trying to wrap up HHH-5832, then I was going to look into that
+<jbossbot> jira [HHH-5832] JPA Query and IdClass Causing NullPointerException [Open (Unresolved) Bug, Major, Gail Badner] https://hibernate.onjira.com/browse/HHH-5832
+<EricDalquist> so what is the difference between load and getReference, are we talking Session.load vs Session.get or is there some other behavior here?
+<sebersole> EricDalquist: yep thats it
+<EricDalquist> got it
+<sebersole> gbadner: no worries, i think we figured it out
+<sebersole> EricDalquist: although load->getReference
+<sebersole> and get->load
+<sebersole> we should deprecate those at the same time
+<sebersole> the methods on Session 
+<EricDalquist> got it
+<EricDalquist> so this API will be a wholesale replacement for all existing session.get/.load APIs
+<sebersole> hmm, on second thought don't deprecate them 
+<EricDalquist> Session.load will become *LoadAccess.getReference and Session.get will become *LoadAccess.load
+<EricDalquist> just to confirm as I'm creating my git branch, should I be branching from master or stable?
+<sebersole> master
+<sebersole> thanks EricDalquist 
+<EricDalquist> thank you, I have no idea how much progress I'll actually be able to make on this but I'll get hacking on it in the bits of free time I can scrape up and I've added this channel to the list of places I idle
+<sebersole> EricDalquist: no worries.  and just ask if you run into trouble
+<sebersole> have to run, ttyl
+<sebersole> EricDalquist: forgot to ask, you comfortable with using gradle?
+<EricDalquist> never have but I have a gradle build running now, found the docs and once the build is done I'm going to give "gradle eclipse" a try
+<EricDalquist> if you have any other tips that would be great but it looks fairly straight forward
+<sebersole> we tried to put the relevant info in the main readme
+<sebersole> https://github.com/hibernate/hibernate-core
+<sebersole> scroll to the bottom
+<EricDalquist> great, thanks again :)

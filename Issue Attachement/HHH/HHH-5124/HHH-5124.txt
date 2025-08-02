@@ -1,0 +1,162 @@
+Index: core/src/main/java/org/hibernate/engine/ActionQueue.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/ActionQueue.java	(revision 19240)
++++ core/src/main/java/org/hibernate/engine/ActionQueue.java	(working copy)
+@@ -53,6 +53,7 @@
+ import org.hibernate.action.AfterTransactionCompletionProcess;
+ import org.hibernate.action.BeforeTransactionCompletionProcess;
+ import org.hibernate.cache.CacheException;
++import org.hibernate.event.DeleteEvent;
+ import org.hibernate.type.Type;
+ 
+ /**
+@@ -715,4 +716,15 @@
+ 
+ 	}
+ 
++	public void undelete(EntityEntry entry, Object rescuedEntity) {
++		for ( int i = 0; i < deletions.size(); i++ ) {
++			EntityDeleteAction action = (EntityDeleteAction)deletions.get(i);
++			if (action.getInstance() == rescuedEntity) {
++				deletions.remove(i);
++				return;
++			}
++		}
++		throw new AssertionFailure( "Unable to perform undelete for instance " + entry.getEntityName());
++	}
++
+ }
+Index: core/src/main/java/org/hibernate/event/def/DefaultPersistEventListener.java
+===================================================================
+--- core/src/main/java/org/hibernate/event/def/DefaultPersistEventListener.java	(revision 19240)
++++ core/src/main/java/org/hibernate/event/def/DefaultPersistEventListener.java	(working copy)
+@@ -32,6 +32,7 @@
+ import org.hibernate.PersistentObjectException;
+ import org.hibernate.engine.CascadingAction;
+ import org.hibernate.engine.EntityEntry;
++import org.hibernate.engine.Status;
+ import org.hibernate.event.EventSource;
+ import org.hibernate.event.PersistEvent;
+ import org.hibernate.event.PersistEventListener;
+@@ -134,6 +135,12 @@
+ 			case TRANSIENT:
+ 				entityIsTransient( event, createCache );
+ 				break;
++			case DELETED:
++				entityEntry.setStatus( Status.MANAGED );
++				entityEntry.setDeletedState( null );
++				event.getSession().getActionQueue().undelete(entityEntry, event.getObject());
++				entityIsDeleted( event, createCache );
++				break;
+ 			default:
+ 				throw new ObjectDeletedException(
+ 						"deleted entity passed to persist",
+@@ -160,7 +167,22 @@
+ 		}
+ 
+ 	}
+-	
++
++	protected void entityIsDeleted(PersistEvent event, Map createCache) {
++		log.trace("reviving deleted instance");
++		final EventSource source = event.getSession();
++		
++		final Object entity = source.getPersistenceContext().unproxy( event.getObject() );
++		final EntityPersister persister = source.getEntityPersister( event.getEntityName(), entity );
++		
++		if ( createCache.put(entity, entity)==null ) {
++			//TODO: merge into one method!
++			cascadeBeforeSave(source, persister, entity, createCache);
++			cascadeAfterSave(source, persister, entity, createCache);
++		}
++
++	}
++
+ 	/** 
+ 	 * Handle the given create event.
+ 	 *
+Index: testsuite/src/test/java/org/hibernate/test/jpa/removed/RemovedEntityTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/jpa/removed/RemovedEntityTest.java	(revision 19240)
++++ testsuite/src/test/java/org/hibernate/test/jpa/removed/RemovedEntityTest.java	(working copy)
+@@ -1,11 +1,14 @@
+ package org.hibernate.test.jpa.removed;
+ 
++import java.math.BigDecimal;
++
+ import junit.framework.Test;
+ 
+ import org.hibernate.Session;
+ import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
+ import org.hibernate.test.jpa.AbstractJPATest;
+ import org.hibernate.test.jpa.Item;
++import org.hibernate.test.jpa.Part;
+ 
+ /**
+  *
+@@ -59,4 +62,65 @@
+ 
+ 		assertNull( "expecting removed entity to be returned as null from get()", item );
+ 	}
++
++	public void testRemoveThenSave() {
++		Session s = openSession();
++		s.beginTransaction();
++		Item item = new Item();
++		item.setName( "dummy" );
++		s.persist( item );
++		s.getTransaction().commit();
++		s.close();
++
++		Long id = item.getId();
++
++		s = openSession();
++		s.beginTransaction();
++		item = ( Item ) s.get( Item.class, id );
++		String sessionAsString = s.toString();
++		
++		s.delete( item );
++
++		Item item2 = ( Item ) s.get( Item.class, id );
++		assertNull( "expecting removed entity to be returned as null from get()", item2 );
++
++		s.persist( item );
++		assertEquals( "expecting session to be as it was before", sessionAsString, s.toString() );
++		
++		item.setName("Rescued");
++		item = ( Item ) s.get( Item.class, id );
++		assertNotNull( "expecting rescued entity to be returned from get()", item );
++		
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		item = ( Item ) s.get( Item.class, id );
++		s.getTransaction().commit();
++		s.close();
++
++		assertNotNull( "expecting removed entity to be returned as null from get()", item );
++		assertEquals("Rescued", item.getName());
++	}
++	
++	public void testRemoveChildThenFlushWithCascadePersist() {
++		Session s = openSession();
++		s.beginTransaction();
++		
++		Item item = new Item();
++		item.setName( "dummy" );
++		Part child = new Part(item, "child", "1234", BigDecimal.ONE);
++		
++		s.persist( item );
++		s.persist( child );
++
++		s.delete(child);
++		assertFalse("the child is contained in the session, since it is deleted", s.contains(child));
++		s.flush();
++		assertTrue("Now it is consistent again since if was cascade-persisted by the flush()", s.contains(child));
++		s.getTransaction().commit();
++		s.close();
++	}
++	
+ }

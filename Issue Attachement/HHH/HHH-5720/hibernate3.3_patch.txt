@@ -1,0 +1,2889 @@
+### Eclipse Workspace Patch 1.0
+#P envers-hibernate-3.3-new
+Index: src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java	(working copy)
+@@ -27,14 +27,19 @@
+ import java.util.Properties;
+ import java.util.WeakHashMap;
+ 
++import org.hibernate.MappingException;
+ import org.hibernate.envers.entities.EntitiesConfigurations;
++import org.hibernate.envers.entities.PropertyData;
+ import org.hibernate.envers.revisioninfo.RevisionInfoNumberReader;
+ import org.hibernate.envers.revisioninfo.RevisionInfoQueryCreator;
++import org.hibernate.envers.strategy.AuditStrategy;
++import org.hibernate.envers.strategy.ValidityAuditStrategy;
+ import org.hibernate.envers.synchronization.AuditSyncManager;
+-
++import org.hibernate.envers.tools.reflection.ReflectionTools;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.AnnotationConfiguration;
+ import org.hibernate.annotations.common.reflection.ReflectionManager;
++import org.hibernate.property.Getter;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -43,6 +48,7 @@
+     private final GlobalConfiguration globalCfg;
+     private final AuditEntitiesConfiguration auditEntCfg;
+     private final AuditSyncManager auditSyncManager;
++    private final AuditStrategy auditStrategy;
+     private final EntitiesConfigurations entCfg;
+     private final RevisionInfoQueryCreator revisionInfoQueryCreator;
+     private final RevisionInfoNumberReader revisionInfoNumberReader;
+@@ -70,6 +76,10 @@
+     public RevisionInfoNumberReader getRevisionInfoNumberReader() {
+         return revisionInfoNumberReader;
+     }
++    
++    public AuditStrategy getAuditStrategy() {
++        return auditStrategy;
++    }
+ 
+     @SuppressWarnings({"unchecked"})
+     public AuditConfiguration(Configuration cfg) {
+@@ -83,11 +93,30 @@
+         auditSyncManager = new AuditSyncManager(revInfoCfgResult.getRevisionInfoGenerator());
+         revisionInfoQueryCreator = revInfoCfgResult.getRevisionInfoQueryCreator();
+         revisionInfoNumberReader = revInfoCfgResult.getRevisionInfoNumberReader();
+-        entCfg = new EntitiesConfigurator().configure(cfg, reflectionManager, globalCfg, auditEntCfg,
++        auditStrategy = initializeAuditStrategy(revInfoCfgResult.getRevisionInfoClass(), 
++            revInfoCfgResult.getRevisionInfoTimestampData());
++        entCfg = new EntitiesConfigurator().configure(cfg, reflectionManager, globalCfg, auditEntCfg, auditStrategy,
+                 revInfoCfgResult.getRevisionInfoXmlMapping(), revInfoCfgResult.getRevisionInfoRelationMapping());
+     }
+ 
+-    //
++  private AuditStrategy initializeAuditStrategy(Class<?> revisionInfoClass, PropertyData revisionInfoTimestampData) {
++    AuditStrategy strategy;
++    
++    try {
++            Class<?> auditStrategyClass = Thread.currentThread().getContextClassLoader().loadClass(auditEntCfg.getAuditStrategyName());
++            strategy = (AuditStrategy) auditStrategyClass.newInstance();
++        } catch (Exception e) {
++           throw new MappingException(String.format("Unable to create AuditStrategy[%s] instance." , auditEntCfg.getAuditStrategyName()));
++        }
++        
++        if (strategy instanceof ValidityAuditStrategy) {
++          // further initialization required
++          Getter revisionTimestampGetter = ReflectionTools.getGetter(revisionInfoClass, revisionInfoTimestampData);
++          ((ValidityAuditStrategy) strategy).setRevisionTimestampGetter(revisionTimestampGetter);
++        }
++
++        return strategy;
++  }
+ 
+     private static Map<Configuration, AuditConfiguration> cfgs
+             = new WeakHashMap<Configuration, AuditConfiguration>();
+Index: src/main/java/org/hibernate/envers/tools/query/QueryBuilder.java
+===================================================================
+--- src/main/java/org/hibernate/envers/tools/query/QueryBuilder.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/tools/query/QueryBuilder.java	(working copy)
+@@ -24,9 +24,12 @@
+ package org.hibernate.envers.tools.query;
+ 
+ import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+ 
++import org.hibernate.Query;
++import org.hibernate.Session;
+ import org.hibernate.envers.tools.MutableInteger;
+ import org.hibernate.envers.tools.Pair;
+ import org.hibernate.envers.tools.StringTools;
+@@ -197,4 +200,18 @@
+ 
+         return orderList;
+     }
++    
++    public Query toQuery(Session session) {
++        StringBuilder querySb = new StringBuilder();
++        Map<String, Object> queryParamValues = new HashMap<String, Object>();
++
++        build(querySb, queryParamValues);
++
++        Query query = session.createQuery(querySb.toString());
++        for (Map.Entry<String, Object> paramValue : queryParamValues.entrySet()) {
++            query.setParameter(paramValue.getKey(), paramValue.getValue());
++        }
++
++        return query;
++    }
+ }
+Index: src/test/java/org/hibernate/envers/test/AbstractSessionTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/AbstractSessionTest.java	(revision 20852)
++++ src/test/java/org/hibernate/envers/test/AbstractSessionTest.java	(working copy)
+@@ -14,6 +14,7 @@
+ import org.testng.annotations.AfterClass;
+ import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.BeforeMethod;
++import org.testng.annotations.*;
+ 
+ /**
+  * Base class for testing envers with Session.
+@@ -28,21 +29,21 @@
+ 	private Session session ;
+ 	private AuditReader auditReader;
+ 	
+-	
+-	@BeforeClass
+-    public void init() {
+-		config = new AnnotationConfiguration();
+-        try {
+-            URL url = Thread.currentThread().getContextClassLoader().getResource("hibernate.test.session-cfg.xml");
+-            config.configure(new File(url.toURI()));
+-            this.initMappings();
+-		} catch (Exception e) {
+-			// TODO Auto-generated catch block
+-			e.printStackTrace();
+-		}
+-		
+-		sessionFactory = config.buildSessionFactory();
++  @BeforeClass
++  @Parameters("auditStrategy")
++  public void init(@Optional String auditStrategy) throws URISyntaxException {
++    config = new AnnotationConfiguration();
++    URL url = Thread.currentThread().getContextClassLoader().getResource("hibernate.test.session-cfg.xml");
++    config.configure(new File(url.toURI()));
++
++    if (auditStrategy != null && !"".equals(auditStrategy)) {
++      config.setProperty("org.hibernate.envers.audit_strategy", auditStrategy);
+     }
++
++    this.initMappings();
++
++    sessionFactory = config.buildSessionFactory();
++  }
+ 	
+ 	protected abstract void initMappings() throws MappingException, URISyntaxException ;
+ 
+Index: src/main/java/org/hibernate/envers/synchronization/work/WorkUnitMergeDispatcher.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/work/WorkUnitMergeDispatcher.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/synchronization/work/WorkUnitMergeDispatcher.java	(working copy)
+@@ -29,7 +29,7 @@
+  */
+ public interface WorkUnitMergeDispatcher {
+     /**
+-     * Shuold be invoked on the second work unit.
++     * Should be invoked on the second work unit.
+      * @param first First work unit (that is, the one added earlier).
+      * @return The work unit that is the result of the merge.
+      */
+Index: src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java	(working copy)
+@@ -26,12 +26,17 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.MappingException;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+-import org.hibernate.envers.entities.mapper.relation.query.*;
+-import org.hibernate.MappingException;
++import org.hibernate.envers.entities.mapper.relation.query.OneEntityQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.RelationQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.ThreeEntityQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.TwoEntityOneAuditedQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.TwoEntityQueryGenerator;
++import org.hibernate.envers.strategy.AuditStrategy;
+ 
+ /**
+  * Builds query generators, for reading collection middle tables, along with any related entities.
+@@ -41,14 +46,17 @@
+ public final class QueryGeneratorBuilder {
+     private final GlobalConfiguration globalCfg;
+     private final AuditEntitiesConfiguration verEntCfg;
++    private final AuditStrategy auditStrategy;
+     private final MiddleIdData referencingIdData;
+     private final String auditMiddleEntityName;
+     private final List<MiddleIdData> idDatas;
+ 
+     QueryGeneratorBuilder(GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
++                          AuditStrategy auditStrategy,
+                           MiddleIdData referencingIdData, String auditMiddleEntityName) {
+         this.globalCfg = globalCfg;
+         this.verEntCfg = verEntCfg;
++        this.auditStrategy = auditStrategy;
+         this.referencingIdData = referencingIdData;
+         this.auditMiddleEntityName = auditMiddleEntityName;
+ 
+@@ -61,14 +69,14 @@
+ 
+     RelationQueryGenerator build(MiddleComponentData... componentDatas) {
+         if (idDatas.size() == 0) {
+-            return new OneEntityQueryGenerator(verEntCfg, auditMiddleEntityName, referencingIdData,
++            return new OneEntityQueryGenerator(verEntCfg, auditStrategy, auditMiddleEntityName, referencingIdData,
+                     componentDatas);
+         } else if (idDatas.size() == 1) {
+             if (idDatas.get(0).isAudited()) {
+-                return new TwoEntityQueryGenerator(globalCfg, verEntCfg, auditMiddleEntityName, referencingIdData,
++                return new TwoEntityQueryGenerator(globalCfg, verEntCfg, auditStrategy, auditMiddleEntityName, referencingIdData,
+                         idDatas.get(0), componentDatas);
+             } else {
+-                return new TwoEntityOneAuditedQueryGenerator(verEntCfg, auditMiddleEntityName, referencingIdData,
++                return new TwoEntityOneAuditedQueryGenerator(verEntCfg, auditStrategy, auditMiddleEntityName, referencingIdData,
+                         idDatas.get(0), componentDatas);
+             }
+         } else if (idDatas.size() == 2) {
+@@ -77,7 +85,7 @@
+                 throw new MappingException("Ternary relations using @Audited(targetAuditMode = NOT_AUDITED) are not supported.");
+             }
+ 
+-            return new ThreeEntityQueryGenerator(globalCfg, verEntCfg, auditMiddleEntityName, referencingIdData,
++            return new ThreeEntityQueryGenerator(globalCfg, verEntCfg, auditStrategy, auditMiddleEntityName, referencingIdData,
+                     idDatas.get(0), idDatas.get(1), componentDatas);
+         } else {
+             throw new IllegalStateException("Illegal number of related entities.");
+Index: src/test/java/org/hibernate/envers/test/AbstractEntityTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/AbstractEntityTest.java	(revision 20852)
++++ src/test/java/org/hibernate/envers/test/AbstractEntityTest.java	(working copy)
+@@ -36,6 +36,7 @@
+ 
+ import org.hibernate.ejb.Ejb3Configuration;
+ import org.hibernate.event.*;
++import org.testng.annotations.*;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -78,11 +79,12 @@
+     }
+ 
+     @BeforeClass
+-    public void init() throws IOException {
+-        init(true);
++    @Parameters("auditStrategy")    
++    public void init(@Optional String auditStrategy) throws IOException {
++        init(true, auditStrategy);
+     }
+ 
+-    protected void init(boolean audited) throws IOException {
++    protected void init(boolean audited, String auditStrategy) throws IOException {
+         this.audited = audited;
+ 
+         cfg = new Ejb3Configuration();
+@@ -91,6 +93,10 @@
+         }
+ 
+         cfg.configure("hibernate.test.cfg.xml");
++        
++        if (auditStrategy != null && !"".equals(auditStrategy)) {
++            cfg.setProperty("org.hibernate.envers.audit_strategy", auditStrategy);
++        }
+ 
+         // Separate database for each test class
+         cfg.setProperty("hibernate.connection.url", "jdbc:h2:mem:" + this.getClass().getName());
+@@ -118,4 +124,10 @@
+     public Ejb3Configuration getCfg() {
+         return cfg;
+     }
++    
++//    protected void addJTAConfig(Ejb3Configuration cfg) {        
++//        cfg.setProperty("connection.provider_class", ConnectionProviderImpl.class.getName());
++//    cfg.setProperty(Environment.TRANSACTION_MANAGER_STRATEGY, TransactionManagerLookupImpl.class.getName());
++//    cfg.setProperty(AvailableSettings.TRANSACTION_TYPE, "JTA");
++//    }
+ }
+Index: src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(working copy)
+@@ -32,9 +32,11 @@
+ import java.util.Set;
+ import java.util.TreeMap;
+ import java.util.TreeSet;
++
+ import javax.persistence.JoinColumn;
+ 
+ import org.dom4j.Element;
++import org.hibernate.MappingException;
+ import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.RelationTargetAuditMode;
+ import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+@@ -45,8 +47,19 @@
+ import org.hibernate.envers.entities.mapper.PropertyMapper;
+ import org.hibernate.envers.entities.mapper.SinglePropertyMapper;
+ import org.hibernate.envers.entities.mapper.id.IdMapper;
+-import org.hibernate.envers.entities.mapper.relation.*;
+-import org.hibernate.envers.entities.mapper.relation.component.*;
++import org.hibernate.envers.entities.mapper.relation.BasicCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.CommonCollectionMapperData;
++import org.hibernate.envers.entities.mapper.relation.ListCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.MapCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.entities.mapper.relation.ToOneIdMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleDummyComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleMapKeyIdComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleMapKeyPropertyComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleRelatedComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleSimpleComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleStraightComponentMapper;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.ListProxy;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.MapProxy;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.SetProxy;
+@@ -54,11 +67,9 @@
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.SortedSetProxy;
+ import org.hibernate.envers.entities.mapper.relation.query.OneAuditEntityQueryGenerator;
+ import org.hibernate.envers.entities.mapper.relation.query.RelationQueryGenerator;
++import org.hibernate.envers.tools.MappingTools;
+ import org.hibernate.envers.tools.StringTools;
+ import org.hibernate.envers.tools.Tools;
+-import org.hibernate.envers.tools.MappingTools;
+-
+-import org.hibernate.MappingException;
+ import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.IndexedCollection;
+ import org.hibernate.mapping.OneToMany;
+@@ -109,7 +120,7 @@
+      * be created using this object.
+      * @param propertyAuditingData Property auditing (meta-)data. Among other things, holds the name of the
+      * property that references the collection in the referencing entity, the user data for middle (join)
+-     * table and the value of the <code>@MapKey</code> annotation, if there was one. 
++     * table and the value of the <code>@MapKey</code> annotation, if there was one.
+      */
+     public CollectionMetadataGenerator(AuditMetadataGenerator mainGenerator,
+                                        Collection propertyValue, CompositeMapperBuilder currentMapper,
+@@ -184,8 +195,8 @@
+ 
+         // Generating the query generator - it should read directly from the related entity.
+         RelationQueryGenerator queryGenerator = new OneAuditEntityQueryGenerator(mainGenerator.getGlobalCfg(),
+-                mainGenerator.getVerEntCfg(), referencingIdData, referencedEntityName,
+-                referencedIdMapping.getIdMapper());
++            mainGenerator.getVerEntCfg(), mainGenerator.getAuditStrategy(),
++            referencingIdData, referencedEntityName, referencedIdData);
+ 
+         // Creating common mapper data.
+         CommonCollectionMapperData commonCollectionMapperData = new CommonCollectionMapperData(
+@@ -287,13 +298,13 @@
+         // Generating the XML mapping for the middle entity, only if the relation isn't inverse.
+         // If the relation is inverse, will be later checked by comparing middleEntityXml with null.
+         Element middleEntityXml;
+-        if (!propertyValue.isInverse()) {            
++        if (!propertyValue.isInverse()) {
+             // Generating a unique middle entity name
+             auditMiddleEntityName = mainGenerator.getAuditEntityNameRegister().createUnique(auditMiddleEntityName);
+ 
+             // Registering the generated name
+             mainGenerator.getAuditEntityNameRegister().register(auditMiddleEntityName);
+-                        
++
+             middleEntityXml = createMiddleEntityXml(auditMiddleTableName, auditMiddleEntityName, propertyValue.getWhere());
+         } else {
+             middleEntityXml = null;
+@@ -333,7 +344,8 @@
+         // references some entities (either from the element or index). At the end, this will be used to build
+         // a query generator to read the raw data collection from the middle table.
+         QueryGeneratorBuilder queryGeneratorBuilder = new QueryGeneratorBuilder(mainGenerator.getGlobalCfg(),
+-                mainGenerator.getVerEntCfg(), referencingIdData, auditMiddleEntityName);
++            mainGenerator.getVerEntCfg(), mainGenerator.getAuditStrategy(), referencingIdData,
++            auditMiddleEntityName);
+ 
+         // Adding the XML mapping for the referencing entity, if the relation isn't inverse.
+         if (middleEntityXml != null) {
+@@ -545,10 +557,10 @@
+ 
+         // searching in referenced class
+         String mappedBy = this.searchMappedBy(referencedClass, collectionValue);
+-        
++
+         if(mappedBy == null) {
+             log.debug("Going to search the mapped by attribute for " + propertyName + " in superclasses of entity: " + referencedClass.getClassName());
+-            
++
+             PersistentClass tempClass = referencedClass;
+ 			while ((mappedBy == null) && (tempClass.getSuperclass() != null)) {
+ 	            log.debug("Searching in superclass: " + tempClass.getSuperclass().getClassName());
+@@ -557,13 +569,13 @@
+ 			}
+         }
+ 
+-        if(mappedBy == null) { 
++        if(mappedBy == null) {
+ 	        throw new MappingException("Unable to read the mapped by attribute for " + propertyName + " in "
+ 	                + referencedClass.getClassName() + "!");
+         }
+-        
++
+         return mappedBy;
+-    }        
++    }
+ 
+     @SuppressWarnings({"unchecked"})
+     private String searchMappedBy(PersistentClass referencedClass, Collection collectionValue) {
+@@ -575,7 +587,7 @@
+                     collectionValue.getKey().getColumnIterator())) {
+                 return property.getName();
+             }
+-        }    	
++        }
+         return null;
+     }
+ 
+@@ -590,7 +602,7 @@
+         String mappedBy = this.searchMappedBy(referencedClass, collectionTable);
+ 
+         // not found on referenced class, searching on superclasses
+-        if(mappedBy == null) { 
++        if(mappedBy == null) {
+             log.debug("Going to search the mapped by attribute for " + propertyName + " in superclases of entity: " + referencedClass.getClassName());
+ 
+             PersistentClass tempClass = referencedClass;
+@@ -601,14 +613,14 @@
+ 			}
+         }
+ 
+-        if(mappedBy == null) { 
++        if(mappedBy == null) {
+ 	        throw new MappingException("Unable to read the mapped by attribute for " + propertyName + " in "
+ 	                + referencedClass.getClassName() + "!");
+         }
+-        
++
+         return mappedBy;
+     }
+-    
++
+     @SuppressWarnings({"unchecked"})
+     private String searchMappedBy(PersistentClass referencedClass, Table collectionTable) {
+         Iterator<Property> properties = referencedClass.getPropertyIterator();
+@@ -621,8 +633,8 @@
+                     return property.getName();
+                 }
+             }
+-        }   
++        }
+         return null;
+     }
+-   
++
+ }
+Index: src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoQueryCreator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoQueryCreator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/revisioninfo/RevisionInfoQueryCreator.java	(working copy)
+@@ -24,6 +24,7 @@
+ package org.hibernate.envers.revisioninfo;
+ 
+ import java.util.Date;
++import java.util.Set;
+ 
+ import org.hibernate.Query;
+ import org.hibernate.Session;
+@@ -34,7 +35,7 @@
+ public class RevisionInfoQueryCreator {
+     private final String revisionDateQuery;
+     private final String revisionNumberForDateQuery;
+-    private final String revisionQuery;
++    private final String revisionsQuery;
+     private final boolean timestampAsDate;
+ 
+     public RevisionInfoQueryCreator(String revisionInfoEntityName, String revisionInfoIdName,
+@@ -53,10 +54,10 @@
+                 .append(" rev where ").append(revisionInfoTimestampName).append(" <= :_revision_date")
+                 .toString();
+ 
+-        revisionQuery = new StringBuilder()
++        revisionsQuery = new StringBuilder()
+                 .append("select rev from ").append(revisionInfoEntityName)
+                 .append(" rev where ").append(revisionInfoIdName)
+-                .append(" = :_revision_number")
++                .append(" in (:_revision_numbers)")
+                 .toString();
+     }
+ 
+@@ -68,7 +69,7 @@
+         return session.createQuery(revisionNumberForDateQuery).setParameter("_revision_date", timestampAsDate ? date : date.getTime());
+     }
+ 
+-    public Query getRevisionQuery(Session session, Number revision) {
+-        return session.createQuery(revisionQuery).setParameter("_revision_number", revision);
++    public Query getRevisionsQuery(Session session, Set<Number> revisions) {
++        return session.createQuery(revisionsQuery).setParameterList("_revision_numbers", revisions);
+     }
+ }
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(working copy)
+@@ -25,6 +25,7 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+@@ -32,10 +33,10 @@
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+ 
+ /**
+  * Selects data from a relation middle-table and a related versions entity.
+@@ -47,6 +48,7 @@
+ 
+     public TwoEntityQueryGenerator(GlobalConfiguration globalCfg,
+                                    AuditEntitiesConfiguration verEntCfg,
++                                   AuditStrategy auditStrategy,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleIdData referencedIdData,
+@@ -61,12 +63,25 @@
+          *     ee.id_ref_ed = e.id_ref_ed AND
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.id_ref_ing = :id_ref_ing AND
++         *     
+          * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id_ref_ed = e.id_ref_ed) AND
+-         * (the association at revision :revision)
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidityAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         *     
++          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidityAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL AND
+          *     e.revision_type != DEL
+@@ -88,13 +103,17 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+-                originalIdPropertyName, "e", "e2");
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addEntityAtRevisionRestriction(globalCfg, qb, "e." + revisionPropertyPath,
++            "e." + verEntCfg.getRevisionEndFieldName(), false,
++            referencedIdData, revisionPropertyPath, originalIdPropertyName, "e", "e2");
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addAssociationAtRevisionRestriction(qb, revisionPropertyPath,
++            verEntCfg.getRevisionEndFieldName(), true, referencingIdData, versionsMiddleEntityName,
++            eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/strategy/AuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/AuditStrategy.java	(revision 0)
++++ src/main/java/org/hibernate/envers/strategy/AuditStrategy.java	(revision 0)
+@@ -0,0 +1,100 @@
++package org.hibernate.envers.strategy;
++
++import java.io.Serializable;
++
++import org.hibernate.Session;
++import org.hibernate.envers.configuration.AuditConfiguration;
++import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.QueryBuilder;
++
++/**
++ * Behaviours of different audit strategy for populating audit data.
++ *
++ * @author Stephanie Pau
++ * @author Adam Warski (adam at warski dot org)
++ */
++public interface AuditStrategy {
++    /**
++     * Perform the persistence of audited data for regular entities.
++     *
++     * @param session Session, which can be used to persist the data.
++     * @param entityName Name of the entity, in which the audited change happens
++     * @param auditCfg Audit configuration
++     * @param id Id of the entity.
++     * @param data Audit data to persist
++     * @param revision Current revision data
++     */
++    void perform(Session session, String entityName, AuditConfiguration auditCfg, Serializable id, Object data,
++                 Object revision);
++
++    /**
++     * Perform the persistence of audited data for collection ("middle") entities.
++     *
++     * @param session Session, which can be used to persist the data.
++     * @param auditCfg Audit configuration
++     * @param persistentCollectionChangeData Collection change data to be persisted.
++     * @param revision Current revision data
++     */
++    void performCollectionChange(Session session, AuditConfiguration auditCfg,
++                                 PersistentCollectionChangeData persistentCollectionChangeData, Object revision);
++
++
++    /**
++   * Update the rootQueryBuilder with an extra WHERE clause to restrict the revision for a two-entity relation.
++   * This WHERE clause depends on the AuditStrategy, as follows:
++   * <ul>
++   * <li>For {@link DefaultAuditStrategy} a subquery is created:
++   * <p><code>e.revision = (SELECT max(...) ...)</code></p>
++   * </li>
++   * <li>for {@link ValidityAuditStrategy} the revision-end column is used:
++   * <p><code>e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)</code></p>
++   * </li>
++   * </ul>
++   *
++   * @param globalCfg the {@link GlobalConfiguration}
++     * @param rootQueryBuilder the {@link QueryBuilder} that will be updated
++     * @param revisionProperty property of the revision column
++     * @param revisionEndProperty property of the revisionEnd column (only used for {@link ValidityAuditStrategy})
++     * @param addAlias {@code boolean} indicator if a left alias is needed
++     * @param idData id-information for the two-entity relation (only used for {@link DefaultAuditStrategy})
++     * @param revisionPropertyPath path of the revision property (only used for {@link ValidityAuditStrategy})
++     * @param originalIdPropertyName name of the id property (only used for {@link ValidityAuditStrategy})
++     * @param alias1 an alias used for subquery (only used for {@link ValidityAuditStrategy})
++     * @param alias2 an alias used for subquery (only used for {@link ValidityAuditStrategy})
++     */
++  void addEntityAtRevisionRestriction(GlobalConfiguration globalCfg, QueryBuilder rootQueryBuilder,
++      String revisionProperty, String revisionEndProperty, boolean addAlias, MiddleIdData idData,
++      String revisionPropertyPath, String originalIdPropertyName, String alias1, String alias2);
++
++  /**
++   * Update the rootQueryBuilder with an extra WHERE clause to restrict the revision for a middle-entity
++   * association. This WHERE clause depends on the AuditStrategy, as follows:
++   * <ul>
++   * <li>For {@link DefaultAuditStrategy} a subquery is created:
++   * <p><code>e.revision = (SELECT max(...) ...)</code></p>
++   * </li>
++   * <li>for {@link ValidityAuditStrategy} the revision-end column is used:
++   * <p><code>e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)</code></p>
++   * </li>
++   * </ul>
++   *
++   * @param rootQueryBuilder the {@link QueryBuilder} that will be updated
++     * @param revisionProperty property of the revision column
++     * @param revisionEndProperty property of the revisionEnd column (only used for {@link ValidityAuditStrategy})
++     * @param addAlias {@code boolean} indicator if a left alias is needed
++     * @param referencingIdData id-information for the middle-entity association (only used for {@link DefaultAuditStrategy})
++   * @param versionsMiddleEntityName name of the middle-entity
++   * @param eeOriginalIdPropertyPath name of the id property (only used for {@link ValidityAuditStrategy})
++   * @param revisionPropertyPath path of the revision property (only used for {@link ValidityAuditStrategy})
++   * @param originalIdPropertyName name of the id property (only used for {@link ValidityAuditStrategy})
++   * @param componentDatas information about the middle-entity relation
++   */
++  void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty,
++      String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData,
++      String versionsMiddleEntityName, String eeOriginalIdPropertyPath, String revisionPropertyPath,
++          String originalIdPropertyName, MiddleComponentData... componentDatas);
++
++}
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(working copy)
+@@ -25,6 +25,7 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+@@ -32,10 +33,11 @@
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
++
+ 
+ /**
+  * Selects data from a relation middle-table and a two related versions entity.
+@@ -47,6 +49,7 @@
+ 
+     public ThreeEntityQueryGenerator(GlobalConfiguration globalCfg,
+                                      AuditEntitiesConfiguration verEntCfg,
++                                     AuditStrategy auditStrategy,
+                                      String versionsMiddleEntityName,
+                                      MiddleIdData referencingIdData,
+                                      MiddleIdData referencedIdData,
+@@ -55,7 +58,7 @@
+         this.referencingIdData = referencingIdData;
+ 
+         /*
+-         * The query that we need to create:
++                  * The query that we need to create:
+          *   SELECT new list(ee, e, f) FROM versionsReferencedEntity e, versionsIndexEntity f, middleEntity ee
+          *   WHERE
+          * (entities referenced by the middle table; id_ref_ed = id of the referenced entity)
+@@ -65,14 +68,48 @@
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.id_ref_ing = :id_ref_ing AND
+          * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id_ref_ed = e.id_ref_ed) AND
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidityAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         *     
+          * (selecting f entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     f.revision = (SELECT max(f2.revision) FROM versionsIndexEntity f2
+-         *       WHERE f2.revision <= :revision AND f2.id_ref_ed = f.id_ref_ed) AND
++         *       WHERE f2.revision <= :revision AND f2.id_ref_ed = f.id_ref_ed)
++         *     
++         *   --> for ValidityAuditStrategy:
++         *     f.revision <= :revision and (f.endRevision > :revision or f.endRevision is null)
++         *     
++         *     AND
++         *     
+          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidityAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *     
++        and (
++            strtestent1_.REVEND>? 
++            or strtestent1_.REVEND is null
++        ) 
++        and (
++            strtestent1_.REVEND>? 
++            or strtestent1_.REVEND is null
++        ) 
++        and (
++            ternarymap0_.REVEND>? 
++            or ternarymap0_.REVEND is null
++        )
++         *       
++         *       
++         *       
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL AND
+          *     e.revision_type != DEL AND
+@@ -99,17 +136,23 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+-                originalIdPropertyName, "e", "e2");
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addEntityAtRevisionRestriction(globalCfg, qb, "e." + revisionPropertyPath,
++            "e." + verEntCfg.getRevisionEndFieldName(), false,
++            referencedIdData, revisionPropertyPath, originalIdPropertyName, "e", "e2");
++        
++        // (selecting f entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addEntityAtRevisionRestriction(globalCfg, qb, "e." + revisionPropertyPath,
++            "e." + verEntCfg.getRevisionEndFieldName(), false,
++            referencedIdData, revisionPropertyPath, originalIdPropertyName, "f", "f2");
+ 
+-        // f.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, indexIdData, revisionPropertyPath,
+-                originalIdPropertyName, "f", "f2");
+-
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addAssociationAtRevisionRestriction(qb, revisionPropertyPath,
++            verEntCfg.getRevisionEndFieldName(), true, referencingIdData, versionsMiddleEntityName,
++            eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(working copy)
+@@ -31,6 +31,7 @@
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+@@ -45,7 +46,7 @@
+     private final MiddleIdData referencingIdData;
+ 
+     public TwoEntityOneAuditedQueryGenerator(
+-                                   AuditEntitiesConfiguration verEntCfg,
++                                   AuditEntitiesConfiguration verEntCfg, AuditStrategy auditStrategy,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleIdData referencedIdData,
+@@ -62,7 +63,13 @@
+          *     ee.id_ref_ing = :id_ref_ing AND
+          * (the association at revision :revision)
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidityAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *
++         *     AND
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL
+          */
+@@ -83,9 +90,11 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addAssociationAtRevisionRestriction(qb, revisionPropertyPath,
++            verEntCfg.getRevisionEndFieldName(), true,referencingIdData, versionsMiddleEntityName,
++            eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/RevisionInfoConfiguration.java	(working copy)
+@@ -29,7 +29,6 @@
+ import org.dom4j.Document;
+ import org.dom4j.DocumentHelper;
+ import org.dom4j.Element;
+-import org.hibernate.envers.Audited;
+ import org.hibernate.envers.*;
+ import org.hibernate.envers.entities.PropertyData;
+ import org.hibernate.envers.configuration.metadata.MetadataTools;
+@@ -245,7 +244,8 @@
+                 new RevisionInfoQueryCreator(revisionInfoEntityName, revisionInfoIdData.getName(),
+                         revisionInfoTimestampData.getName(), isTimestampAsDate()),
+                 generateRevisionInfoRelationMapping(),
+-                new RevisionInfoNumberReader(revisionInfoClass, revisionInfoIdData), revisionInfoEntityName);
++                new RevisionInfoNumberReader(revisionInfoClass, revisionInfoIdData), revisionInfoEntityName,
++                revisionInfoClass, revisionInfoTimestampData);
+     }
+     
+     private boolean isTimestampAsDate() {
+@@ -261,17 +261,22 @@
+     private final Element revisionInfoRelationMapping;
+     private final RevisionInfoNumberReader revisionInfoNumberReader;
+     private final String revisionInfoEntityName;
++    private final Class<?> revisionInfoClass;
++    private final PropertyData revisionInfoTimestampData;
+ 
+     RevisionInfoConfigurationResult(RevisionInfoGenerator revisionInfoGenerator,
+                                     Document revisionInfoXmlMapping, RevisionInfoQueryCreator revisionInfoQueryCreator,
+                                     Element revisionInfoRelationMapping,
+-                                    RevisionInfoNumberReader revisionInfoNumberReader, String revisionInfoEntityName) {
++                                    RevisionInfoNumberReader revisionInfoNumberReader, String revisionInfoEntityName, Class<?> revisionInfoClass,
++                                    PropertyData revisionInfoTimestampData) {
+         this.revisionInfoGenerator = revisionInfoGenerator;
+         this.revisionInfoXmlMapping = revisionInfoXmlMapping;
+         this.revisionInfoQueryCreator = revisionInfoQueryCreator;
+         this.revisionInfoRelationMapping = revisionInfoRelationMapping;
+         this.revisionInfoNumberReader = revisionInfoNumberReader;
+         this.revisionInfoEntityName = revisionInfoEntityName;
++        this.revisionInfoClass = revisionInfoClass;
++        this.revisionInfoTimestampData = revisionInfoTimestampData;
+     }
+ 
+     public RevisionInfoGenerator getRevisionInfoGenerator() {
+@@ -297,4 +302,12 @@
+     public String getRevisionInfoEntityName() {
+         return revisionInfoEntityName;
+     }
++        
++    public Class<?> getRevisionInfoClass() {
++      return revisionInfoClass;
++    }
++  
++    public PropertyData getRevisionInfoTimestampData() {
++      return revisionInfoTimestampData;
++    }
+ }
+\ No newline at end of file
+Index: src/main/java/org/hibernate/envers/AuditReader.java
+===================================================================
+--- src/main/java/org/hibernate/envers/AuditReader.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/AuditReader.java	(working copy)
+@@ -25,6 +25,8 @@
+ 
+ import java.util.Date;
+ import java.util.List;
++import java.util.Set;
++import java.util.Map;
+ 
+ import org.hibernate.envers.exception.NotAuditedException;
+ import org.hibernate.envers.exception.RevisionDoesNotExistException;
+@@ -133,6 +135,25 @@
+     <T> T findRevision(Class<T> revisionEntityClass, Number revision) throws IllegalArgumentException,
+             RevisionDoesNotExistException, IllegalStateException;
+ 
++  /**
++   * Find a map of revisions using the revision numbers specified.
++   * 
++   * @param revisionEntityClass
++   *            Class of the revision entity. Should be annotated with
++   *            {@link RevisionEntity}.
++   * @param revisions
++   *            Revision numbers of the revision for which to get the data.
++   * @return A map of revision number and the given revision entity.
++   * @throws IllegalArgumentException
++   *             If a revision number is less or equal to 0 or if the class of
++   *             the revision entity is invalid.
++   * @throws IllegalStateException
++   *             If the associated entity manager is closed.
++   */
++  <T> Map<Number, T> findRevisions(Class<T> revisionEntityClass, 
++      Set<Number> revisions) throws IllegalArgumentException,
++      IllegalStateException;
++
+ 	/**
+ 	 * Gets an instance of the current revision entity, to which any entries in the audit tables will be bound.
+ 	 * Please note the if {@code persist} is {@code false}, and no audited entities are modified in this session,
+Index: src/test/java/org/hibernate/envers/test/performance/AbstractPerformanceTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/performance/AbstractPerformanceTest.java	(revision 20852)
++++ src/test/java/org/hibernate/envers/test/performance/AbstractPerformanceTest.java	(working copy)
+@@ -88,11 +88,11 @@
+         List<Long> unauditedRuns = new ArrayList<Long>();
+         List<Long> auditedRuns = new ArrayList<Long>();
+ 
+-        init(true);
++        init(true, null);
+         long audited = run(numberOfRuns, auditedRuns);
+         close();
+ 
+-        init(false);
++        init(false, null);
+         long unaudited = run(numberOfRuns, unauditedRuns);
+         close();
+ 
+Index: src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java
+===================================================================
+--- src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/reader/AuditReaderImpl.java	(working copy)
+@@ -24,9 +24,14 @@
+ package org.hibernate.envers.reader;
+ 
+ import java.util.Date;
++import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Map;
++import java.util.Set;
+ import javax.persistence.NoResultException;
+ 
++import org.hibernate.HibernateException;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.exception.NotAuditedException;
+ import org.hibernate.envers.exception.RevisionDoesNotExistException;
+@@ -189,7 +194,9 @@
+         checkPositive(revision, "Entity revision");
+         checkSession();
+ 
+-        Query query = verCfg.getRevisionInfoQueryCreator().getRevisionQuery(session, revision);
++        Set<Number> revisions = new HashSet<Number>(1);
++        revisions.add(revision);
++        Query query = verCfg.getRevisionInfoQueryCreator().getRevisionsQuery(session, revisions);
+ 
+         try {
+             T revisionData = (T) query.uniqueResult();
+@@ -203,6 +210,34 @@
+             throw new AuditException(e);
+         }
+     }
++    
++    
++    @SuppressWarnings({"unchecked"})
++    public <T> Map<Number, T> findRevisions(Class<T> revisionEntityClass, Set<Number> revisions) throws IllegalArgumentException,
++    IllegalStateException {
++    Map<Number, T> result = new HashMap<Number, T>(revisions.size());
++
++      for (Number revision : revisions) {
++            checkNotNull(revision, "Entity revision");
++            checkPositive(revision, "Entity revision");
++    }
++        checkSession();
++
++        Query query = verCfg.getRevisionInfoQueryCreator().getRevisionsQuery(session, revisions);
++
++        try {
++            List<T> revisionList = query.list();
++            for (T revision : revisionList) {
++              Number revNo = verCfg.getRevisionInfoNumberReader().getRevisionNumber(revision);
++            result.put(revNo, revision);
++      }
++
++            return result;
++        } catch (HibernateException e) {
++            throw new AuditException(e);
++        }
++    }
++    
+ 
+ 	@SuppressWarnings({"unchecked"})
+ 	public <T> T getCurrentRevision(Class<T> revisionEntityClass, boolean persist) {
+Index: src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTestCustomRevEnt.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTestCustomRevEnt.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTestCustomRevEnt.java	(revision 0)
+@@ -0,0 +1,433 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.strategy;
++
++import java.util.Arrays;
++import java.util.Date;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import javax.persistence.EntityManager;
++import javax.persistence.Query;
++
++import org.hibernate.Session;
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.strategy.ValidityAuditStrategy;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.entities.manytomany.sametable.Child1Entity;
++import org.hibernate.envers.test.entities.manytomany.sametable.Child2Entity;
++import org.hibernate.envers.test.entities.manytomany.sametable.ParentEntity;
++import org.hibernate.envers.test.entities.reventity.CustomDateRevEntity;
++import org.hibernate.envers.test.tools.TestTools;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * Test which checks that the revision end timestamp is correctly set for
++ * {@link ValidityAuditStrategy}.
++ * 
++ * @author Erik-Berndt Scheper
++ */
++public class ValidityAuditStrategyRevEndTestCustomRevEnt extends AbstractEntityTest {
++  private final String revendTimestampColumName = "REVEND_TIMESTAMP";
++
++  private Integer p1_id;
++  private Integer p2_id;
++  private Integer c1_1_id;
++  private Integer c1_2_id;
++  private Integer c2_1_id;
++  private Integer c2_2_id;
++  private Map<Number, CustomDateRevEntity> revisions;
++
++  public void configure(Ejb3Configuration cfg) {
++    cfg.addAnnotatedClass(ParentEntity.class);
++    cfg.addAnnotatedClass(Child1Entity.class);
++    cfg.addAnnotatedClass(Child2Entity.class);
++        cfg.addAnnotatedClass(CustomDateRevEntity.class);
++
++    cfg.setProperty("org.hibernate.envers.audit_strategy",
++        "org.hibernate.envers.strategy.ValidityAuditStrategy");
++    cfg
++        .setProperty(
++            "org.hibernate.envers.audit_strategy_validity_store_revend_timestamp",
++            "true");
++    cfg
++        .setProperty(
++            "org.hibernate.envers.audit_strategy_validity_revend_timestamp_field_name",
++            revendTimestampColumName);
++  }
++
++  @BeforeClass(enabled = true, dependsOnMethods = "init")
++  public void initData() {
++    EntityManager em = getEntityManager();
++
++    // We need first to modify the columns in the middle (join table) to
++    // allow null values. Hbm2ddl doesn't seem
++    // to allow this.
++    em.getTransaction().begin();
++    Session session = (Session) em.getDelegate();
++    session.createSQLQuery("DROP TABLE children").executeUpdate();
++    session
++        .createSQLQuery(
++            "CREATE TABLE children(parent_id integer, child1_id integer NULL, child2_id integer NULL)")
++        .executeUpdate();
++    session.createSQLQuery("DROP TABLE children_AUD").executeUpdate();
++    session
++        .createSQLQuery(
++            "CREATE TABLE children_AUD(REV integer NOT NULL, REVEND integer, "
++                + revendTimestampColumName
++                + " timestamp, REVTYPE tinyint, "
++                + "parent_id integer, child1_id integer NULL, child2_id integer NULL)")
++        .executeUpdate();
++    em.getTransaction().commit();
++    em.clear();
++
++    ParentEntity p1 = new ParentEntity("parent_1");
++    ParentEntity p2 = new ParentEntity("parent_2");
++
++    Child1Entity c1_1 = new Child1Entity("child1_1");
++    Child1Entity c1_2 = new Child1Entity("child1_2");
++
++    Child2Entity c2_1 = new Child2Entity("child2_1");
++    Child2Entity c2_2 = new Child2Entity("child2_2");
++
++    // Revision 1
++    em.getTransaction().begin();
++
++    em.persist(p1);
++    em.persist(p2);
++    em.persist(c1_1);
++    em.persist(c1_2);
++    em.persist(c2_1);
++    em.persist(c2_2);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 2 - (p1: c1_1, p2: c2_1)
++
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c2_1 = em.find(Child2Entity.class, c2_1.getId());
++
++    p1.getChildren1().add(c1_1);
++    p2.getChildren2().add(c2_1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 3 - (p1: c1_1, c1_2, c2_2, p2: c1_1, c2_1)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c1_2 = em.find(Child1Entity.class, c1_2.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    p1.getChildren1().add(c1_2);
++    p1.getChildren2().add(c2_2);
++
++    p2.getChildren1().add(c1_1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 4 - (p1: c1_2, c2_2, p2: c1_1, c2_1, c2_2)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    p1.getChildren1().remove(c1_1);
++    p2.getChildren2().add(c2_2);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 5 - (p1: c2_2, p2: c1_1, c2_1)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_2 = em.find(Child1Entity.class, c1_2.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    c2_2.getParents().remove(p2);
++    c1_2.getParents().remove(p1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    //
++
++    p1_id = p1.getId();
++    p2_id = p2.getId();
++    c1_1_id = c1_1.getId();
++    c1_2_id = c1_2.getId();
++    c2_1_id = c2_1.getId();
++    c2_2_id = c2_2.getId();
++
++    Set<Number> revisionNumbers = new HashSet<Number>();
++    revisionNumbers.addAll(Arrays.asList(1, 2, 3, 4, 5));
++    revisions = getAuditReader().findRevisions(CustomDateRevEntity.class,
++        revisionNumbers);
++
++    assert revisions.size() == 5;
++  }
++
++  @Test(enabled = true)
++  public void testRevisionsCounts() {
++    assert Arrays.asList(1, 2, 3, 4).equals(
++        getAuditReader().getRevisions(ParentEntity.class, p1_id));
++    assert Arrays.asList(1, 2, 3, 4).equals(
++        getAuditReader().getRevisions(ParentEntity.class, p2_id));
++
++    assert Arrays.asList(1).equals(
++        getAuditReader().getRevisions(Child1Entity.class, c1_1_id));
++    assert Arrays.asList(1, 5).equals(
++        getAuditReader().getRevisions(Child1Entity.class, c1_2_id));
++
++    assert Arrays.asList(1).equals(
++        getAuditReader().getRevisions(Child2Entity.class, c2_1_id));
++    assert Arrays.asList(1, 5).equals(
++        getAuditReader().getRevisions(Child2Entity.class, c2_2_id));
++  }
++
++  @Test(enabled = true)
++  public void testAllRevEndTimeStamps() {
++    List<Map<String, Object>> p1RevList = getRevisions(ParentEntity.class,
++        p1_id);
++    List<Map<String, Object>> p2RevList = getRevisions(ParentEntity.class,
++        p2_id);
++    List<Map<String, Object>> c1_1_List = getRevisions(Child1Entity.class,
++        c1_1_id);
++    List<Map<String, Object>> c1_2_List = getRevisions(Child1Entity.class,
++        c1_2_id);
++    List<Map<String, Object>> c2_1_List = getRevisions(Child2Entity.class,
++        c2_1_id);
++    List<Map<String, Object>> c2_2_List = getRevisions(Child2Entity.class,
++        c2_2_id);
++
++    verifyRevEndTimeStamps("ParentEntity: " + p1_id, p1RevList);
++    verifyRevEndTimeStamps("ParentEntity: " + p2_id, p2RevList);
++    verifyRevEndTimeStamps("Child1Entity: " + c1_1_id, c1_1_List);
++    verifyRevEndTimeStamps("Child1Entity: " + c1_2_id, c1_2_List);
++    verifyRevEndTimeStamps("Child2Entity: " + c2_1_id, c2_1_List);
++    verifyRevEndTimeStamps("Child2Entity: " + c2_2_id, c2_2_List);
++
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfParent1() {
++
++    Child1Entity c1_1 = getEntityManager()
++        .find(Child1Entity.class, c1_1_id);
++    Child1Entity c1_2 = getEntityManager()
++        .find(Child1Entity.class, c1_2_id);
++    Child2Entity c2_2 = getEntityManager()
++        .find(Child2Entity.class, c2_2_id);
++
++    ParentEntity rev1 = getAuditReader().find(ParentEntity.class, p1_id, 1);
++    ParentEntity rev2 = getAuditReader().find(ParentEntity.class, p1_id, 2);
++    ParentEntity rev3 = getAuditReader().find(ParentEntity.class, p1_id, 3);
++    ParentEntity rev4 = getAuditReader().find(ParentEntity.class, p1_id, 4);
++    ParentEntity rev5 = getAuditReader().find(ParentEntity.class, p1_id, 5);
++
++    assert TestTools.checkList(rev1.getChildren1());
++    assert TestTools.checkList(rev2.getChildren1(), c1_1);
++    assert TestTools.checkList(rev3.getChildren1(), c1_1, c1_2);
++    assert TestTools.checkList(rev4.getChildren1(), c1_2);
++    assert TestTools.checkList(rev5.getChildren1());
++
++    assert TestTools.checkList(rev1.getChildren2());
++    assert TestTools.checkList(rev2.getChildren2());
++    assert TestTools.checkList(rev3.getChildren2(), c2_2);
++    assert TestTools.checkList(rev4.getChildren2(), c2_2);
++    assert TestTools.checkList(rev5.getChildren2(), c2_2);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfParent2() {
++    Child1Entity c1_1 = getEntityManager()
++        .find(Child1Entity.class, c1_1_id);
++    Child2Entity c2_1 = getEntityManager()
++        .find(Child2Entity.class, c2_1_id);
++    Child2Entity c2_2 = getEntityManager()
++        .find(Child2Entity.class, c2_2_id);
++
++    ParentEntity rev1 = getAuditReader().find(ParentEntity.class, p2_id, 1);
++    ParentEntity rev2 = getAuditReader().find(ParentEntity.class, p2_id, 2);
++    ParentEntity rev3 = getAuditReader().find(ParentEntity.class, p2_id, 3);
++    ParentEntity rev4 = getAuditReader().find(ParentEntity.class, p2_id, 4);
++    ParentEntity rev5 = getAuditReader().find(ParentEntity.class, p2_id, 5);
++
++    assert TestTools.checkList(rev1.getChildren1());
++    assert TestTools.checkList(rev2.getChildren1());
++    assert TestTools.checkList(rev3.getChildren1(), c1_1);
++    assert TestTools.checkList(rev4.getChildren1(), c1_1);
++    assert TestTools.checkList(rev5.getChildren1(), c1_1);
++
++    assert TestTools.checkList(rev1.getChildren2());
++    assert TestTools.checkList(rev2.getChildren2(), c2_1);
++    assert TestTools.checkList(rev3.getChildren2(), c2_1);
++    assert TestTools.checkList(rev4.getChildren2(), c2_1, c2_2);
++    assert TestTools.checkList(rev5.getChildren2(), c2_1);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild1_1() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child1Entity rev1 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        1);
++    Child1Entity rev2 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        2);
++    Child1Entity rev3 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        3);
++    Child1Entity rev4 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        4);
++    Child1Entity rev5 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents(), p1);
++    assert TestTools.checkList(rev3.getParents(), p1, p2);
++    assert TestTools.checkList(rev4.getParents(), p2);
++    assert TestTools.checkList(rev5.getParents(), p2);
++  }
++
++  @Test(enabled = false)
++  public void testHistoryOfChild1_2() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++
++    Child1Entity rev1 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        1);
++    Child1Entity rev2 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        2);
++    Child1Entity rev3 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        3);
++    Child1Entity rev4 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        4);
++    Child1Entity rev5 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents());
++    assert TestTools.checkList(rev3.getParents(), p1);
++    assert TestTools.checkList(rev4.getParents(), p1);
++    assert TestTools.checkList(rev5.getParents());
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild2_1() {
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child2Entity rev1 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        1);
++    Child2Entity rev2 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        2);
++    Child2Entity rev3 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        3);
++    Child2Entity rev4 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        4);
++    Child2Entity rev5 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents(), p2);
++    assert TestTools.checkList(rev3.getParents(), p2);
++    assert TestTools.checkList(rev4.getParents(), p2);
++    assert TestTools.checkList(rev5.getParents(), p2);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild2_2() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child2Entity rev1 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        1);
++    Child2Entity rev2 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        2);
++    Child2Entity rev3 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        3);
++    Child2Entity rev4 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        4);
++    Child2Entity rev5 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents());
++    assert TestTools.checkList(rev3.getParents(), p1);
++    assert TestTools.checkList(rev4.getParents(), p1, p2);
++    assert TestTools.checkList(rev5.getParents(), p1);
++  }
++
++  private List<Map<String, Object>> getRevisions(
++      Class<?> originalEntityClazz, Integer originalEntityId) {
++    // Build the query:
++    // select auditEntity from
++    // org.hibernate.envers.test.entities.manytomany.sametable.ParentEntity_AUD
++    // auditEntity where auditEntity.originalId.id = :originalEntityId
++
++    StringBuilder builder = new StringBuilder("select auditEntity from ");
++    builder.append(originalEntityClazz.getName())
++        .append("_AUD auditEntity");
++    builder.append(" where auditEntity.originalId.id = :originalEntityId");
++
++    Query qry = getEntityManager().createQuery(builder.toString());
++    qry.setParameter("originalEntityId", originalEntityId);
++
++    @SuppressWarnings("unchecked")
++    List<Map<String, Object>> resultList = qry.getResultList();
++    return resultList;
++  }
++
++  private void verifyRevEndTimeStamps(String debugInfo,
++      List<Map<String, Object>> revisionEntities) {
++    for (Map<String, Object> revisionEntity : revisionEntities) {
++
++      Date revendTimestamp = (Date) revisionEntity
++          .get(revendTimestampColumName);
++      CustomDateRevEntity revEnd = (CustomDateRevEntity) revisionEntity
++          .get("REVEND");
++
++      if (revendTimestamp == null) {
++        assert revEnd == null;
++      } else {
++        assert revendTimestamp.getTime() == revEnd.getDateTimestamp().getTime();
++      }
++    }
++  }
++
++}
+Index: src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/AuditEntitiesConfiguration.java	(working copy)
+@@ -29,6 +29,7 @@
+ import java.util.Map;
+ import java.util.Properties;
+ 
++import org.hibernate.envers.strategy.DefaultAuditStrategy;
+ /**
+  * Configuration of versions entities - names of fields, entities and tables created to store versioning information.
+  * @author Adam Warski (adam at warski dot org)
+@@ -37,6 +38,7 @@
+     private final String auditTablePrefix;
+     private final String auditTableSuffix;
+ 
++    private final String auditStrategyName;
+     private final String originalIdPropName;
+ 
+     private final String revisionFieldName;
+@@ -49,6 +51,11 @@
+     private final String revisionInfoEntityName;
+ 
+     private final Map<String, String> customAuditTablesNames;
++    
++    private final String revisionEndFieldName;
++    
++    private final boolean revisionEndTimestampEnabled;
++    private final String revisionEndTimestampFieldName;
+ 
+     public AuditEntitiesConfiguration(Properties properties, String revisionInfoEntityName) {
+         this.revisionInfoEntityName = revisionInfoEntityName;
+@@ -61,6 +68,11 @@
+                 "org.hibernate.envers.audit_table_suffix", 
+                 "org.hibernate.envers.auditTableSuffix",
+                 "_AUD");
++                
++        auditStrategyName = getProperty(properties,
++                "org.hibernate.envers.audit_strategy",
++                "org.hibernate.envers.audit_strategy",
++                DefaultAuditStrategy.class.getName());
+ 
+         originalIdPropName = "originalId";
+ 
+@@ -74,6 +86,26 @@
+                 "org.hibernate.envers.revisionTypeFieldName",
+                 "REVTYPE");
+         revisionTypePropType = "byte";
++        
++        revisionEndFieldName = getProperty(properties,
++                "org.hibernate.envers.audit_strategy_validity_end_rev_field_name",
++                "org.hibernate.envers.audit_strategy_valid_time_end_name",
++                "REVEND");
++
++        String revisionEndTimestampEnabledStr = getProperty(properties,
++            "org.hibernate.envers.audit_strategy_validity_store_revend_timestamp",
++            "org.hibernate.envers.audit_strategy_validity_store_revend_timestamp",
++            "false");
++        revisionEndTimestampEnabled = Boolean.parseBoolean(revisionEndTimestampEnabledStr);
++                
++        if (revisionEndTimestampEnabled) {
++            revisionEndTimestampFieldName = getProperty(properties,
++                "org.hibernate.envers.audit_strategy_validity_revend_timestamp_field_name",
++                "org.hibernate.envers.audit_strategy_validity_revend_timestamp_field_name",
++                "REVEND_TSTMP");
++        } else {
++            revisionEndTimestampFieldName = null;
++        }
+ 
+         customAuditTablesNames = new HashMap<String, String>();
+ 
+@@ -89,6 +121,14 @@
+         return revisionFieldName;
+     }
+ 
++    public boolean isRevisionEndTimestampEnabled() {
++      return revisionEndTimestampEnabled;
++    }
++  
++    public String getRevisionEndTimestampFieldName() {
++      return revisionEndTimestampFieldName;
++    }    
++
+     public String getRevisionNumberPath() {
+         return revisionNumberPath;
+     }
+@@ -113,14 +153,10 @@
+         return revisionInfoEntityName;
+     }
+ 
+-    //
+-
+     public void addCustomAuditTableName(String entityName, String tableName) {
+         customAuditTablesNames.put(entityName, tableName);
+     }
+ 
+-    //
+-
+     public String getAuditEntityName(String entityName) {
+         return auditTablePrefix + entityName + auditTableSuffix;
+     }
+@@ -133,4 +169,12 @@
+ 
+         return customHistoryTableName;
+     }
++    
++    public String getAuditStrategyName() {
++        return auditStrategyName;
++    }
++
++    public String getRevisionEndFieldName() {
++        return revisionEndFieldName;
++    }
+ }
+Index: src/main/java/org/hibernate/envers/strategy/ValidityAuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/ValidityAuditStrategy.java	(revision 0)
++++ src/main/java/org/hibernate/envers/strategy/ValidityAuditStrategy.java	(revision 0)
+@@ -0,0 +1,179 @@
++package org.hibernate.envers.strategy;
++
++import java.io.Serializable;
++import java.util.Date;
++import java.util.List;
++import java.util.Map;
++
++import org.hibernate.Session;
++import org.hibernate.envers.RevisionType;
++import org.hibernate.envers.configuration.AuditConfiguration;
++import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.id.IdMapper;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.Parameters;
++import org.hibernate.envers.tools.query.QueryBuilder;
++import org.hibernate.property.Getter;
++
++/**
++ *  Audit strategy which persists and retrieves audit information using a validity algorithm, based on the
++ *  start-revision and end-revision of a row in the audit tables.
++ *  <p>This algorithm works as follows:
++ *  <ul>
++ *  <li>For a <strong>new row</strong> that is persisted in an audit table, only the <strong>start-revision</strong> column of that row is set</li>
++ *  <li>At the same time the <strong>end-revision</strong> field of the <strong>previous</strong> audit row is set to this revision</li>
++ *  <li>Queries are retrieved using 'between start and end revision', instead of a subquery.</li>
++ *  </ul>
++ *  </p>
++ *
++ *  <p>
++ *  This has a few important consequences that need to be judged against against each other:
++ *  <ul>
++ *  <li>Persisting audit information is a bit slower, because an extra row is updated</li>
++ *  <li>Retrieving audit information is a lot faster</li>
++ *  </ul>
++ *  </p>
++ *
++ * @author Stephanie Pau
++ * @author Adam Warski (adam at warski dot org)
++ */
++public class ValidityAuditStrategy implements AuditStrategy {
++
++    /** getter for the revision entity field annotated with @RevisionTimestamp */
++    private Getter revisionTimestampGetter = null;
++
++    public void perform(Session session, String entityName, AuditConfiguration auditCfg, Serializable id, Object data,
++                        Object revision) {
++        AuditEntitiesConfiguration audEntCfg = auditCfg.getAuditEntCfg();
++        String auditedEntityName = audEntCfg.getAuditEntityName(entityName);
++
++        // Update the end date of the previous row if this operation is expected to have a previous row
++        if (getRevisionType(auditCfg, data) != RevisionType.ADD) {
++            /*
++             Constructing a query:
++             select e from audited_ent e where e.end_rev is null and e.id = :id
++             */
++
++            QueryBuilder qb = new QueryBuilder(auditedEntityName, "e");
++
++            // e.id = :id
++            IdMapper idMapper = auditCfg.getEntCfg().get(entityName).getIdMapper();
++            idMapper.addIdEqualsToQuery(qb.getRootParameters(), id, auditCfg.getAuditEntCfg().getOriginalIdPropName(), true);
++
++            updateLastRevision(session, auditCfg, qb, id, auditedEntityName, revision);
++        }
++
++        // Save the audit data
++        session.save(auditedEntityName, data);
++    }
++
++    @SuppressWarnings({"unchecked"})
++    public void performCollectionChange(Session session, AuditConfiguration auditCfg,
++                                        PersistentCollectionChangeData persistentCollectionChangeData, Object revision) {
++        // Update the end date of the previous row if this operation is expected to have a previous row
++        if (getRevisionType(auditCfg, persistentCollectionChangeData.getData()) != RevisionType.ADD) {
++            /*
++             Constructing a query (there are multiple id fields):
++             select e from audited_middle_ent e where e.end_rev is null and e.id1 = :id1 and e.id2 = :id2 ...
++             */
++
++            QueryBuilder qb = new QueryBuilder(persistentCollectionChangeData.getEntityName(), "e");
++
++            // Adding a parameter for each id component, except the rev number
++            String originalIdPropName = auditCfg.getAuditEntCfg().getOriginalIdPropName();
++            Map<String, Object> originalId = (Map<String, Object>) persistentCollectionChangeData.getData().get(
++                    originalIdPropName);
++            for (Map.Entry<String, Object> originalIdEntry : originalId.entrySet()) {
++                if (!auditCfg.getAuditEntCfg().getRevisionFieldName().equals(originalIdEntry.getKey())) {
++                    qb.getRootParameters().addWhereWithParam(originalIdPropName + "." + originalIdEntry.getKey(),
++                            true, "=", originalIdEntry.getValue());
++                }
++            }
++
++            updateLastRevision(session, auditCfg, qb, originalId, persistentCollectionChangeData.getEntityName(), revision);
++        }
++
++        // Save the audit data
++        session.save(persistentCollectionChangeData.getEntityName(), persistentCollectionChangeData.getData());
++    }
++
++  public void addEntityAtRevisionRestriction(GlobalConfiguration globalCfg, QueryBuilder rootQueryBuilder,
++      String revisionProperty,String revisionEndProperty, boolean addAlias,
++            MiddleIdData idData, String revisionPropertyPath, String originalIdPropertyName,
++            String alias1, String alias2) {
++    Parameters rootParameters = rootQueryBuilder.getRootParameters();
++    addRevisionRestriction(rootParameters, revisionProperty, revisionEndProperty, addAlias);
++  }
++
++  public void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty,
++        String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData,
++        String versionsMiddleEntityName, String eeOriginalIdPropertyPath, String revisionPropertyPath,
++        String originalIdPropertyName, MiddleComponentData... componentDatas) {
++    Parameters rootParameters = rootQueryBuilder.getRootParameters();
++    addRevisionRestriction(rootParameters, revisionProperty, revisionEndProperty, addAlias);
++  }
++
++  public void setRevisionTimestampGetter(Getter revisionTimestampGetter) {
++    this.revisionTimestampGetter = revisionTimestampGetter;
++  }
++
++    private void addRevisionRestriction(Parameters rootParameters,
++      String revisionProperty, String revisionEndProperty, boolean addAlias) {
++
++    // e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++    Parameters subParm = rootParameters.addSubParameters("or");
++    rootParameters.addWhereWithNamedParam(revisionProperty, addAlias, "<=", "revision");
++    subParm.addWhereWithNamedParam(revisionEndProperty + ".id", addAlias, ">", "revision");
++    subParm.addWhere(revisionEndProperty, addAlias, "is", "null", false);
++  }
++
++    @SuppressWarnings({"unchecked"})
++    private RevisionType getRevisionType(AuditConfiguration auditCfg, Object data) {
++        return (RevisionType) ((Map<String, Object>) data).get(auditCfg.getAuditEntCfg().getRevisionTypePropName());
++    }
++
++    @SuppressWarnings({"unchecked"})
++    private void updateLastRevision(Session session, AuditConfiguration auditCfg, QueryBuilder qb,
++                                    Object id, String auditedEntityName, Object revision) {
++        String revisionEndFieldName = auditCfg.getAuditEntCfg().getRevisionEndFieldName();
++
++        // e.end_rev is null
++        qb.getRootParameters().addWhere(revisionEndFieldName, true, "is", "null", false);
++
++        List<Object> l = qb.toQuery(session).list();
++
++        // There should be one entry
++        if (l.size() == 1) {
++            // Setting the end revision to be the current rev
++            Object previousData = l.get(0);
++            ((Map<String, Object>) previousData).put(revisionEndFieldName, revision);
++
++            if (auditCfg.getAuditEntCfg().isRevisionEndTimestampEnabled()) {
++                // Determine the value of the revision property annotated with @RevisionTimestamp
++              Date revisionEndTimestamp;
++              String revEndTimestampFieldName = auditCfg.getAuditEntCfg().getRevisionEndTimestampFieldName();
++              Object revEndTimestampObj = this.revisionTimestampGetter.get(revision);
++
++              // convert to a java.util.Date
++              if (revEndTimestampObj instanceof Date) {
++                revisionEndTimestamp = (Date) revEndTimestampObj;
++              } else {
++                revisionEndTimestamp = new Date((Long) revEndTimestampObj);
++              }
++
++              // Setting the end revision timestamp
++              ((Map<String, Object>) previousData).put(revEndTimestampFieldName, revisionEndTimestamp);
++            }
++
++            // Saving the previous version
++            session.save(auditedEntityName, previousData);
++
++        } else {
++            throw new RuntimeException("Cannot find previous revision for entity " + auditedEntityName + " and id " + id);
++        }
++    }
++}
++
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(working copy)
+@@ -25,6 +25,7 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+@@ -32,10 +33,10 @@
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+ 
+ /**
+  * Selects data from an audit entity.
+@@ -46,8 +47,9 @@
+     private final MiddleIdData referencingIdData;
+ 
+     public OneAuditEntityQueryGenerator(GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
+-                                           MiddleIdData referencingIdData, String referencedEntityName,
+-                                           IdMapper referencedIdMapper) {
++                                          AuditStrategy auditStrategy,
++                                          MiddleIdData referencingIdData, String referencedEntityName,
++                                          MiddleIdData referencedIdData) {
+         this.referencingIdData = referencingIdData;
+ 
+         /*
+@@ -58,7 +60,12 @@
+          *     e.id_ref_ing = :id_ref_ing AND
+          * (selecting e entities at revision :revision)
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id = e.id) AND
++         *       WHERE e2.revision <= :revision AND e2.id = e.id)
++         *     
++         *   --> for ValidityAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
+          * (only non-deleted entities)
+          *     e.revision_type != DEL
+          */
+@@ -75,19 +82,11 @@
+         // e.id_ref_ed = :id_ref_ed
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, null, true);
+ 
+-        // SELECT max(e.revision) FROM versionsReferencedEntity e2
+-        QueryBuilder maxERevQb = qb.newSubQueryBuilder(versionsReferencedEntityName, "e2");
+-        maxERevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxERevQbParameters = maxERevQb.getRootParameters();
+-        // e2.revision <= :revision
+-        maxERevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // e2.id = e.id
+-        referencedIdMapper.addIdsEqualToQuery(maxERevQbParameters,
+-                "e." + originalIdPropertyName, "e2." + originalIdPropertyName);
+-
+-        // e.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addEntityAtRevisionRestriction(globalCfg, qb, revisionPropertyPath,
++            verEntCfg.getRevisionEndFieldName(), true, referencedIdData, 
++        revisionPropertyPath, originalIdPropertyName, "e", "e2");
+ 
+         // e.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), false, "!=", "delrevisiontype");
+Index: src/test/resources/testng.xml
+===================================================================
+--- src/test/resources/testng.xml	(revision 20852)
++++ src/test/resources/testng.xml	(working copy)
+@@ -71,6 +71,7 @@
+             <package name="org.hibernate.envers.test.integration.secondary" />
+             <package name="org.hibernate.envers.test.integration.secondary.ids" />
+             <package name="org.hibernate.envers.test.integration.serialization" />
++            <package name="org.hibernate.envers.test.integration.strategy" />
+             <package name="org.hibernate.envers.test.integration.superclass" />
+ 
+             <package name="org.hibernate.envers.test.entityNames.auditedEntity" />
+Index: src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java	(working copy)
+@@ -29,6 +29,7 @@
+ import java.util.HashMap;
+ import java.util.ArrayList;
+ 
++import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
+@@ -84,7 +85,7 @@
+             ((Map<String, Object>) persistentCollectionChangeData.getData().get(entitiesCfg.getOriginalIdPropName()))
+                     .put(entitiesCfg.getRevisionFieldName(), revisionData);
+ 
+-            session.save(persistentCollectionChangeData.getEntityName(), persistentCollectionChangeData.getData());
++            auditStrategy.performCollectionChange(session, verCfg, persistentCollectionChangeData, revisionData);            
+         }
+     }
+ 
+@@ -137,13 +138,24 @@
+ 
+             // Including only those original changes, which are not overshadowed by new ones.
+             for (PersistentCollectionChangeData originalCollectionChangeData : original.getCollectionChanges()) {
+-                if (!newChangesIdMap.containsKey(getOriginalId(originalCollectionChangeData))) {
++                Object originalOriginalId = getOriginalId(originalCollectionChangeData);
++                if (!newChangesIdMap.containsKey(originalOriginalId)) {
+                     mergedChanges.add(originalCollectionChangeData);
++                } else {
++                    // If the changes collide, checking if the first one isn't a DEL, and the second a subsequent ADD
++                    // If so, removing the change alltogether.
++                    String revTypePropName = verCfg.getAuditEntCfg().getRevisionTypePropName();
++                    if (RevisionType.ADD.equals(newChangesIdMap.get(originalOriginalId).getData().get(
++                            revTypePropName)) && RevisionType.DEL.equals(originalCollectionChangeData.getData().get(
++                            revTypePropName))) {
++                        newChangesIdMap.remove(originalOriginalId);
++                    }
+                 }
+             }
+ 
+-            // Finally adding all of the new changes to the end of the list
+-            mergedChanges.addAll(getCollectionChanges());
++            // Finally adding all of the new changes to the end of the list (the map values may differ from
++            // getCollectionChanges() because of the last operation above).
++            mergedChanges.addAll(newChangesIdMap.values());
+ 
+             return new PersistentCollectionChangeWorkUnit(sessionImplementor, entityName, verCfg, id, mergedChanges, 
+                     referencingPropertyName);
+Index: src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(working copy)
+@@ -43,6 +43,7 @@
+ import org.hibernate.envers.configuration.metadata.AuditMetadataGenerator;
+ import org.hibernate.envers.configuration.metadata.AuditEntityNameRegister;
+ import org.hibernate.envers.entities.EntitiesConfigurations;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.StringTools;
+ import org.hibernate.envers.tools.graph.GraphTopologicalSort;
+ 
+@@ -57,6 +58,7 @@
+ public class EntitiesConfigurator {
+     public EntitiesConfigurations configure(Configuration cfg, ReflectionManager reflectionManager,
+                                             GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
++                                            AuditStrategy auditStrategy,
+                                             Document revisionInfoXmlMapping, Element revisionInfoRelationMapping) {
+         // Creating a name register to capture all audit entity names created.
+         AuditEntityNameRegister auditEntityNameRegister = new AuditEntityNameRegister();
+@@ -83,7 +85,7 @@
+         // Now that all information is read we can update the calculated fields.
+         classesAuditingData.updateCalculatedFields();
+ 
+-        AuditMetadataGenerator auditMetaGen = new AuditMetadataGenerator(cfg, globalCfg, verEntCfg,
++        AuditMetadataGenerator auditMetaGen = new AuditMetadataGenerator(cfg, globalCfg, verEntCfg, auditStrategy,
+                 revisionInfoRelationMapping, auditEntityNameRegister);
+ 
+         // First pass
+Index: src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java
+===================================================================
+--- src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(working copy)
+@@ -24,14 +24,16 @@
+ package org.hibernate.envers.query.impl;
+ 
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.List;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.query.criteria.AuditCriterion;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+-import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -55,40 +57,52 @@
+ 
+     @SuppressWarnings({"unchecked"})
+     public List list() {
+-        /*
+-        The query that should be executed in the versions table:
+-        SELECT e FROM ent_ver e WHERE
+-          (all specified conditions, transformed, on the "e" entity) AND
+-          e.revision_type != DEL AND
+-          e.revision = (SELECT max(e2.revision) FROM ent_ver e2 WHERE
+-            e2.revision <= :revision AND e2.originalId.id = e.originalId.id)
++       /*
++         * The query that we need to create:
++         *   SELECT new list(e) FROM versionsReferencedEntity e
++         *   WHERE
++         * (all specified conditions, transformed, on the "e" entity) AND
++         * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
++         *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidityAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         * (only non-deleted entities)
++         *     e.revision_type != DEL
+          */
+ 
+-        QueryBuilder maxRevQb = qb.newSubQueryBuilder(versionsEntityName, "e2");
+-
+         AuditEntitiesConfiguration verEntCfg = verCfg.getAuditEntCfg();
+-
+         String revisionPropertyPath = verEntCfg.getRevisionNumberPath();
+         String originalIdPropertyName = verEntCfg.getOriginalIdPropName();
++        
++         MiddleIdData referencedIdData = new MiddleIdData(verEntCfg, verCfg.getEntCfg().get(entityName).getIdMappingData(), 
++            null, entityName, verCfg.getEntCfg().isVersioned(entityName));
+ 
+-        // SELECT max(e2.revision)
+-        maxRevQb.addProjection("max", revisionPropertyPath, false);
+-        // e2.revision <= :revision
+-        maxRevQb.getRootParameters().addWhereWithParam(revisionPropertyPath, "<=", revision);
+-        // e2.id = e.id
+-        verCfg.getEntCfg().get(entityName).getIdMapper().addIdsEqualToQuery(maxRevQb.getRootParameters(),
+-                "e." + originalIdPropertyName, "e2." + originalIdPropertyName);
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        verCfg.getAuditStrategy().addEntityAtRevisionRestriction(verCfg.getGlobalCfg(), qb, revisionPropertyPath, 
++            verEntCfg.getRevisionEndFieldName(), true, referencedIdData, 
++        revisionPropertyPath, originalIdPropertyName, "e", "e2");
++        
++         // e.revision_type != DEL
++         qb.getRootParameters().addWhereWithParam(verEntCfg.getRevisionTypePropName(), "<>", RevisionType.DEL);
+ 
+-        // e.revision_type != DEL AND
+-        qb.getRootParameters().addWhereWithParam(verEntCfg.getRevisionTypePropName(), "<>", RevisionType.DEL);
+-        // e.revision = (SELECT max(...) ...)
+-        qb.getRootParameters().addWhere(revisionPropertyPath, verCfg.getGlobalCfg().getCorrelatedSubqueryOperator(), maxRevQb);
+         // all specified conditions
+         for (AuditCriterion criterion : criterions) {
+             criterion.addToQuery(verCfg, entityName, qb, qb.getRootParameters());
+         }
+-
+-        List queryResult = buildAndExecuteQuery();
++        
++        Query query = buildQuery();
++        // add named parameter (only used for ValidAuditTimeStrategy) 
++        List<String> params = Arrays.asList(query.getNamedParameters());
++        if (params.contains("revision")) {
++            query.setParameter("revision", revision);
++        }
++        List queryResult = query.list();
+ 
+         if (hasProjection) {
+             return queryResult;
+Index: src/main/java/org/hibernate/envers/synchronization/work/AbstractAuditWorkUnit.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/work/AbstractAuditWorkUnit.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/synchronization/work/AbstractAuditWorkUnit.java	(working copy)
+@@ -33,6 +33,7 @@
+ 
+ import org.hibernate.Session;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -42,6 +43,7 @@
+     protected final AuditConfiguration verCfg;
+     protected final Serializable id;
+     protected final String entityName;
++    protected final AuditStrategy auditStrategy;
+ 
+     private Object performedData;
+ 
+@@ -51,6 +53,7 @@
+         this.verCfg = verCfg;
+         this.id = id;
+         this.entityName = entityName;
++        this.auditStrategy = verCfg.getAuditStrategy();
+     }
+ 
+     protected void fillDataWithId(Map<String, Object> data, Object revision, RevisionType revisionType) {
+@@ -67,8 +70,8 @@
+     public void perform(Session session, Object revisionData) {
+         Map<String, Object> data = generateData(revisionData);
+ 
+-        session.save(verCfg.getAuditEntCfg().getAuditEntityName(getEntityName()), data);
+-
++        auditStrategy.perform(session, getEntityName(), verCfg, id, data, revisionData);
++        
+         setPerformed(data);
+     }
+ 
+Index: src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTsTest.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTsTest.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/strategy/ValidityAuditStrategyRevEndTsTest.java	(revision 0)
+@@ -0,0 +1,432 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.envers.test.integration.strategy;
++
++import java.util.Arrays;
++import java.util.Date;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import javax.persistence.EntityManager;
++import javax.persistence.Query;
++
++import org.hibernate.Session;
++import org.hibernate.ejb.Ejb3Configuration;
++import org.hibernate.envers.DefaultRevisionEntity;
++import org.hibernate.envers.strategy.ValidityAuditStrategy;
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.envers.test.entities.manytomany.sametable.Child1Entity;
++import org.hibernate.envers.test.entities.manytomany.sametable.Child2Entity;
++import org.hibernate.envers.test.entities.manytomany.sametable.ParentEntity;
++import org.hibernate.envers.test.tools.TestTools;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++/**
++ * Test which checks that the revision end timestamp is correctly set for
++ * {@link ValidityAuditStrategy}.
++ * 
++ * @author Erik-Berndt Scheper
++ */
++public class ValidityAuditStrategyRevEndTsTest extends AbstractEntityTest {
++  private final String revendTimestampColumName = "REVEND_TIMESTAMP";
++
++  private Integer p1_id;
++  private Integer p2_id;
++  private Integer c1_1_id;
++  private Integer c1_2_id;
++  private Integer c2_1_id;
++  private Integer c2_2_id;
++  private Map<Number, DefaultRevisionEntity> revisions;
++
++  public void configure(Ejb3Configuration cfg) {
++    cfg.addAnnotatedClass(ParentEntity.class);
++    cfg.addAnnotatedClass(Child1Entity.class);
++    cfg.addAnnotatedClass(Child2Entity.class);
++
++    cfg.setProperty("org.hibernate.envers.audit_strategy",
++        "org.hibernate.envers.strategy.ValidityAuditStrategy");
++    cfg
++        .setProperty(
++            "org.hibernate.envers.audit_strategy_validity_store_revend_timestamp",
++            "true");
++    cfg
++        .setProperty(
++            "org.hibernate.envers.audit_strategy_validity_revend_timestamp_field_name",
++            revendTimestampColumName);
++  }
++
++  @BeforeClass(enabled = true, dependsOnMethods = "init")
++  public void initData() {
++    EntityManager em = getEntityManager();
++
++    // We need first to modify the columns in the middle (join table) to
++    // allow null values. Hbm2ddl doesn't seem
++    // to allow this.
++    em.getTransaction().begin();
++    Session session = (Session) em.getDelegate();
++    session.createSQLQuery("DROP TABLE children").executeUpdate();
++    session
++        .createSQLQuery(
++            "CREATE TABLE children(parent_id integer, child1_id integer NULL, child2_id integer NULL)")
++        .executeUpdate();
++    session.createSQLQuery("DROP TABLE children_AUD").executeUpdate();
++    session
++        .createSQLQuery(
++            "CREATE TABLE children_AUD(REV integer NOT NULL, REVEND integer, "
++                + revendTimestampColumName
++                + " timestamp, REVTYPE tinyint, "
++                + "parent_id integer, child1_id integer NULL, child2_id integer NULL)")
++        .executeUpdate();
++    em.getTransaction().commit();
++    em.clear();
++
++    ParentEntity p1 = new ParentEntity("parent_1");
++    ParentEntity p2 = new ParentEntity("parent_2");
++
++    Child1Entity c1_1 = new Child1Entity("child1_1");
++    Child1Entity c1_2 = new Child1Entity("child1_2");
++
++    Child2Entity c2_1 = new Child2Entity("child2_1");
++    Child2Entity c2_2 = new Child2Entity("child2_2");
++
++    // Revision 1
++    em.getTransaction().begin();
++
++    em.persist(p1);
++    em.persist(p2);
++    em.persist(c1_1);
++    em.persist(c1_2);
++    em.persist(c2_1);
++    em.persist(c2_2);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 2 - (p1: c1_1, p2: c2_1)
++
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c2_1 = em.find(Child2Entity.class, c2_1.getId());
++
++    p1.getChildren1().add(c1_1);
++    p2.getChildren2().add(c2_1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 3 - (p1: c1_1, c1_2, c2_2, p2: c1_1, c2_1)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c1_2 = em.find(Child1Entity.class, c1_2.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    p1.getChildren1().add(c1_2);
++    p1.getChildren2().add(c2_2);
++
++    p2.getChildren1().add(c1_1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 4 - (p1: c1_2, c2_2, p2: c1_1, c2_1, c2_2)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_1 = em.find(Child1Entity.class, c1_1.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    p1.getChildren1().remove(c1_1);
++    p2.getChildren2().add(c2_2);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    // Revision 5 - (p1: c2_2, p2: c1_1, c2_1)
++    em.getTransaction().begin();
++
++    p1 = em.find(ParentEntity.class, p1.getId());
++    p2 = em.find(ParentEntity.class, p2.getId());
++    c1_2 = em.find(Child1Entity.class, c1_2.getId());
++    c2_2 = em.find(Child2Entity.class, c2_2.getId());
++
++    c2_2.getParents().remove(p2);
++    c1_2.getParents().remove(p1);
++
++    em.getTransaction().commit();
++    em.clear();
++
++    //
++
++    p1_id = p1.getId();
++    p2_id = p2.getId();
++    c1_1_id = c1_1.getId();
++    c1_2_id = c1_2.getId();
++    c2_1_id = c2_1.getId();
++    c2_2_id = c2_2.getId();
++
++    Set<Number> revisionNumbers = new HashSet<Number>();
++    revisionNumbers.addAll(Arrays.asList(1, 2, 3, 4, 5));
++    revisions = getAuditReader().findRevisions(DefaultRevisionEntity.class,
++        revisionNumbers);
++
++    assert revisions.size() == 5;
++  }
++
++  @Test(enabled = true)
++  public void testRevisionsCounts() {
++    assert Arrays.asList(1, 2, 3, 4).equals(
++        getAuditReader().getRevisions(ParentEntity.class, p1_id));
++    assert Arrays.asList(1, 2, 3, 4).equals(
++        getAuditReader().getRevisions(ParentEntity.class, p2_id));
++
++    assert Arrays.asList(1).equals(
++        getAuditReader().getRevisions(Child1Entity.class, c1_1_id));
++    assert Arrays.asList(1, 5).equals(
++        getAuditReader().getRevisions(Child1Entity.class, c1_2_id));
++
++    assert Arrays.asList(1).equals(
++        getAuditReader().getRevisions(Child2Entity.class, c2_1_id));
++    assert Arrays.asList(1, 5).equals(
++        getAuditReader().getRevisions(Child2Entity.class, c2_2_id));
++  }
++
++  @Test(enabled = true)
++  public void testAllRevEndTimeStamps() {
++    List<Map<String, Object>> p1RevList = getRevisions(ParentEntity.class,
++        p1_id);
++    List<Map<String, Object>> p2RevList = getRevisions(ParentEntity.class,
++        p2_id);
++    List<Map<String, Object>> c1_1_List = getRevisions(Child1Entity.class,
++        c1_1_id);
++    List<Map<String, Object>> c1_2_List = getRevisions(Child1Entity.class,
++        c1_2_id);
++    List<Map<String, Object>> c2_1_List = getRevisions(Child2Entity.class,
++        c2_1_id);
++    List<Map<String, Object>> c2_2_List = getRevisions(Child2Entity.class,
++        c2_2_id);
++
++    verifyRevEndTimeStamps("ParentEntity: " + p1_id, p1RevList);
++    verifyRevEndTimeStamps("ParentEntity: " + p2_id, p2RevList);
++    verifyRevEndTimeStamps("Child1Entity: " + c1_1_id, c1_1_List);
++    verifyRevEndTimeStamps("Child1Entity: " + c1_2_id, c1_2_List);
++    verifyRevEndTimeStamps("Child2Entity: " + c2_1_id, c2_1_List);
++    verifyRevEndTimeStamps("Child2Entity: " + c2_2_id, c2_2_List);
++
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfParent1() {
++
++    Child1Entity c1_1 = getEntityManager()
++        .find(Child1Entity.class, c1_1_id);
++    Child1Entity c1_2 = getEntityManager()
++        .find(Child1Entity.class, c1_2_id);
++    Child2Entity c2_2 = getEntityManager()
++        .find(Child2Entity.class, c2_2_id);
++
++    ParentEntity rev1 = getAuditReader().find(ParentEntity.class, p1_id, 1);
++    ParentEntity rev2 = getAuditReader().find(ParentEntity.class, p1_id, 2);
++    ParentEntity rev3 = getAuditReader().find(ParentEntity.class, p1_id, 3);
++    ParentEntity rev4 = getAuditReader().find(ParentEntity.class, p1_id, 4);
++    ParentEntity rev5 = getAuditReader().find(ParentEntity.class, p1_id, 5);
++
++    assert TestTools.checkList(rev1.getChildren1());
++    assert TestTools.checkList(rev2.getChildren1(), c1_1);
++    assert TestTools.checkList(rev3.getChildren1(), c1_1, c1_2);
++    assert TestTools.checkList(rev4.getChildren1(), c1_2);
++    assert TestTools.checkList(rev5.getChildren1());
++
++    assert TestTools.checkList(rev1.getChildren2());
++    assert TestTools.checkList(rev2.getChildren2());
++    assert TestTools.checkList(rev3.getChildren2(), c2_2);
++    assert TestTools.checkList(rev4.getChildren2(), c2_2);
++    assert TestTools.checkList(rev5.getChildren2(), c2_2);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfParent2() {
++    Child1Entity c1_1 = getEntityManager()
++        .find(Child1Entity.class, c1_1_id);
++    Child2Entity c2_1 = getEntityManager()
++        .find(Child2Entity.class, c2_1_id);
++    Child2Entity c2_2 = getEntityManager()
++        .find(Child2Entity.class, c2_2_id);
++
++    ParentEntity rev1 = getAuditReader().find(ParentEntity.class, p2_id, 1);
++    ParentEntity rev2 = getAuditReader().find(ParentEntity.class, p2_id, 2);
++    ParentEntity rev3 = getAuditReader().find(ParentEntity.class, p2_id, 3);
++    ParentEntity rev4 = getAuditReader().find(ParentEntity.class, p2_id, 4);
++    ParentEntity rev5 = getAuditReader().find(ParentEntity.class, p2_id, 5);
++
++    assert TestTools.checkList(rev1.getChildren1());
++    assert TestTools.checkList(rev2.getChildren1());
++    assert TestTools.checkList(rev3.getChildren1(), c1_1);
++    assert TestTools.checkList(rev4.getChildren1(), c1_1);
++    assert TestTools.checkList(rev5.getChildren1(), c1_1);
++
++    assert TestTools.checkList(rev1.getChildren2());
++    assert TestTools.checkList(rev2.getChildren2(), c2_1);
++    assert TestTools.checkList(rev3.getChildren2(), c2_1);
++    assert TestTools.checkList(rev4.getChildren2(), c2_1, c2_2);
++    assert TestTools.checkList(rev5.getChildren2(), c2_1);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild1_1() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child1Entity rev1 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        1);
++    Child1Entity rev2 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        2);
++    Child1Entity rev3 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        3);
++    Child1Entity rev4 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        4);
++    Child1Entity rev5 = getAuditReader().find(Child1Entity.class, c1_1_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents(), p1);
++    assert TestTools.checkList(rev3.getParents(), p1, p2);
++    assert TestTools.checkList(rev4.getParents(), p2);
++    assert TestTools.checkList(rev5.getParents(), p2);
++  }
++
++  @Test(enabled = false)
++  public void testHistoryOfChild1_2() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++
++    Child1Entity rev1 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        1);
++    Child1Entity rev2 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        2);
++    Child1Entity rev3 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        3);
++    Child1Entity rev4 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        4);
++    Child1Entity rev5 = getAuditReader().find(Child1Entity.class, c1_2_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents());
++    assert TestTools.checkList(rev3.getParents(), p1);
++    assert TestTools.checkList(rev4.getParents(), p1);
++    assert TestTools.checkList(rev5.getParents());
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild2_1() {
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child2Entity rev1 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        1);
++    Child2Entity rev2 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        2);
++    Child2Entity rev3 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        3);
++    Child2Entity rev4 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        4);
++    Child2Entity rev5 = getAuditReader().find(Child2Entity.class, c2_1_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents(), p2);
++    assert TestTools.checkList(rev3.getParents(), p2);
++    assert TestTools.checkList(rev4.getParents(), p2);
++    assert TestTools.checkList(rev5.getParents(), p2);
++  }
++
++  @Test(enabled = true)
++  public void testHistoryOfChild2_2() {
++    ParentEntity p1 = getEntityManager().find(ParentEntity.class, p1_id);
++    ParentEntity p2 = getEntityManager().find(ParentEntity.class, p2_id);
++
++    Child2Entity rev1 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        1);
++    Child2Entity rev2 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        2);
++    Child2Entity rev3 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        3);
++    Child2Entity rev4 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        4);
++    Child2Entity rev5 = getAuditReader().find(Child2Entity.class, c2_2_id,
++        5);
++
++    assert TestTools.checkList(rev1.getParents());
++    assert TestTools.checkList(rev2.getParents());
++    assert TestTools.checkList(rev3.getParents(), p1);
++    assert TestTools.checkList(rev4.getParents(), p1, p2);
++    assert TestTools.checkList(rev5.getParents(), p1);
++  }
++
++  private List<Map<String, Object>> getRevisions(
++      Class<?> originalEntityClazz, Integer originalEntityId) {
++    // Build the query:
++    // select auditEntity from
++    // org.hibernate.envers.test.entities.manytomany.sametable.ParentEntity_AUD
++    // auditEntity where auditEntity.originalId.id = :originalEntityId
++
++    StringBuilder builder = new StringBuilder("select auditEntity from ");
++    builder.append(originalEntityClazz.getName())
++        .append("_AUD auditEntity");
++    builder.append(" where auditEntity.originalId.id = :originalEntityId");
++
++    Query qry = getEntityManager().createQuery(builder.toString());
++    qry.setParameter("originalEntityId", originalEntityId);
++
++    @SuppressWarnings("unchecked")
++    List<Map<String, Object>> resultList = qry.getResultList();
++    return resultList;
++  }
++
++  private void verifyRevEndTimeStamps(String debugInfo,
++      List<Map<String, Object>> revisionEntities) {
++    for (Map<String, Object> revisionEntity : revisionEntities) {
++
++      Date revendTimestamp = (Date) revisionEntity
++          .get(revendTimestampColumName);
++      DefaultRevisionEntity revEnd = (DefaultRevisionEntity) revisionEntity
++          .get("REVEND");
++
++      if (revendTimestamp == null) {
++        assert revEnd == null;
++      } else {
++        assert revendTimestamp.getTime() == revEnd.getTimestamp();
++      }
++    }
++  }
++
++}
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(working copy)
+@@ -25,16 +25,17 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.strategy.AuditStrategy;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+ 
+ /**
+  * Selects data from a relation middle-table only.
+@@ -45,6 +46,7 @@
+     private final MiddleIdData referencingIdData;
+ 
+     public OneEntityQueryGenerator(AuditEntitiesConfiguration verEntCfg,
++                                   AuditStrategy auditStrategy,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleComponentData... componentDatas) {
+@@ -57,7 +59,13 @@
+          *     ee.originalId.id_ref_ing = :id_ref_ing AND
+          * (the association at revision :revision)
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidityAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         * 
++         *     AND
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL
+          */
+@@ -71,22 +79,15 @@
+         Parameters rootParameters = qb.getRootParameters();
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+-        // SELECT max(ee2.revision) FROM middleEntity ee2
+-        QueryBuilder maxRevQb = qb.newSubQueryBuilder(versionsMiddleEntityName, "ee2");
+-        maxRevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxRevQbParameters = maxRevQb.getRootParameters();
+-        // ee2.revision <= :revision
+-        maxRevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // ee2.originalId.* = ee.originalId.*        
++        
+         String eeOriginalIdPropertyPath = "ee." + originalIdPropertyName;
+-        String ee2OriginalIdPropertyPath = "ee2." + originalIdPropertyName;
+-        referencingIdData.getPrefixedMapper().addIdsEqualToQuery(maxRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        for (MiddleComponentData componentData : componentDatas) {
+-            componentData.getComponentMapper().addMiddleEqualToQuery(maxRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        }
+-        // ee.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, "=", maxRevQb);       
++
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditStrategy.addAssociationAtRevisionRestriction(qb, revisionPropertyPath,
++            verEntCfg.getRevisionEndFieldName(), true,referencingIdData, versionsMiddleEntityName, 
++            eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+ 
+Index: src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/metadata/MetadataTools.java	(working copy)
+@@ -49,7 +49,7 @@
+         return id_mapping;
+     }
+ 
+-    public static Element addProperty(Element parent, String name, String type, boolean insertable, boolean key) {
++    public static Element addProperty(Element parent, String name, String type, boolean insertable, boolean updateable, boolean key) {
+         Element prop_mapping;
+         if (key) {
+             prop_mapping = parent.addElement("key-property");
+@@ -59,7 +59,7 @@
+ 
+         prop_mapping.addAttribute("name", name);
+         prop_mapping.addAttribute("insert", Boolean.toString(insertable));
+-        prop_mapping.addAttribute("update", "false");
++        prop_mapping.addAttribute("update", Boolean.toString(updateable));
+ 
+         if (type != null) {
+             prop_mapping.addAttribute("type", type);
+@@ -67,7 +67,11 @@
+ 
+         return prop_mapping;
+     }
+-
++    
++    public static Element addProperty(Element parent, String name, String type, boolean insertable, boolean key) {
++        return addProperty(parent, name, type, insertable, false, key);
++    }
++    
+     private static void addOrModifyAttribute(Element parent, String name, String value) {
+         Attribute attribute = parent.attribute(name);
+         if (attribute == null) {
+Index: src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java
+===================================================================
+--- src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(working copy)
+@@ -71,38 +71,34 @@
+     	this(verCfg, versionsReader, cls, cls.getName());
+     }
+ 
+-	protected AbstractAuditQuery(AuditConfiguration verCfg,
+-			AuditReaderImplementor versionsReader, Class<?> cls, String entityName) {
+-		this.verCfg = verCfg;
+-		this.versionsReader = versionsReader;
+-
+-		criterions = new ArrayList<AuditCriterion>();
+-		entityInstantiator = new EntityInstantiator(verCfg, versionsReader);
+-
+-		entityClassName = cls.getName();
+-		this.entityName = entityName;
+-		versionsEntityName = verCfg.getAuditEntCfg().getAuditEntityName(
+-				entityName);
+-
+-		qb = new QueryBuilder(versionsEntityName, "e");
+-	}
++  	protected AbstractAuditQuery(AuditConfiguration verCfg,
++  			AuditReaderImplementor versionsReader, Class<?> cls, String entityName) {
++  		this.verCfg = verCfg;
++  		this.versionsReader = versionsReader;
++  
++  		criterions = new ArrayList<AuditCriterion>();
++  		entityInstantiator = new EntityInstantiator(verCfg, versionsReader);
++  
++  		entityClassName = cls.getName();
++  		this.entityName = entityName;
++  		versionsEntityName = verCfg.getAuditEntCfg().getAuditEntityName(
++  				entityName);
++  
++  		qb = new QueryBuilder(versionsEntityName, "e");
++  	}
+     
++    protected Query buildQuery() {
++      Query query = qb.toQuery(versionsReader.getSession());
++      setQueryProperties(query);
++      return query;
++    }
++  
+     protected List buildAndExecuteQuery() {
+-        StringBuilder querySb = new StringBuilder();
+-        Map<String, Object> queryParamValues = new HashMap<String, Object>();
+-
+-        qb.build(querySb, queryParamValues);
+-
+-        Query query = versionsReader.getSession().createQuery(querySb.toString());
+-        for (Map.Entry<String, Object> paramValue : queryParamValues.entrySet()) {
+-            query.setParameter(paramValue.getKey(), paramValue.getValue());
+-        }
+-
+-        setQueryProperties(query);
+-
+-        return query.list();
++      Query query = buildQuery();
++  
++      return query.list();
+     }
+-
++    
+     public abstract List list() throws AuditException;
+ 
+     public List getResultList() throws AuditException {
+Index: src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java	(revision 0)
++++ src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java	(revision 0)
+@@ -0,0 +1,78 @@
++package org.hibernate.envers.strategy;
++
++import java.io.Serializable;
++
++import org.hibernate.Session;
++import org.hibernate.envers.configuration.AuditConfiguration;
++import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.Parameters;
++import org.hibernate.envers.tools.query.QueryBuilder;
++
++/**
++ * Default strategy is to simply persist the audit data.
++ *
++ * @author Adam Warski
++ * @author Stephanie Pau
++ */
++public class DefaultAuditStrategy implements AuditStrategy {
++    public void perform(Session session, String entityName, AuditConfiguration auditCfg, Serializable id, Object data,
++                        Object revision) {
++        session.save(auditCfg.getAuditEntCfg().getAuditEntityName(entityName), data);
++    }
++
++    public void performCollectionChange(Session session, AuditConfiguration auditCfg,
++                                        PersistentCollectionChangeData persistentCollectionChangeData, Object revision) {
++        session.save(persistentCollectionChangeData.getEntityName(), persistentCollectionChangeData.getData());
++    }
++
++
++  public void addEntityAtRevisionRestriction(GlobalConfiguration globalCfg, QueryBuilder rootQueryBuilder, String revisionProperty,
++      String revisionEndProperty, boolean addAlias, MiddleIdData idData, String revisionPropertyPath,
++      String originalIdPropertyName, String alias1, String alias2) {
++    Parameters rootParameters = rootQueryBuilder.getRootParameters();
++
++    // create a subquery builder
++        // SELECT max(e.revision) FROM versionsReferencedEntity e2
++        QueryBuilder maxERevQb = rootQueryBuilder.newSubQueryBuilder(idData.getAuditEntityName(), alias2);
++        maxERevQb.addProjection("max", revisionPropertyPath, false);
++        // WHERE
++        Parameters maxERevQbParameters = maxERevQb.getRootParameters();
++        // e2.revision <= :revision
++        maxERevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        // e2.id_ref_ed = e.id_ref_ed
++        idData.getOriginalMapper().addIdsEqualToQuery(maxERevQbParameters,
++                alias1 + "." + originalIdPropertyName, alias2 +"." + originalIdPropertyName);
++
++    // add subquery to rootParameters
++        String subqueryOperator = globalCfg.getCorrelatedSubqueryOperator();
++    rootParameters.addWhere(revisionProperty, addAlias, subqueryOperator, maxERevQb);
++  }
++
++  public void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty,
++            String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData, String versionsMiddleEntityName,
++            String eeOriginalIdPropertyPath, String revisionPropertyPath,
++            String originalIdPropertyName, MiddleComponentData... componentDatas) {
++    Parameters rootParameters = rootQueryBuilder.getRootParameters();
++
++      // SELECT max(ee2.revision) FROM middleEntity ee2
++        QueryBuilder maxEeRevQb = rootQueryBuilder.newSubQueryBuilder(versionsMiddleEntityName, "ee2");
++        maxEeRevQb.addProjection("max", revisionPropertyPath, false);
++        // WHERE
++        Parameters maxEeRevQbParameters = maxEeRevQb.getRootParameters();
++        // ee2.revision <= :revision
++        maxEeRevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        // ee2.originalId.* = ee.originalId.*
++        String ee2OriginalIdPropertyPath = "ee2." + originalIdPropertyName;
++        referencingIdData.getPrefixedMapper().addIdsEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
++        for (MiddleComponentData componentData : componentDatas) {
++            componentData.getComponentMapper().addMiddleEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
++        }
++
++    // add subquery to rootParameters
++        rootParameters.addWhere(revisionProperty, addAlias, "=", maxEeRevQb);
++  }
++
++}
+Index: src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(revision 20852)
++++ src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(working copy)
+@@ -28,6 +28,10 @@
+ import java.util.Map;
+ 
+ import org.dom4j.Element;
++import org.hibernate.MappingException;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.envers.RelationTargetAuditMode;
++import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.configuration.metadata.reader.ClassAuditingData;
+@@ -38,6 +42,8 @@
+ import org.hibernate.envers.entities.mapper.ExtendedPropertyMapper;
+ import org.hibernate.envers.entities.mapper.MultiPropertyMapper;
+ import org.hibernate.envers.entities.mapper.SubclassPropertyMapper;
++import org.hibernate.envers.strategy.AuditStrategy;
++import org.hibernate.envers.strategy.ValidityAuditStrategy;
+ import org.hibernate.envers.tools.StringTools;
+ import org.hibernate.envers.tools.Triple;
+ import org.hibernate.envers.RelationTargetAuditMode;
+@@ -61,6 +67,7 @@
+     private final Configuration cfg;
+     private final GlobalConfiguration globalCfg;
+     private final AuditEntitiesConfiguration verEntCfg;
++    private final AuditStrategy auditStrategy;
+     private final Element revisionInfoRelationMapping;
+ 
+     /*
+@@ -84,11 +91,13 @@
+ 
+     public AuditMetadataGenerator(Configuration cfg, GlobalConfiguration globalCfg,
+                                   AuditEntitiesConfiguration verEntCfg,
++                                  AuditStrategy auditStrategy,
+                                   Element revisionInfoRelationMapping,
+                                   AuditEntityNameRegister auditEntityNameRegister) {
+         this.cfg = cfg;
+         this.globalCfg = globalCfg;
+         this.verEntCfg = verEntCfg;
++        this.auditStrategy = auditStrategy;
+         this.revisionInfoRelationMapping = revisionInfoRelationMapping;
+ 
+         this.basicMetadataGenerator = new BasicMetadataGenerator();
+@@ -125,6 +134,28 @@
+         Element revTypeProperty = MetadataTools.addProperty(any_mapping, verEntCfg.getRevisionTypePropName(),
+                 verEntCfg.getRevisionTypePropType(), true, false);
+         revTypeProperty.addAttribute("type", "org.hibernate.envers.entities.RevisionTypeType");
++        
++        // Adding the end revision, if appropriate
++        addEndRevision(any_mapping);        
++    }
++
++    private void addEndRevision(Element any_mapping ) {
++        // Add the end-revision field, if the appropriate strategy is used.
++        if (auditStrategy instanceof ValidityAuditStrategy) {
++            Element end_rev_mapping = (Element) revisionInfoRelationMapping.clone();
++            end_rev_mapping.setName("many-to-one");
++            end_rev_mapping.addAttribute("name", verEntCfg.getRevisionEndFieldName());
++            MetadataTools.addOrModifyColumn(end_rev_mapping, verEntCfg.getRevisionEndFieldName());
++
++            any_mapping.add(end_rev_mapping);
++            
++            if (verEntCfg.isRevisionEndTimestampEnabled()) {
++              // add a column for the timestamp of the end revision
++              String revisionInfoTimestampSqlType = new TimestampType().getName(); //3.5 style TimestampType.INSTANCE.getName();
++              Element timestampProperty = MetadataTools.addProperty(any_mapping, verEntCfg.getRevisionEndTimestampFieldName(), revisionInfoTimestampSqlType, true, true, false);
++              MetadataTools.addColumn(timestampProperty, verEntCfg.getRevisionEndTimestampFieldName(), 0, 0, 0, null);
++            }
++        }
+     }
+ 
+     @SuppressWarnings({"unchecked"})
+@@ -472,6 +503,10 @@
+     AuditEntitiesConfiguration getVerEntCfg() {
+         return verEntCfg;
+     }
++    
++    AuditStrategy getAuditStrategy() {
++        return auditStrategy;
++    }
+ 
+     AuditEntityNameRegister getAuditEntityNameRegister() {
+         return auditEntityNameRegister;

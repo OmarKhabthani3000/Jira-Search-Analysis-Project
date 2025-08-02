@@ -1,0 +1,219 @@
+Dear all,
+
+I have recently *discovered* the usage of the all-delete-orphan cascade 
+directive and decided to give it a try. So I removed my own implementation and 
+let Hibernate delete the orphans for me.
+
+To my great surprise, Hibernate was slower than my own code by a factor of 60% 
+?!? For the completness, this slow down appeared when adding or removing a few 
+records from large Sets (300-2000 records) mapped in their parent with cascade-
+delete-orphans.
+
+I was so disapointed (Hibernate has been so fast sofar), I decided to dig into 
+the code looking for the bottleneck. After a while, I found the hotspot, made 
+some modifications and built a test for performance benchmark.
+
+==> The modifications gave 30 to 40 percent speed improvement, with less memory 
+consumption. <==
+
+Please see below for a detailled description.
+
+Feedback is welcome.
+
+
+Note: I ran the Hibernate JUnit tests and they all passed. I included the 
+modifications in our application, all tests are ok and it still behaves 
+correctly... As far as I can trust the test suites and our application ;-)
+
+
+-------------------------------------------------------------
+
+Problem description
+-------------------
+
+The collection.PersistentCollection class contains the two following
+methods:
+
+
+  static void identityRemoveAll(List list, Collection collection, SessionImplementor session)
+	throws HibernateException
+  {
+	Iterator iter = collection.iterator();
+	while ( iter.hasNext() ) PersistentCollection.identityRemove( list, iter.next(), session );
+  }
+
+
+  static void identityRemove(Collection list, Object object, SessionImplementor session)
+	throws HibernateException
+  {
+	if ( object!=null && session.isSaved(object) ) {
+		Serializable idOfCurrent = session.getEntityIdentifierIfNotUnsaved(object);
+		Iterator iter = list.iterator();
+		while ( iter.hasNext() ) {
+			Serializable idOfOld = session.getEntityIdentifierIfNotUnsaved( iter.next() );
+			if ( idOfCurrent.equals(idOfOld) )
+				iter.remove();
+		}
+	}
+  }
+
+
+The identityRemoveAll method is called from Set.getOrphans() when looking for 
+Orphans. The first argument is the original state of the Set, the second 
+contains the current state. An Orphan is an element which is in the original 
+state and not in the current anymore (to make it short). This method iterates 
+over the current elements and calls identityRemove for every element found.
+
+Looking at the code of this second method, you quickly realize that this 
+approach is not very efficient: 1/ it does a *linear search* over the original 
+collection looking for the new object. May be very slow if the collection 
+contains many elements;
+
+2/ it retrieves the EntityIdentifier *many times* for the same elements (because 
+the method is called many times and the iteration always restart at the first);
+
+3/ when the condition is met (the element is not an Orphan - which is often the 
+case), it is removed from the original list by calling remove on the iterator. 
+The iterator is backed by an ArrayList (instantiated in Set and passed to the 
+method). One must remember that ArrayList are very efficient for random access 
+but not for object removal (except for the latest) - it implies shifting 
+elements one position to the left, this is done by a memory copy. In this 
+particular case, a LinkedList would perform better.
+
+4/ when looking at the calling code (Set.getOrphans(), List.getOrphans(), 
+Bag.getOrphans(), etc) we discover they first create a new ArrayList, add all 
+elements of the current state (snapshot), then pass this ArrayList to the 
+PersistentCollection.identityRemoveAll() method where it will be emptied in most 
+cases (no orphans detected). A better approach is described below.
+
+
+
+Performance measures 
+--------------------
+
+I made some modifications (a few lines actually) and made a simple benchmark to 
+measure the performance gain. The test creates several 25 Sets with 100 up to 
+2500 records, by step of 100. The first perf measure was to add 10% new records 
+to the sets - flushing the session will trigger the Orphan lookup. The second 
+perf measure was to remove 10% records of all sets - again, flushing the session 
+will trigger the Orphan lookup. Every sets were modified in a separate Session.
+
+The performance were identical up to 500 records (for both tests). Then the 
+modified version was about 30% faster inserting new records, and 40% faster for 
+the removal. All these times include the database roundtrips.
+
+When running a profiler, the results were even better - for the 
+PersistentCollection.identityRemoveAll() method: ==> cumulative time spent: 100 
+times less (!) - we don't see such improvement in total probably because of the 
+extra time spent on the database when committing the changes; ==> cumulative 
+object creation: 8 times less - always good to avoid short-live objects, GC and 
+Heap friendlier ;-)
+
+Not too bad for the few lines that were changed.
+
+
+
+Modifications
+-------------
+
+The first modifications include fix for point 1, 2 & 3. Here is the code:
+
+	static void identityRemoveAll(List oldElements, Collection currentElements, SessionImplementor session)
+			throws HibernateException
+	{
+	    // short-circuit(s)
+	    if( currentElements.size() == 0 ) // no new elements, the old list contains only Orphans
+	        return;
+
+	    if( oldElements.size() == 0) // no old elements, so no Orphans neither
+	        return;
+
+	    // collect EntityIdentifier(s) of the *current* elements - add them into a HashSet for fast access
+	    java.util.Set currentIds = new HashSet();
+	    for(Iterator it=currentElements.iterator(); it.hasNext(); )
+	    {
+	        Object current = it.next();
+	        if( current!=null && session.isSaved(current) )
+	            currentIds.add( session.getEntityIdentifierIfNotUnsaved(current));
+	    }
+
+	    // iterate over the *old* list
+	    for(Iterator it=oldElements.iterator(); it.hasNext(); )
+	    {
+	        Object old = it.next();
+	        Object id = session.getEntityIdentifierIfNotUnsaved(old);
+
+	        if( currentIds.contains(id) )
+	            it.remove();
+	    }
+	}
+
+The idea is to replace the two 'enclosed' loops (meaning up to n*n search) by 
+two independent loops (meaning 2*n searches). The first iteration collects the 
+EntityIdentifier of the current elements and store them in a HashMap for fast 
+lookup. The second iteration iterates over the old elements, retrieve the 
+EntityIdentitifer and then look it up in the HashMap - which is significantly 
+faster than a linear search). This modification gave almost all the performance 
+gain.
+
+
+A few extra 5% are gained by not removing the elements from the original list 
+when they are not orphan, but by creating a new one and adding the orphans when 
+found.
+
+The PersistentCollection.identityRemoveAll() is modified to return a collection 
+containing the Orphans instead of deleting non-orphan elements in the collection 
+given as input:
+
+
+	static Collection identityRemoveAll(Collection oldElements, Collection currentElements, SessionImplementor session)
+		throws HibernateException
+	{
+	    // short-circuit(s)
+	    if( currentElements.size() == 0 ) // no new elements, the old list contains only Orphans
+	        return oldElements;
+
+	    if( oldElements.size() == 0) // no old elements, so no Orphans neither
+	        return oldElements;
+
+	    // create the collection holding the Orphans
+	    Collection res = new ArrayList();
+
+	    // collect EntityIdentifier(s) of the *current* elements - add them into a HashSet for fast access
+	    java.util.Set currentIds = new HashSet();
+	    for(Iterator it=currentElements.iterator(); it.hasNext(); )
+	    {
+	        Object current = it.next();
+	        if( current!=null && session.isSaved(current) )
+	            currentIds.add( session.getEntityIdentifierIfNotUnsaved(current) );
+	    }
+
+	    // iterate over the *old* list
+	    for(Iterator it=oldElements.iterator(); it.hasNext(); )
+	    {
+	        Object old = it.next();
+	        Object id = session.getEntityIdentifierIfNotUnsaved(old);
+
+	        if( ! currentIds.contains(id) )
+	            res.add(old);
+	    }
+
+	    return res;
+	}
+
+
+Then the Set.getOrphans() must be modified as follows (original code is
+commented):
+
+	public Collection getOrphans(Serializable snapshot) throws HibernateException {
+		java.util.Map sn = (java.util.Map) snapshot;
+
+		//java.util.List result = new ArrayList( sn.keySet() );
+		//PersistentCollection.identityRemoveAll( result, set, getSession() );
+		//return result;
+
+		return PersistentCollection.identityRemoveAll( sn.keySet(), set, getSession() );
+	}
+
+The same modification should be applied to other Collection implementations.
+

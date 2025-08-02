@@ -1,0 +1,77 @@
+--- src/org/hibernate/search/engine/DocumentExtractor.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/engine/DocumentExtractor.java	Thu Feb 14 14:26:27 2008
+@@ -62,6 +62,9 @@
+ 					}
+ 					entityInfo.indexesOfThis.add(x);
+ 				}
++				else if (ProjectionConstants.DOCID.equals( projection[x] ) ) {
++					eip[x] = hits.id(index);
++				}
+ 			}
+ 		}
+ 		return entityInfo;
+--- src/org/hibernate/search/jpa/impl/FullTextQueryImpl.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/jpa/impl/FullTextQueryImpl.java	Thu Feb 14 14:26:27 2008
+@@ -35,6 +35,7 @@
+ import org.hibernate.hql.QueryExecutionRequestException;
+ import org.apache.lucene.search.Sort;
+ import org.apache.lucene.search.Filter;
++import org.apache.lucene.search.Explanation;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -258,5 +259,14 @@
+ 			query.setFlushMode( FlushMode.COMMIT );
+ 		}
+ 		return this;
++	}
++
++	public Explanation explain(int docId)
++	{
++		if (query instanceof org.hibernate.search.query.FullTextQueryImpl)
++		{
++			return ((org.hibernate.search.query.FullTextQueryImpl)query).explain(docId);
++		}
++		return null;
+ 	}
+ }
+--- src/org/hibernate/search/query/FullTextQueryImpl.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/query/FullTextQueryImpl.java	Thu Feb 14 14:28:18 2008
+@@ -570,6 +570,23 @@
+ 		return searchFactoryImplementor;
+ 	}
+ 
++	public Explanation explain(int docId)
++	{
++		Explanation retval = null;
++
++		try
++		{
++			SearchFactoryImplementor searchFactoryImplementor = ContextHelper.getSearchFactoryBySFI(session);
++			Searcher searcher = buildSearcher(searchFactoryImplementor);
++			retval = searcher.explain(luceneQuery, docId);
++		}
++		catch (IOException e)
++		{
++			log.error("IO Exception encountered whilst explaining a query");
++		}
++		return retval;
++	}
++
+ 	private static Loader noLoader = new Loader() {
+ 		public void init(Session session, SearchFactoryImplementor searchFactoryImplementor) {
+ 		}
+--- src/org/hibernate/search/ProjectionConstants.java	Sun Sep 23 16:51:46 2007
++++ src/org/hibernate/search/ProjectionConstants.java	Thu Feb 14 14:26:27 2008
+@@ -28,6 +28,11 @@
+ 	 */
+ 	public String ID = "__HSearch_id";
+ 	/**
++	 * The Lucene document ID
++	 */
++	public String DOCID = "__HSearch_DocId";
++
++	/**
+ 	 * Object class
+ 	 */
+ 	//TODO OBJECT CLASS

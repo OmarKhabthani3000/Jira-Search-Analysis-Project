@@ -1,0 +1,86 @@
+--- QueryPageViewer.java	2005-03-16 07:19:35.649310400 -0800
++++ QueryPageViewer.java	2005-03-16 07:19:54.977102400 -0800
+@@ -35,6 +35,9 @@
+  */
+ public class QueryPageViewer {
+ 
++	// The initial content. It says "Running" to give the thread some time to run and come back to us.
++	public static final Object[] STILL_RUNNING = new Object[] { "Running.." };
++	
+ 	class LabelProviderImpl implements ITableLabelProvider {
+ 		public Image getColumnImage(Object element, int columnIndex) {
+ 			return null;
+@@ -68,28 +71,55 @@
+ 	
+ 	// should map to our table model instead
+ 	class ContentProviderImpl implements IStructuredContentProvider {
++		
++		Object[] queryResults = STILL_RUNNING;
++		QueryPage queryPage = null;
++		private Thread queryThread;
++		
+ 		public Object[] getElements(Object inputElement) {
+ 			if (inputElement instanceof QueryPage) {
+-				QueryPage qp = ((QueryPage) inputElement);
+-				Object[] objects = qp.getList().toArray();
+-				if(qp.getExceptions().isEmpty()) {
+-					return objects;
+-				} else {
+-					Throwable[] throwables = (Throwable[])qp.getExceptions().toArray(new Throwable[0]);
+-					HibernateConsolePlugin.logErrorMessage("Exception while executing HQL Query", throwables);
+-					return throwables; // TODO: provide actual error page					
+-				}
++				queryPage = ((QueryPage) inputElement);
++				return queryResults;
+ 			} else {
+ 				return null;
+ 			}
+ 		}
+ 
+ 		public void dispose() {
++			// I wish there was a "stop fetching" on that queryPage :-)
++			queryThread = null;
++			if ( queryPage!=null ) queryPage.release();
+ 		}
+ 
+ 		public void inputChanged(Viewer viewer, Object oldInput, Object newInput) {
++			queryThread = new Thread() { 
++							public void run() {
++								final Object[] threadedResults = getResultsFromQueryPage(queryPage);
++								// Once you have the pointer to the results filled on a thread, quickly switch it and refresh.
++								tableViewer.getControl().getDisplay().asyncExec(new Runnable() {
++									public void run() {
++										queryResults = threadedResults;
++										tableViewer.refresh(true);
++									}
++								});
++							}
++							
++							// Actually retrieve the results from the query page. This will potentially block for a while.
++							private Object[] getResultsFromQueryPage(QueryPage queryPage) {
++								Object[] objects = queryPage.getList().toArray();
++								if(queryPage.getExceptions().isEmpty()) {
++									return objects;
++								} else {
++									Throwable[] throwables = (Throwable[])queryPage.getExceptions().toArray(new Throwable[0]);
++									HibernateConsolePlugin.logErrorMessage("Exception while executing HQL Query", throwables);
++									return throwables; // TODO: provide actual error page					
++								}
++							}
++							
++						};
++			queryThread.start();
++			
+ 		}
+-		
+ 	}
+ 	
+ 
+@@ -215,6 +245,7 @@
+ 	public void dispose() {
+ 		//this.queryPage.removePropertyChangeListener(this);
+ 		this.tabItem.dispose();
++		this.tableViewer.getContentProvider().dispose();
+ 	}
+ 
+ 	protected QueryPage getQueryPage() {

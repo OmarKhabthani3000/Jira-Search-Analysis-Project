@@ -1,0 +1,150 @@
+Index: hibernate/src/org/hibernate/property/BasicPropertyAccessor.java
+===================================================================
+--- hibernate/src/org/hibernate/property/BasicPropertyAccessor.java	(revision 109867)
++++ hibernate/src/org/hibernate/property/BasicPropertyAccessor.java	(working copy)
+@@ -24,20 +24,20 @@
+ package org.hibernate.property;
+ 
+ import java.beans.Introspector;
++import java.lang.reflect.Field;
+ import java.lang.reflect.InvocationTargetException;
+-import java.lang.reflect.Method;
+ import java.lang.reflect.Member;
++import java.lang.reflect.Method;
+ import java.util.Map;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+ import org.hibernate.HibernateException;
+ import org.hibernate.PropertyAccessException;
+ import org.hibernate.PropertyNotFoundException;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.util.ReflectHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * Accesses property values via a get/set pair, which may be nonpublic.
+@@ -148,6 +148,7 @@
+ 			return createSetter(clazz, propertyName);
+ 		}
+ 
++		@Override
+ 		public String toString() {
+ 			return "BasicSetter(" + clazz.getName() + '.' + propertyName + ')';
+ 		}
+@@ -240,6 +241,7 @@
+ 			return method.getName();
+ 		}
+ 
++		@Override
+ 		public String toString() {
+ 			return "BasicGetter(" + clazz.getName() + '.' + propertyName + ')';
+ 		}
+@@ -271,12 +273,16 @@
+ 
+ 	private static BasicSetter getSetterOrNull(Class theClass, String propertyName) {
+ 
+-		if (theClass==Object.class || theClass==null) return null;
++		if (theClass==Object.class || theClass==null) {
++			return null;
++		}
+ 
+ 		Method method = setterMethod(theClass, propertyName);
+ 
+ 		if (method!=null) {
+-			if ( !ReflectHelper.isPublic(theClass, method) ) method.setAccessible(true);
++			if ( !ReflectHelper.isPublic(theClass, method) ) {
++				method.setAccessible(true);
++			}
+ 			return new BasicSetter(theClass, method, propertyName);
+ 		}
+ 		else {
+@@ -336,29 +342,62 @@
+ 
+ 	}
+ 
++	/* jaime.porras: includes a control to get isProperty() getter only in the case of boolean properties */
+ 	private static BasicGetter getGetterOrNull(Class theClass, String propertyName) {
+ 
+-		if (theClass==Object.class || theClass==null) return null;
++		if (theClass==Object.class || theClass==null) {
++			return null;
++		}
++		Class clazz = getFieldType(theClass, propertyName);
++		boolean isBoolean = clazz != null && (clazz.getName().equals("boolean") || java.lang.Boolean.class.equals(clazz));
++				
++		return getGetterOrNull(theClass, propertyName, isBoolean);
++	}
++	
++	private static Class getFieldType(Class theClass, String propertyName) {
++		Class fieldType = null;
++		if (theClass == Object.class || theClass == null) {
++			fieldType = null;
++		}
++		else {
++			try {
++				Field field = theClass.getDeclaredField(propertyName);
++				fieldType = field.getType();
++			}
++			catch (NoSuchFieldException e) {
++				fieldType = getFieldType(theClass.getSuperclass(), propertyName);
++			}
++		}
++		return fieldType;
++	}
++
++	private static BasicGetter getGetterOrNull(Class theClass, String propertyName, boolean isBoolean) {
++
++		if (theClass==Object.class || theClass==null) {
++			return null;
++		}
+ 
+-		Method method = getterMethod(theClass, propertyName);
++		Method method = getterMethod(theClass, propertyName, isBoolean);
+ 
+ 		if (method!=null) {
+-			if ( !ReflectHelper.isPublic(theClass, method) ) method.setAccessible(true);
++			if ( !ReflectHelper.isPublic(theClass, method) ) {
++				method.setAccessible(true);
++			}
+ 			return new BasicGetter(theClass, method, propertyName);
+ 		}
+ 		else {
+-			BasicGetter getter = getGetterOrNull( theClass.getSuperclass(), propertyName );
++			BasicGetter getter = getGetterOrNull( theClass.getSuperclass(), propertyName, isBoolean );
+ 			if (getter==null) {
+ 				Class[] interfaces = theClass.getInterfaces();
+ 				for ( int i=0; getter==null && i<interfaces.length; i++ ) {
+-					getter=getGetterOrNull( interfaces[i], propertyName );
++					getter=getGetterOrNull( interfaces[i], propertyName, isBoolean );
+ 				}
+ 			}
+ 			return getter;
+ 		}
+ 	}
+-
+-	private static Method getterMethod(Class theClass, String propertyName) {
++	
++	private static Method getterMethod(Class theClass, String propertyName, boolean isBoolean) {
+ 
+ 		Method[] methods = theClass.getDeclaredMethods();
+ 		for (int i=0; i<methods.length; i++) {
+@@ -377,7 +416,7 @@
+ 				}
+ 
+ 				// if not "get", then try "is"
+-				if ( methodName.startsWith("is") ) {
++				if ( isBoolean && methodName.startsWith("is") ) {
+ 					String testStdMethod = Introspector.decapitalize( methodName.substring(2) );
+ 					String testOldMethod = methodName.substring(2);
+ 					if ( testStdMethod.equals(propertyName) || testOldMethod.equals(propertyName) ) {
+@@ -388,5 +427,6 @@
+ 		}
+ 		return null;
+ 	}
++	/* jaime.porras: includes a control to get isProperty() getter only in the case of boolean properties */
+ 
+ }

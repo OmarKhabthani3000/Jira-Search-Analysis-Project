@@ -1,0 +1,644 @@
+Here is an extract of my Person.java file :
+
+    @Entity
+    @Table(name = "jpacache_person", uniqueConstraints=@UniqueConstraint(columnNames={"first_name", "family_id"}))
+    @DiscriminatorColumn(name = "sexe", discriminatorType = DiscriminatorType.STRING, length = 1)
+    @Inheritance(strategy = InheritanceType.SINGLE_TABLE)
+    @DiscriminatorValue("U")
+    @org.hibernate.annotations.Entity(dynamicInsert = true, dynamicUpdate = true)
+    public class Person {
+
+        private Address address;
+        private int id;
+        private String firstName;
+        private Family family;
+        
+        public Person(String firstName, Family family) {
+            this.firstName = firstName;
+            this.family = family;
+            this.address = null;
+            this.id = 0;
+            this.family.addMember(this);
+        }
+
+        @ManyToOne
+        @JoinColumn(name="address_id")
+        public Address getAddress() {
+            return address;
+        }
+
+        public boolean setAddress(Address address) {
+            boolean done = false;
+            if (this.address != address) {
+                if (this.address != null) this.address.remInhabitant(this);
+                this.address = address;
+                if (this.address != null) this.address.addInhabitant(this);
+                done = true;
+            }
+            return done;
+        }
+
+        @Id
+        public int getId() {
+            return id;
+        }
+
+        /**
+         * Since we are in a bench context, we want to control the ID value.
+         * In other context, this method should be protected 
+         * and the getter should use "@GeneratedValue(strategy = GenerationType.AUTO)". 
+         */
+        public void setId(int id) {
+            this.id = id;
+        }
+        
+        ...
+    }
+
+Here is an extract of my Address.java file :
+
+    @Entity
+    @Table(name = "jpacache_address", uniqueConstraints=@UniqueConstraint(columnNames={"street_number", "street_name", "city_name", "country_name"}))
+    public class Address {
+
+        private Set<Person> inhabitants;
+        private int id;
+
+        @OneToMany(mappedBy = "address")
+        public Set<Person> getInhabitants() {
+            return inhabitants;
+        }
+
+        public boolean addInhabitant(Person inhabitant) {
+            boolean done = false;
+            if (inhabitants.add(inhabitant)) {
+                inhabitant.setAddress(this);
+                done = true;
+            }
+            return done;
+        }
+
+        public boolean remInhabitant(Person inhabitant) {
+            boolean done = false;
+            if (inhabitants.remove(inhabitant)) {
+                inhabitant.setAddress(null);
+                done = true;
+            }
+            return done;
+        }
+
+        @PreRemove
+        protected void removeAllInhabitants() {
+            // inhabitants relation is not CASCADED, we must delete the relation on other side by ourselves
+            for (Iterator<Person> iterator = inhabitants.iterator(); iterator.hasNext();) {
+                Person p = iterator.next();
+                p.setAddress(null);
+            }
+        }
+
+        @Id
+        public int getId() {
+            return id;
+        }
+
+        /**
+         * Since we are in a bench context, we want to control the ID value.
+         * In other context, this method should be protected 
+         * and the getter should use "@GeneratedValue(strategy = GenerationType.AUTO)". 
+         */
+        public void setId(int id) {
+            this.id = id;
+        }
+
+        ...
+    }
+
+Here is an extract of my Family.java file :
+
+    @Entity
+    @Table(name = "jpacache_family", uniqueConstraints=@UniqueConstraint(columnNames={"name"}))
+    @org.hibernate.annotations.Entity(dynamicInsert = true, dynamicUpdate = true)
+    public class Family {
+
+        private String name;
+        private Set<Person> members;
+        private int id;
+
+        public Family(String name) {
+            this.name = name;
+            this.members = new HashSet<Person>();
+            this.id = 0;
+        }
+
+        @OneToMany(mappedBy = "family", cascade = CascadeType.ALL)
+        public Set<Person> getMembers() {
+            return members;
+        }
+
+        /**
+         * Adds a member in the Collection members.
+         * But does not update this relation on Person side.
+         * This is used internally to update the Collection members upon Person creation 
+         * 
+         * @param member the member
+         * 
+         * @return true, if successful
+         */
+        boolean addMember(Person member) {
+            return members.add(member);
+        }
+
+        @Id
+        public int getId() {
+            return id;
+        }
+
+        /**
+         * Since we are in a bench context, we want to control the ID value.
+         * In other context, this method should be protected 
+         * and the getter should use "@GeneratedValue(strategy = GenerationType.AUTO)". 
+         */
+        public void setId(int id) {
+            this.id = id;
+        }
+
+        protected Family() {
+            this.name = null;
+            this.members = new HashSet<Person>();
+            this.id = 0;
+        }
+
+        protected void setMembers(Set<Person> members) {
+            this.members = members;
+        }
+}
+
+Here an extract of my Stateless Session bean which is called :
+
+    @Stateless(name="FamilyManagerBean")
+    public class FamilyManagerBean implements FamilyManager {
+
+        //@PersistenceContext(unitName = "jpacache1")
+        public EntityManager em;
+
+        public EntityManager getEm() {
+            return em;
+        }
+
+        @TransactionAttribute(TransactionAttributeType.REQUIRED)
+        public void setAddressForPerson(int personId, int addressId) {
+            Address address = findAddress(addressId);
+            if (address == null) {
+                throw new IllegalArgumentException("Address with id " + addressId + " does not currently exist.");
+            }
+            Person person = findPerson(personId);
+            if (person == null) {
+                throw new IllegalArgumentException("Person with id " + personId + " does not currently exist.");
+            }
+            person.setAddress(address);
+        }
+
+        @TransactionAttribute(TransactionAttributeType.SUPPORTS)
+        public Address findAddress(int id) {
+            return em.find(Address.class, id);
+        }
+
+        @TransactionAttribute(TransactionAttributeType.SUPPORTS)
+        public Person findPerson(int id) {
+            return em.find(Person.class, id);
+        }
+
+        @TransactionAttribute(TransactionAttributeType.REQUIRED)
+        public void createFamily(int id, String name) {
+            Family family = new Family(name);
+            family.setId(id);
+            em.persist(family);
+        }
+
+        @TransactionAttribute(TransactionAttributeType.REQUIRED)
+        public void createAddress(int id, int streetNumber, String streetName, String cityName, String countryName) {
+            Address address = new Address(streetNumber, streetName, cityName, countryName);
+            address.setId(id);
+            em.persist(address);
+        }
+
+        @TransactionAttribute(TransactionAttributeType.REQUIRED)
+        public void createPerson(int id, String firstName, int familyId) {
+            Family family = em.find(Family.class, familyId);
+            if (family != null) {
+                Person person = new Person(firstName, family);
+                person.setId(id);
+                em.persist(person);
+            } else {
+                throw new IllegalArgumentException("Family '" + familyId + "' does not currently exist."
+                        +" Person '" + firstName + "' cannot therefore be created.");
+            }
+        }
+
+Here an extract of my test which calls my Bean manager :
+
+    FamilyManager manager = (FamilyManager)context.lookup("FamilyManagerBeanLocal");
+
+    int familyId = 0;
+    int addressId = 0;
+    manager.createFamily(familyId, "Durand-0-0");
+    manager.createAddress(addressId, 0, "rue 0", "Paris", "France");
+    for (int personId = 0; personId < 3; personId++) {
+        manager.createPerson(personId, "Pierre-" + personId, familyId);
+    }
+    for (int personId = 0; personId < 3; personId++) {
+        manager.setAddressForPerson(personId, addressId);
+    }
+
+
+Here is the stack trace at the line 366 
+where hibernate throws the LazyInitializationException
+and values of variables :
+
+Thread [Thread-11] (Suspended (breakpoint at line 366 in AbstractPersistentCollection))
+    PersistentSet(AbstractPersistentCollection).initialize(boolean) line: 366
+        this                          PersistentSet  (id=61)
+          cachedSize                    -1
+          directlyAccessible            false
+          dirty                         false
+          initialized                   false
+          initializing                  true
+          key                           Integer  (id=110)
+          operationQueue                null
+          owner                         Address  (id=62)
+          role                          "test.Address.inhabitants" (id=114)
+          session                       SessionImpl  (id=76)
+          set                           HashSet<E>  (id=125)
+          storedSnapshot                null
+          tempList                      ArrayList<E>  (id=130)
+        writing                       false
+    PersistentSet(AbstractPersistentCollection).read() line: 111
+        this                          PersistentSet  (id=61)
+    PersistentSet(AbstractPersistentCollection).readElementExistence(Object) line: 167
+        this                          PersistentSet  (id=61)
+#
+# SECOND Person entity
+#
+        element                       Person  (id=63)
+          address                       Address  (id=62)
+          birthDate                     null
+          checked                       false
+          family                        null
+          firstName                     null
+          id                            0
+          version                       0
+    PersistentSet.add(Object) line: 210
+        this                          PersistentSet  (id=61)
+        value                         Person  (id=63)
+    Address.addInhabitant(Person) line: 103
+        this                          Address  (id=62)
+          cityName                      "Paris" (id=155)
+          countryName                   "France" (id=156)
+          id                            0
+          inhabitants                   PersistentSet  (id=61)
+          streetName                    "rue 0" (id=157)
+          streetNumber                  0
+          version                       1
+          zipCode                       null
+        inhabitant                    Person  (id=63)
+        done                          false
+    Person.setAddress(Address) line: 107
+        this                          Person  (id=63)
+        address                       Address  (id=62)
+        done                          false
+    NativeMethodAccessorImpl.invoke0(Method, Object, Object[]) line: not available [native method]
+    NativeMethodAccessorImpl.invoke(Object, Object[]) line: 39
+        this                          NativeMethodAccessorImpl  (id=64)
+          method                        Method  (id=66)
+          numInvocations                4
+          parent                        DelegatingMethodAccessorImpl  (id=65)
+        arg0                          Person  (id=63)
+        arg1                          Object[1]  (id=5136)
+    DelegatingMethodAccessorImpl.invoke(Object, Object[]) line: 25
+        this                          DelegatingMethodAccessorImpl  (id=65)
+          delegate                      NativeMethodAccessorImpl  (id=64)
+        arg0                          Person  (id=63)
+        arg1                          Object[1]  (id=5136)
+          [0]                           Address  (id=62)
+    Method.invoke(Object, Object...) line: 597
+        this                          Method  (id=66)
+          annotationDefault             null
+          annotations                   null
+          clazz                         Class<T> (test.Person) (id=17)
+          declaredAnnotations           null
+          exceptionTypes                Class<T>[0]  (id=5158)
+          genericInfo                   null
+          methodAccessor                DelegatingMethodAccessorImpl  (id=65)
+          modifiers                     1
+          name                          "setAddress" (id=5171)
+          override                      false
+          parameterAnnotations          null
+          parameterTypes                Class<T>[1]  (id=5190)
+          returnType                    Class<T> (boolean) (id=5193)
+          root                          Method  (id=5200)
+          securityCheckCache            null
+          securityCheckTargetClassCache null
+          signature                     null
+          slot                          13
+        arg0                          Person  (id=63)
+        arg1                          Object[1]  (id=5136)
+    BasicPropertyAccessor$BasicSetter.set(Object, Object, SessionFactoryImplementor) line: 66
+        this                          BasicPropertyAccessor$BasicSetter  (id=67)
+          clazz                         Class<T> (test.Person) (id=17)
+          method                        Method  (id=66)
+          propertyName                  "address" (id=5326)
+        target                        Person  (id=63)
+        value                         Address  (id=62)
+        factory                       SessionFactoryImpl  (id=5296)
+    PojoEntityTuplizer(AbstractEntityTuplizer).setPropertyValues(Object, Object[]) line: 583
+        this                          PojoEntityTuplizer  (id=68)
+        j                             0
+        entity                        Person  (id=63)
+        values                        Object[6]  (id=5335)
+          [0]                           Address  (id=62)
+          [1]                           null
+          [2]                           Boolean  (id=5351)
+            value                         false
+          [3]                           Family  (id=5352)
+          [4]                           "Pierre-0" (id=5359)
+          [5]                           Integer  (id=5366)
+            value                         1
+        setAll                        true
+    PojoEntityTuplizer.setPropertyValues(Object, Object[]) line: 229
+        this                          PojoEntityTuplizer  (id=68)
+        entity                        Person  (id=63)
+        values                        Object[6]  (id=5335)
+    SingleTableEntityPersister(AbstractEntityPersister).setPropertyValues(Object, Object[], EntityMode) line: 3822
+        this                          SingleTableEntityPersister  (id=69)
+        object                        Person  (id=63)
+        values                        Object[6]  (id=5335)
+        entityMode                    EntityMode  (id=5387)
+          name                          "pojo" (id=5388)
+    TwoPhaseLoad.initializeEntity(Object, boolean, SessionImplementor, PreLoadEvent, PostLoadEvent) line: 152
+        entity                        Person  (id=63)
+        readOnly                      false
+        session                       SessionImpl  (id=76)
+        preLoadEvent                  PreLoadEvent  (id=5418)
+        postLoadEvent                 PostLoadEvent  (id=5419)
+        persistenceContext            StatefulPersistenceContext  (id=5420)
+        entityEntry                   EntityEntry  (id=5421)
+        persister                     SingleTableEntityPersister  (id=69)
+        id                            Integer  (id=110)
+        hydratedState                 Object[6]  (id=5335)
+        types                         Type[6]  (id=5422)
+    OneToManyLoader(Loader).initializeEntitiesAndCollections(List, Object, SessionImplementor, boolean) line: 982
+        this                          OneToManyLoader  (id=71)
+          aliases                       String[2]  (id=5531)
+            [0]                           "family1_" (id=5534)
+            [1]                           "inhabitant0_" (id=5535)
+          collectionDescriptors         CollectionAliases[1]  (id=5532)
+          collectionOwners              null
+          collectionPersister           OneToManyPersister  (id=73)
+          collectionPersisters          CollectionPersister[1]  (id=5530)
+          collectionSuffixes            String[1]  (id=5533)
+          columnNameCache               null
+          descriptors                   EntityAliases[2]  (id=5561)
+          factory                       SessionFactoryImpl  (id=5296)
+          loadQueryInfluencers          LoadQueryInfluencers  (id=5582)
+          lockModeArray                 LockMode[2]  (id=5583)
+          lockOptions                   LockOptions  (id=5584)
+          ownerAssociationTypes         EntityType[2]  (id=5585)
+          owners                         (id=5586)
+          persisters                    Loadable[2]  (id=5587)
+          sql                           "select inhabitant0_.address_id as address7_1_2_, inhabitant0_.id as id2_, inhabitant0_.id as id0_1_, inhabitant0_.address_id as address7_0_1_, inhabitant0_.birth_date as birth3_0_1_, inhabitant0_.checked as checked0_1_, inhabitant0_.family_id as family8_0_1_, inhabitant0_.first_name as first5_0_1_, inhabitant0_.version as version0_1_, family1_.id as id2_0_, family1_.name as name2_0_, family1_.second_name as second3_2_0_, family1_.version as version2_0_ from jpacache_person inhabitant0_ left outer join jpacache_family family1_ on inhabitant0_.family_id=family1_.id where inhabitant0_.address_id=?" (id=5588)
+          suffixes                      String[2]  (id=5589)
+        i                             0
+        hydratedObjectsSize           1
+        hydratedObjects               ArrayList<E>  (id=5528)
+          elementData                   Object[20]  (id=5590)
+            [0]                           Person  (id=63)
+            [1]                           null
+            ...
+            [19]                          null
+          modCount                      1
+          size                          1
+        resultSetId                   DelegatingResultSet  (id=5529)
+        session                       SessionImpl  (id=76)
+        readOnly                      false
+        collectionPersisters          CollectionPersister[1]  (id=5530)
+        pre                           PreLoadEvent  (id=5418)
+        post                          PostLoadEvent  (id=5419)
+    OneToManyLoader(Loader).doQuery(SessionImplementor, QueryParameters, boolean) line: 857
+        this                          OneToManyLoader  (id=71)
+        session                       SessionImpl  (id=76)
+        queryParameters               QueryParameters  (id=5664)
+        returnProxies                 true
+        selection                     null
+        maxRows                       2147483647
+        entitySpan                    2
+        hydratedObjects               ArrayList<E>  (id=5528)
+        st                            DelegatingPreparedStatement  (id=5665)
+        rs                            DelegatingResultSet  (id=5529)
+        optionalObjectKey             null
+        lockModesArray                LockMode[2]  (id=5583)
+        createSubselects              false
+        subselectResultKeys           null
+        results                       ArrayList<E>  (id=5666)
+    OneToManyLoader(Loader).doQueryAndInitializeNonLazyCollections(SessionImplementor, QueryParameters, boolean) line: 274
+        this                          OneToManyLoader  (id=71)
+        session                       SessionImpl  (id=76)
+        queryParameters               QueryParameters  (id=5664)
+        returnProxies                 true
+        persistenceContext            StatefulPersistenceContext  (id=5420)
+        defaultReadOnlyOrig           false
+    OneToManyLoader(Loader).loadCollection(SessionImplementor, Serializable, Type) line: 2166
+        this                          OneToManyLoader  (id=71)
+        session                       SessionImpl  (id=76)
+        id                            Integer  (id=110)
+          value                         0
+        type                          IntegerType  (id=5685)
+        ids                           Serializable[1]  (id=5686)
+    OneToManyLoader(CollectionLoader).initialize(Serializable, SessionImplementor) line: 62
+        this                          OneToManyLoader  (id=71)
+        id                            Integer  (id=110)
+        session                       SessionImpl  (id=76)
+    OneToManyPersister(AbstractCollectionPersister).initialize(Serializable, SessionImplementor) line: 627
+        this                          OneToManyPersister  (id=73)
+          baseIndex                     0
+          batchSize                     1
+          cacheAccessStrategy           null
+          cacheEntryStructure           UnstructuredCacheEntry  (id=5562)
+          cascadeDeleteEnabled          false
+          collectionPropertyColumnAliases HashMap<K,V>  (id=5563)
+          collectionPropertyColumnNames   HashMap<K,V>  (id=5564)
+          collectionType                SetType  (id=5565)
+          deleteAllCallable             false
+          deleteAllCheckStyle           ExecuteUpdateResultCheckStyle  (id=5566)
+          deleteCallable                false
+          deleteCheckStyle              ExecuteUpdateResultCheckStyle  (id=5566)
+          dialect                       HSQLDialect  (id=5567)
+          elementClass                  null
+          elementColumnAliases          String[1]  (id=5568)
+          elementColumnIsInPrimaryKey    (id=5569)
+          elementColumnIsSettable        (id=5570)
+          elementColumnNames            String[1]  (id=5571)
+          elementColumnReaders          String[1]  (id=5572)
+          elementColumnReaderTemplates  String[1]  (id=5573)
+          elementColumnWriters          String[1]  (id=5574)
+          elementFormulas               String[1]  (id=5575)
+          elementFormulaTemplates       String[1]  (id=5576)
+          elementIsPureFormula          false
+          elementNodeName               "Person" (id=5577)
+          elementPersister              SingleTableEntityPersister  (id=69)
+          elementPropertyMapping        SingleTableEntityPersister  (id=69)
+          elementType                   ManyToOneType  (id=5578)
+          entityName                    "test.Address" (id=5579)
+          factory                       SessionFactoryImpl  (id=5296)
+          fetchMode                     FetchMode  (id=5580)
+          filterHelper                  FilterHelper  (id=5581)
+          hasIdentifier                 false
+          hasIndex                      false
+          hasManyToManyOrder            false
+          hasOrder                      false
+          hasOrphanDelete               false
+          hasWhere                      false
+          identifierColumnAlias         null
+          identifierColumnName          null
+          identifierGenerator           null
+          identifierType                null
+          indexColumnAliases            null
+          indexColumnIsSettable         null
+          indexColumnNames              null
+          indexContainsFormula          false
+          indexFormulas                 null
+          indexFormulaTemplates         null
+          indexFragments                null
+          indexNodeName                 null
+          indexType                     null
+          initializer                   OneToManyLoader  (id=71)
+          insertCallable                false
+          insertCheckStyle              ExecuteUpdateResultCheckStyle  (id=5431)
+          isArray                       false
+          isExtraLazy                   false
+          isInverse                     true
+          isLazy                        true
+          isMutable                     true
+          isPrimitiveArray              false
+          isVersioned                   true
+          keyColumnAliases              String[1]  (id=5746)
+          keyColumnNames                String[1]  (id=5747)
+          keyIsNullable                 true
+          keyIsUpdateable               true
+          keyType                       IntegerType  (id=5685)
+          manyToManyFilterHelper        FilterHelper  (id=5748)
+          manyToManyOrderByTemplate     null
+          manyToManyWhereString         null
+          manyToManyWhereTemplate       null
+          nodeName                      "inhabitants" (id=5749)
+          ownerPersister                SingleTableEntityPersister  (id=5750)
+          qualifiedTableName            "jpacache_person" (id=5751)
+          queryLoaderName               null
+          role                          "test.Address.inhabitants" (id=114)
+          spaces                        String[1]  (id=5752)
+          sqlDeleteRowString            "update jpacache_person set address_id=null where address_id=? and id=?" (id=5753)
+          sqlDeleteString               "update jpacache_person set address_id=null where address_id=?" (id=5754)
+          sqlDetectRowByElementString   "select 1 from jpacache_person where address_id =? and id =?" (id=5755)
+          sqlDetectRowByIndexString     null
+          sqlExceptionConverter         SQLStateConverter  (id=5756)
+          sqlInsertRowString            "update jpacache_person set address_id=? where id=?" (id=5757)
+          sqlOrderByStringTemplate      null
+          sqlSelectRowByIndexString     null
+          sqlSelectSizeString           "select count(id) from jpacache_person where address_id =?" (id=5758)
+          sqlUpdateRowString            null
+          sqlWhereString                null
+          sqlWhereStringTemplate        null
+          subselectLoadable             false
+          updateCallable                false
+          updateCheckStyle              ExecuteUpdateResultCheckStyle  (id=5431)
+        key                           Integer  (id=110)
+          value                         0
+        session                       SessionImpl  (id=76)
+    DefaultInitializeCollectionEventListener.onInitializeCollection(InitializeCollectionEvent) line: 83
+        this                          DefaultInitializeCollectionEventListener  (id=75)
+        foundInCache                  false
+        event                         InitializeCollectionEvent  (id=5762)
+        collection                    PersistentSet  (id=61)
+        source                        SessionImpl  (id=76)
+        ce                            CollectionEntry  (id=5763)
+    SessionImpl.initializeCollection(PersistentCollection, boolean) line: 1863
+        this                          SessionImpl  (id=76)
+        i                             0
+        collection                    PersistentSet  (id=61)
+        writing                       false
+        listener                      InitializeCollectionEventListener[1]  (id=5770)
+    PersistentSet(AbstractPersistentCollection).initialize(boolean) line: 369
+        this                          PersistentSet  (id=61)
+        writing                       false
+    PersistentSet(AbstractPersistentCollection).read() line: 111
+        this                          PersistentSet  (id=61)
+    PersistentSet(AbstractPersistentCollection).readElementExistence(Object) line: 167
+        this                          PersistentSet  (id=61)
+#
+# FIRST Person entity
+#
+        element                       Person  (id=77)
+          address                       Address  (id=62)
+          birthDate                     null
+          checked                       false
+          family                        Family  (id=5352)
+          firstName                     "Pierre-1" (id=5787)
+          id                            1
+          version                       0
+    PersistentSet.add(Object) line: 210
+        this                          PersistentSet  (id=61)
+        value                         Person  (id=77)
+    Address.addInhabitant(Person) line: 103
+        this                          Address  (id=62)
+        inhabitant                    Person  (id=77)
+        done                          false
+    Person.setAddress(Address) line: 107
+        this                          Person  (id=77)
+        address                       Address  (id=62)
+        done                          false
+    FamilyManagerBean.setAddressForPerson(int, int) line: 584
+        this                          FamilyManagerBean  (id=78)
+          em                            JtaEntityManager  (id=5808)
+          log                           Log4jLoggerAdapter  (id=5809)
+        personId                      1
+        addressId                     0
+        address                       Address  (id=62)
+        person                        Person  (id=77)
+    NativeMethodAccessorImpl.invoke0(Method, Object, Object[]) line: not available [native method]
+    NativeMethodAccessorImpl.invoke(Object, Object[]) line: 39
+    DelegatingMethodAccessorImpl.invoke(Object, Object[]) line: 25
+    Method.invoke(Object, Object...) line: 597
+    ReflectionInvocationContext$BeanInvocation(ReflectionInvocationContext$Invocation).invoke() line: 182
+    ReflectionInvocationContext.proceed() line: 164
+    StatsInterceptor.record(InvocationContext, Method) line: 174
+    StatsInterceptor.invoke(InvocationContext) line: 93
+    GeneratedMethodAccessor17.invoke(Object, Object[]) line: not available
+    DelegatingMethodAccessorImpl.invoke(Object, Object[]) line: 25
+    Method.invoke(Object, Object...) line: 597
+    ReflectionInvocationContext$InterceptorInvocation(ReflectionInvocationContext$Invocation).invoke() line: 182
+    ReflectionInvocationContext.proceed() line: 164
+    CdiInterceptor.invoke(InvocationContext) line: 132
+    CdiInterceptor.access$000(CdiInterceptor, InvocationContext) line: 46
+    CdiInterceptor$1.call() line: 64
+    CdiInterceptor$ScopeActivator.call() line: 97
+    CdiInterceptor$ScopeActivator.call() line: 97
+    CdiInterceptor.aroundInvoke(InvocationContext) line: 70
+    GeneratedMethodAccessor16.invoke(Object, Object[]) line: not available
+    DelegatingMethodAccessorImpl.invoke(Object, Object[]) line: 25
+    Method.invoke(Object, Object...) line: 597
+    ReflectionInvocationContext$InterceptorInvocation(ReflectionInvocationContext$Invocation).invoke() line: 182
+    ReflectionInvocationContext.proceed() line: 164
+    InterceptorStack.invoke(Object...) line: 126
+    StatelessContainer._invoke(Method, Method, Object[], Instance, ThreadContext, InterfaceType) line: 224
+    StatelessContainer.invoke(Object, InterfaceType, Class, Method, Object[], Object) line: 176
+    StatelessEjbObjectHandler(EjbObjectProxyHandler).synchronizedBusinessMethod(Class<?>, Method, Object[], Object) line: 249
+    StatelessEjbObjectHandler(EjbObjectProxyHandler).businessMethod(Class<?>, Method, Object[], Object) line: 232
+    StatelessEjbObjectHandler(EjbObjectProxyHandler)._invoke(Object, Class, Method, Object[]) line: 89
+    StatelessEjbObjectHandler(BaseEjbProxyHandler).invoke(Object, Method, Object[]) line: 274
+    $Proxy67.setAddressForPerson(int, int) line: not available
+    Runner$CollectionInsertRunner.run() line: 614
+    Thread.run() line: 662
+
+	
+	
+	
+	GeneratedMethodAccessor16.invoke(Object, Object[]) line: not available	

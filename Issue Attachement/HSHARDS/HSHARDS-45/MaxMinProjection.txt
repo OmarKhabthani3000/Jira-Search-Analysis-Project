@@ -1,0 +1,48 @@
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java	(working copy)
+@@ -24,6 +24,7 @@
+ 
+ import java.math.BigDecimal;
+ import java.util.Collections;
++import java.util.Comparator;
+ import java.util.List;
+ 
+ /**
+@@ -76,12 +77,33 @@
+   public List<Object> apply(List<Object> results) {
+ 
+     List<Object> nonNullResults = ExitOperationUtils.getNonNullList(results);
++    
++    /**
++     * Aviad Lichtenstadt
++     * Applying here a new algorithm so there is no need to use only comparable Objects
++     * I am offering to use the same methodology as used in the OrderExitOperation.
++     * build our own comparable that fits the field name set in the projection
++     * this should be done for both max and min operations
++     */
++    Comparator<Object> comparator = new Comparator<Object>() {
++      public int compare(Object o1, Object o2) {
++        if (o1 == o2) {
++          return 0;
++        }
++        Comparable<Object> o1Value = ExitOperationUtils.getPropertyValue(o1, fieldName);
++        Comparable<Object> o2Value = ExitOperationUtils.getPropertyValue(o2, fieldName);
++        if (o1Value == null) {
++          return -1;
++        }
++        return  o1Value.compareTo(o2Value);
++      }
++    };
+ 
+     switch(aggregate) {
+       case MAX:
+-        return Collections.singletonList((Object) Collections.max(ExitOperationUtils.getComparableList(nonNullResults)));
++        return Collections.singletonList((Object) Collections.max(nonNullResults,comparator));
+       case MIN:
+-        return Collections.singletonList((Object) Collections.min(ExitOperationUtils.getComparableList(nonNullResults)));
++        return Collections.singletonList((Object) Collections.min(nonNullResults,comparator));
+       case SUM:
+         return Collections.<Object>singletonList(getSum(nonNullResults, fieldName));
+       default:

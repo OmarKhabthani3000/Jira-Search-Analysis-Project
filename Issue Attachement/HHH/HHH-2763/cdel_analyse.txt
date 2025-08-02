@@ -1,0 +1,179 @@
+We have similar problems with other relation patterns. I've analysed the attached original TestCase (m:n relation, see testcase.zip) and came to these suggestions
+which may solve the problem (background and details can be found in the attached file analyse_of_cdel.txt):
+ - (Solution 1) Class CollectionEntry: set a default value for flag processed (see ####Comment 0.0)
+ - Method StatefulPersistenceContext.addUninitializedCollection: one of these two points is sufficient to solve our problem
+     -> (Solution 2) flag flushing has value false and we are in a flushing action: if this is
+      a bug and if this bug is corrected, then the our bug is solved
+     -> (Solution 3) flag processed could be set to true at this place because we are sure the collection 
+      was just read from the DB
+ - (Solution 4) Constructor CollectionEntry (For collections just loaded from the database) (see ####Comment 26.2)
+Evaluation: 
+  Side effects for Solution 1 are difficult to evaluate: it affects all clients of the CollectionEntry class 
+   whose logic may be built on the asumption that the field has a false default value.
+   Such a change affects CollectionEntry Items (i.e scope is limited).
+  Side effects for Solution 2 are difficult to evaluate and are beyond the Collection scope.
+  Solution 3 has the lowest side effect potential but with the risk that collections
+   that are loaded in another way will still cause our bug.
+  Solution 4: constuctor is also called by StatefulPersistenceContext.addInitializedCollection.
+   Fixing here may have an undesired side effect.
+
+---------------------------
+Call overview (lines starting with x are covered by the execution stack which is commented hereafter)
+---------------------------
+                                              
+      Object A is loaded
+      value of field of Class A is changed
+x      flush()
+x        ...                                       
+x        pre-flush()                               
+x          ...                                     
+x          prepareCollectionForUpdate              
+x             ...                                  
+x             flag processed is set to true for CollectionEntry A.entitiesOfB
+x             ...                                     
+x          ...
+x        ...                                       
+x        post-update Listener called
+x          ..                                      
+x(*)      causes each element of Collection A.entitiesOfB to be loaded and as a consequence
+          each B.entitiesOfA CollectionsEntry are initialized with flag processed=false  #### see commented stack trace hereafter
+        ...                                          
+        post-flush()                              
+          ...                                     
+          CollectionEntry.postFlush()  : no exception raised for A.entitiesOfB because flag processed=true
+        ...                              exception raised for B.entitiesofA because flag processed is still to "false"    <==== HHH-2763
+      commit()
+-------------------------------------
+Commented stack trace occuring at (*): 
+-------------------------------------
+Stack:
+-------
+Step  Stack Entry
+      Thread [main] (Suspended (breakpoint at line 95 in org.hibernate.engine.CollectionEntry)) 
+26    org.hibernate.engine.CollectionEntry.<init>(org.hibernate.collection.PersistentCollection, org.hibernate.persister.collection.CollectionPersister, java.io.Serializable, boolean) line: 95 
+25    org.hibernate.engine.StatefulPersistenceContext.addUninitializedCollection(org.hibernate.persister.collection.CollectionPersister, org.hibernate.collection.PersistentCollection, java.io.Serializable) line: 673 
+24    org.hibernate.type.SetType(org.hibernate.type.CollectionType).getCollection(java.io.Serializable, org.hibernate.engine.SessionImplementor, java.lang.Object) line: 575 
+23    org.hibernate.type.SetType(org.hibernate.type.CollectionType).resolveKey(java.io.Serializable, org.hibernate.engine.SessionImplementor, java.lang.Object) line: 374 
+22    org.hibernate.type.SetType(org.hibernate.type.CollectionType).resolve(java.lang.Object, org.hibernate.engine.SessionImplementor, java.lang.Object) line: 368 
+21    org.hibernate.engine.TwoPhaseLoad.initializeEntity(java.lang.Object, boolean, org.hibernate.engine.SessionImplementor, org.hibernate.event.PreLoadEvent, org.hibernate.event.PostLoadEvent) line: 116 
+20    org.hibernate.loader.collection.BasicCollectionLoader(org.hibernate.loader.Loader).initializeEntitiesAndCollections(java.util.List, java.lang.Object, org.hibernate.engine.SessionImplementor, boolean) line: 854 
+19    org.hibernate.loader.collection.BasicCollectionLoader(org.hibernate.loader.Loader).doQuery(org.hibernate.engine.SessionImplementor, org.hibernate.engine.QueryParameters, boolean) line: 729 
+18    org.hibernate.loader.collection.BasicCollectionLoader(org.hibernate.loader.Loader).doQueryAndInitializeNonLazyCollections(org.hibernate.engine.SessionImplementor, org.hibernate.engine.QueryParameters, boolean) line: 236 
+17    org.hibernate.loader.collection.BasicCollectionLoader(org.hibernate.loader.Loader).loadCollection(org.hibernate.engine.SessionImplementor, java.io.Serializable, org.hibernate.type.Type) line: 1994 
+16    org.hibernate.loader.collection.BasicCollectionLoader(org.hibernate.loader.collection.CollectionLoader).initialize(java.io.Serializable, org.hibernate.engine.SessionImplementor) line: 36 
+15    org.hibernate.persister.collection.BasicCollectionPersister(org.hibernate.persister.collection.AbstractCollectionPersister).initialize(java.io.Serializable, org.hibernate.engine.SessionImplementor) line: 565 
+14    org.hibernate.event.def.DefaultInitializeCollectionEventListener.onInitializeCollection(org.hibernate.event.InitializeCollectionEvent) line: 60 
+13    org.hibernate.impl.SessionImpl.initializeCollection(org.hibernate.collection.PersistentCollection, boolean) line: 1716 
+12    org.hibernate.collection.PersistentSet(org.hibernate.collection.AbstractPersistentCollection).initialize(boolean) line: 344 
+11    org.hibernate.collection.PersistentSet(org.hibernate.collection.AbstractPersistentCollection).read() line: 86 
+10    org.hibernate.collection.PersistentSet.iterator() line: 163 
+9     ch.rtc.infra.protok.client.InPro_MyHibernateListener.onPostUpdate(org.hibernate.event.PostUpdateEvent) line: 43 
+8     org.hibernate.action.EntityUpdateAction.postUpdate() line: 180 
+7     org.hibernate.action.EntityUpdateAction.execute() line: 159 
+6     org.hibernate.engine.ActionQueue.execute(org.hibernate.action.Executable) line: 248 
+5     org.hibernate.engine.ActionQueue.executeActions(java.util.List) line: 232 
+4     org.hibernate.engine.ActionQueue.executeActions() line: 140 
+3     org.hibernate.event.def.DefaultFlushEventListener(org.hibernate.event.def.AbstractFlushingEventListener).performExecutions(org.hibernate.event.EventSource) line: 298 
+2     org.hibernate.event.def.DefaultFlushEventListener.onFlush(org.hibernate.event.FlushEvent) line: 27 
+1     org.hibernate.impl.SessionImpl.flush() line: 1000 
+
+Comment (are marked with ####)
+as background for the comments, here some piece of source code:
+
+  Class CollectionEntry:
+      ...
+      private transient boolean reached;
+      private transient boolean processed;
+      ####Comment 0.0 this flag usually has value "false" (default value of a boolean) when the collection
+      ####            is loaded (see for example comment 25.1); it is then set to true in the preparation steps of the flush
+      ####            operation (see typically Collections.prepareCollectionForUpdate)
+      ####            in our case (HHH-2763), the collection is loaded in the postUpdateListener steps (so after these preparation steps)
+      ####            and as consequence the flag "processed" has no chance to be set to "true" and stays with value "false"
+      ####            which causes the "was not processed by flush()" exception to be raised (see ####Comment 0.2) 
+      ####            --> Proposal: set a default value for this flag 
+      private transient boolean doupdate;
+      private transient boolean doremove;
+      private transient boolean dorecreate;
+      ...
+   /**
+    * Called after a successful flush
+    */
+   public void postFlush(PersistentCollection collection) throws HibernateException {
+    if ( isIgnore() ) {       ####Comment 0.1 flag ignore is checked here and reset
+     ignore = false;
+    }
+    else if ( !isProcessed() ) {   
+      ####Comment 0.2 flag isProcessed is checked here    
+     throw new AssertionFailure( "collection [" + collection.getRole() + "] was not processed by flush()" );
+    }
+    collection.setSnapshot(loadedKey, role, snapshot);
+   }
+
+Comment on some steps of the above stack:
+
+---
+26    org.hibernate.engine.CollectionEntry.<init>
+--
+    /**
+     * For collections just loaded from the database
+     */
+    public CollectionEntry(
+            final PersistentCollection collection, 
+            final CollectionPersister loadedPersister, 
+            final Serializable loadedKey, 
+            final boolean ignore
+    ) {
+        ####Comment 26.1 this is a debuging statement i've added
+        traceConstructorCall("For collections just loaded from the database: ignore=" + ignore); 
+        this.ignore=ignore;   ####Comment 26.2 flag ignore is set here 
+        ####Comment 26.2 set processed to true here would solve the problem
+        //collection.clearDirty()
+        
+        this.loadedKey = loadedKey;
+        setLoadedPersister(loadedPersister);
+        collection.setSnapshot(loadedKey, role, null);
+        //postInitialize() will be called after initialization
+    }
+
+---
+25    org.hibernate.engine.StatefulPersistenceContext.addUninitializedCollection
+---
+ /**
+  * add a collection we just loaded up (still needs initializing)
+  */
+ public void addUninitializedCollection(CollectionPersister persister, PersistentCollection collection, Serializable id) {
+  CollectionEntry ce = new CollectionEntry(collection, persister, id, flushing);
+     #####Comment 25.1
+     ##### - the 4th parameter (flushing) will set attribute "ignore" in CollectionEntry Constructor.
+     #####   it has value "false". Is it correct as we are just in flushing phase (see stack and comment 3.1) ?
+     #####   (if flag flushing is true at this point then the "was not processed by flush" Exception will not 
+     #####   occur (see CollectionEntry.postFlush first statement: if (isIgnore())))
+     ##### - the "was not processed by flush" could also be solved at this point by
+     #####   explicitly setting the "processed" flag to true on the created Collection entry, so ce.setProcessed(true)
+  addCollection(collection, ce, id);
+ }
+ 
+--- 
+3     org.hibernate.event.def.DefaultFlushEventListener(org.hibernate.event.def.AbstractFlushingEventListener).performExecutions(org.hibernate.event.EventSource) line: 298  
+---
+
+  protected void performExecutions(EventSource session) throws HibernateException {
+  log.trace("executing flush");
+  try {
+   session.getJDBCContext().getConnectionManager().flushBeginning();   (####Comment 3.1 here it is marked as "flushing")
+   // we need to lock the collection caches before
+   // executing entity inserts/updates in order to
+   // account for bidi associations
+   session.getActionQueue().prepareActions();                    ####Comment 3.2  --> call to 4
+   session.getActionQueue().executeActions();
+  }
+  catch (HibernateException he) {
+   log.error("Could not synchronize database state with session", he);
+   throw he;
+  }
+  finally {
+   session.getJDBCContext().getConnectionManager().flushEnding();
+  }
+ }
+ 
+--------------------

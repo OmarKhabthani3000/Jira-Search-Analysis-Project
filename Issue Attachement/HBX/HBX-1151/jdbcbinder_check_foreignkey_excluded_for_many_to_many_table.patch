@@ -1,0 +1,44 @@
+Index: tools/src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- tools/src/java/org/hibernate/cfg/JDBCBinder.java	(revision 17926)
++++ tools/src/java/org/hibernate/cfg/JDBCBinder.java	(working copy)
+@@ -427,14 +427,16 @@
+         	Iterator foreignKeyIterator = foreignKey.getTable().getForeignKeyIterator();
+         	List keys = new ArrayList();
+         	while ( foreignKeyIterator.hasNext() ) {
+-				Object next = foreignKeyIterator.next();
+-				if(next!=foreignKey) {
++				ForeignKey next = (ForeignKey) foreignKeyIterator.next();
++				if(next!=foreignKey && !isForeignKeyExcluded(next)) {
+ 					keys.add(next);
+ 				}
+ 			}
+ 
+         	if(keys.size()>1) {
+         		throw new JDBCBinderException("more than one other foreign key to choose from!"); // todo: handle better ?
++        	} else if(keys.size() == 0) {
++        		throw new JDBCBinderException("there is no other foreign key column for a many-to-many table or the foreign key column has been excluded");
+         	}
+ 
+         	ForeignKey fk = (ForeignKey) keys.get( 0 );
+@@ -485,11 +487,18 @@
+ 
+ 		return makeCollectionProperty(StringHelper.unqualify( collection.getRole() ), true, rc.getTable(), foreignKey, collection, true);
+ 		//return makeProperty(TableIdentifier.create( rc.getTable() ), StringHelper.unqualify( collection.getRole() ), collection, true, true, true, "none", null); // TODO: cascade isn't all by default
++	}
+ 
+-
++	private boolean isForeignKeyExcluded(ForeignKey foreignKey) {
++		boolean excluded = true;
++		Iterator columnIterator = foreignKey.getColumnIterator();
++		while(columnIterator.hasNext()) {
++			Column column = (Column) columnIterator.next();
++			excluded = excluded && revengStrategy.excludeColumn(TableIdentifier.create(foreignKey.getTable()), column.getName());
++		}
++		return excluded;
+ 	}
+ 
+-
+ 	private String bindCollection(PersistentClass rc, ForeignKey fromForeignKey, ForeignKey toForeignKey, Collection collection) {
+ 		ForeignKey targetKey = fromForeignKey;
+ 		String collectionRole = null;

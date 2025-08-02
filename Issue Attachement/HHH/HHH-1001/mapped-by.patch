@@ -1,0 +1,179 @@
+Index: src/org/hibernate/hibernate-mapping-3.0.dtd
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/hibernate-mapping-3.0.dtd,v
+retrieving revision 1.135
+diff -u -r1.135 hibernate-mapping-3.0.dtd
+--- src/org/hibernate/hibernate-mapping-3.0.dtd	26 Sep 2005 19:29:03 -0000	1.135
++++ src/org/hibernate/hibernate-mapping-3.0.dtd	1 Oct 2005 16:37:14 -0000
+@@ -515,6 +515,7 @@
+ 	<!ATTLIST map lazy (true|false|extra) #IMPLIED>
+ 	<!ATTLIST map mutable (true|false) "true">
+ 	<!ATTLIST map inverse (true|false) "false">
++	<!ATTLIST map mapped-by CDATA #IMPLIED>
+ 	<!ATTLIST map sort CDATA "unsorted">														 	<!-- unsorted|natural|"comparator class", default: unsorted -->
+ 	<!ATTLIST map cascade CDATA #IMPLIED>
+ 	<!ATTLIST map order-by CDATA #IMPLIED>													 		<!-- default: none -->
+@@ -549,6 +550,7 @@
+ 	<!ATTLIST set lazy (true|false|extra) #IMPLIED>
+ 	<!ATTLIST set sort CDATA "unsorted">														 	<!-- unsorted|natural|"comparator class" -->
+ 	<!ATTLIST set inverse (true|false) "false">
++	<!ATTLIST set mapped-by CDATA #IMPLIED>	
+ 	<!ATTLIST set mutable (true|false) "true">
+ 	<!ATTLIST set cascade CDATA #IMPLIED>
+ 	<!ATTLIST set order-by CDATA #IMPLIED>													 		<!-- default: none -->
+@@ -582,6 +584,7 @@
+ 	<!ATTLIST bag subselect CDATA #IMPLIED>
+ 	<!ATTLIST bag lazy (true|false|extra) #IMPLIED>
+ 	<!ATTLIST bag inverse (true|false) "false">
++	<!ATTLIST map mapped-by CDATA #IMPLIED>		
+ 	<!ATTLIST bag mutable (true|false) "true">
+ 	<!ATTLIST bag cascade CDATA #IMPLIED>
+ 	<!ATTLIST bag order-by CDATA #IMPLIED>													 		<!-- default: none -->
+@@ -649,6 +652,7 @@
+ 	<!ATTLIST list subselect CDATA #IMPLIED>
+ 	<!ATTLIST list lazy (true|false|extra) #IMPLIED>
+ 	<!ATTLIST list inverse (true|false) "false">
++	<!ATTLIST list mapped-by CDATA #IMPLIED>		
+ 	<!ATTLIST list mutable (true|false) "true">
+ 	<!ATTLIST list cascade CDATA #IMPLIED>
+ 	<!ATTLIST list where CDATA #IMPLIED>														 	<!-- default: none -->
+@@ -680,6 +684,7 @@
+ 	<!ATTLIST array catalog CDATA #IMPLIED>															<!-- default: none -->
+ 	<!ATTLIST array subselect CDATA #IMPLIED>
+ 	<!ATTLIST array inverse (true|false) "false">
++	<!ATTLIST array mapped-by CDATA #IMPLIED>		
+ 	<!ATTLIST array mutable (true|false) "true">
+ 	<!ATTLIST array element-class CDATA #IMPLIED>
+ 	<!ATTLIST array cascade CDATA #IMPLIED>
+Index: src/org/hibernate/cfg/HbmBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/cfg/HbmBinder.java,v
+retrieving revision 1.131
+diff -u -r1.131 HbmBinder.java
+--- src/org/hibernate/cfg/HbmBinder.java	27 Sep 2005 12:32:17 -0000	1.131
++++ src/org/hibernate/cfg/HbmBinder.java	1 Oct 2005 16:37:19 -0000
+@@ -1206,7 +1206,13 @@
+ 		if ( inverseNode != null ) {
+ 			collection.setInverse( "true".equals( inverseNode.getValue() ) );
+ 		}
+-
++/*
++		Attribute mappedByNode = node.attribute( "mapped-by" );
++		if ( mappedByNode != null ) {
++			collection.setInverse(true);
++			collection.setMappedBy( mappedByNode.getValue() );
++		}
++*/
+ 		Attribute mutableNode = node.attribute( "mutable" );
+ 		if ( mutableNode != null ) {
+ 			collection.setMutable( !"false".equals( mutableNode.getValue() ) );
+@@ -2229,7 +2235,16 @@
+ 			}
+ 			oneToMany.setAssociatedClass( persistentClass );
+ 			collection.setCollectionTable( persistentClass.getTable() );
+-
++					
++			if( collection.getMappedBy()!=null ) {
++				// only check for oneToMany, manytomany does not know necessarily know the other side yet. 
++				try {
++					persistentClass.getProperty(collection.getMappedBy());
++				} catch(MappingException me) {
++					throw new MappingException("Association " + collection.getRole() + " mapped-by property " + collection.getMappedBy() + " not found on " + persistentClass.getEntityName());
++				}
++			}
++					
+ 			log.info( 
+ 					"Mapping collection: " + collection.getRole() + 
+ 					" -> " + collection.getCollectionTable().getName() 
+Index: src/org/hibernate/mapping/Collection.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/mapping/Collection.java,v
+retrieving revision 1.38
+diff -u -r1.38 Collection.java
+--- src/org/hibernate/mapping/Collection.java	27 Sep 2005 12:32:17 -0000	1.38
++++ src/org/hibernate/mapping/Collection.java	1 Oct 2005 16:37:21 -0000
+@@ -67,7 +67,8 @@
+ 	private boolean customDeleteCallable;
+ 	private boolean customDeleteAllCallable;
+ 
+-	private String loaderName;	
++	private String loaderName;
++	private String mappedBy;	
+ 
+ 	protected Collection(PersistentClass owner) {
+ 		this.owner = owner;
+@@ -573,4 +574,12 @@
+ 		return comparatorClassName;
+ 	}
+ 
++	public void setMappedBy(String value) {
++		this.mappedBy = value;		
++	}
++	
++	public String getMappedBy() {
++		return mappedBy;
++	}
++
+ }
+\ No newline at end of file
+Index: test/org/hibernate/test/legacy/NonReflectiveBinderTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/NonReflectiveBinderTest.java,v
+retrieving revision 1.6
+diff -u -r1.6 NonReflectiveBinderTest.java
+--- test/org/hibernate/test/legacy/NonReflectiveBinderTest.java	27 Sep 2005 12:32:17 -0000	1.6
++++ test/org/hibernate/test/legacy/NonReflectiveBinderTest.java	1 Oct 2005 16:37:23 -0000
+@@ -117,4 +117,16 @@
+ 		Collection col = (Collection) property.getValue();
+ 		assertEquals(col.getComparatorClassName(),"org.hibernate.test.legacy.NonExistingComparator");
+ 	}
++	
++	public void testMappedBy() {
++		Configuration cfg = getCfg();
++		cfg.buildMappings();
++		PersistentClass cm = cfg.getClassMapping("org.hibernate.test.legacy.Wicked");
++		
++		Property property = cm.getProperty("sortedEmployee");
++		Collection col = (Collection) property.getValue();
++		assertTrue(col.isInverse());
++
++		assertEquals(col.getMappedBy(), "wicked");
++	}
+ }
+Index: test/org/hibernate/test/legacy/Wicked.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/legacy/Wicked.hbm.xml,v
+retrieving revision 1.2
+diff -u -r1.2 Wicked.hbm.xml
+--- test/org/hibernate/test/legacy/Wicked.hbm.xml	27 Sep 2005 12:32:17 -0000	1.2
++++ test/org/hibernate/test/legacy/Wicked.hbm.xml	1 Oct 2005 16:37:24 -0000
+@@ -7,6 +7,8 @@
+ <hibernate-mapping default-lazy="false">
+   <meta attribute="global">global value</meta>
+   <meta attribute="globalnoinherit" inherit="false">only visible at top level</meta>
++  
++  
+     <class name="org.hibernate.test.legacy.Wicked"
+            table="WICKED"
+            schema="HR">
+@@ -34,9 +36,9 @@
+ 			<property name="x" type="string"/>
+ 		</component>
+ 
+-		<set name="sortedEmployee" sort="org.hibernate.test.legacy.NonExistingComparator">
++		<set name="sortedEmployee" sort="org.hibernate.test.legacy.NonExistingComparator" inverse="false" mapped-by="wicked">
+ 			 <key column="attrb_id"/> 
+-    	     <many-to-many class="org.hibernate.test.legacy.Employee" column="id"/>
++    	     <one-to-many class="org.hibernate.test.legacy.Employee" />
+ 		</set>
+ 
+ 
+@@ -46,6 +48,8 @@
+         <composite-id class="X">
+             <key-property name="comp" type="string"/>
+         </composite-id>
++        
++        <many-to-one name="wicked" class="org.hibernate.test.legacy.Wicked"/>
+ 		
+    </class>
+ </hibernate-mapping>

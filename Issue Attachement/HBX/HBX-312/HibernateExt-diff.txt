@@ -1,0 +1,285 @@
+? HibernateExt/org.hibernate.eclipse/.settings
+? HibernateExt/org.hibernate.eclipse.console/.settings
+? HibernateExt/org.hibernate.eclipse.help/.settings
+? HibernateExt/org.hibernate.eclipse.mapper/.settings
+? HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/DAOExporter.java.original
+Index: HibernateExt/build.bat
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/build.bat,v
+retrieving revision 1.3
+diff -r1.3 build.bat
+1c1
+< set HIBERNATECORE=%~dp0..\hibernate-3.0
+---
+> set HIBERNATECORE=%~dp0..\hibernate-3.1
+Index: HibernateExt/build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/build.xml,v
+retrieving revision 1.9
+diff -r1.9 build.xml
+20c20
+<   <property name="version" value="3.0"/>
+---
+>   <property name="version" value="3.1"/>
+28a29,34
+>   
+>   <target name="tools" depends="" description="Build just tools">
+> 	<subant inheritall="false">
+>       <fileset dir="." includes="tools/build.xml"/>
+> 	</subant>
+>   </target>  
+Index: HibernateExt/org.hibernate.eclipse/.classpath
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse/.classpath,v
+retrieving revision 1.9
+diff -r1.9 .classpath
+3c3
+< 	<classpathentry kind="src" path="src/"/>
+---
+> 	<classpathentry kind="src" path="src"/>
+8d7
+< 	<classpathentry exported="true" kind="lib" path="lib/cglib-2.1.jar"/>
+17c16
+< 	<classpathentry exported="true" kind="lib" path="lib/hibernate-tools.jar"/>
+---
+> 	<classpathentry exported="true" sourcepath="C:/work/hibernate-3/HibernateExt/tools/src/java" kind="lib" path="lib/hibernate-tools.jar"/>
+35a35
+> 	<classpathentry kind="lib" path="lib/cglib-2.1.1.jar"/>
+Index: HibernateExt/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/wizards/ArtifactGeneratorWizard.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/wizards/ArtifactGeneratorWizard.java,v
+retrieving revision 1.19
+diff -r1.19 ArtifactGeneratorWizard.java
+31a32
+> import org.hibernate.tool.hbm2x.DAOExporter;
+87a89
+>         final boolean gendao = page.isGenerateDao();
+98c100
+< 					doFinish(configurationName, output, outputPackage, revengsettings, reveng, genjava, genhbm, gencfg, monitor, preferRaw, templatedir, ejb3, gendoc);
+---
+> 					doFinish(configurationName, output, outputPackage, revengsettings, reveng, genjava, gendao, genhbm, gencfg, monitor, preferRaw, templatedir, ejb3, gendoc);
+134c136
+< 		String outputPackage, IPath revengsettings, boolean reveng, final boolean genjava, final boolean genhbm, final boolean gencfg, final IProgressMonitor monitor, boolean preferRawCompositeids, IPath templateDir, final boolean ejb3, final boolean gendoc)
+---
+> 		String outputPackage, IPath revengsettings, boolean reveng, final boolean genjava, final boolean gendao, final boolean genhbm, final boolean gencfg, final IProgressMonitor monitor, boolean preferRawCompositeids, IPath templateDir, final boolean ejb3, final boolean gendoc)
+182a185,186
+>                 // Add support for DAO generation
+>                 final DAOExporter daoExporter = new DAOExporter(cfg,outputdir);
+195a200,205
+>                 
+>                 if(gendao) {
+>                     monitor.subTask("DAO code");
+>                     daoExporter.start();
+>                     monitor.worked(7);
+>                 }
+200c210
+< 					monitor.worked(7);
+---
+> 					monitor.worked(8);
+206c216
+< 					monitor.worked(8);
+---
+> 					monitor.worked(9);
+Index: HibernateExt/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/wizards/BasicGeneratorSettingsPage.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/org.hibernate.eclipse.console/src/org/hibernate/eclipse/console/wizards/BasicGeneratorSettingsPage.java,v
+retrieving revision 1.8
+diff -r1.8 BasicGeneratorSettingsPage.java
+53a54,55
+>     private SelectionButtonDialogField generatedao;
+>     
+93c95
+< 		layout.verticalSpacing = 9;
+---
+> 		layout.verticalSpacing = 10;
+162a165,167
+>         generatedao = new SelectionButtonDialogField(SWT.CHECK);
+>         generatedao.setLabelText("Generate DAO code (.java)");
+>         
+193a199
+>         generatedao.doFillIntoGrid(container, 3);
+345a352,358
+>     
+>     /**
+>      * @return
+>      */
+>     public boolean isGenerateDao() {
+>         return generatedao.isSelected();
+>     }   
+Index: HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/DAOExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/DAOExporter.java,v
+retrieving revision 1.2
+diff -r1.2 DAOExporter.java
+8a9,11
+> import org.apache.commons.logging.Log;
+> import org.apache.commons.logging.LogFactory;
+> 
+11,22c14,54
+< 	public DAOExporter(Configuration cfg, File outputdir) {
+< 		super(cfg, outputdir);
+< 	}
+< 
+< 	public boolean startComponent(Component component) throws ExporterException {
+< 		// we ignore
+< 		return false;
+< 	}
+< 	
+< 	protected String getNameForClass(PersistentClass clazz) {	
+< 		return super.getNameForClass(clazz) + "Home";
+< 	}
+---
+>     private static final String DAO_DAOHOME_VM = "dao/daohome.vm";
+> 
+>     private static final Log log = LogFactory.getLog(DAOExporter.class);
+> 
+>     String templateName = DAO_DAOHOME_VM;
+> 
+>     public DAOExporter(Configuration cfg, File outputdir) {
+>         super(cfg, outputdir);
+>         log.info("Starting ...");
+>     }
+> 
+>     public boolean startComponent(Component component) throws ExporterException {
+>         // we ignore
+>         return false;
+>     }
+> 
+>     protected String getNameForClass(PersistentClass clazz) {
+>         String className = super.getNameForClass(clazz) + "DAO";
+>         log.info("DAO class: " + className);
+>         return className;
+>     }
+> 
+>     public void exportPersistentClass(PersistentClass clazz) {
+>         runVelocity(clazz, getNameForClass(clazz), templateName);
+>     }
+> 
+>     public void start() {
+>         // TODO Auto-generated method stub
+>         super.start();
+>     }
+> 
+>     public void exportComponent(Component component) throws ExporterException {
+>         return;
+>     }
+> 
+>     protected void runVelocity(Object clazz, String qualifiedDeclarationName,
+>             String templateName) {
+>         log.info("Generating " + qualifiedDeclarationName + " with "
+>                 + templateName);
+>         super.runVelocity(clazz, qualifiedDeclarationName, templateName);
+>     }
+Index: HibernateExt/tools/src/velocity/dao/daohome.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/dao/daohome.vm,v
+retrieving revision 1.2
+diff -r1.2 daohome.vm
+3,6c3
+< #if($ejb3) 
+< import javax.ejb.*;	
+< import javax.persistence.*;
+< #else
+---
+> 
+8c5
+< #end
+---
+> import org.hibernate.criterion.Example;
+10a8
+> import javax.naming.InitialContext;
+12,18c10
+< /**
+< $c2j.toJavaDoc($render.eval("@see $c2j.getQualifiedDeclarationName($clazz)"),0)
+<  */
+< #if($ejb3) 
+< @Stateless
+< #end
+< public class $c2j.getDeclarationName($clazz)Home {
+---
+> #set($cls = ".class")
+20c12,14
+<     private static final Log log = LogFactory.getLog($c2j.getDeclarationName($clazz).class);
+---
+> public class $c2j.getDeclarationName($clazz)DAO {
+> 
+>     private static final Log log = LogFactory.getLog($c2j.getDeclarationName($clazz)DAO\$cls);
+22,74d15
+< #if($ejb3) 
+<     @Inject private EntityManager entityManager;
+<     
+<     public void persist($c2j.getDeclarationName($clazz) transientInstance) {
+<         log.debug("persisting $c2j.getDeclarationName($clazz) instance");
+<         try {
+<             entityManager.persist(transientInstance);
+<             log.debug("persist successful");
+<         }
+<         catch (RuntimeException re) {
+<             log.error("persist failed", re);
+<             throw re;
+<         }
+<     }
+<     
+<     public void remove($c2j.getDeclarationName($clazz) persistentInstance) {
+<         log.debug("removing $c2j.getDeclarationName($clazz) instance");
+<         try {
+<             entityManager.remove(persistentInstance);
+<             log.debug("remove successful");
+<         }
+<         catch (RuntimeException re) {
+<             log.error("remove failed", re);
+<             throw re;
+<         }
+<     }
+<     
+<     public $c2j.getDeclarationName($clazz) merge($c2j.getDeclarationName($clazz) detachedInstance) {
+<         log.debug("merging $c2j.getDeclarationName($clazz) instance");
+<         try {
+<             $c2j.getDeclarationName($clazz) result = entityManager.merge(detachedInstance);
+<             log.debug("merge successful");
+<             return result;
+<         }
+<         catch (RuntimeException re) {
+<             log.error("merge failed", re);
+<             throw re;
+<         }
+<     }
+<     
+<     public $c2j.getDeclarationName($clazz) findById(($c2j.stripPackage( $c2j.getJavaTypeName($clazz.identifierProperty), $clazz ) id) {
+<         log.debug("getting $c2j.getDeclarationName($clazz) instance with id: " + id);
+<         try {
+<             ($c2j.getDeclarationName($clazz)) instance = entityManager.find($c2j.getDeclarationName($clazz).class, id);
+<             log.debug("get successful");
+<             return instance;
+<         }
+<         catch (RuntimeException re) {
+<             log.error("get failed", re);
+<             throw re;
+<         }
+<     }
+< #else
+79c20,21
+<             return (SessionFactory) new InitialContext.lookup("SessionFactory");
+---
+>         	InitialContext ctx = new InitialContext();
+>             return (SessionFactory) ctx.lookup("SessionFactory");
+149c91
+<     public $c2j.getDeclarationName($clazz) findById(($c2j.stripPackage( $c2j.getJavaTypeName($clazz.identifierProperty), $clazz ) id) {
+---
+>     public $c2j.getDeclarationName($clazz) findById($c2j.stripPackage( $c2j.getJavaTypeName($clazz.identifierProperty), $clazz ) id) {
+152c94
+<             ($c2j.getDeclarationName($clazz)) instance = ($c2j.getDeclarationName($clazz)) sessionFactory.getCurrentSession()
+---
+>             $c2j.getDeclarationName($clazz) instance = ($c2j.getDeclarationName($clazz)) sessionFactory.getCurrentSession()
+169c111
+<         log.debug("finding $c2j.getDeclarationName($clazz) instance by example);
+---
+>         log.debug("finding $c2j.getDeclarationName($clazz) instance by example");
+171c113
+<             List results = ($c2j.getDeclarationName($clazz)) sessionFactory.getCurrentSession()
+---
+>             List results = sessionFactory.getCurrentSession()
+185c127
+< #end
+---
+> 

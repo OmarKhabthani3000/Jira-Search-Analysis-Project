@@ -1,0 +1,1137 @@
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/Shard.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/Shard.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/Shard.java	(working copy)
+@@ -126,6 +126,11 @@
+    * @see Query#list()
+    */
+   List<Object> list(QueryId queryId);
++  
++  /**
++   * @see Query#executeUpdate()
++   */
++  int executeUpdate(QueryId queryId);
+ 
+   /**
+    * @see Query#uniqueResult()
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/session/ShardedSessionImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/session/ShardedSessionImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/session/ShardedSessionImpl.java	(working copy)
+@@ -18,6 +18,15 @@
+ 
+ package org.hibernate.shards.session;
+ 
++import java.io.Serializable;
++import java.sql.Connection;
++import java.util.Collection;
++import java.util.Collections;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.CacheMode;
+@@ -58,6 +67,7 @@
+ import org.hibernate.shards.query.NamedQueryFactoryImpl;
+ import org.hibernate.shards.query.QueryId;
+ import org.hibernate.shards.query.ShardedQueryImpl;
++import org.hibernate.shards.query.ShardedSQLQueryImpl;
+ import org.hibernate.shards.stat.ShardedSessionStatistics;
+ import org.hibernate.shards.strategy.ShardStrategy;
+ import org.hibernate.shards.strategy.exit.FirstNonNullResultExitStrategy;
+@@ -73,15 +83,6 @@
+ import org.hibernate.stat.SessionStatistics;
+ import org.hibernate.type.Type;
+ 
+-import java.io.Serializable;
+-import java.sql.Connection;
+-import java.util.Collection;
+-import java.util.Collections;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+ /**
+  * Concrete implementation of a ShardedSession, and also the central component of
+  * Hibernate Shards' internal implementation. This class exposes two interfaces;
+@@ -459,13 +460,14 @@
+   }
+ 
+   public boolean isOpen() {
+-    // one open session means the sharded session is open
+-    for (Shard shard : shards) {
+-      if (shard.getSession() != null && shard.getSession().isOpen()) {
+-        return true;
+-      }
+-    }
+-    return false;
++//    // one open session means the sharded session is open
++//    for (Shard shard : shards) {
++//      if (shard.getSession() != null && shard.getSession().isOpen()) {
++//        return true;
++//      }
++//    }
++//    return false;
++      return !closed;
+   }
+ 
+   public boolean isConnected() {
+@@ -1149,7 +1151,10 @@
+    * Unsupported.  This is a scope decision, not a technical decision.
+    */
+   public SQLQuery createSQLQuery(String queryString) throws HibernateException {
+-    throw new UnsupportedOperationException();
++      return new ShardedSQLQueryImpl(new QueryId(nextQueryId++),
++          shards,
++          new AdHocQueryFactoryImpl(queryString),
++          shardStrategy.getShardAccessStrategy());
+   }
+ 
+   /**
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/AggregateExitOperation.java	(working copy)
+@@ -18,14 +18,17 @@
+ 
+ package org.hibernate.shards.strategy.exit;
+ 
++import java.math.BigDecimal;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.criterion.AggregateProjection;
++import org.hibernate.criterion.Projection;
+ 
+-import java.math.BigDecimal;
+-import java.util.Collections;
+-import java.util.List;
+-
+ /**
+  * @author Maulik Shah
+  */
+@@ -34,6 +37,8 @@
+   private final SupportedAggregations aggregate;
+ 
+   private final String fieldName;
++  
++  private final Projection proj;
+ 
+   private final Log log = LogFactory.getLog(getClass());
+ 
+@@ -41,7 +46,9 @@
+ 
+     SUM("sum"),
+     MIN("min"),
+-    MAX("max");
++    MAX("max"),
++    COUNT("count"),
++    DISTINCT_COUNT("distinct count");
+ 
+     private final String aggregate;
+ 
+@@ -62,11 +69,12 @@
+      * we just care about the name of the function
+      * which happens to be before the first left parenthesis
+      */
++    this.proj = projection;
+     String projectionAsString = projection.toString();
+     String aggregateName = projectionAsString.substring(0,projectionAsString.indexOf("("));
+     this.fieldName = projectionAsString.substring(projectionAsString.indexOf("(")+1, projectionAsString.indexOf(")"));
+     try {
+-      this.aggregate = SupportedAggregations.valueOf(aggregateName.toUpperCase());
++      this.aggregate = SupportedAggregations.valueOf(aggregateName.replace(" ", "_").toUpperCase());
+     } catch (IllegalArgumentException e) {
+       log.error("Use of unsupported aggregate: "+ aggregateName);
+       throw e;
+@@ -76,14 +84,31 @@
+   public List<Object> apply(List<Object> results) {
+ 
+     List<Object> nonNullResults = ExitOperationUtils.getNonNullList(results);
+-
++    /**
++     * aviadl@sentrigo.com (Aviad Lichtenstdadt)
++     * added here the return list with one element.
++     * As this is what Hibernate does in cases of empty result set 
++     * 
++     */
+     switch(aggregate) {
+       case MAX:
+-        return Collections.singletonList((Object) Collections.max(ExitOperationUtils.getComparableList(nonNullResults)));
++          if (nonNullResults.size() == 0) {
++              return Collections.singletonList(null);
++          } else {
++              return Collections.singletonList((Object) Collections.max(ExitOperationUtils.getComparableList(nonNullResults)));
++          }
+       case MIN:
+-        return Collections.singletonList((Object) Collections.min(ExitOperationUtils.getComparableList(nonNullResults)));
++          if (nonNullResults.size() == 0) {
++              return Collections.singletonList(null);
++          } else {
++              return Collections.singletonList((Object) Collections.min(ExitOperationUtils.getComparableList(nonNullResults)));
++          }
+       case SUM:
+         return Collections.<Object>singletonList(getSum(nonNullResults, fieldName));
++      case COUNT:
++          return Collections.<Object>singletonList(getSum(results));
++      case DISTINCT_COUNT:
++          return Collections.<Object>singletonList(getDistinctSum(results));
+       default:
+         log.error("Aggregation Projection is unsupported: "+aggregate);
+         throw new UnsupportedOperationException("Aggregation Projection is unsupported: "+ aggregate);
+@@ -98,6 +123,20 @@
+     }
+     return sum;
+   }
++  
++  private BigDecimal getSum(List<Object> results) {
++      BigDecimal sum = new BigDecimal(0.0);
++      for (Object obj : results) {
++        Number num = (Number)obj;
++        sum = sum.add(new BigDecimal(num.toString()));
++      }
++      return sum;
++    }
++  
++  private int getDistinctSum(List<Object> results) {
++      Set<Object> uniqueResult = new HashSet<Object>(results);
++      return uniqueResult.size();
++    }
+ 
+   private Number getNumber(Object obj, String fieldName) {
+     return (Number) ExitOperationUtils.getPropertyValue(obj, fieldName);
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java	(revision 3910)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/OrderExitOperation.java	(working copy)
+@@ -94,7 +94,7 @@
+     return nonNullList;
+   }
+ 
+-  private static String getSortingProperty(Order order) {
++  public static String getSortingProperty(Order order) {
+     /**
+      * This method relies on the format that Order is using:
+      * propertyName + ' ' + (ascending?"asc":"desc")
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionOrderExitOperation.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionOrderExitOperation.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionOrderExitOperation.java	(revision 0)
+@@ -0,0 +1,125 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.strategy.exit;
++
++import org.hibernate.criterion.Order;
++import org.hibernate.shards.util.Preconditions;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.Comparator;
++import java.util.List;
++
++/**
++ * @author "Aviad Lichtenstadt"
++ * 
++ * A special Order exit operation for cases of property projection in this case
++ * we just go over the array
++ */
++public class PropertyProjectionOrderExitOperation implements ExitOperation
++{
++
++    private final List<OrderProperty> orderProperties = new ArrayList<OrderProperty>();
++
++    public PropertyProjectionOrderExitOperation(List<Order> orders)
++    {
++        for (Order order : orders)
++        {
++            // TODO(maulik) support Ignore case!
++            Preconditions.checkState(order.toString().endsWith("asc")
++                || order.toString().endsWith("desc"));
++
++            orderProperties.add(new OrderProperty(order.toString().endsWith(
++                "asc")));
++        }
++    }
++
++    public List<Object> apply(List<Object> results)
++    {
++        List<Object> nonNullList = ExitOperationUtils.getNonNullList(results);
++        Comparator<Object> comparator = new Comparator<Object>()
++        {
++            @SuppressWarnings("unchecked")
++            public int compare(Object o1, Object o2)
++            {
++                if (o1 == o2)
++                {
++                    return 0;
++                }
++                int cmp = 0;
++                // the object must be array object other wise we wont get to this piece of code
++                Object[] arr1 = (Object[]) o1;
++                Object[] arr2 = (Object[]) o2;
++                int i = 0;
++                for (i = 1; i < arr1.length; i++)
++                {
++
++                    Comparable<Object> o1Value = (Comparable<Object>) arr1[i];
++                    if (arr2.length <= i)
++                    {
++                        cmp = 1;
++                        break;
++                    }
++                    Comparable<Object> o2Value = (Comparable<Object>) arr2[i];
++                    if (o1Value == null)
++                    {
++                        cmp = -1;
++                        break;
++                    }
++
++                    cmp = o1Value.compareTo(o2Value);
++
++                    if (cmp == 0)
++                    {
++                        continue;
++                    }
++                    else
++                    {
++                        break;
++                    }
++                }
++                if (cmp != 0 && !orderProperties.get(i - 1).isAsc())
++                {
++                    cmp = cmp * (-1);
++                }
++                return cmp;
++            }
++        };
++
++        Collections.sort(nonNullList, comparator);
++
++        return nonNullList;
++    }
++
++    private class OrderProperty
++    {
++        private final boolean asc;
++
++        private OrderProperty(boolean asc)
++        {
++            this.asc = asc;
++        }
++
++        public boolean isAsc()
++        {
++            return asc;
++        }
++    }
++
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionExitOperation.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionExitOperation.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/strategy/exit/PropertyProjectionExitOperation.java	(revision 0)
+@@ -0,0 +1,42 @@
++/**
++ * 
++ */
++package org.hibernate.shards.strategy.exit;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.criterion.PropertyProjection;
++
++/**
++ * @author "Aviad Lichtenstadt"
++ * 
++ */
++public class PropertyProjectionExitOperation
++{
++
++    public PropertyProjectionExitOperation(PropertyProjection propertyProjection)
++    {
++    }
++
++    public List<Object> apply(List<Object> result)
++    {
++        List<Object> projectedList = new ArrayList<Object>();
++        for (Object o : result)
++        {
++            //If there were Orders in the criteria we will get an array 
++            //else we will get an object
++            if (o.getClass().isArray())
++            {
++                Object[] array = (Object[]) o;
++                projectedList.add(array[0]);
++            }
++            else
++            {
++                projectedList.add(o);
++            }
++        }
++        return projectedList;
++    }
++
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ShardedCriteriaImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ShardedCriteriaImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ShardedCriteriaImpl.java	(working copy)
+@@ -18,6 +18,10 @@
+ 
+ package org.hibernate.shards.criteria;
+ 
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
+ import org.hibernate.CacheMode;
+ import org.hibernate.Criteria;
+ import org.hibernate.FetchMode;
+@@ -26,12 +30,15 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.ScrollMode;
+ import org.hibernate.ScrollableResults;
++import org.hibernate.criterion.AggregateProjection;
+ import org.hibernate.criterion.AvgProjection;
++import org.hibernate.criterion.CountProjection;
+ import org.hibernate.criterion.Criterion;
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
+ import org.hibernate.criterion.ProjectionList;
+ import org.hibernate.criterion.Projections;
++import org.hibernate.criterion.PropertyProjection;
+ import org.hibernate.shards.Shard;
+ import org.hibernate.shards.ShardOperation;
+ import org.hibernate.shards.strategy.access.ShardAccessStrategy;
+@@ -39,10 +46,6 @@
+ import org.hibernate.shards.strategy.exit.FirstNonNullResultExitStrategy;
+ import org.hibernate.transform.ResultTransformer;
+ 
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.List;
+-
+ /**
+  * Concrete implementation of the {@link ShardedCriteria} interface.
+  *
+@@ -66,6 +69,10 @@
+   // the criteria collector we use to process the results of executing
+   // the Criteria across multiple shards
+   private final ExitOperationsCriteriaCollector criteriaCollector;
++  
++  //Since we need to initiate the projection lazily we need to know
++  //that the last projection is a PropertyProjection else we dont care
++  private boolean propertyProjectionIsLast = false;
+ 
+   /**
+    * Construct a ShardedCriteriaImpl
+@@ -128,10 +135,28 @@
+   }
+ 
+   public Criteria setProjection(Projection projection) {
++      this.propertyProjectionIsLast = false;
+     criteriaCollector.addProjection(projection);
++    CriteriaEvent event = null;
+     if(projection instanceof AvgProjection) {
+       setAvgProjection(projection);
++    } else if (projection instanceof CountProjection){
++        event = new CountProjectionEvent(projection);
++    } else if (projection instanceof AggregateProjection){
++        event = new AggregateProjectionEvent(projection);
++    } else if (projection instanceof PropertyProjection){
++        propertyProjectionIsLast = true;
+     }
++    //for property projection there nothing else to do here
++    if (event != null) {
++        for (Shard shard : shards) {
++            if (shard.getCriteriaById(criteriaId) != null) {
++              shard.getCriteriaById(criteriaId).setProjection(projection);
++            } else {
++              shard.addCriteriaEvent(criteriaId, event);
++            }
++         }
++    }
+     // TODO - handle ProjectionList
+     return this;
+   }
+@@ -410,7 +435,22 @@
+   }
+ 
+   public List list() throws HibernateException {
+-
++     // insert the property projection correctly can be done only when the criteria is ready
++      if (propertyProjectionIsLast) {
++          Projection projection = criteriaCollector.getReadyPropertyProjection();
++          if (projection!= null) {
++              CriteriaEvent event = new GeneralProjectionEvent(projection);
++              for (Shard shard : shards) {
++                  if (shard.getCriteriaById(criteriaId) != null) {
++                    shard.getCriteriaById(criteriaId).setProjection(projection);
++                  } else {
++                    shard.addCriteriaEvent(criteriaId, event);
++                  }
++               } 
++          } else {
++              //this should never happen since the propertyProjectionIsLast was set to true
++          }
++      }
+     // build a shard operation and apply it across all shards
+     ShardOperation<List<Object>> shardOp = new ShardOperation<List<Object>>() {
+       public List<Object> execute(Shard shard) {
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/AggregateProjectionEvent.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/AggregateProjectionEvent.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/AggregateProjectionEvent.java	(revision 0)
+@@ -0,0 +1,49 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.criteria;
++
++import org.hibernate.Criteria;
++import org.hibernate.criterion.AggregateProjection;
++import org.hibernate.criterion.Criterion;
++import org.hibernate.criterion.Projection;
++
++/**
++ * Event that allows a Projection (valid only for max/min projection to be lazily added to a Criteria.
++ * @see Criteria#add(Criterion) 
++ *
++ * @author aviadl@sentrigo.com (Aviad Lichtenstadt)
++ */
++class AggregateProjectionEvent implements CriteriaEvent {
++
++  // the Projection we're going to add when the event fires
++  private final Projection proj;
++
++  public AggregateProjectionEvent(Projection proj) {
++      if (proj instanceof AggregateProjection) {
++          this.proj = proj;
++      } else {
++          throw new RuntimeException("Event valid only for max/min projections");
++      }
++  }
++
++
++  public void onEvent(Criteria crit) {
++    crit.setProjection(proj);
++  }
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java	(revision 3910)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/ExitOperationsCriteriaCollector.java	(working copy)
+@@ -24,6 +24,9 @@
+ import org.hibernate.criterion.Distinct;
+ import org.hibernate.criterion.Order;
+ import org.hibernate.criterion.Projection;
++import org.hibernate.criterion.ProjectionList;
++import org.hibernate.criterion.Projections;
++import org.hibernate.criterion.PropertyProjection;
+ import org.hibernate.criterion.RowCountProjection;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.shards.strategy.exit.AvgResultsExitOperation;
+@@ -33,6 +36,8 @@
+ import org.hibernate.shards.strategy.exit.MaxResultsExitOperation;
+ import org.hibernate.shards.strategy.exit.OrderExitOperation;
+ import org.hibernate.shards.strategy.exit.ProjectionExitOperationFactory;
++import org.hibernate.shards.strategy.exit.PropertyProjectionExitOperation;
++import org.hibernate.shards.strategy.exit.PropertyProjectionOrderExitOperation;
+ import org.hibernate.shards.util.Lists;
+ 
+ import java.util.List;
+@@ -61,6 +66,9 @@
+ 
+   // Row Count Projection operation applied to the Criteria
+   private RowCountProjection rowCountProjection;
++  
++  //Porperty Projection operation applied to the criteria
++  private PropertyProjection propertyProjection;
+ 
+   // The Session Factory Implementor with which the Criteria is associated
+   private SessionFactoryImplementor sessionFactoryImplementor;
+@@ -113,6 +121,13 @@
+       } else {
+         this.aggregateProjection = (AggregateProjection) projection;
+       }
++    } else if (projection instanceof PropertyProjection) {
++        /**
++         * aviadl@sentrigo.com (Aviad Lichtenstadt) we need to set here the
++         * property projection so if there are Order and property projection
++         * we will load all relevant fields from database
++         */
++        this.propertyProjection = (PropertyProjection) projection; 
+     } else {
+       log.error("Adding an unsupported Projection: " + projection.getClass().getName());
+       throw new UnsupportedOperationException();
+@@ -145,7 +160,7 @@
+      * MaxResult
+      * RowCount
+      * Average
+-     * Min/Max/Sum
++     * Min/Max/Sum/Count/distinct count
+      */
+ 
+     // ordering of the following operations *really* matters!
+@@ -154,8 +169,17 @@
+     }
+ 
+ //    for(Order order : orders) {
+-      result = new OrderExitOperation(orders).apply(result);
++    if (orders.size() > 0) {
++        if (propertyProjection!= null) {
++          result = new PropertyProjectionOrderExitOperation(orders).apply(result);
++        } else {
++          result = new OrderExitOperation(orders).apply(result);
++        }
++    }
+ //    }
++    if (propertyProjection != null){
++        result = new PropertyProjectionExitOperation(propertyProjection).apply(result);
++    }
+     if (firstResult != null) {
+       result = new FirstResultExitOperation(firstResult).apply(result);
+     }
+@@ -174,7 +198,7 @@
+       result = new AvgResultsExitOperation().apply(result);
+     }
+ 
+-    // min, max, sum
++    // min, max, sum, count, distinct count
+     if (aggregateProjection != null) {
+       result = factory.getProjectionExitOperation(aggregateProjection, sessionFactoryImplementor).apply(result);
+     }
+@@ -189,4 +213,16 @@
+     this.sessionFactoryImplementor = sessionFactoryImplementor;
+   }
+ 
++  public Projection getReadyPropertyProjection() {
++        if (propertyProjection!= null){
++            ProjectionList prjList = Projections.projectionList();
++            prjList.add(propertyProjection);
++            for (Order ord: this.orders){
++                prjList.add(Projections.property(OrderExitOperation.getSortingProperty(ord)));
++            }
++            return prjList;
++        }
++        return null;
++  }
++
+ }
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/GeneralProjectionEvent.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/GeneralProjectionEvent.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/GeneralProjectionEvent.java	(revision 0)
+@@ -0,0 +1,47 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.criteria;
++
++import org.hibernate.Criteria;
++import org.hibernate.criterion.Criterion;
++import org.hibernate.criterion.Projection;
++
++/**
++ * Event that allows a Projection to be lazily added to a Criteria.
++ * 
++ * @see Criteria#add(Criterion)
++ * 
++ * @author aviadl@sentrigo.com (Aviad Lichtenstadt)
++ */
++class GeneralProjectionEvent implements CriteriaEvent
++{
++
++    // the Projection we're going to add when the event fires
++    private final Projection proj;
++
++    public GeneralProjectionEvent(Projection proj)
++    {
++        this.proj = proj;
++    }
++
++    public void onEvent(Criteria crit)
++    {
++        crit.setProjection(proj);
++    }
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/CountProjectionEvent.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/CountProjectionEvent.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/criteria/CountProjectionEvent.java	(revision 0)
+@@ -0,0 +1,62 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.criteria;
++
++import org.hibernate.Criteria;
++import org.hibernate.criterion.CountProjection;
++import org.hibernate.criterion.Criterion;
++import org.hibernate.criterion.Projection;
++import org.hibernate.criterion.Projections;
++
++/**
++ * Event that allows a Count Projection to be lazily added to a Criteria.
++ * this event supports both distinct and regular count projections.
++ * @see Criteria#add(Criterion) 
++ *
++ * @author aviadl@sentrigo.com (Aviad Lichtenstadt)
++ */
++class CountProjectionEvent implements CriteriaEvent {
++
++  // the Projection we're going to add when the event fires
++  private final Projection proj;
++  private String fieldName;
++  private boolean distinct = false;
++
++  public CountProjectionEvent(Projection proj) {
++      if (proj instanceof CountProjection) {
++          this.proj = proj;
++          String projectionAsString = proj.toString();
++          if (projectionAsString.startsWith("distinct")) {
++              distinct = true;
++              fieldName = projectionAsString.substring(projectionAsString.indexOf("(")+1, projectionAsString.indexOf(")"));
++          }
++      } else {
++          throw new RuntimeException("Event valid only for count projections");
++      }
++  }
++
++
++  public void onEvent(Criteria crit) {
++      if (distinct) {
++          crit.setProjection(Projections.property(fieldName));
++      } else {
++          crit.setProjection(proj);
++      }
++  }
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/ShardImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/ShardImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/ShardImpl.java	(working copy)
+@@ -18,6 +18,12 @@
+ 
+ package org.hibernate.shards;
+ 
++import java.util.Collections;
++import java.util.LinkedList;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
+ import org.hibernate.Criteria;
+ import org.hibernate.Interceptor;
+ import org.hibernate.Query;
+@@ -29,18 +35,13 @@
+ import org.hibernate.shards.query.QueryEvent;
+ import org.hibernate.shards.query.QueryId;
+ import org.hibernate.shards.query.ShardedQuery;
++import org.hibernate.shards.query.ShardedSQLQuery;
+ import org.hibernate.shards.session.OpenSessionEvent;
+ import org.hibernate.shards.util.Lists;
+ import org.hibernate.shards.util.Maps;
+ import org.hibernate.shards.util.Preconditions;
+ import org.hibernate.shards.util.Sets;
+ 
+-import java.util.Collections;
+-import java.util.LinkedList;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+ /**
+  * Concrete implementation of the {@link Shard} interface.
+  *
+@@ -202,7 +203,11 @@
+     Query query = queryMap.get(queryId);
+     if(query == null) {
+       // Criteria does not yet exist so need to create it
+-      query = shardedQuery.getQueryFactory().createQuery(establishSession());
++        if (shardedQuery instanceof ShardedSQLQuery) {
++            query = shardedQuery.getQueryFactory().createSQLQuery(establishSession());
++        } else {
++            query = shardedQuery.getQueryFactory().createQuery(establishSession());
++        }
+        // add it to the map right away in case some of our events require it
+       queryMap.put(queryId, query);
+       // see if we have events that we need to apply to the Query
+@@ -260,6 +265,11 @@
+   public List<Object> list(QueryId queryId) {
+     return queryMap.get(queryId).list();
+   }
++  
++  @SuppressWarnings("unchecked")
++  public int executeUpdate(QueryId queryId) {
++    return queryMap.get(queryId).executeUpdate();
++  }
+ 
+   public Object uniqueResult(QueryId queryId) {
+     return queryMap.get(queryId).uniqueResult();
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQueryImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQueryImpl.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQueryImpl.java	(revision 0)
+@@ -0,0 +1,123 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.query;
++
++import java.util.List;
++
++import org.hibernate.LockMode;
++import org.hibernate.MappingException;
++import org.hibernate.SQLQuery;
++import org.hibernate.shards.Shard;
++import org.hibernate.shards.strategy.access.ShardAccessStrategy;
++import org.hibernate.type.Type;
++
++public class ShardedSQLQueryImpl extends ShardedQueryImpl implements ShardedSQLQuery
++{
++    public ShardedSQLQueryImpl(QueryId queryId, List<Shard> shards,
++        QueryFactory queryFactory, ShardAccessStrategy shardAccessStrategy)
++    {
++        super(queryId, shards, queryFactory, shardAccessStrategy);
++    }
++
++    @Override
++    public SQLQuery addEntity(String entityName)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addEntity(Class entityClass)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addEntity(String alias, String entityName)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addEntity(String alias, Class entityClass)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addEntity(String alias, String entityName, LockMode lockMode)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addEntity(String alias, Class entityClass, LockMode lockMode)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addJoin(String alias, String path)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addJoin(String alias, String path, LockMode lockMode)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addScalar(String columnAlias)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addScalar(String columnAlias, Type type)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addSynchronizedEntityClass(Class entityClass)
++        throws MappingException
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addSynchronizedEntityName(String entityName)
++        throws MappingException
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery addSynchronizedQuerySpace(String querySpace)
++    {
++        throw new UnsupportedOperationException();
++    }
++
++    @Override
++    public SQLQuery setResultSetMapping(String name)
++    {
++        throw new UnsupportedOperationException();
++    }
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQuery.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQuery.java	(revision 0)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedSQLQuery.java	(revision 0)
+@@ -0,0 +1,34 @@
++/**
++ * Copyright (C) 2007 Google Inc.
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
++ */
++
++package org.hibernate.shards.query;
++
++import org.hibernate.SQLQuery;
++
++/**
++ * ShardedSqlQuery extends the SQLQuery interface to provide the ability to execute sql queries
++ * across shards.
++ *
++ * @see org.hibernate.SQLQuery
++ *
++ * @author Aviad Lichtenstadt
++ */
++
++public interface ShardedSQLQuery extends ShardedQuery, SQLQuery  {
++
++}
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedQueryImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedQueryImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/ShardedQueryImpl.java	(working copy)
+@@ -18,6 +18,18 @@
+ 
+ package org.hibernate.shards.query;
+ 
++import java.io.Serializable;
++import java.math.BigDecimal;
++import java.math.BigInteger;
++import java.util.Calendar;
++import java.util.Collection;
++import java.util.Collections;
++import java.util.Date;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Locale;
++import java.util.Map;
++
+ import org.hibernate.CacheMode;
+ import org.hibernate.FlushMode;
+ import org.hibernate.HibernateException;
+@@ -34,17 +46,6 @@
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.Type;
+ 
+-import java.io.Serializable;
+-import java.math.BigDecimal;
+-import java.math.BigInteger;
+-import java.util.Calendar;
+-import java.util.Collection;
+-import java.util.Date;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Locale;
+-import java.util.Map;
+-
+ /**
+  * Concrete implementation of ShardedQuery provided by Hibernate Shards. This
+  * implementation introduces limits to the HQL language; mostly around
+@@ -256,7 +257,29 @@
+    * @throws HibernateException
+    */
+   public int executeUpdate() throws HibernateException {
+-    throw new UnsupportedOperationException();
++      ShardOperation<List<Object>> shardOp = new ShardOperation<List<Object>>() {
++          public List<Object> execute(Shard shard) {
++            shard.establishQuery(ShardedQueryImpl.this);
++            int tmp = shard.executeUpdate(queryId);
++            return Collections.singletonList((Object)tmp);
++          }
++
++          public String getOperationName() {
++            return "executeUpdate()";
++          }
++        };
++        
++        List<Object> rets =  
++        shardAccessStrategy.apply(
++                shards,
++                shardOp,
++                new ConcatenateListsExitStrategy(),
++                queryCollector);
++        int sum = 0;
++        for (Object i : rets){
++            sum+=(Integer)i;
++        }
++        return sum;
+   }
+ 
+   public Query setMaxResults(int maxResults) {
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/AdHocQueryFactoryImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/AdHocQueryFactoryImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/AdHocQueryFactoryImpl.java	(working copy)
+@@ -19,6 +19,7 @@
+ package org.hibernate.shards.query;
+ 
+ import org.hibernate.Query;
++import org.hibernate.SQLQuery;
+ import org.hibernate.Session;
+ 
+ /**
+@@ -35,5 +36,9 @@
+   public Query createQuery(Session session) {
+     return session.createQuery(queryString);
+   }
++  
++  public SQLQuery createSQLQuery(Session session) {
++      return session.createSQLQuery(queryString);
++  }
+ 
+ }
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/NamedQueryFactoryImpl.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/NamedQueryFactoryImpl.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/NamedQueryFactoryImpl.java	(working copy)
+@@ -19,6 +19,7 @@
+ package org.hibernate.shards.query;
+ 
+ import org.hibernate.Query;
++import org.hibernate.SQLQuery;
+ import org.hibernate.Session;
+ 
+ /**
+@@ -37,4 +38,9 @@
+   public Query createQuery(Session session) {
+     return session.getNamedQuery(queryName);
+   }
++  
++  public SQLQuery createSQLQuery(Session session) {
++      throw new UnsupportedOperationException("no such thing as named SQLQuery");
++  }
++
+ }
+Index: C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/QueryFactory.java
+===================================================================
+--- C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/QueryFactory.java	(revision 3880)
++++ C:/sentrigo/dev/HiberanteShards/src/org/hibernate/shards/query/QueryFactory.java	(working copy)
+@@ -27,4 +27,6 @@
+ public interface QueryFactory {
+ 
+   Query createQuery(Session session);
++  
++  Query createSQLQuery(Session session);
+ }
+\ No newline at end of file

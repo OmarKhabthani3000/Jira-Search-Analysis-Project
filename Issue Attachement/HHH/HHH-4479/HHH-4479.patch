@@ -1,0 +1,722 @@
+Index: src/main/java/org/hibernate/annotations/JoinColumnOrFormula.java
+===================================================================
+--- src/main/java/org/hibernate/annotations/JoinColumnOrFormula.java	(revision 0)
++++ src/main/java/org/hibernate/annotations/JoinColumnOrFormula.java	(revision 0)
+@@ -0,0 +1,44 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++import javax.persistence.JoinColumn;
++
++/**
++ * @author Sharath Reddy
++ */
++@Target({METHOD, FIELD})
++@Retention(RUNTIME)
++public @interface JoinColumnOrFormula {
++	JoinFormula formula() default @JoinFormula(value="", referencedColumnName="");
++	JoinColumn column() default @JoinColumn();
++}
+Index: src/main/java/org/hibernate/annotations/JoinColumnsOrFormulas.java
+===================================================================
+--- src/main/java/org/hibernate/annotations/JoinColumnsOrFormulas.java	(revision 0)
++++ src/main/java/org/hibernate/annotations/JoinColumnsOrFormulas.java	(revision 0)
+@@ -0,0 +1,40 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++/**
++ * @author Sharath Reddy
++ */
++@Target({METHOD, FIELD})
++@Retention(RUNTIME)
++public @interface JoinColumnsOrFormulas {
++	JoinColumnOrFormula [] value();
++}
+Index: src/main/java/org/hibernate/annotations/JoinFormula.java
+===================================================================
+--- src/main/java/org/hibernate/annotations/JoinFormula.java	(revision 0)
++++ src/main/java/org/hibernate/annotations/JoinFormula.java	(revision 0)
+@@ -0,0 +1,43 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.ElementType.METHOD;
++import java.lang.annotation.Retention;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++import java.lang.annotation.Target;
++
++/**
++ * JoinFormula. To be used as a replacement for @JoinColumn in most places
++ * The formula has to be a valid SQL fragment
++ *
++ * @author Sharath Reddy
++ */
++@Target({METHOD, FIELD})
++@Retention(RUNTIME)
++public @interface JoinFormula {
++	String value();
++	String referencedColumnName();
++}
+Index: src/main/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17641)
++++ src/main/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -101,6 +101,7 @@
+ import org.hibernate.annotations.Formula;
+ import org.hibernate.annotations.GenericGenerator;
+ import org.hibernate.annotations.Index;
++import org.hibernate.annotations.JoinColumnsOrFormulas;
+ import org.hibernate.annotations.LazyToOne;
+ import org.hibernate.annotations.LazyToOneOption;
+ import org.hibernate.annotations.ManyToAny;
+@@ -1219,6 +1220,13 @@
+ 						propertyHolder, inferredData.getPropertyName(), mappings
+ 				);
+ 			}
++			else if ( property.isAnnotationPresent( JoinColumnsOrFormulas.class ) ) {
++				JoinColumnsOrFormulas ann = property.getAnnotation( JoinColumnsOrFormulas.class );
++				joinColumns = Ejb3JoinColumn.buildJoinColumnsOrFormulas(
++						ann, null, entityBinder.getSecondaryTables(),
++						propertyHolder, inferredData.getPropertyName(), mappings
++				);
++			}
+ 		}
+ 		if ( property.isAnnotationPresent( Column.class ) || property.isAnnotationPresent( Formula.class ) ) {
+ 			Column ann = property.getAnnotation( Column.class );
+Index: src/main/java/org/hibernate/cfg/Ejb3Column.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Ejb3Column.java	(revision 17641)
++++ src/main/java/org/hibernate/cfg/Ejb3Column.java	(working copy)
+@@ -95,6 +95,10 @@
+ 		return unique;
+ 	}
+ 
++	public boolean isFormula() {
++		return StringHelper.isNotEmpty(formulaString) ? true : false; 
++	}
++		
+ 	public String getFormulaString() {
+ 		return formulaString;
+ 	}
+@@ -188,16 +192,22 @@
+ 			String columnName, String propertyName, int length, int precision, int scale, boolean nullable,
+ 			String sqlType, boolean unique, boolean applyNamingStrategy
+ 	) {
+-		this.mappingColumn = new Column();
+-		redefineColumnName( columnName, propertyName, applyNamingStrategy );
+-		this.mappingColumn.setLength( length );
+-		if ( precision > 0 ) {  //revelent precision
+-			this.mappingColumn.setPrecision( precision );
+-			this.mappingColumn.setScale( scale );
++		if ( StringHelper.isNotEmpty( formulaString ) ) {
++			this.formula = new Formula();
++			this.formula.setFormula( formulaString );
+ 		}
+-		this.mappingColumn.setNullable( nullable );
+-		this.mappingColumn.setSqlType( sqlType );
+-		this.mappingColumn.setUnique( unique );
++		else {
++			this.mappingColumn = new Column();
++			redefineColumnName( columnName, propertyName, applyNamingStrategy );
++			this.mappingColumn.setLength( length );
++			if ( precision > 0 ) {  //revelent precision
++				this.mappingColumn.setPrecision( precision );
++				this.mappingColumn.setScale( scale );
++			}
++			this.mappingColumn.setNullable( nullable );
++			this.mappingColumn.setSqlType( sqlType );
++			this.mappingColumn.setUnique( unique );
++		}
+ 	}
+ 
+ 	public boolean isNameDeferred() {
+@@ -462,8 +472,14 @@
+ 
+ 	public static void checkPropertyConsistency(Ejb3Column[] columns, String propertyName) {
+ 		int nbrOfColumns = columns.length;
++		
+ 		if ( nbrOfColumns > 1 ) {
+ 			for (int currentIndex = 1; currentIndex < nbrOfColumns; currentIndex++) {
++				
++				if (columns[currentIndex].isFormula() || columns[currentIndex - 1].isFormula()) {
++					continue;
++				}
++				
+ 				if ( columns[currentIndex].isInsertable() != columns[currentIndex - 1].isInsertable() ) {
+ 					throw new AnnotationException(
+ 							"Mixing insertable and non insertable columns in a property is not allowed: " + propertyName
+@@ -486,6 +502,7 @@
+ 				}
+ 			}
+ 		}
++		
+ 	}
+ 
+ 	public void addIndex(Index index, boolean inSecondPass) {
+Index: src/main/java/org/hibernate/cfg/Ejb3JoinColumn.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Ejb3JoinColumn.java	(revision 17641)
++++ src/main/java/org/hibernate/cfg/Ejb3JoinColumn.java	(working copy)
+@@ -33,6 +33,9 @@
+ import org.hibernate.AnnotationException;
+ import org.hibernate.MappingException;
+ import org.hibernate.util.StringHelper;
++import org.hibernate.annotations.JoinColumnOrFormula;
++import org.hibernate.annotations.JoinColumnsOrFormulas;
++import org.hibernate.annotations.JoinFormula;
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.Join;
+ import org.hibernate.mapping.PersistentClass;
+@@ -127,6 +130,55 @@
+ 		return referencedColumn;
+ 	}
+ 
++	
++	public static Ejb3JoinColumn[] buildJoinColumnsOrFormulas(
++			JoinColumnsOrFormulas anns,
++			String mappedBy, Map<String, Join> joins,
++			PropertyHolder propertyHolder,
++			String propertyName,
++			ExtendedMappings mappings
++	) {
++		
++		JoinColumnOrFormula [] ann = anns.value();
++		Ejb3JoinColumn [] joinColumns = new Ejb3JoinColumn[ann.length];
++		for (int i = 0; i < ann.length; i++) {
++			JoinColumnOrFormula join = (JoinColumnOrFormula) ann[i];
++			JoinFormula formula = join.formula();
++			if (formula.value() != null && !formula.value().equals("")) {
++				joinColumns[i] = buildJoinFormula(formula, mappedBy, joins, propertyHolder, propertyName, mappings); 
++			}
++			else {
++				joinColumns[i] = buildJoinColumns(new JoinColumn[] { join.column() }, mappedBy, joins, propertyHolder, propertyName, mappings)[0];
++			}
++		}
++				 
++		return joinColumns;
++	}
++	
++	/**
++	 * build join formula
++	 */
++	private static Ejb3JoinColumn buildJoinFormula(
++			JoinFormula ann,
++			String mappedBy, Map<String, Join> joins,
++			PropertyHolder propertyHolder,
++			String propertyName,
++			ExtendedMappings mappings
++	) {
++			
++			Ejb3JoinColumn formulaColumn = new Ejb3JoinColumn();
++			formulaColumn.setFormula( ann.value() );
++			formulaColumn.setReferencedColumn(ann.referencedColumnName());
++			formulaColumn.setMappings( mappings );
++			formulaColumn.setPropertyHolder( propertyHolder );
++			formulaColumn.setJoins( joins );
++			formulaColumn.setPropertyName( BinderHelper.getRelativePath( propertyHolder, propertyName ) );
++			
++			formulaColumn.bind();
++			return formulaColumn;
++		}
++	
++	
+ 	public static Ejb3JoinColumn[] buildJoinColumns(
+ 			JoinColumn[] anns,
+ 			String mappedBy, Map<String, Join> joins,
+@@ -382,9 +434,10 @@
+ 				null, referencedColumn.getLength(),
+ 				referencedColumn.getPrecision(),
+ 				referencedColumn.getScale(),
+-				getMappingColumn().isNullable(),
++				getMappingColumn() != null ? getMappingColumn().isNullable() : false,
+ 				referencedColumn.getSqlType(),
+-				getMappingColumn().isUnique(), false
++				getMappingColumn() != null ? getMappingColumn().isUnique() : false,
++			    false
+ 		);
+ 		linkWithValue( value );
+ 	}
+Index: src/test/java/org/hibernate/test/annotations/manytoonewithformula/Company.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/manytoonewithformula/Company.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/manytoonewithformula/Company.java	(revision 0)
+@@ -0,0 +1,67 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.manytoonewithformula;
++
++import java.io.Serializable;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.ManyToOne;
++import org.hibernate.annotations.JoinColumnOrFormula;
++import org.hibernate.annotations.JoinColumnsOrFormulas;
++import org.hibernate.annotations.JoinFormula;
++
++/**
++ * @author Sharath Reddy
++ */
++@Entity
++public class Company implements Serializable {
++	
++	private int id;
++	private Person person;
++	
++	@Id @GeneratedValue
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	
++	@ManyToOne
++	@JoinColumnsOrFormulas(
++	{ 
++		@JoinColumnOrFormula(column=@JoinColumn(name="id", referencedColumnName="company_id", updatable=false, insertable=false)),
++		@JoinColumnOrFormula(formula=@JoinFormula(value="'true'", referencedColumnName="is_default"))
++	})
++	public Person getDefaultContactPerson() {
++		return person;
++	}
++	public void setDefaultContactPerson(Person person) {
++		this.person = person;
++	}
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/manytoonewithformula/FoodItem.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/manytoonewithformula/FoodItem.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/manytoonewithformula/FoodItem.java	(revision 0)
+@@ -0,0 +1,76 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.manytoonewithformula;
++
++import javax.persistence.Entity;
++import javax.persistence.Id;
++import javax.persistence.GeneratedValue;
++import javax.persistence.ManyToOne;
++import javax.persistence.JoinColumn;
++
++import org.hibernate.annotations.JoinColumnOrFormula;
++import org.hibernate.annotations.JoinColumnsOrFormulas;
++import org.hibernate.annotations.JoinFormula;
++
++/**
++ * @author Sharath Reddy
++ */
++@Entity
++public class FoodItem {
++	private Integer id;
++	private String item;
++	private Menu order;
++	
++	@Id @GeneratedValue
++	public Integer getId() {
++		return id;
++	}
++
++	public void setId(Integer id) {
++		this.id = id;
++	}
++
++	public String getItem() {
++		return item;
++	}
++
++	public void setItem(String item) {
++		this.item = item;
++	}
++
++	@ManyToOne
++	@JoinColumnsOrFormulas(
++	{ 
++	  @JoinColumnOrFormula(column=@JoinColumn(name="order_nbr", referencedColumnName="order_nbr")),
++	  @JoinColumnOrFormula(formula=@JoinFormula(value="'false'", referencedColumnName="is_default"))
++	})
++	public Menu getOrder() {
++		return order;
++	}
++
++	public void setOrder(Menu order) {
++		this.order = order;
++	}
++}
+Index: src/test/java/org/hibernate/test/annotations/manytoonewithformula/ManyToOneWithFormulaTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/manytoonewithformula/ManyToOneWithFormulaTest.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/manytoonewithformula/ManyToOneWithFormulaTest.java	(revision 0)
+@@ -0,0 +1,94 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.manytoonewithformula;
++
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.test.annotations.TestCase;
++
++/**
++ * @author Sharath Reddy
++ */
++public class ManyToOneWithFormulaTest extends TestCase {
++
++	public ManyToOneWithFormulaTest(String x) {
++		super( x );
++	}
++	
++	public void testManyToOneNonPk() throws Exception {
++		Session s = openSession();
++		Transaction tx = s.beginTransaction();
++		Menu order = new Menu();
++		order.setOrderNbr( "123" );
++		s.persist( order );
++		FoodItem ol = new FoodItem();
++		ol.setItem( "Mouse" );
++		ol.setOrder( order );
++		s.persist( ol );
++		s.flush();
++		s.clear();
++		ol = (FoodItem) s.get( FoodItem.class, ol.getId() );
++		assertNotNull( ol.getOrder() );
++		assertEquals( "123", ol.getOrder().getOrderNbr() );
++		tx.rollback();
++		s.close();
++	}
++
++	
++	public void testManyToOnePk() throws Exception {
++		Session s = openSession();
++		Transaction tx = s.beginTransaction();
++		
++		Company company = new Company();
++		s.persist( company );
++		
++		Person person = new Person();
++		person.setDefaultFlag(true);
++		person.setCompanyId(company.getId());
++		s.persist(person);
++						
++		s.flush();
++		s.clear();
++		
++		company = (Company) s.get( Company.class, company.getId() );
++		assertNotNull( company.getDefaultContactPerson() );
++		assertEquals( person.getId(), company.getDefaultContactPerson().getId() );
++		tx.rollback();
++		s.close();
++	}
++
++	/**
++	 * @see org.hibernate.test.annotations.TestCase#getMappings()
++	 */
++	protected java.lang.Class[] getMappings() {
++		return new java.lang.Class[]{
++				Menu.class,
++				FoodItem.class,
++				Company.class,
++				Person.class
++		};
++	}
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/test/annotations/manytoonewithformula/Menu.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/manytoonewithformula/Menu.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/manytoonewithformula/Menu.java	(revision 0)
+@@ -0,0 +1,71 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.manytoonewithformula;
++
++import java.io.Serializable;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.Column;
++
++/**
++ * @author Sharath Reddy
++ */
++@Entity
++public class Menu implements Serializable {
++	private Integer id;
++	private String orderNbr;
++	private boolean isDefault;
++	
++	@Id
++	@GeneratedValue
++	public Integer getId() {
++		return id;
++	}
++
++	public void setId(Integer id) {
++		this.id = id;
++	}
++
++	@Column(name="is_default")	
++	public boolean isDefault() {
++		return isDefault;
++	}
++
++	public void setDefault(boolean isDefault) {
++		this.isDefault = isDefault;
++	}
++
++	@Column(name="order_nbr")
++	public String getOrderNbr() {
++		return orderNbr;
++	}
++
++	public void setOrderNbr(String orderNbr) {
++		this.orderNbr = orderNbr;
++	}
++
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/manytoonewithformula/Person.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/manytoonewithformula/Person.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/manytoonewithformula/Person.java	(revision 0)
+@@ -0,0 +1,67 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++
++package org.hibernate.test.annotations.manytoonewithformula;
++
++import java.io.Serializable;
++
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++/**
++ * @author Sharath Reddy
++ */
++@Entity
++public class Person implements Serializable {
++	
++	private int id;
++	private int companyId;
++	private boolean defaultFlag;
++	
++	@Id @GeneratedValue
++	public int getId() {
++		return id;
++	}
++	public void setId(int id) {
++		this.id = id;
++	}
++	
++	@Column(name="company_id")
++	public int getCompanyId() {
++		return companyId;
++	}
++	public void setCompanyId(int companyId) {
++		this.companyId = companyId;
++	}
++	@Column(name="is_default")
++	public boolean isDefaultFlag() {
++		return defaultFlag;
++	}
++	public void setDefaultFlag(boolean defaultFlag) {
++		this.defaultFlag = defaultFlag;
++	}
++}
++

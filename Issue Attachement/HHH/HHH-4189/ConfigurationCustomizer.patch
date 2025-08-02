@@ -1,0 +1,79 @@
+Index: ConfigurationCustomizer.java
+===================================================================
+--- ConfigurationCustomizer.java	(revision 0)
++++ ConfigurationCustomizer.java	(revision 0)
+@@ -0,0 +1,18 @@
++//$Id$
++package org.hibernate.ejb;
++
++import org.hibernate.cfg.Configuration;
++
++/**
++ * Allows user code to inspect and/or change configuration values.
++ * <br><br>
++ * Inspection occurs before an EntityManager is instatiated and after annotations and XML configuration
++ * files have been read.<br>
++ * @author John Leach
++ */
++public interface ConfigurationCustomizer {
++	/**
++	 * Called after annoation and XML configuration has taken place.
++	 */
++	public void customize(Configuration cfg);
++}
+Index: Ejb3Configuration.java
+===================================================================
+--- Ejb3Configuration.java	(revision 14674)
++++ Ejb3Configuration.java	(working copy)
+@@ -860,6 +860,35 @@
+ 		}
+ 		discardOnClose = preparedProperties.getProperty( HibernatePersistence.DISCARD_PC_ON_CLOSE )
+ 				.equals( "true" );
++
++		if ( preparedProperties.containsKey( HibernatePersistence.CONFIGURATION_CUSTOMIZER ) ) {
++			String configurationCustomizerName = preparedProperties.getProperty( HibernatePersistence.CONFIGURATION_CUSTOMIZER );
++			try {
++				Class configurationCustomizer = classForName( configurationCustomizerName );
++				((ConfigurationCustomizer)configurationCustomizer.newInstance()).customize(cfg);
++			}
++			catch (ClassNotFoundException e) {
++				throw new PersistenceException(
++						getExceptionHeader() + "Unable to find configuration customizer class: " + configurationCustomizerName, e
++				);
++			}
++			catch (IllegalAccessException e) {
++				throw new PersistenceException(
++						getExceptionHeader() + "Unable to access configuration customizer class: " + configurationCustomizerName, e
++				);
++			}
++			catch (InstantiationException e) {
++				throw new PersistenceException(
++						getExceptionHeader() + "Unable to instanciate configuration customizer class: " + configurationCustomizerName, e
++				);
++			}
++			catch (ClassCastException e) {
++				throw new PersistenceException(
++						getExceptionHeader() + "Configuration customizer class does not implement ConfigurationCustomizer interface: " + configurationCustomizerName, e
++				);
++			}
++		}
++
+ 		return this;
+ 	}
+ 
+Index: HibernatePersistence.java
+===================================================================
+--- HibernatePersistence.java	(revision 14674)
++++ HibernatePersistence.java	(working copy)
+@@ -59,6 +59,11 @@
+ 	 */
+ 	public static final String SESSION_INTERCEPTOR = "hibernate.ejb.interceptor.session_scoped";
+ 	/**
++	 * Configuration customizer class name, the class has to have a no-arg constructor, and implement
++	 * the org.hibernate.ejb.ConfigurationCustomizer interface
++	 */
++	public static final String CONFIGURATION_CUSTOMIZER = "hibernate.cfg.customizer";
++	/**
+ 	 * Naming strategy class name, the class has to have a no-arg constructor
+ 	 */
+ 	public static final String NAMING_STRATEGY = "hibernate.ejb.naming_strategy";

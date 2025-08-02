@@ -1,0 +1,441 @@
+Index: core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(revision 18845)
++++ core/src/main/java/org/hibernate/persister/collection/AbstractCollectionPersister.java	(working copy)
+@@ -297,7 +297,7 @@
+ 			// NativeSQL: collect key column and auto-aliases
+ 			Column col = ( (Column) iter.next() );
+ 			keyColumnNames[k] = col.getQuotedName(dialect);
+-			keyColumnAliases[k] = col.getAlias(dialect);
++			keyColumnAliases[k] = col.getAlias(dialect,collection.getOwner().getRootTable());
+ 			k++;
+ 		}
+ 		
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/mapping.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/mapping.hbm.xml	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/mapping.hbm.xml	(revision 0)
+@@ -0,0 +1,36 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++			"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++<hibernate-mapping package="org.hibernate.test.unionsubclass.alias">
++
++	<class name="Seller">
++		<composite-id class="PersonID" name="id">
++			<key-property column="NR_RZBK" name="num" />
++			<key-property column="TXT_OID" name="name" />
++		</composite-id>
++		<set cascade="persist, merge, save-update" inverse="true" lazy="false"
++			name="buyers">
++			<key>
++				<column name="NR_RZBK" />
++				<column name="TXT_OID_TESTB" />
++			</key>
++			<one-to-many class="CarBuyer" />
++		</set>
++	</class>
++
++	<class abstract="true" name="Customer">
++		<composite-id class="PersonID" name="id">
++			<key-property column="NR_RZBK" name="num" />
++			<key-property column="TXT_OID" name="name" />
++		</composite-id>
++		<union-subclass name="CarBuyer">
++			<property column="PID" name="pid" update="false" />
++			<property column="TXT_OID_TESTB" name="sellerName" />
++			<many-to-one cascade="persist, merge, save-update" class="Seller"
++				insert="false" name="seller" update="false">
++				<column name="NR_RZBK" />
++				<column name="TXT_OID_TESTB" />
++			</many-to-one>
++		</union-subclass>
++	</class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Customer.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Customer.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Customer.java	(revision 0)
+@@ -0,0 +1,57 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.unionsubclass.alias;
++
++import java.io.Serializable;
++
++/**
++ * 
++ * @author Strong Liu <stliu@redhat.com>
++ */
++public abstract class Customer implements Serializable {
++    private PersonID id;
++
++    public PersonID getId() {
++        return id;
++    }
++
++    public void setId( PersonID id ) {
++        this.id = id;
++    }
++
++    public boolean equals( Object obj ) {
++        if ( obj == null )
++            return false;
++        if ( obj == this )
++            return true;
++        if ( !( obj instanceof Customer ) )
++            return false;
++        return ( (Customer) obj ).getId().equals( getId() );
++    }
++
++    public int hashCode() {
++        return id.hashCode();
++    }
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/PersonID.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/PersonID.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/PersonID.java	(revision 0)
+@@ -0,0 +1,94 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.unionsubclass.alias;
++
++import java.io.Serializable;
++
++/**
++ * 
++ * @author Strong Liu <stliu@redhat.com>
++ */
++public class PersonID implements Serializable {
++    private Long num;
++    private String name;
++
++    public Long getNum() {
++        return num;
++    }
++
++    public void setNum( Long num ) {
++        this.num = num;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public void setName( String name ) {
++        this.name = name;
++    }
++
++    public boolean equals( Object obj ) {
++        if ( this == obj )
++            return true;
++        if ( obj == null )
++            return false;
++        if ( getClass() != obj.getClass() )
++            return false;
++        final PersonID other = (PersonID) obj;
++        if ( name == null ) {
++            if ( other.name != null )
++                return false;
++
++        } else if ( !name.equals( other.name ) ) {
++            return false;
++        }
++        if ( num == null ) {
++            if ( other.num != null )
++                return false;
++
++        } else if ( !num.equals( other.num ) ) {
++            return false;
++        }
++        return true;
++    }
++
++    public int hashCode() {
++        final int PRIME = 31;
++        int result = 1;
++        if ( name != null ) {
++            result += name.hashCode();
++        }
++        result *= PRIME;
++        if ( num != null ) {
++            result += num.hashCode();
++        }
++        return result;
++    }
++
++    public String toString() {
++        return name + " | " + num;
++    }
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/SellCarTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/SellCarTest.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/SellCarTest.java	(revision 0)
+@@ -0,0 +1,82 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.unionsubclass.alias;
++
++import org.hibernate.Query;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.junit.functional.FunctionalTestCase;
++
++/**
++ * http://opensource.atlassian.com/projects/hibernate/browse/HHH-4825
++ * @author Strong Liu <stliu@redhat.com>
++ */
++public class SellCarTest extends FunctionalTestCase {
++
++    public SellCarTest( String string ) {
++        super( string );
++    }
++
++    public String[] getMappings() {
++        return new String[] { "unionsubclass/alias/mapping.hbm.xml" };
++    }
++
++    public void testSellCar() throws Exception {
++        prepareData();
++        Session session = openSession();
++        Transaction tx = session.beginTransaction();
++        Query query = session.createQuery( "from Seller" );
++        Seller seller = (Seller) query.uniqueResult();
++        assertNotNull( seller );
++        assertEquals( 1, seller.getBuyers().size() );
++        tx.commit();
++        session.close();
++    }
++
++    private void prepareData() {
++        Session session = openSession();
++        Transaction tx = session.beginTransaction();
++        session.save( createData() );
++        tx.commit();
++        session.close();
++    }
++
++    private Object createData() {
++        Seller stliu = new Seller();
++        stliu.setId( createID( "stliu" ) );
++        CarBuyer zd = new CarBuyer();
++        zd.setId( createID( "zd" ) );
++        zd.setSeller( stliu );
++        zd.setSellerName( stliu.getId().getName() );
++        stliu.getBuyers().add( zd );
++        return stliu;
++    }
++
++    private PersonID createID( String name ) {
++        PersonID id = new PersonID();
++        id.setName( name );
++        id.setNum( new Long( 100 ) );
++        return id;
++    }
++}
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Seller.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Seller.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/Seller.java	(revision 0)
+@@ -0,0 +1,69 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.unionsubclass.alias;
++
++import java.io.Serializable;
++import java.util.HashSet;
++import java.util.Set;
++
++/**
++ * 
++ * @author Strong Liu <stliu@redhat.com>
++ */
++public class Seller implements Serializable {
++    private PersonID id;
++    private Set buyers = new HashSet();
++
++    public PersonID getId() {
++        return id;
++    }
++
++    public void setId( PersonID id ) {
++        this.id = id;
++    }
++
++    public Set getBuyers() {
++        return buyers;
++    }
++
++    public void setBuyers( Set buyers ) {
++        this.buyers = buyers;
++    }
++
++    public boolean equals( Object obj ) {
++        if ( obj == null )
++            return false;
++        if ( obj == this )
++            return true;
++        if ( !( obj instanceof Seller ) )
++            return false;
++
++        return ( (Seller) obj ).getId().equals( getId() );
++    }
++
++    public int hashCode() {
++        return id.hashCode();
++    }
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/CarBuyer.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/CarBuyer.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/unionsubclass/alias/CarBuyer.java	(revision 0)
+@@ -0,0 +1,59 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.unionsubclass.alias;
++
++/**
++ * 
++ * @author Strong Liu <stliu@redhat.com>
++ */
++public class CarBuyer extends Customer {
++    private String sellerName;
++    private String pid;
++    private Seller seller;
++
++    public String getSellerName() {
++        return sellerName;
++    }
++
++    public void setSellerName( String sellerName ) {
++        this.sellerName = sellerName;
++    }
++
++    public String getPid() {
++        return pid;
++    }
++
++    public void setPid( String pid ) {
++        this.pid = pid;
++    }
++
++    public Seller getSeller() {
++        return seller;
++    }
++
++    public void setSeller( Seller seller ) {
++        this.seller = seller;
++    }
++
++}

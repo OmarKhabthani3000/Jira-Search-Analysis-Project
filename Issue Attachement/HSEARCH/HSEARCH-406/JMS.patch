@@ -1,0 +1,182 @@
+Index: src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorFactory.java
+===================================================================
+--- src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorFactory.java	(revision 17630)
++++ src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorFactory.java	Sat Oct 24 16:18:21 BST 2009
+@@ -52,19 +52,36 @@
+ 	private QueueConnectionFactory factory;
+ 	public static final String JMS_CONNECTION_FACTORY = Environment.WORKER_PREFIX + "jms.connection_factory";
+ 	public static final String JMS_QUEUE = Environment.WORKER_PREFIX + "jms.queue";
++    public static final String JMS_IS_TRANSACTED =   Environment.WORKER_PREFIX + "jms.transacted";
+ 
+ 	public void initialize(Properties props, SearchFactoryImplementor searchFactoryImplementor) {
+-		//TODO proper exception if jms queues and connecitons are not there
+ 		this.properties = props;
++        validateJmsConnectionFactoryAndQueue(props);
+-		this.jmsConnectionFactoryName = props.getProperty( JMS_CONNECTION_FACTORY );
++        this.jmsConnectionFactoryName = props.getProperty( JMS_CONNECTION_FACTORY );
+ 		this.jmsQueueName = props.getProperty( JMS_QUEUE );
+-		prepareJMSTools();
++        prepareJMSTools();
+ 	}
+ 
++    private void validateJmsConnectionFactoryAndQueue(Properties props) {
++        if (props.getProperty( JMS_CONNECTION_FACTORY ) == null || "".equals(props.getProperty( JMS_CONNECTION_FACTORY ))){
++            throw new IllegalArgumentException("No valid jms connection factory jndi reference set");
++        }
++        if (props.getProperty( JMS_QUEUE ) == null || "".equals(props.getProperty( JMS_QUEUE ))) {
++            throw new IllegalArgumentException("No valid jms queue jndi reference set");
++        }
++    }
++
+-	public Runnable getProcessor(List<LuceneWork> queue) {
++    public Runnable getProcessor(List<LuceneWork> queue) {
+-		return new JMSBackendQueueProcessor( queue, this );
++        JMSBackendQueueProcessorParameter jmsBackendQueueProcessorParameter = new JMSBackendQueueProcessorParameter(factory,jmsQueue,hasTransactedProperty(properties));
++        return new JMSBackendQueueProcessor( queue, jmsBackendQueueProcessorParameter);
+ 	}
+ 
++    private boolean hasTransactedProperty(Properties prop) {
++       if (prop.get(JMS_IS_TRANSACTED) != null && "".equals(prop.get(JMS_IS_TRANSACTED))) {
++           return true;
++       }
++       return false;
++    }
+ 
+ 	public QueueConnectionFactory getJMSFactory() {
+ 		return factory;
+@@ -112,7 +129,7 @@
+ 
+ 	private static Properties getJndiProperties(Properties properties) {
+ 
+-		HashSet specialProps = new HashSet();
++		HashSet<String> specialProps = new HashSet<String>();
+ 		specialProps.add( JNDI_PREFIX + "class" );
+ 		specialProps.add( JNDI_PREFIX + "url" );
+ 
+Index: src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorParameter.java
+===================================================================
+--- src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorParameter.java	Sat Oct 24 16:08:47 BST 2009
++++ src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessorParameter.java	Sat Oct 24 16:08:47 BST 2009
+@@ -0,0 +1,49 @@
++package org.hibernate.search.backend.impl.jms;
++
++import org.hibernate.HibernateException;
++
++import javax.jms.QueueConnectionFactory;
++import javax.jms.Queue;
++import javax.jms.JMSException;
++
++
++/**
++ * Parameter object to encapsulate all the necessary data required for JMSBackendQueueProcessor
++ *
++ */
++class JMSBackendQueueProcessorParameter {
++
++    private final QueueConnectionFactory factory;
++    private final Queue jmsQueue;
++    private final boolean isTransacted;
++
++
++    JMSBackendQueueProcessorParameter(QueueConnectionFactory factory, Queue jmsQueue, boolean isTransacted) {
++        this.factory = factory;
++        this.jmsQueue = jmsQueue;
++        this.isTransacted = isTransacted;
++    }
++
++    QueueConnectionFactory getQueueConnectionFactory() {
++        return this.factory;
++    }
++
++
++    Queue getJmsQueue() {
++        return this.jmsQueue;
++    }
++
++    boolean isTransacted() {
++        return this.isTransacted;
++    }
++
++    String getJmsQueueName() {
++        try {
++            return this.jmsQueue.getQueueName();
++        } catch (JMSException jmsex) {
++            throw new HibernateException( "Unable to get queue name: " + this.jmsQueue, jmsex );
++        }
++    }
++
++
++}
+Index: src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessor.java
+===================================================================
+--- src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessor.java	(revision 17630)
++++ src/main/java/org/hibernate/search/backend/impl/jms/JMSBackendQueueProcessor.java	Sat Oct 24 16:08:27 BST 2009
+@@ -27,11 +27,7 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.List;
+-import javax.jms.JMSException;
+-import javax.jms.ObjectMessage;
+-import javax.jms.QueueConnection;
+-import javax.jms.QueueSender;
+-import javax.jms.QueueSession;
++import javax.jms.*;
+ 
+ import org.slf4j.Logger;
+ 
+@@ -47,12 +43,11 @@
+ 	private static final Logger log = LoggerFactory.make();
+ 
+ 	private List<LuceneWork> queue;
+-	private JMSBackendQueueProcessorFactory factory;
++    private JMSBackendQueueProcessorParameter jmsBackendQueueProcessorParameter;
+ 
+-	public JMSBackendQueueProcessor(List<LuceneWork> queue,
+-									JMSBackendQueueProcessorFactory jmsBackendQueueProcessorFactory) {
++	public JMSBackendQueueProcessor(List<LuceneWork> queue, JMSBackendQueueProcessorParameter jmsBackendQueueProcessorParameter) {
+ 		this.queue = queue;
+-		this.factory = jmsBackendQueueProcessorFactory;
++	    this.jmsBackendQueueProcessorParameter = jmsBackendQueueProcessorParameter;
+ 	}
+ 
+ 	public void run() {
+@@ -64,25 +59,23 @@
+ 			}
+ 		}
+ 		if ( filteredQueue.size() == 0) return;
+-		factory.prepareJMSTools();
+ 		QueueConnection cnn = null;
+ 		QueueSender sender;
+ 		QueueSession session;
+-		try {
++      	try {
+-			cnn = factory.getJMSFactory().createQueueConnection();
+-			//TODO make transacted parameterized
+-			session = cnn.createQueueSession( false, QueueSession.AUTO_ACKNOWLEDGE );
++			cnn = jmsBackendQueueProcessorParameter.getQueueConnectionFactory().createQueueConnection();
++            session = cnn.createQueueSession( jmsBackendQueueProcessorParameter.isTransacted(), QueueSession.AUTO_ACKNOWLEDGE );
+ 
+ 			ObjectMessage message = session.createObjectMessage();
+ 			message.setObject( (Serializable) filteredQueue );
+ 
+-			sender = session.createSender( factory.getJmsQueue() );
++			sender = session.createSender( jmsBackendQueueProcessorParameter.getJmsQueue() );
+ 			sender.send( message );
+ 
+ 			session.close();
+ 		}
+ 		catch (JMSException e) {
+-			throw new HibernateException( "Unable to send Search work to JMS queue: " + factory.getJmsQueueName(), e );
++			throw new HibernateException( "Unable to send Search work to JMS queue: " + jmsBackendQueueProcessorParameter.getJmsQueueName(), e );
+ 		}
+ 		finally {
+ 			try {
+@@ -90,7 +83,7 @@
+ 					cnn.close();
+ 				}
+ 			catch ( JMSException e ) {
+-				log.warn( "Unable to close JMS connection for " + factory.getJmsQueueName(), e );
++				log.warn( "Unable to close JMS connection for " + jmsBackendQueueProcessorParameter.getJmsQueueName(), e );
+ 			}
+ 		}
+ 	}

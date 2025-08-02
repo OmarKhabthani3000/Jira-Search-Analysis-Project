@@ -1,0 +1,145 @@
+Index: C:/projects/workspace/Hibernate3/src/org/hibernate/engine/CollectionLoadContext.java
+===================================================================
+--- C:/projects/workspace/Hibernate3/src/org/hibernate/engine/CollectionLoadContext.java	(revision 9841)
++++ C:/projects/workspace/Hibernate3/src/org/hibernate/engine/CollectionLoadContext.java	(working copy)
+@@ -219,7 +219,7 @@
+ 	/**
+ 	 * Finish the process of loading collections for a particular result set
+ 	 */
+-	public void endLoadingCollections(CollectionPersister persister, Object resultSetId, SessionImplementor session)
++	public void endLoadingCollections(CollectionPersister persister, Object resultSetId, SessionImplementor session, Object loadedEntity)
+ 	throws HibernateException {
+ 
+ 		// scan the loading collections for collections from this result set
+@@ -231,17 +231,20 @@
+ 		while ( iter.hasNext() ) {
+ 			LoadingCollectionEntry lce = (LoadingCollectionEntry) iter.next();
+ 			if ( lce.resultSetId == resultSetId && lce.persister==persister) {
+-				if ( resultSetCollections == null ) {
+-					resultSetCollections = new ArrayList();
+-				}
+-				resultSetCollections.add(lce);
+ 				if ( lce.collection.getOwner()==null ) {
+ 					session.getPersistenceContext()
+ 							.addUnownedCollection( 
+ 									new CollectionKey( persister, lce.key, session.getEntityMode() ), 
+ 									lce.collection
+ 								);
++				} else if (loadedEntity != null && lce.collection.getOwner() != loadedEntity){
++					// The collection does not belong to the loadedEntity and is not completely initialized.
++					continue;
+ 				}
++				if ( resultSetCollections == null ) {
++					resultSetCollections = new ArrayList();
++				}
++				resultSetCollections.add(lce);
+ 				iter.remove();
+ 			}
+ 		}
+Index: C:/projects/workspace/Hibernate3/src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- C:/projects/workspace/Hibernate3/src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 9841)
++++ C:/projects/workspace/Hibernate3/src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -75,6 +75,7 @@
+ import org.hibernate.tuple.Tuplizer;
+ import org.hibernate.type.AbstractComponentType;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.CollectionType;
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
+@@ -1315,7 +1316,7 @@
+ 	 * which takes the entity name.
+ 	 */
+ 	public int getSubclassPropertyTableNumber(String propertyPath) {
+-		final String rootPropertyName = StringHelper.root(propertyPath);
++		String rootPropertyName = StringHelper.root(propertyPath);
+ 		Type type = propertyMapping.toType(rootPropertyName);
+ 		if ( type.isAssociationType() && ( (AssociationType) type ).useLHSPrimaryKey() ) {
+ 			return 0;
+@@ -1328,6 +1329,9 @@
+ 				return getSubclassColumnTableNumberClosure()[idx];
+ 			}
+ 		}*/
++		if ( type.isCollectionType() /*&& ( (CollectionType) type ).getLHSPropertyName() != null*/) {
++			rootPropertyName = ( (CollectionType) type ).getLHSPropertyName();
++		}
+ 		int index = ArrayHelper.indexOf( getSubclassPropertyNameClosure(), rootPropertyName); //TODO: optimize this better!
+ 		return index==-1 ? 0 : getSubclassPropertyTableNumber(index);
+ 	}
+Index: C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java
+===================================================================
+--- C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java	(revision 9841)
++++ C:/projects/workspace/Hibernate3/src/org/hibernate/loader/Loader.java	(working copy)
+@@ -277,7 +277,8 @@
+ 				hydratedObjects, 
+ 				resultSet, 
+ 				session, 
+-				queryParameters.isReadOnly() 
++				queryParameters.isReadOnly(),
++				result
+ 			);
+ 		session.getPersistenceContext().initializeNonLazyCollections();
+ 		return result;
+@@ -328,7 +329,8 @@
+ 				hydratedObjects, 
+ 				resultSet, 
+ 				session, 
+-				queryParameters.isReadOnly() 
++				queryParameters.isReadOnly(),
++				result
+ 			);
+ 		session.getPersistenceContext().initializeNonLazyCollections();
+ 		return result;
+@@ -714,7 +716,7 @@
+ 			session.getBatcher().closeQueryStatement( st, rs );
+ 		}
+ 
+-		initializeEntitiesAndCollections( hydratedObjects, rs, session, queryParameters.isReadOnly() );
++		initializeEntitiesAndCollections( hydratedObjects, rs, session, queryParameters.isReadOnly(), null );
+ 
+ 		if ( createSubselects ) createSubselects( subselectResultKeys, queryParameters, session );
+ 
+@@ -804,7 +806,8 @@
+ 			final List hydratedObjects,
+ 			final Object resultSetId,
+ 			final SessionImplementor session,
+-			final boolean readOnly) 
++			final boolean readOnly, 
++			final Object loadedEntity) 
+ 	throws HibernateException {
+ 		
+ 		final CollectionPersister[] collectionPersisters = getCollectionPersisters();
+@@ -816,7 +819,7 @@
+ 					//during loading
+ 					//TODO: or we could do this polymorphically, and have two
+ 					//      different operations implemented differently for arrays
+-					endCollectionLoad( resultSetId, session, collectionPersisters[i] );
++					endCollectionLoad( resultSetId, session, collectionPersisters[i], loadedEntity );
+ 				}
+ 			}
+ 		}
+@@ -850,7 +853,7 @@
+ 					//the entities, since we might call hashCode() on the elements
+ 					//TODO: or we could do this polymorphically, and have two
+ 					//      different operations implemented differently for arrays
+-					endCollectionLoad( resultSetId, session, collectionPersisters[i] );
++					endCollectionLoad( resultSetId, session, collectionPersisters[i], loadedEntity );
+ 				}
+ 			}
+ 		}
+@@ -860,11 +863,12 @@
+ 	private void endCollectionLoad(
+ 			final Object resultSetId, 
+ 			final SessionImplementor session, 
+-			final CollectionPersister collectionPersister
++			final CollectionPersister collectionPersister, 
++			final Object loadedEntity
+ 	) {
+ 		//this is a query and we are loading multiple instances of the same collection role
+ 		session.getPersistenceContext().getCollectionLoadContext()
+-				.endLoadingCollections( collectionPersister, resultSetId, session );
++				.endLoadingCollections( collectionPersister, resultSetId, session, loadedEntity );
+ 	}
+ 
+ 	protected List getResultList(List results, ResultTransformer resultTransformer) throws QueryException {

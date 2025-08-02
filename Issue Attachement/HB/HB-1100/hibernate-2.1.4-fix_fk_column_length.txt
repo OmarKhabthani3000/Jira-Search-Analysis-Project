@@ -1,0 +1,67 @@
+diff -u hibernate-2.1.4/src/net/sf/hibernate/cfg/Configuration.java hibernate-2.1.4.modified/src/net/sf/hibernate/cfg/Configuration.java
+--- hibernate-2.1.4/src/net/sf/hibernate/cfg/Configuration.java	2004-06-02 05:15:56.000000000 -0700
++++ hibernate-2.1.4.modified/src/net/sf/hibernate/cfg/Configuration.java	2004-07-19 18:23:18.549004512 -0700
+@@ -610,9 +624,24 @@
+ 	// This method may be called many times!!
+ 	private void secondPassCompile() throws MappingException {
+ 
++		//	first process the foreign key constraints
++      log.info("processing foreign key constraints");
++      // make sure that classes are handled before their subclasses
++      Iterator iter = getClassMappings();
++      while ( iter.hasNext() ) {
++         PersistentClass classMapping = (PersistentClass) iter.next();
++         if (classMapping.getSuperclass()==null)
++         processForeignKeyConstraints(classMapping);
++      }
++      //process the foreign keys a second time to include collection tables
++      iter= getTableMappings();
++      while ( iter.hasNext() ) {
++         processForeignKeyConstraints((Table)iter.next());
++      } 		
++		
+ 		log.info("processing one-to-many association mappings");
+ 
+-		Iterator iter = secondPasses.iterator();
++		iter = secondPasses.iterator();
+ 		while ( iter.hasNext() ) {
+ 			Binder.SecondPass sp = (Binder.SecondPass) iter.next();
+ 			sp.doSecondPass(classes);
+@@ -669,6 +698,37 @@
+ 			}
+ 		}
+ 	}
++	
++   //introduced two new methods
++   private void processForeignKeyConstraints(PersistentClass classMapping) throws MappingException {
++      processForeignKeyConstraints(classMapping.getTable());
++      Iterator subClassIter= classMapping.getDirectSubclasses();
++      while(subClassIter.hasNext()){
++         processForeignKeyConstraints((PersistentClass) subClassIter.next());
++      }
++   } 	
++   private void processForeignKeyConstraints(Table table) throws MappingException {
++      System.out.println("processForeignKeyConstraints:"+ table.getName());
++      Iterator subIter = table.getForeignKeyIterator();
++      while ( subIter.hasNext() ) {
++
++         ForeignKey fk = (ForeignKey) subIter.next();
++         //skip the test because each key will be processed two times
++         //if ( fk.getReferencedTable() == null ) {
++            if ( log.isDebugEnabled() ) log.debug(
++               "resolving reference to class: " + fk.getReferencedClass().getName()
++            );
++            PersistentClass referencedClass = (PersistentClass) classes.get( fk.getReferencedClass() );
++            if (referencedClass == null) throw new MappingException(
++               "An association from the table " +
++               fk.getTable().getName() +
++               " refers to an unmapped class: " +
++               fk.getReferencedClass().getName()
++            );
++            fk.setReferencedTable( referencedClass.getTable() );
++         //}
++      }
++   } 	
+ 
+ 	/**
+ 	 * Get the named queries

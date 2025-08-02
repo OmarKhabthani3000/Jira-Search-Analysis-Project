@@ -1,0 +1,59 @@
+diff --git a/entitymanager/src/main/java/org/hibernate/ejb/criteria/CriteriaBuilderImpl.java b/entitymanager/src/main/java/org/hibernate/ejb/criteria/CriteriaBuilderImpl.java
+index 9f29b3c..4fc5855 100644
+--- a/entitymanager/src/main/java/org/hibernate/ejb/criteria/CriteriaBuilderImpl.java
++++ b/entitymanager/src/main/java/org/hibernate/ejb/criteria/CriteriaBuilderImpl.java
+@@ -251,7 +251,10 @@ public class CriteriaBuilderImpl implements CriteriaBuilder, Serializable {
+ 	// predicates ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+ 	public Predicate wrap(Expression<Boolean> expression) {
+-		if ( Predicate.class.isInstance( expression ) ) {
++                if ( CompoundPredicate.class.isInstance( expression ) ) {
++                        return (( CompoundPredicate ) expression);
++                }
++                else if(Predicate.class.isInstance(expression)) {
+ 			return ( ( Predicate ) expression );
+ 		}
+ 		else if ( PathImplementor.class.isInstance( expression ) ) {
+diff --git a/entitymanager/src/main/java/org/hibernate/ejb/criteria/predicate/CompoundPredicate.java b/entitymanager/src/main/java/org/hibernate/ejb/criteria/predicate/CompoundPredicate.java
+index 6bda4f1..255211f 100644
+--- a/entitymanager/src/main/java/org/hibernate/ejb/criteria/predicate/CompoundPredicate.java
++++ b/entitymanager/src/main/java/org/hibernate/ejb/criteria/predicate/CompoundPredicate.java
+@@ -44,7 +44,7 @@ import org.hibernate.ejb.criteria.Renderable;
+ public class CompoundPredicate
+ 		extends AbstractPredicateImpl
+ 		implements Serializable {
+-	private final BooleanOperator operator;
++	private BooleanOperator operator;
+ 	private final List<Expression<Boolean>> expressions = new ArrayList<Expression<Boolean>>();
+ 
+ 	/**
+@@ -148,4 +148,29 @@ public class CompoundPredicate
+ 	public String renderProjection(CriteriaQueryCompiler.RenderingContext renderingContext) {
+ 		return render( renderingContext );
+ 	}
++
++        /**
++         * Create negation of compound predicate by using logic rules:
++         * 1. not (x || y) is (not x && not y)
++         * 2. not (x && y) is (not x || not y)
++         * 
++         */
++        @Override
++        public Predicate not() {
++                if (this.operator == BooleanOperator.AND) {
++                        this.operator = BooleanOperator.OR;
++                } else {
++                        this.operator = BooleanOperator.AND;
++                }
++                for (Expression expr : this.getExpressions()) {
++                        if (Predicate.class.isInstance(expr)) {
++                                ( (Predicate) expr ).not();
++                        }
++                        else if(CompoundPredicate.class.isInstance(expr)) {
++                            ( (CompoundPredicate) expr ).not();
++                        }
++                }
++
++                return this;
++        }
+ }

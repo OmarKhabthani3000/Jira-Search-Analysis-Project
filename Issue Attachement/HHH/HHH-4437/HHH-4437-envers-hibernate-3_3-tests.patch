@@ -1,0 +1,89 @@
+Index: src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java	(revision 17249)
++++ src/test/java/org/hibernate/envers/test/integration/manytoone/unidirectional/RelationNotAuditedTarget.java	Sun Sep 13 16:39:47 EEST 2009
+@@ -32,6 +32,11 @@
+ import org.hibernate.envers.test.AbstractEntityTest;
+ import org.hibernate.envers.test.entities.UnversionedStrTestEntity;
+ import org.hibernate.envers.test.entities.manytoone.unidirectional.TargetNotAuditedEntity;
++
++import org.hibernate.Hibernate;
++import org.hibernate.proxy.HibernateProxy;
++import org.hibernate.proxy.HibernateProxyHelper;
++
+ import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.Test;
+ 
+@@ -129,6 +134,9 @@
+ 
+ 	@Test
+ 	public void testHistoryOfTnae1_id() {
++		// load original "tnae1" TargetNotAuditedEntity to force load "str1" UnversionedStrTestEntity as Proxy
++		TargetNotAuditedEntity original = getEntityManager().find(TargetNotAuditedEntity.class, tnae1_id);
++
+ 		UnversionedStrTestEntity uste1 = getEntityManager().find(UnversionedStrTestEntity.class, uste1_id);
+ 		UnversionedStrTestEntity uste2 = getEntityManager().find(UnversionedStrTestEntity.class, uste2_id);
+ 
+@@ -141,6 +149,11 @@
+ 		assert rev2.getReference().equals(uste2);
+ 		assert rev3.getReference().equals(uste2);
+ 		assert rev4.getReference().equals(uste1);
++
++		assert original.getReference() instanceof HibernateProxy;
++		assert UnversionedStrTestEntity.class.equals(Hibernate.getClass(original.getReference()));
++		assert UnversionedStrTestEntity.class.equals(HibernateProxyHelper.getClassWithoutInitializingProxy(rev1.getReference()));
++		assert UnversionedStrTestEntity.class.equals(Hibernate.getClass(rev1.getReference()));
+ 	}
+ 
+ 	@Test
+Index: src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java	(revision 17249)
++++ src/test/java/org/hibernate/envers/test/entities/manytoone/unidirectional/TargetNotAuditedEntity.java	Sun Sep 13 16:13:57 EEST 2009
+@@ -45,7 +45,7 @@
+ 	private String data;
+ 
+ 	@Audited(targetAuditMode = RelationTargetAuditMode.NOT_AUDITED)
+-	@ManyToOne(fetch = FetchType.EAGER)
++	@ManyToOne(fetch = FetchType.LAZY)
+ 	private UnversionedStrTestEntity reference;
+ 
+ 	public TargetNotAuditedEntity() { }
+@@ -96,8 +96,8 @@
+ 
+ 		TargetNotAuditedEntity that = (TargetNotAuditedEntity) o;
+ 
+-		if (data != null ? !data.equals(that.data) : that.data != null) return false;
+-		if (id != null ? !id.equals(that.id) : that.id != null) return false;
++		if (data != null ? !data.equals(that.getData()) : that.getData() != null) return false;
++		if (id != null ? !id.equals(that.getId()) : that.getId() != null) return false;
+ 
+ 		return true;
+ 	}
+Index: src/test/resources/testng.xml
+===================================================================
+--- src/test/resources/testng.xml	(revision 16503)
++++ src/test/resources/testng.xml	Sun Sep 13 15:30:10 EEST 2009
+@@ -33,6 +33,7 @@
+             <package name="org.hibernate.envers.test.integration.manytomany" />
+             <package name="org.hibernate.envers.test.integration.manytomany.ternary" />
+             <package name="org.hibernate.envers.test.integration.manytomany.unidirectional" />
++            <package name="org.hibernate.envers.test.integration.manytoone.unidirectional" />
+             <package name="org.hibernate.envers.test.integration.naming" />
+             <package name="org.hibernate.envers.test.integration.naming.ids" />
+             <package name="org.hibernate.envers.test.integration.notinsertable" />
+Index: src/test/java/org/hibernate/envers/test/entities/UnversionedStrTestEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/entities/UnversionedStrTestEntity.java	(revision 15436)
++++ src/test/java/org/hibernate/envers/test/entities/UnversionedStrTestEntity.java	Sun Sep 13 16:13:57 EEST 2009
+@@ -72,8 +72,8 @@
+ 
+         UnversionedStrTestEntity that = (UnversionedStrTestEntity) o;
+ 
+-        if (id != null ? !id.equals(that.id) : that.id != null) return false;
+-        if (str != null ? !str.equals(that.str) : that.str != null) return false;
++        if (id != null ? !id.equals(that.getId()) : that.getId() != null) return false;
++        if (str != null ? !str.equals(that.getStr()) : that.getStr() != null) return false;
+ 
+         return true;
+     }

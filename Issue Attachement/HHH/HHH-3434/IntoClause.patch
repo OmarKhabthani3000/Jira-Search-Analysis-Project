@@ -1,0 +1,57 @@
+--- hibernate-distribution-3.3.1.GA-orig/project/core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java	2008-09-10 19:19:58.000000000 +0100
++++ hibernate-distribution-3.3.1.GA/project/core/src/main/java/org/hibernate/hql/ast/tree/IntoClause.java	2009-03-31 14:02:50.562500000 +0100
+@@ -25,11 +25,14 @@
+ package org.hibernate.hql.ast.tree;
+ 
+ import java.util.ArrayList;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ import java.sql.Types;
+ 
+ import org.hibernate.QueryException;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.type.ComponentType;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ 
+@@ -47,6 +50,9 @@
+ 	private String columnSpec = "";
+ 	private Type[] types;
+ 
++	private Set explicitComponentIds;
++	private Set componentIds;
++
+ 	private boolean discriminated;
+ 	private boolean explicitIdInsertion;
+ 	private boolean explicitVersionInsertion;
+@@ -167,9 +173,28 @@
+ 			throw new QueryException( "INSERT statements cannot refer to superclass/joined properties [" + name + "]" );
+ 		}
+ 
+-		if ( name.equals( persister.getIdentifierPropertyName() ) ) {
++		if ( !explicitIdInsertion ) {
++			if ( persister.getIdentifierType() instanceof ComponentType ) {
++				if ( explicitComponentIds == null ) {
++					explicitComponentIds = new HashSet();
++				}
++				if ( componentIds == null ) {
++					String[] propertyNames = ( (ComponentType) persister.getIdentifierType() ).getPropertyNames();
++					componentIds = new HashSet();
++					for ( int i = 0; i < propertyNames.length; i++ ) {
++						componentIds.add( propertyNames[i] );
++					}
++				}
++				if ( componentIds.contains(name) ) {
++					explicitComponentIds.add(name);
++				}
++				if ( explicitComponentIds.size() == componentIds.size() ) {
+ 			explicitIdInsertion = true;
+ 		}
++			} else if ( name.equals( persister.getIdentifierPropertyName() ) ) {
++				explicitIdInsertion = true;
++			}
++		}
+ 
+ 		if ( persister.isVersioned() ) {
+ 			if ( name.equals( persister.getPropertyNames()[ persister.getVersionProperty() ] ) ) {

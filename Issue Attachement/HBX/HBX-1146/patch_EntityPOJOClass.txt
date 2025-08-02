@@ -1,0 +1,107 @@
+diff -Naur orig/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java new/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+--- orig/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	2009-10-07 09:46:25.256250000 +0200
++++ new/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	2009-10-07 10:47:01.600000000 +0200
+@@ -9,6 +9,8 @@
+ import java.util.Properties;
+ import java.util.Set;
+ import java.util.StringTokenizer;
++import java.util.Comparator;
++import java.util.Collections;
+ 
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.id.MultipleHiLoPerTableGenerator;
+@@ -34,6 +36,7 @@
+ import org.hibernate.mapping.Value;
+ import org.hibernate.tool.hbm2x.Cfg2JavaTool;
+ import org.hibernate.type.ForeignKeyDirection;
++import org.hibernate.type.Type;
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -41,6 +44,30 @@
+ 
+ 	private PersistentClass clazz;
+ 
++	/**
++	Comparator to sort properties in a stable order.
++	*/
++	private Comparator PROPERTY_ORDER_COMPARATOR = new Comparator<Property>() {
++		public int compare(Property p1, Property p2) {
++			// first sort by property type
++			int p1_type = getPropertyOrderType(p1);
++			int p2_type = getPropertyOrderType(p2);
++			int r = p1_type-p2_type;
++			
++			// then sort by property name
++			if (r==0) {
++				// same property type => sort by property name
++				r = p1.getName().compareTo(p2.getName());
++			}
++			
++			return r;
++		}
++		
++		public boolean equals(Object obj) {
++			return true;
++		}
++	};
++	
+ 	public EntityPOJOClass(PersistentClass clazz, Cfg2JavaTool cfg) {
+ 		super(clazz, cfg);
+ 		this.clazz = clazz;
+@@ -163,6 +190,9 @@
+ 			}
+ 		}
+ 
++		Collections.sort(properties, PROPERTY_ORDER_COMPARATOR);
++
++		
+ 		iterators.add( properties.iterator() );
+ 
+ 		Iterator[] it = (Iterator[]) iterators.toArray( new Iterator[iterators.size()] );
+@@ -791,6 +821,8 @@
+ 			}
+ 		}
+ 
++		Collections.sort(result, PROPERTY_ORDER_COMPARATOR);
++
+ 		return result;
+ 	}
+ 
+@@ -863,6 +895,8 @@
+ 				result.add(property);
+ 			}
+ 		}
++		
++		Collections.sort(result, PROPERTY_ORDER_COMPARATOR);
+ 
+ 		return result;
+ 	}
+@@ -941,5 +975,27 @@
+ 			delegate.remove();
+ 		}
+ 	}
++	
++	/**
++	Returns the Property type for sorting. From first to last:
++	  1. identifier
++	  2. simple properties
++	  3. many-to-one
++	  4. Collections
++	*/
++	private int getPropertyOrderType(Property p) {
++		Type type = null;
++		try {
++			type = p.getValue().getType();
++		} catch (Exception e) {
++			// most probably a ClassNotFoundException on a generated class => ignore
++		}
++		
++		return
++			type!=null && java.util.Collection.class.isAssignableFrom(type.getReturnedClass())?3:
++			type!=null && type instanceof org.hibernate.type.ManyToOneType?2:
++			p.getPersistentClass().getIdentifierProperty().equals(p)?0:
++			1;
++	}
+ 
+ }

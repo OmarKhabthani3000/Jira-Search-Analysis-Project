@@ -1,0 +1,127 @@
+Index: core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java	(revision 15151)
++++ core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java	(working copy)
+@@ -138,7 +138,7 @@
+ 	 * @return the existing cache, or a newly created cache if none by that region name
+ 	 */
+ 	public QueryCache getQueryCache(String regionName) throws HibernateException;
+-	
++
+ 	/**
+ 	 * Get the cache of table update timestamps
+ 	 */
+@@ -147,7 +147,7 @@
+ 	 * Statistics SPI
+ 	 */
+ 	public StatisticsImplementor getStatisticsImplementor();
+-	
++
+ 	public NamedQueryDefinition getNamedQuery(String queryName);
+ 	public NamedSQLQueryDefinition getNamedSQLQuery(String queryName);
+ 	public ResultSetMappingDefinition getResultSetMapping(String name);
+@@ -156,7 +156,7 @@
+ 	 * Get the identifier generator for the hierarchy
+ 	 */
+ 	public IdentifierGenerator getIdentifierGenerator(String rootEntityName);
+-	
++
+ 	/**
+ 	 * Get a named second-level cache region
+ 	 *
+@@ -173,7 +173,7 @@
+ 	 * @return The map of regions
+ 	 */
+ 	public Map getAllSecondLevelCacheRegions();
+-	
++
+ 	/**
+ 	 * Retrieves the SQLExceptionConverter in effect for this SessionFactory.
+ 	 *
+@@ -208,6 +208,27 @@
+ 			final ConnectionReleaseMode connectionReleaseMode) throws HibernateException;
+ 
+ 	/**
++	 * Open a session conforming to the given parameters.  Used mainly by
++	 * {@link org.hibernate.context.JTASessionContext} for current session processing.
++	 *
++	 * @param connection				   The external jdbc connection to use, if one (i.e., optional).
++	 * @param flushBeforeCompletionEnabled Should the session be auto-flushed
++	 *                                     prior to transaction completion?
++	 * @param autoCloseSessionEnabled	  Should the session be auto-closed after
++	 *                                     transaction completion?
++	 * @param connectionReleaseMode		The release mode for managed jdbc connections.
++	 * @param interceptor				  an optional Interceptor
++	 * @return An appropriate session.
++	 * @throws HibernateException
++	 */
++	public org.hibernate.classic.Session openSession(
++			final Connection connection,
++			final boolean flushBeforeCompletionEnabled,
++			final boolean autoCloseSessionEnabled,
++			final ConnectionReleaseMode connectionReleaseMode,
++			final Interceptor interceptor) throws HibernateException;
++
++	/**
+ 	 * Retrieves a set of all the collection roles in which the given entity
+ 	 * is a participant, as either an index or an element.
+ 	 *
+@@ -219,5 +240,5 @@
+ 	public EntityNotFoundDelegate getEntityNotFoundDelegate();
+ 
+ 	public SQLFunctionRegistry getSqlFunctionRegistry();
+-		
++
+ }
+Index: core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(revision 15151)
++++ core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -551,20 +551,35 @@
+ 
+ 	public org.hibernate.classic.Session openSession(
+ 			final Connection connection,
+-	        final boolean flushBeforeCompletionEnabled,
+-	        final boolean autoCloseSessionEnabled,
+-	        final ConnectionReleaseMode connectionReleaseMode) throws HibernateException {
++			final boolean flushBeforeCompletionEnabled,
++			final boolean autoCloseSessionEnabled,
++			final ConnectionReleaseMode connectionReleaseMode) throws HibernateException {
++		return openSession(
++				connection,
++				flushBeforeCompletionEnabled,
++				autoCloseSessionEnabled,
++				connectionReleaseMode,
++				interceptor
++		);
++	}
++
++	public org.hibernate.classic.Session openSession(
++			final Connection connection,
++			final boolean flushBeforeCompletionEnabled,
++			final boolean autoCloseSessionEnabled,
++			final ConnectionReleaseMode connectionReleaseMode,
++			final Interceptor interceptor) throws HibernateException {
+ 		return new SessionImpl(
+ 				connection,
+-		        this,
+-		        true,
+-		        settings.getRegionFactory().nextTimestamp(),
+-		        interceptor,
+-		        settings.getDefaultEntityMode(),
+-		        flushBeforeCompletionEnabled,
+-		        autoCloseSessionEnabled,
+-		        connectionReleaseMode
+-			);
++				this,
++				true,
++				settings.getRegionFactory().nextTimestamp(),
++				interceptor != null ? interceptor : this.interceptor,
++				settings.getDefaultEntityMode(),
++				flushBeforeCompletionEnabled,
++				autoCloseSessionEnabled,
++				connectionReleaseMode
++		);
+ 	}
+ 
+ 	public org.hibernate.classic.Session getCurrentSession() throws HibernateException {

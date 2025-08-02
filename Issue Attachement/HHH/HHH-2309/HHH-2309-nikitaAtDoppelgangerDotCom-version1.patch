@@ -1,0 +1,781 @@
+Index: core/src/main/java/org/hibernate/engine/Cascade.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/Cascade.java	(revision 15971)
++++ core/src/main/java/org/hibernate/engine/Cascade.java	(working copy)
+@@ -27,6 +27,7 @@
+ import java.util.Collection;
+ import java.util.Iterator;
+ 
++import java.util.Set;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.hibernate.EntityMode;
+@@ -141,10 +142,13 @@
+ 			Type[] types = persister.getPropertyTypes();
+ 			CascadeStyle[] cascadeStyles = persister.getPropertyCascadeStyles();
+ 			EntityMode entityMode = eventSource.getEntityMode();
+-			boolean hasUninitializedLazyProperties = persister.hasUninitializedLazyProperties( parent, entityMode );
++			//boolean hasUninitializedLazyProperties = persister.hasUninitializedLazyProperties( parent, entityMode );
++			Set uninitializedPropertyNames = persister.getUninitializedLazyPropertyNames(parent, entityMode);
+ 			for ( int i=0; i<types.length; i++) {
+ 				CascadeStyle style = cascadeStyles[i];
+-				if ( hasUninitializedLazyProperties && persister.getPropertyLaziness()[i] && ! action.performOnLazyProperty() ) {
++                boolean propertyUninitialized = uninitializedPropertyNames != null && uninitializedPropertyNames.contains(persister.getPropertyNames()[i]);
++                //persister.getPropertyLaziness()[i] looks unnecessary: if propertyUnitialized is true -> persister.getPropertyLaziness()[i] cannot be false
++				if ( propertyUninitialized && persister.getPropertyLaziness()[i] && ! action.performOnLazyProperty() ) {
+ 					//do nothing to avoid a lazy property initialization
+ 					continue;
+ 				}
+Index: core/src/main/java/org/hibernate/intercept/AbstractFieldInterceptor.java
+===================================================================
+--- core/src/main/java/org/hibernate/intercept/AbstractFieldInterceptor.java	(revision 15971)
++++ core/src/main/java/org/hibernate/intercept/AbstractFieldInterceptor.java	(working copy)
+@@ -29,99 +29,107 @@
+ 
+ import java.util.Set;
+ import java.io.Serializable;
++import java.util.HashSet;
+ 
+ /**
+  * @author Steve Ebersole
+  */
+ public abstract class AbstractFieldInterceptor implements FieldInterceptor, Serializable {
+ 
+-	private transient SessionImplementor session;
+-	private Set uninitializedFields;
+-	private final String entityName;
++    private transient SessionImplementor session;
++    private Set uninitializedFields;
++    private final String entityName;    
+ 
+-	private transient boolean initializing;
+-	private boolean dirty;
++    //private transient boolean initializing;
++    private Set initializingFields;
++    private boolean dirty;
+ 
+-	protected AbstractFieldInterceptor(SessionImplementor session, Set uninitializedFields, String entityName) {
+-		this.session = session;
+-		this.uninitializedFields = uninitializedFields;
+-		this.entityName = entityName;
+-	}
++    protected AbstractFieldInterceptor(SessionImplementor session, Set uninitializedFields, String entityName) {
++        this.session = session;
++        this.uninitializedFields = uninitializedFields;
++        this.entityName = entityName;
++        this.initializingFields = uninitializedFields == null ? null : new HashSet();
++    }
+ 
++    // FieldInterceptor impl ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++    public final void setSession(SessionImplementor session) {
++        this.session = session;
++    }
+ 
+-	// FieldInterceptor impl ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++    public final boolean isInitialized() {
++        return uninitializedFields == null || uninitializedFields.size() == 0;
++    }
+ 
+-	public final void setSession(SessionImplementor session) {
+-		this.session = session;
+-	}
++    public final boolean isInitialized(String field) {
++        return uninitializedFields == null || !uninitializedFields.contains(field);
++    }
+ 
+-	public final boolean isInitialized() {
+-		return uninitializedFields == null || uninitializedFields.size() == 0;
+-	}
++    public final Set getUninitializedFieldNames() {
++        return uninitializedFields;
++    }
+ 
+-	public final boolean isInitialized(String field) {
+-		return uninitializedFields == null || !uninitializedFields.contains( field );
+-	}
++    public final void dirty() {
++        dirty = true;
++    }
+ 
+-	public final void dirty() {
+-		dirty = true;
+-	}
++    public final boolean isDirty() {        
++        return dirty;
++    }
+ 
+-	public final boolean isDirty() {
+-		return dirty;
+-	}
++    public final void clearDirty() {
++        dirty = false;
++    }
+ 
+-	public final void clearDirty() {
+-		dirty = false;
+-	}
+ 
++    // subclass accesses ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++    protected final Object intercept(Object target, String fieldName, Object value) {        
+ 
+-	// subclass accesses ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++        if (initializingFields != null && initializingFields.contains(fieldName)) {            
++            return value;
++        }
+ 
+-	protected final Object intercept(Object target, String fieldName, Object value) {
+-		if ( initializing ) {
+-			return value;
+-		}
++        if (uninitializedFields != null && uninitializedFields.contains(fieldName)) {
++            if (session == null) {
++                throw new LazyInitializationException("entity with lazy properties is not associated with a session");
++            } else if (!session.isOpen() || !session.isConnected()) {
++                throw new LazyInitializationException("session is not connected");
++            }
+ 
+-		if ( uninitializedFields != null && uninitializedFields.contains( fieldName ) ) {
+-			if ( session == null ) {
+-				throw new LazyInitializationException( "entity with lazy properties is not associated with a session" );
+-			}
+-			else if ( !session.isOpen() || !session.isConnected() ) {
+-				throw new LazyInitializationException( "session is not connected" );
+-			}
++            final Object result;
++            //initializing = true;
++            initializingFields.add(fieldName);            
+ 
+-			final Object result;
+-			initializing = true;
+-			try {
+-				result = ( ( LazyPropertyInitializer ) session.getFactory()
+-						.getEntityPersister( entityName ) )
+-						.initializeLazyProperty( fieldName, target, session );
+-			}
+-			finally {
+-				initializing = false;
+-			}
+-			uninitializedFields = null; //let's assume that there is only one lazy fetch group, for now!
+-			return result;
+-		}
+-		else {
+-			return value;
+-		}
+-	}
++            try {
++                result = ((LazyPropertyInitializer) session.getFactory().getEntityPersister(entityName)).initializeLazyProperty(fieldName, target, session);
++            } finally {
++                //initializing = false;
++                initializingFields.remove(fieldName);                
++            }
++            uninitializedFields.remove(fieldName);
++            //uninitializedFields = null; //let's assume that there is only one lazy fetch group, for now!
++            return result;
++        } else {
++            return value;
++        }
++    }
+ 
+-	public final SessionImplementor getSession() {
+-		return session;
+-	}
++    public final SessionImplementor getSession() {
++        return session;
++    }
+ 
+-	public final Set getUninitializedFields() {
+-		return uninitializedFields;
+-	}
++    public final Set getUninitializedFields() {
++        return uninitializedFields;
++    }
+ 
+-	public final String getEntityName() {
+-		return entityName;
+-	}
++    public final String getEntityName() {
++        return entityName;
++    }
+ 
+-	public final boolean isInitializing() {
+-		return initializing;
+-	}
++    /**
++     *
++     * @return true if any of the fields are initializing
++     */
++    public final boolean isInitializing() {
++        return (initializingFields != null) && (!initializingFields.isEmpty());
++    }
+ }
+Index: core/src/main/java/org/hibernate/intercept/FieldInterceptor.java
+===================================================================
+--- core/src/main/java/org/hibernate/intercept/FieldInterceptor.java	(revision 15971)
++++ core/src/main/java/org/hibernate/intercept/FieldInterceptor.java	(working copy)
+@@ -24,6 +24,7 @@
+  */
+ package org.hibernate.intercept;
+ 
++import java.util.Set;
+ import org.hibernate.engine.SessionImplementor;
+ 
+ /**
+@@ -33,6 +34,13 @@
+  */
+ public interface FieldInterceptor {
+ 
++    /**
++     * 
++     * @return Set of String fieldNames of lacy fields that are currently uninitialized.
++     * may return null
++     */
++    public Set getUninitializedFieldNames();
++
+ 	/**
+ 	 * Use to associate the entity to which we are bound to the given session.
+ 	 *
+Index: core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 15971)
++++ core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -766,7 +766,14 @@
+ 				);
+ 		}
+ 
+-		if ( hasCache() ) {
++        /**
++         * In case the only lazy props are shared one-to-one associations
++         * (eg getSQLLazySelectString() returns null), it's superfluous to hit 2nd level cache.
++         * calling initializeLazyPropertiesFromDatastore will not go to DB
++         * but simply create and return a proxy for the property being initialized.
++         * so in that case there no need to hit 2nd level cache in the first place
++         */
++		if (getSQLLazySelectString() != null && hasCache() ) {
+ 			CacheKey cacheKey = new CacheKey(id, getIdentifierType(), getEntityName(), session.getEntityMode(), getFactory() );
+ 			Object ce = getCacheAccessStrategy().get( cacheKey, session.getTimestamp() );
+ 			if (ce!=null) {
+@@ -782,6 +789,7 @@
+ 
+ 	}
+ 
++    //TODO: rename to initializeLazyPropertyFromDatastore since only one property will be initialized
+ 	private Object initializeLazyPropertiesFromDatastore(
+ 			final String fieldName,
+ 			final Object entity,
+@@ -813,12 +821,21 @@
+ 						rs.next();
+ 					}
+ 					final Object[] snapshot = entry.getLoadedState();
+-					for ( int j = 0; j < lazyPropertyNames.length; j++ ) {
+-						Object propValue = lazyPropertyTypes[j].nullSafeGet( rs, lazyPropertyColumnAliases[j], session, entity );
+-						if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
+-							result = propValue;
+-						}
+-					}
++
++                    //initialize requested property only
++                    int j = getLazyPropertyArrayIndex(fieldName);
++                    if(j >= 0) {
++                        Object propValue = lazyPropertyTypes[j].nullSafeGet( rs, lazyPropertyColumnAliases[j], session, entity );
++                        if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
++                            result = propValue;
++                        }
++                    }
++//					for ( int j = 0; j < lazyPropertyNames.length; j++ ) {
++//						Object propValue = lazyPropertyTypes[j].nullSafeGet( rs, lazyPropertyColumnAliases[j], session, entity );
++//						if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
++//							result = propValue;
++//						}
++//					}
+ 				}
+ 				finally {
+ 					if ( rs != null ) {
+@@ -848,6 +865,17 @@
+ 		}
+ 	}
+ 
++    private int getLazyPropertyArrayIndex(String fieldName) {
++        int index = -1;
++        for(int j = 0; j < lazyPropertyNames.length; j++) {
++            if(lazyPropertyNames[j].equals(fieldName)){
++                index = j;
++                break;
++            }
++        }
++        return index;
++    }
++
+ 	private Object initializeLazyPropertiesFromCache(
+ 			final String fieldName,
+ 			final Object entity,
+@@ -2622,11 +2650,29 @@
+ 		}
+ 		else {
+ 			// For the case of dynamic-update="false", or no snapshot, we use the static SQL
+-			updateStrings = getUpdateStrings(
++            // unless entity has lazy properties and only a subset was initialized
++
++            /**
++              * Three cases wrt *uninitialized* lazy properties:
++              * 1. there are none -> return either getSQLUpdateByRowIdStrings() or getSQLUpdateStrings()
++              * 2. all lazy properties remained uninitialized -> return either getSQLLazyUpdateByRowIdStrings() or getSQLLazyUpdateStrings()
++              * 3. new case: some - but not all - lazy properties were initialized. need to generate update Strings on the fly
++              */
++            if(dirtyFields != null && isSubsetOfLazyPropertiesUninitialized(object, session.getEntityMode())) {
++                propsToUpdate = getPropertyUpdateability( object, session.getEntityMode() );
++                updateStrings = new String[span];
++                for ( int j = 0; j < span; j++ ) {
++                    updateStrings[j] = generateUpdateString( propsToUpdate, j, oldFields, j == 0 && rowId != null );
++                }
++            }
++            else{
++                //static sql case
++                updateStrings = getUpdateStrings(
+ 					rowId != null,
+ 					hasUninitializedLazyProperties( object, session.getEntityMode() )
+ 				);
+-			propsToUpdate = getPropertyUpdateability( object, session.getEntityMode() );
++                propsToUpdate = getPropertyUpdateability( object, session.getEntityMode() );
++            }
+ 		}
+ 
+ 		for ( int j = 0; j < span; j++ ) {
+@@ -2648,6 +2694,20 @@
+ 		}
+ 	}
+ 
++    /**
++     * return true if all of the following are true:
++     * -entity has lazy properties
++     * -some - but not all - lazy properties are currently uninitialized
++     * @param entity
++     * @param entityMode
++     * @return true only if above conditions are met
++     */
++    private boolean isSubsetOfLazyPropertiesUninitialized(Object entity, EntityMode entityMode) {
++        Set uninitializedPropertyNames = getUninitializedLazyPropertyNames(entity, entityMode);
++        return uninitializedPropertyNames != null && !uninitializedPropertyNames.isEmpty()
++                && uninitializedPropertyNames.size() != getLazyProperties().size();
++    }
++
+ 	public Serializable insert(Object[] fields, Object object, SessionImplementor session)
+ 			throws HibernateException {
+ 
+@@ -3153,7 +3213,9 @@
+ 				currentState,
+ 				previousState,
+ 				propertyColumnUpdateable,
+-				hasUninitializedLazyProperties( entity, session.getEntityMode() ),
++                //instead of a single boolean need an array of booleans - one per property
++                getUninitializedLazyPropertyNames(entity, session.getEntityMode()),
++				//hasUninitializedLazyProperties( entity, session.getEntityMode() ),
+ 				session
+ 			);
+ 		if ( props == null ) {
+@@ -3182,7 +3244,8 @@
+ 				current,
+ 				old,
+ 				propertyColumnUpdateable,
+-				hasUninitializedLazyProperties( entity, session.getEntityMode() ),
++                getUninitializedLazyPropertyNames(entity, session.getEntityMode()),
++				//hasUninitializedLazyProperties( entity, session.getEntityMode() ),
+ 				session
+ 			);
+ 		if ( props == null ) {
+@@ -3199,9 +3262,28 @@
+ 	 * (Initialized, updateable ones!)
+ 	 */
+ 	protected boolean[] getPropertyUpdateability(Object entity, EntityMode entityMode) {
+-		return hasUninitializedLazyProperties( entity, entityMode ) ?
+-				getNonLazyPropertyUpdateability() :
+-				getPropertyUpdateability();
++
++        Set uninitializedLazyPropertyNames = getUninitializedLazyPropertyNames(entity, entityMode); //may be null
++        final boolean[] currentUpdatability;
++
++        if(uninitializedLazyPropertyNames != null && ! uninitializedLazyPropertyNames.isEmpty()) {
++            String[] propNames = entityMetamodel.getPropertyNames();
++            currentUpdatability = new boolean[propNames.length];
++            for(int i = 0; i < propNames.length; i++) {
++                //property is currently updateable if: it's generally updateable, and not amongst currently un-initialized
++                //thus we deem lazy, updateable, and already initialized as updateable
++                currentUpdatability[i] = entityMetamodel.getPropertyUpdateability()[i] &&
++                         ! uninitializedLazyPropertyNames.contains(propNames[i]);
++            }            
++        }
++        else{
++            //nothing's uninit'ed
++            currentUpdatability = getPropertyUpdateability();
++        }
++        return currentUpdatability;
++//		return hasUninitializedLazyProperties( entity, entityMode ) ?
++//				getNonLazyPropertyUpdateability() :
++//				getPropertyUpdateability();
+ 	}
+ 
+ 	private void logDirtyProperties(int[] props) {
+@@ -3638,10 +3720,17 @@
+ 		return getTuplizer( entityMode ).isInstance( object );
+ 	}
+ 
+-	public boolean hasUninitializedLazyProperties(Object object, EntityMode entityMode) {
+-		return getTuplizer( entityMode ).hasUninitializedLazyProperties( object );
++    //todo: should be deprecated in favor of getUninitializedLazyPropertyNames
++    //or perhaps just delegate to the latter
++	public boolean hasUninitializedLazyProperties(Object object, EntityMode entityMode) {		
++        Set uninitializedProps = getUninitializedLazyPropertyNames(object, entityMode);
++        return uninitializedProps != null && !uninitializedProps.isEmpty();
+ 	}
+ 
++    public Set getUninitializedLazyPropertyNames(Object object, EntityMode entityMode) {
++        return getTuplizer( entityMode ).getUninitializedLazyPropertyNames( object );
++    }
++
+ 	public void resetIdentifier(Object entity, Serializable currentId, Object currentVersion, EntityMode entityMode) {
+ 		getTuplizer( entityMode ).resetIdentifier( entity, currentId, currentVersion );
+ 	}
+Index: core/src/main/java/org/hibernate/persister/entity/EntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/EntityPersister.java	(revision 15971)
++++ core/src/main/java/org/hibernate/persister/entity/EntityPersister.java	(working copy)
+@@ -27,6 +27,7 @@
+ import java.io.Serializable;
+ import java.util.Map;
+ 
++import java.util.Set;
+ import org.hibernate.HibernateException;
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
+@@ -664,9 +665,18 @@
+ 
+ 	/**
+ 	 * Does the given instance have any uninitialized lazy properties?
++     * should this be deprecated in favor of getUninitializedLazyPropertyNames
+ 	 */
+ 	public boolean hasUninitializedLazyProperties(Object object, EntityMode entityMode);
+ 
++    /**     
++     * @param object entity
++     * @param entityMode
++     * @return Set of String names of properties of given entity that are lazy and are currently not initialized.
++     * will return null when applicable
++     */
++    public Set getUninitializedLazyPropertyNames(Object object, EntityMode entityMode);
++
+ 	/**
+ 	 * Set the identifier and version of the given instance back
+ 	 * to its "unsaved" value, returning the id
+Index: core/src/main/java/org/hibernate/tuple/entity/AbstractEntityTuplizer.java
+===================================================================
+--- core/src/main/java/org/hibernate/tuple/entity/AbstractEntityTuplizer.java	(revision 15971)
++++ core/src/main/java/org/hibernate/tuple/entity/AbstractEntityTuplizer.java	(working copy)
+@@ -30,6 +30,7 @@
+ import java.util.Set;
+ 
+ import org.hibernate.EntityMode;
++import org.hibernate.Hibernate;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.tuple.Instantiator;
+@@ -275,7 +276,7 @@
+ 
+ 		for ( int j = 0; j < span; j++ ) {
+ 			StandardProperty property = entityMetamodel.getProperties()[j];
+-			if ( getAll || !property.isLazy() ) {
++			if ( getAll || !property.isLazy() || Hibernate.isPropertyInitialized(entity, property.getName()) ) {
+ 				result[j] = getters[j].get( entity );
+ 			}
+ 			else {
+@@ -386,9 +387,14 @@
+ 
+ 	public boolean hasUninitializedLazyProperties(Object entity) {
+ 		// the default is to simply not lazy fetch properties for now...
+-		return false;
++		Set names = getUninitializedLazyPropertyNames(entity);
++        return names != null && !names.isEmpty();
+ 	}
+ 
++    public Set getUninitializedLazyPropertyNames(Object entity) {
++        return null;
++    }
++
+ 	public final boolean isInstance(Object object) {
+         return getInstantiator().isInstance( object );
+ 	}
+Index: core/src/main/java/org/hibernate/tuple/entity/EntityTuplizer.java
+===================================================================
+--- core/src/main/java/org/hibernate/tuple/entity/EntityTuplizer.java	(revision 15971)
++++ core/src/main/java/org/hibernate/tuple/entity/EntityTuplizer.java	(working copy)
+@@ -27,6 +27,7 @@
+ import java.io.Serializable;
+ import java.util.Map;
+ 
++import java.util.Set;
+ import org.hibernate.HibernateException;
+ import org.hibernate.tuple.Tuplizer;
+ import org.hibernate.engine.SessionImplementor;
+@@ -190,9 +191,16 @@
+      * Does the given entity instance have any currently uninitialized lazy properties?
+      *
+      * @param entity The entity to be check for uninitialized lazy properties.
+-     * @return True if uninitialized lazy properties were found; false otherwise.
++     * @return True if uninitialized lazy properties were found; false otherwise.     
+      */
+ 	public boolean hasUninitializedLazyProperties(Object entity);
++
++    /**
++     * @param entity The entity to be checked for uninitialized lazy properties.
++     * @return Set of String names of properties of given entity that are lazy and are currently not initialized.
++     * will return null when applicable
++     */
++    public Set getUninitializedLazyPropertyNames(Object entity);
+ 	
+ 	/**
+ 	 * Is it an instrumented POJO?
+Index: core/src/main/java/org/hibernate/tuple/entity/PojoEntityTuplizer.java
+===================================================================
+--- core/src/main/java/org/hibernate/tuple/entity/PojoEntityTuplizer.java	(revision 15971)
++++ core/src/main/java/org/hibernate/tuple/entity/PojoEntityTuplizer.java	(working copy)
+@@ -280,8 +280,16 @@
+ 
+ 	public void afterInitialize(Object entity, boolean lazyPropertiesAreUnfetched, SessionImplementor session) {
+ 		if ( isInstrumented() ) {
+-			Set lazyProps = lazyPropertiesAreUnfetched && getEntityMetamodel().hasLazyProperties() ?
+-					lazyPropertyNames : null;
++            boolean supplyProps = lazyPropertiesAreUnfetched && getEntityMetamodel().hasLazyProperties();
++            final Set lazyProps;
++            if(supplyProps && lazyPropertyNames != null){
++                lazyProps = new HashSet(lazyPropertyNames);
++            }
++            else{
++                lazyProps = null;
++            }
++//			Set lazyProps = lazyPropertiesAreUnfetched && getEntityMetamodel().hasLazyProperties() ?
++//					lazyPropertyNames : null;
+ 			//TODO: if we support multiple fetch groups, we would need
+ 			//      to clone the set of lazy properties!
+ 			FieldInterceptionHelper.injectFieldInterceptor( entity, getEntityName(), lazyProps, session );
+@@ -289,14 +297,28 @@
+ 	}
+ 
+ 	public boolean hasUninitializedLazyProperties(Object entity) {
+-		if ( getEntityMetamodel().hasLazyProperties() ) {
++//		if ( getEntityMetamodel().hasLazyProperties() ) {
++//			FieldInterceptor callback = FieldInterceptionHelper.extractFieldInterceptor( entity );
++//			return callback != null && !callback.isInitialized();
++//		}
++//		else {
++//			return false;
++//		}
++        Set propertyNames = getUninitializedLazyPropertyNames(entity);
++        return propertyNames != null && !propertyNames.isEmpty();
++	}
++
++    public Set getUninitializedLazyPropertyNames(Object entity) {
++        final Set names;
++        if ( getEntityMetamodel().hasLazyProperties() ) {
+ 			FieldInterceptor callback = FieldInterceptionHelper.extractFieldInterceptor( entity );
+-			return callback != null && !callback.isInitialized();
++			names = callback != null ? callback.getUninitializedFieldNames() : null;
+ 		}
+ 		else {
+-			return false;
++			names = null;
+ 		}
+-	}
++        return names;
++    }
+ 
+ 	public boolean isInstrumented() {
+ 		return FieldInterceptionHelper.isInstrumented( getMappedClass() );
+Index: core/src/main/java/org/hibernate/type/TypeFactory.java
+===================================================================
+--- core/src/main/java/org/hibernate/type/TypeFactory.java	(revision 15971)
++++ core/src/main/java/org/hibernate/type/TypeFactory.java	(working copy)
+@@ -39,6 +39,7 @@
+ import java.util.Locale;
+ import java.util.Map;
+ import java.util.Properties;
++import java.util.Set;
+ import java.util.TimeZone;
+ 
+ import org.hibernate.Hibernate;
+@@ -599,8 +600,8 @@
+ 	 * @param properties The property definitions
+ 	 * @param currentState The current state of the entity
+ 	 * @param previousState The baseline state of the entity
+-	 * @param includeColumns Columns to be included in the dirty checking, per property
+-	 * @param anyUninitializedProperties Does the entity currently hold any uninitialized property values?
++	 * @param includeColumns Columns to be included in the dirty checking, per property	 
++     * @param uninitializedPropertyNames String names of entity properties that are currently uninitialized
+ 	 * @param session The session from which the dirty check request originated.
+ 	 * @return Array containing indices of the dirty properties, or null if no properties considered dirty.
+ 	 */
+@@ -608,16 +609,20 @@
+ 			final StandardProperty[] properties,
+ 			final Object[] currentState,
+ 			final Object[] previousState,
+-			final boolean[][] includeColumns,
+-			final boolean anyUninitializedProperties,
++			final boolean[][] includeColumns,            
++			final Set uninitializedPropertyNames,
+ 			final SessionImplementor session) {
+ 		int[] results = null;
+ 		int count = 0;
+ 		int span = properties.length;
+ 
+ 		for ( int i = 0; i < span; i++ ) {
+-			final boolean dirty = currentState[i] != LazyPropertyInitializer.UNFETCHED_PROPERTY
+-					&& properties[i].isDirtyCheckable( anyUninitializedProperties )
++            final boolean currentStateNotUnfetched = currentState[i] != LazyPropertyInitializer.UNFETCHED_PROPERTY;
++            //eval init state only if property isn't unfetched
++            final boolean propertyUninitialized = currentStateNotUnfetched ? false :
++                (uninitializedPropertyNames != null  && uninitializedPropertyNames.contains(properties[i].getName()));
++			final boolean dirty = currentStateNotUnfetched
++					&& properties[i].isDirtyCheckable( propertyUninitialized )
+ 					&& properties[i].getType().isDirty( previousState[i], currentState[i], includeColumns[i], session );
+ 			if ( dirty ) {
+ 				if ( results == null ) {
+@@ -647,7 +652,7 @@
+ 	 * @param currentState The current state of the entity
+ 	 * @param previousState The baseline state of the entity
+ 	 * @param includeColumns Columns to be included in the mod checking, per property
+-	 * @param anyUninitializedProperties Does the entity currently hold any uninitialized property values?
++	 * @param uninitializedPropertyNames String names of entity properties that are currently uninitialized
+ 	 * @param session The session from which the dirty check request originated.
+ 	 * @return Array containing indices of the modified properties, or null if no properties considered modified.
+ 	 */
+@@ -656,15 +661,20 @@
+ 			final Object[] currentState,
+ 			final Object[] previousState,
+ 			final boolean[][] includeColumns,
+-			final boolean anyUninitializedProperties,
++            final Set uninitializedPropertyNames,
++			//final boolean anyUninitializedProperties,
+ 			final SessionImplementor session) {
+ 		int[] results = null;
+ 		int count = 0;
+ 		int span = properties.length;
+ 
+ 		for ( int i = 0; i < span; i++ ) {
+-			final boolean modified = currentState[i]!=LazyPropertyInitializer.UNFETCHED_PROPERTY
+-					&& properties[i].isDirtyCheckable(anyUninitializedProperties)
++            final boolean currentStateNotUnfetched = currentState[i] != LazyPropertyInitializer.UNFETCHED_PROPERTY;
++            //eval init state only if property isn't unfetched
++            final boolean propertyUninitialized = currentStateNotUnfetched ? false :
++                (uninitializedPropertyNames != null  && uninitializedPropertyNames.contains(properties[i].getName()));
++			final boolean modified = currentStateNotUnfetched
++					&& properties[i].isDirtyCheckable(propertyUninitialized)
+ 					&& properties[i].getType().isModified( previousState[i], currentState[i], includeColumns[i], session );
+ 
+ 			if ( modified ) {
+Index: testsuite/src/test/java/org/hibernate/test/instrument/cases/TestLazyExecutable.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/cases/TestLazyExecutable.java	(revision 15971)
++++ testsuite/src/test/java/org/hibernate/test/instrument/cases/TestLazyExecutable.java	(working copy)
+@@ -54,12 +54,12 @@
+ 		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "upperCaseName"));
+ 		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "folder"));
+ 		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "owner"));
+-		doc.getUpperCaseName();  // should force initialization
+-		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "text"));
++		doc.getUpperCaseName();  // should force initialization of the requested property only
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "text"));
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "weirdProperty"));
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "upperCaseName"));
+-		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "folder"));
+-		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "owner"));
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "folder"));
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "owner"));
+ 		t.commit();
+ 		s.close();
+ 
+@@ -81,7 +81,7 @@
+ 		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "summary"));
+ 		TestCase.assertEquals( doc.getText(), "blah blah" );
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "text"));
+-		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "summary"));
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "summary"));
+ 		t.commit();
+ 		s.close();
+ 
+@@ -126,6 +126,7 @@
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "text"));
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "weirdProperty"));
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "upperCaseName"));
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "summary"));
+ 		t.commit();
+ 		s.close();
+ 
+@@ -167,7 +168,9 @@
+ 		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "text"));
+ 		TestCase.assertEquals( doc.getText(), "blah blah" );
+ 		TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "text"));
++		TestCase.assertFalse(Hibernate.isPropertyInitialized(doc, "lastTextModification"));
+ 		doc.updateText("blah blah blah blah");
++        TestCase.assertTrue(Hibernate.isPropertyInitialized(doc, "lastTextModification"));
+ 		t.commit();
+ 		s.close();
+ 
+Index: testsuite/src/test/java/org/hibernate/test/instrument/cases/TestManyToOneProxyExecutable.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/cases/TestManyToOneProxyExecutable.java	(revision 15971)
++++ testsuite/src/test/java/org/hibernate/test/instrument/cases/TestManyToOneProxyExecutable.java	(working copy)
+@@ -48,11 +48,11 @@
+ 		Assert.assertFalse( Hibernate.isPropertyInitialized( child1, "sibling" ) );
+ 		Assert.assertFalse( Hibernate.isPropertyInitialized( child1, "child" ) );
+ 
+-		child1.getName();
++		child1.getName(); //should trigger initialization of request property only
+ 		Assert.assertFalse( Hibernate.isPropertyInitialized( root, "name" ) );
+ 		Assert.assertFalse( Hibernate.isPropertyInitialized( root, "sibling" ) );
+ 		Assert.assertTrue( Hibernate.isPropertyInitialized( child1, "name" ) );
+-		Assert.assertTrue( Hibernate.isPropertyInitialized( child1, "sibling" ) );
++		Assert.assertFalse( Hibernate.isPropertyInitialized( child1, "sibling" ) );
+ 		Assert.assertTrue( Hibernate.isPropertyInitialized( child1, "child" ) );
+ 
+ 		gChild1 = child1.getChild();
+Index: testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java	(revision 15971)
++++ testsuite/src/test/java/org/hibernate/test/instrument/runtime/AbstractTransformingClassLoaderInstrumentTestCase.java	(working copy)
+@@ -102,12 +102,15 @@
+ 			execClass.getMethod( "execute", SIG ).invoke( executable, ARGS );
+ 		}
+ 		catch ( NoSuchMethodException e ) {
++            System.err.println("targetException: "+e);
+ 			throw new HibernateException( "could not exeucte executable", e );
+ 		}
+ 		catch ( IllegalAccessException e ) {
++            System.err.println("targetException: "+e);
+ 			throw new HibernateException( "could not exeucte executable", e );
+ 		}
+ 		catch ( InvocationTargetException e ) {
++            System.err.println("targetException: "+e.getTargetException());
+ 			throw new HibernateException( "could not exeucte executable", e.getTargetException() );
+ 		}
+ 		finally {
+Index: testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java	(revision 15971)
++++ testsuite/src/test/java/org/hibernate/test/legacy/CustomPersister.java	(working copy)
+@@ -6,6 +6,7 @@
+ import java.util.Map;
+ import java.util.Comparator;
+ 
++import java.util.Set;
+ import org.hibernate.EntityMode;
+ import org.hibernate.Hibernate;
+ import org.hibernate.HibernateException;
+@@ -205,6 +206,11 @@
+ 		return false;
+ 	}
+ 
++    public Set getUninitializedLazyPropertyNames(Object object, EntityMode entityMode) {
++        checkEntityMode( entityMode );
++        return null;
++    }
++
+ 	public void resetIdentifier(Object entity, Serializable currentId, Object currentVersion, EntityMode entityMode) {
+ 		checkEntityMode( entityMode );
+ 		( ( Custom ) entity ).id = ( String ) currentId;

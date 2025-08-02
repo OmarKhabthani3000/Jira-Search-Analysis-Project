@@ -1,0 +1,75 @@
+Index: C:/java/workspace/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2DDLExporterTask.java
+===================================================================
+--- C:/java/workspace/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2DDLExporterTask.java	(revision 10462)
++++ C:/java/workspace/HibernateExt/tools/src/java/org/hibernate/tool/ant/Hbm2DDLExporterTask.java	(working copy)
+@@ -8,6 +8,7 @@
+ import java.io.PrintWriter;
+ import java.io.StringWriter;
+ import java.util.Iterator;
++import java.util.List;
+ 
+ import org.apache.tools.ant.BuildException;
+ import org.apache.tools.ant.Project;
+@@ -36,10 +37,39 @@
+ 		super(parent);
+ 	}
+ 	
++	private void printExceptions(List exceptions) {
++		Iterator iterator = exceptions.iterator();
++		int cnt=1;
++		parent.log(exceptions.size() + " errors occurred while performing <hbm2ddl>.", Project.MSG_WARN);
++		while ( iterator.hasNext() ) {
++			Throwable throwable = (Throwable) iterator.next();
++			parent.log("Error #" + cnt + ": " + throwable.toString(), Project.MSG_WARN);
++			StringWriter sw = new StringWriter();
++			throwable.printStackTrace(new PrintWriter(sw));
++			parent.log(sw.getBuffer().toString(), Project.MSG_VERBOSE);
++		}
++		
++		if ( haltOnError ) {
++			throw new BuildException("Errors while performing <hbm2ddl>");				
++		}
++	}
++	
+ 	public void execute() {
+ 		if(schemaUpdate) {
+ 			SchemaUpdate update = new SchemaUpdate(parent.getConfiguration() );
+-			update.execute(scriptToConsole, exportToDatabase);			
++			if(outputfileName!=null) {
++				update.setOutputFile(new File(getDestdir(),outputfileName).toString() );
++			}
++			if(delimiter!=null) {
++				update.setDelimiter(delimiter);
++			}
++			update.setHaltOnError(haltOnError);
++			update.setFormat(format);
++			update.execute(scriptToConsole, exportToDatabase);
++			
++			if(update.getExceptions().size()>0) {
++				printExceptions(update.getExceptions());
++			}
+ 		} 
+ 		else {
+ 			SchemaExport export = new SchemaExport(parent.getConfiguration() );
+@@ -58,20 +88,7 @@
+ 			}
+ 			
+ 			if(export.getExceptions().size()>0) {
+-				Iterator iterator = export.getExceptions().iterator();
+-				int cnt=1;
+-				parent.log(export.getExceptions().size() + " errors occurred while performing <hbm2ddl>.", Project.MSG_WARN);
+-				while ( iterator.hasNext() ) {
+-					Throwable throwable = (Throwable) iterator.next();
+-					parent.log("Error #" + cnt + ": " + throwable.toString(), Project.MSG_WARN);
+-					StringWriter sw = new StringWriter();
+-					throwable.printStackTrace(new PrintWriter(sw));
+-					parent.log(sw.getBuffer().toString(), Project.MSG_VERBOSE);
+-					
+-				}
+-				if(haltOnError) {
+-					throw new BuildException("Errors while performing <hbm2ddl>");				
+-				}
++				printExceptions(export.getExceptions());
+ 			}
+ 		}
+ 	}

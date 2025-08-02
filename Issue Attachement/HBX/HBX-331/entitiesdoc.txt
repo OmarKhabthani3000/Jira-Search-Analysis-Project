@@ -1,0 +1,2373 @@
+Index: tools/.cvsignore
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/.cvsignore,v
+retrieving revision 1.6
+diff -u -r1.6 .cvsignore
+--- tools/.cvsignore	18 May 2005 13:59:08 -0000	1.6
++++ tools/.cvsignore	7 Jul 2005 21:33:41 -0000
+@@ -12,3 +12,6 @@
+ test.log
+ test.properties
+ test.script
++run.xml
++run.ant.xml
++doc-output
+Index: tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java,v
+retrieving revision 1.4
+diff -u -r1.4 DocExporter.java
+--- tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java	18 Jun 2005 23:38:34 -0000	1.4
++++ tools/src/java/org/hibernate/tool/hbm2x/DocExporter.java	7 Jul 2005 21:33:42 -0000
+@@ -10,7 +10,9 @@
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
++import org.apache.xpath.operations.Gte;
+ import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.tool.hbm2x.doc.DocFile;
+ import org.hibernate.tool.hbm2x.doc.DocFileManager;
+@@ -41,7 +43,7 @@
+      * Main index page.
+      */
+     private static final String FILE_INDEX = "doc/index.html";
+-    
++
+     /**
+      * The main header file.
+      */
+@@ -78,6 +80,36 @@
+     private static final String VM_TABLES_TABLE = "doc/tables/table.vm";
+ 
+     /**
++     * Velocity Template used for the index of the table documentation.
++     */
++    private static final String VM_ENTITIES_INDEX = "doc/entities/index.vm";
++
++    /**
++     * Velocity Template used for the Entities Summary.
++     */
++    private static final String VM_ENTITIES_SUMMARY = "doc/entities/summary.vm";
++
++    /**
++     * Velocity Template used for entity lists.
++     */
++    private static final String VM_ENTITIES_ENTITY_LIST = "doc/entities/entity-list.vm";
++
++    /**
++     * Velocity Template used for package lists.
++     */
++    private static final String VM_ENTITIES_PACKAGE_LIST = "doc/entities/package-list.vm";
++
++    /**
++     * Velocity Template used for package summary.
++     */
++    private static final String VM_ENTITIES_PACKAGE_SUMMARY = "doc/entities/package-summary.vm";
++
++    /**
++     * Velocity Template for an Entity.
++     */
++    private static final String VM_ENTITIES_ENTITY = "doc/entities/entity.vm";
++
++    /**
+      * TODO
+      */
+     private StringWriter tempWriter;
+@@ -120,11 +152,19 @@
+         generateCommmonAndAssets();
+         generateTablesIndex();
+         generateTablesSummary();
+-        generateTablesDetails();
+         generateTablesAllSchemasList();
+         generateTablesAllTablesList();
+         generateTablesSchemaTableList();
+         generateTablesSchemaDetailedInfo();
++        generateTablesDetails();
++
++        generateEntitiesIndex();
++        generateEntitiesSummary();
++        generateEntitiesAllPackagesList();
++        generateEntitiesAllEntitiesList();
++        generateEntitiesPackageEntityList();
++        generateEntitiesPackageDetailedInfo();
++        generateEntitiesEntity();
+     }
+ 
+     /**
+@@ -144,12 +184,11 @@
+             DocFile mainIndexDocFile = docFileManager.getMainIndexDocFile();
+ 
+             DocFileManager.copy(FILE_INDEX, mainIndexDocFile.getFile() );
+-            
++
+             DocFile headerFile = docFileManager.getHeaderDocFile();
+-            
+-            DocFileManager.copy(FILE_HEADER, headerFile.getFile() );
+-        } 
+-        catch (IOException ioe) {
++
++            DocFileManager.copy(FILE_HEADER, headerFile.getFile());
++         } catch (IOException ioe) {
+             throw new RuntimeException("Error while copying files.", ioe);
+         }
+     }
+@@ -187,9 +226,11 @@
+      */
+     public void generateTablesDetails() {
+         Iterator tables = getConfiguration().getTableMappings();
+-        while (tables.hasNext() ) {
++        while (tables.hasNext()) {
+             Table table = (Table) tables.next();
+ 
++            log.debug("Generating doc for table: " + table.getName());
++
+             DocFile docFile = docFileManager.getTableDocFile(table);
+ 
+             File file = docFile.getFile();
+@@ -271,14 +312,141 @@
+             runVelocity(parameters, VM_TABLES_SCHEMA_SUMMARY,
+                     summaryDocFile.getFile() );
+ 
+-            DocFile tableListDocFile = docFileManager.getSchemaSummaryDocFile(schemaName);
++            DocFile tableListDocFile = docFileManager.getSchemaTableListDocFile(schemaName);
+ 
+             parameters = new HashMap();
+             parameters.put("docFile", tableListDocFile);
+-            parameters.put("schema", schemaName);
++            parameters.put("schemaList", docHelper.getTables(schemaName));
+ 
+-            runVelocity(parameters, VM_TABLES_SCHEMA_SUMMARY,
+-                    tableListDocFile.getFile() );
++            runVelocity(parameters, VM_TABLES_TABLE_LIST,
++                    tableListDocFile.getFile());
++        }
++    }
++
++    /**
++     * Generate the index file of the entity documentation.
++     */
++    public void generateEntitiesIndex() {
++        DocFile docFile = docFileManager.getEntityIndexDocFile();
++
++        File file = docFile.getFile();
++
++        Map parameters = new HashMap();
++        parameters.put("docFile", docFile);
++
++        runVelocity(parameters, VM_ENTITIES_INDEX, file);
++    }
++
++    /**
++     * Generate a file with an summary of all the entities.
++     */
++    public void generateEntitiesSummary() {
++        DocFile docFile = docFileManager.getEntitySummaryDocFile();
++
++        File file = docFile.getFile();
++
++        Map parameters = new HashMap();
++        parameters.put("docFile", docFile);
++
++        runVelocity(parameters, VM_ENTITIES_SUMMARY, file);
++    }
++
++    /**
++     * Generate a file with a list of all the packages in the configuration.
++     */
++    public void generateEntitiesAllPackagesList() {
++        DocFile docFile = docFileManager.getAllPackagesDocFile();
++
++        File file = docFile.getFile();
++
++        Map parameters = new HashMap();
++        parameters.put("docFile", docFile);
++        parameters.put("title", "Package List");
++        parameters.put("packageList", docHelper.getPackages());
++
++        runVelocity(parameters, VM_ENTITIES_PACKAGE_LIST, file);
++    }
++
++    /**
++     * Generate a file with a list of all the entities in the configuration.
++     */
++    public void generateEntitiesAllEntitiesList() {
++        DocFile docFile = docFileManager.getAllEntitiesDocFile();
++
++        File file = docFile.getFile();
++
++        Map parameters = new HashMap();
++        parameters.put("docFile", docFile);
++        parameters.put("title", "All Entities");
++        parameters.put("entityList", docHelper.getEntities());
++
++        runVelocity(parameters, VM_ENTITIES_ENTITY_LIST, file);
++    }
++
++    public void generateEntitiesPackageEntityList() {
++        Iterator packages = docHelper.getPackages().iterator();
++
++        while (packages.hasNext()) {
++            String packageName = (String) packages.next();
++
++            DocFile docFile = docFileManager.getPackageEntityListDocFile(packageName);
++
++            File file = docFile.getFile();
++
++            Map parameters = new HashMap();
++            parameters.put("docFile", docFile);
++            parameters.put("title", " for " + packageName);
++            parameters.put("packageList", docHelper.getEntities(packageName));
++
++            runVelocity(parameters, VM_ENTITIES_ENTITY_LIST, file);
++        }
++    }
++
++    /**
++     * Generate two files per pacakge. One with a summary of the entities in the
++     * pacakge and another one with a list of entities.
++     */
++    public void generateEntitiesPackageDetailedInfo() {
++        Iterator packages = docHelper.getPackages().iterator();
++        while (packages.hasNext()) {
++            String packageName = (String) packages.next();
++
++            DocFile summaryDocFile = docFileManager.getPackageSummaryDocFile(packageName);
++
++            Map parameters = new HashMap();
++            parameters.put("docFile", summaryDocFile);
++            parameters.put("package", packageName);
++
++            runVelocity(parameters, VM_ENTITIES_PACKAGE_SUMMARY,
++                    summaryDocFile.getFile());
++
++            DocFile entityListDocFile = docFileManager.getPackageEntityListDocFile(packageName);
++
++            parameters = new HashMap();
++            parameters.put("docFile", entityListDocFile);
++            parameters.put("title", packageName);
++            parameters.put("entityList", docHelper.getEntities(packageName));
++
++            runVelocity(parameters, VM_ENTITIES_ENTITY_LIST,
++                    entityListDocFile.getFile());
++        }
++    }    
++    
++    /**
++     * Generate Entity detailed documentation.
++     */
++    public void generateEntitiesEntity() {
++        Iterator entities = getConfiguration().getClassMappings();
++        while (entities.hasNext()) {
++            PersistentClass entity = (PersistentClass) entities.next();
++
++            DocFile entityDocFile = docFileManager.getEntityDocFile(entity);
++
++            Map parameters = new HashMap();
++            parameters.put("docFile", entityDocFile);
++            parameters.put("entity", entity);
++
++            runVelocity(parameters, VM_ENTITIES_ENTITY, entityDocFile.getFile());
+         }
+     }
+ 
+Index: tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java,v
+retrieving revision 1.4
+diff -u -r1.4 DocFileManager.java
+--- tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java	18 Jun 2005 23:38:34 -0000	1.4
++++ tools/src/java/org/hibernate/tool/hbm2x/doc/DocFileManager.java	7 Jul 2005 21:33:43 -0000
+@@ -7,8 +7,10 @@
+ import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.Map;
++import java.util.StringTokenizer;
+ 
+ import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Table;
+ 
+ /**
+@@ -24,6 +26,8 @@
+      */
+     private DocFolder rootDocFolder;
+ 
++    // General files and folders.
++
+     /**
+      * The main index file for the documentation.
+      */
+@@ -49,6 +53,8 @@
+      */
+     private DocFile cssStylesDocFile;
+ 
++    // Table documentation folder and files.
++
+     /**
+      * Root Folder for the Table documentation.
+      */
+@@ -75,20 +81,67 @@
+     private DocFile allTablesDocFile;
+ 
+     /**
++     * Map with the schema summary DocFiles keyed by Schema FQN.
++     */
++    private Map schemaSummaryDocFiles = new HashMap();
++
++    /**
++     * Map with the schema table lists DocFiles keyed by Schema FQN.
++     */
++    private Map schemaTableListDocFiles = new HashMap();
++
++    /**
+      * Map with the doc files for the tables. The keys are the Table objects and
+      * the values are the DocFile instances.
+      */
+     private Map tableDocFiles = new HashMap();
+ 
++    // Entities documentation files and folders.
++
+     /**
+-     * Map with the schema summary DocFiles keyed by Schema FQN.
++     * Root Folder for the entities documentation.
+      */
+-    private Map schemaSummaryDocFiles = new HashMap();
++    private DocFolder rootEntitiesDocFolder;
+ 
+     /**
+-     * Map with the schema table lists DocFiles keyed by Schema FQN.
++     * Entity index DocFile.
+      */
+-    private Map schemaTableListDocFiles = new HashMap();
++    private DocFile entityIndexDocFile;
++
++    /**
++     * Entity summary DocFile.
++     */
++    private DocFile entitySummaryDocFile;
++
++    /**
++     * All packages DocFile.
++     */
++    private DocFile allPackagesDocFile;
++
++    /**
++     * All Tables DocFile.
++     */
++    private DocFile allEntitiesDocFile;
++
++    /**
++     * Entity package folders keyed by package name.
++     */
++    private Map packageDocFolders = new HashMap();
++
++    /**
++     * Map with the entity detail DocFiles keyed by entity name.
++     */
++    private Map entityDocFiles = new HashMap();
++
++    /**
++     * Map with the package summary DocFiles keyed by package name.
++     */
++    private Map packageSummaryDocFiles = new HashMap();
++
++    /**
++     * Map with the package entity lists DocFiles keyed by package name.
++     */
++    private Map packageEntityListDocFiles = new HashMap();
+ 
+     /**
+      * Constructor.
+@@ -155,6 +208,90 @@
+                 tableDocFiles.put(table, tableDocFile);
+             }
+         }
++
++        rootEntitiesDocFolder = new DocFolder("entities", rootDocFolder);
++
++        entityIndexDocFile = new DocFile("index.html", rootEntitiesDocFolder);
++
++        entitySummaryDocFile = new DocFile("summary.html",
++                rootEntitiesDocFolder);
++
++        allPackagesDocFile = new DocFile("allpackages.html",
++                rootEntitiesDocFolder);
++
++        allEntitiesDocFile = new DocFile("allentities.html",
++                rootEntitiesDocFolder);
++
++        Iterator entities = cfg.getClassMappings();
++        while (entities.hasNext()) {
++            PersistentClass entity = (PersistentClass) entities.next();
++
++            String entityFQN = entity.getEntityName();
++
++            String entityName = null;
++            
++            DocFolder parentDocFolder = rootEntitiesDocFolder;
++            DocFolder parentParentFolder = rootEntitiesDocFolder;
++            
++            if (entityFQN.indexOf('.') != -1) {
++                StringTokenizer tokenizer = new StringTokenizer(entityFQN, ".");
++    
++                StringBuffer parentPackage = new StringBuffer();
++    
++                while (tokenizer.hasMoreElements()) {
++                    String token = tokenizer.nextToken();
++                    if (tokenizer.hasMoreTokens()) {
++                        String subPackageName = token;
++    
++                        if (parentPackage.length() != 0) {
++                            parentPackage.append(".");
++                        }
++                        parentPackage.append(subPackageName);
++    
++                        parentDocFolder = (DocFolder) packageDocFolders.get(parentPackage.toString());
++                        if (parentDocFolder == null) {
++                            parentDocFolder = new DocFolder(subPackageName,
++                                    parentParentFolder);
++                            packageDocFolders.put(parentPackage.toString(),
++                                    parentDocFolder);
++                        }
++                        parentParentFolder = parentDocFolder;
++                    } else {
++                        entityName = token;
++                    }
++                }
++            } else {
++                String defaultPackageName = DocHelper.DEFAULT_PACKAGE_NAME;
++                parentDocFolder = (DocFolder) packageDocFolders.get(defaultPackageName);
++                if (parentDocFolder == null) {
++                    parentDocFolder = new DocFolder(defaultPackageName, rootEntitiesDocFolder);
++                    packageDocFolders.put(defaultPackageName, parentDocFolder);
++                }
++                entityName = entityFQN;
++            }
++
++            String entityFileName = entityName + ".html";
++
++            DocFile entityDocFile = new DocFile(entityFileName, parentDocFolder);
++
++            entityDocFiles.put(entityFQN, entityDocFile);
++
++        }
++
++        Iterator packages = docHelper.getPackages().iterator();
++
++        while (packages.hasNext()) {
++            String packageName = (String) packages.next();
++            DocFolder packageDocFolder = (DocFolder) packageDocFolders.get(packageName);
++
++            DocFile packageSummaryDocFile = new DocFile("summary.html",
++                    packageDocFolder);
++            packageSummaryDocFiles.put(packageName, packageSummaryDocFile);
++
++            DocFile entityListDocFile = new DocFile("entities.html",
++                    packageDocFolder);
++            packageEntityListDocFiles.put(packageName, entityListDocFile);
++        }
+     }
+ 
+     /**
+@@ -249,9 +386,24 @@
+      * @param table the Table.
+      * 
+      * @return the DocFile.
++     * 
++     * @throws IllegalArgumentException if table is null orif there is no
++     *             DocFile for the specified table.
+      */
+     public DocFile getTableDocFile(Table table) {
+-        return (DocFile) tableDocFiles.get(table);
++
++        if (table == null) {
++            throw new IllegalArgumentException("table cannot be null");
++        }
++
++        DocFile docFile = (DocFile) tableDocFiles.get(table);
++
++        if (docFile == null) {
++            throw new IllegalArgumentException("DocFile not found for: "
++                    + table.getName());
++        }
++
++        return docFile;
+     }
+ 
+     /**
+@@ -277,6 +429,102 @@
+     }
+ 
+     /**
++     * Return the entity index DocFile.
++     * 
++     * @return the entity index DocFile.
++     */
++    public DocFile getEntityIndexDocFile() {
++        return entityIndexDocFile;
++    }
++
++    /**
++     * Return the entity summary DocFile.
++     * 
++     * @return the entity summary DocFile.
++     */
++    public DocFile getEntitySummaryDocFile() {
++        return entitySummaryDocFile;
++    }
++
++    /**
++     * Return the all packages DocFile.
++     * 
++     * @return the all packages DocFile.
++     */
++    public DocFile getAllPackagesDocFile() {
++        return allPackagesDocFile;
++    }
++
++    /**
++     * Return the all entities DocFile.
++     * 
++     * @return the all entities DocFile.
++     */
++    public DocFile getAllEntitiesDocFile() {
++        return allEntitiesDocFile;
++    }
++
++    /**
++     * Return the DocFile for the specified PersistentClass.
++     * 
++     * @param entity the PersistentClass.
++     * 
++     * @return the DocFile.
++     * 
++     * @throws IllegalArgumentException if entity is null orif there is no
++     *             DocFile for the specified entity.
++     */
++    public DocFile getEntityDocFile(PersistentClass entity) {
++
++        if (entity == null) {
++            throw new IllegalArgumentException("entity cannot be null");
++        }
++
++        DocFile docFile = (DocFile) entityDocFiles.get(entity.getEntityName());
++
++        if (docFile == null) {
++            throw new IllegalArgumentException("DocFile not found for: "
++                    + entity.getEntityName());
++        }
++
++        return docFile;
++    }
++
++    /**
++     * Return the summary DocFile for the specified package.
++     * 
++     * @param packageName the name of the package
++     * 
++     * @return the DocFile.
++     */
++    public DocFile getPackageSummaryDocFile(String packageName) {
++        return (DocFile) packageSummaryDocFiles.get(packageName);
++    }
++
++    /**
++     * Return the Entity List DocFile for the specified package.
++     * 
++     * @param packageName the name of the package.
++     * 
++     * @return the DocFile.
++     */
++    public DocFile getPackageEntityListDocFile(String packageName) {
++
++        if (packageName == null) {
++            throw new IllegalArgumentException("pacakgeName cannot be null");
++        }
++
++        DocFile docFile = (DocFile) packageEntityListDocFiles.get(packageName);
++
++        if (docFile == null) {
++            throw new IllegalArgumentException("no docfile for package: "
++                    + packageName);
++        }
++
++        return docFile;
++    }
++
++    /**
+      * Return the relative reference between the specified files.
+      * 
+      * @param from the origin.
+@@ -299,8 +547,10 @@
+     /**
+      * Copy a File.
+      * 
+-     * TODO: this method ignores custom provided templatepath. Want to call velocity to get the resourceloaders but they are hidden, so we need another way.
+-     *  
++     * TODO: this method ignores custom provided templatepath. Want to call
++     * velocity to get the resourceloaders but they are hidden, so we need
++     * another way.
++     * 
+      * @param fileName the name of the file to copy.
+      * @param to the target file.
+      * 
+@@ -310,22 +560,25 @@
+         InputStream is = null;
+         FileOutputStream out = null;
+         try {
+-            ClassLoader classLoader = Thread.currentThread().getContextClassLoader(); 
++            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+             if (classLoader == null) {
+-                classLoader = DocFileManager.class.getClassLoader();			
++                classLoader = DocFileManager.class.getClassLoader();
++            }
++
++            is = classLoader.getResourceAsStream(fileName);
++            if (is == null
++                    && classLoader != DocFileManager.class.getClassLoader()) {
++                is = DocFileManager.class.getClassLoader().getResourceAsStream(
++                        fileName); // HACK: workaround since eclipse for some
++                // reason doesnt provide the right
++                // classloader;
++
+             }
+-			
+-			is = classLoader.getResourceAsStream(fileName);
+-            if (is == null && classLoader!=DocFileManager.class.getClassLoader() ) {
+-				is = DocFileManager.class.getClassLoader().getResourceAsStream(fileName); // HACK: workaround since eclipse for some reason doesnt provide the right classloader;
+-				
+-            } 
+-			
+ 			if(is==null) {
+                 throw new IllegalArgumentException("File not found: "
+                         + fileName);
+             }
+-            
++
+             out = new FileOutputStream(to);
+ 
+             int value;
+Index: tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java,v
+retrieving revision 1.2
+diff -u -r1.2 DocHelper.java
+--- tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	18 Jun 2005 23:38:34 -0000	1.2
++++ tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	7 Jul 2005 21:33:43 -0000
+@@ -10,10 +10,17 @@
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.dialect.Dialect;
++import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.Column;
++import org.hibernate.mapping.JoinedSubclass;
++import org.hibernate.mapping.ManyToOne;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+-import org.hibernate.mapping.Property;
++import org.hibernate.mapping.RootClass;
++import org.hibernate.mapping.SingleTableSubclass;
+ import org.hibernate.mapping.Table;
++import org.hibernate.mapping.ToOne;
++import org.hibernate.mapping.UnionSubclass;
+ import org.hibernate.mapping.Value;
+ 
+ /**
+@@ -27,13 +34,25 @@
+     /**
+      * Name to use if the schema is not specified.
+      */
+-    public static final String DEFAULT_NO_SCHEMA_NAME = "default";
++    public static final String DEFAULT_SCHEMA_NAME = "default";
++
++    /**
++     * Name to use if the package is not specified.
++     */
++    public static final String DEFAULT_PACKAGE_NAME = "default";
+ 
+     /**
+      * Hibernate Configuration.
+      */
+     private Configuration cfg;
+ 
++    // Table information.
++
++    /**
++     * List with all the tables.
++     */
++    private List tables = new ArrayList();
++
+     /**
+      * Map with Tables keyed by Schema FQN. The keys are Strings and the values
+      * are Lists of Tables
+@@ -41,26 +60,44 @@
+     private Map tablesBySchema = new HashMap();
+ 
+     /**
+-     * Map where the keys are column names (tableFQN.column) and the values are
+-     * lists with the Value instances where those columns referenced.
++     * Map that holds the Schema FQN for each Table. The keys are Table
++     * instances and the values are Strings with the Schema FQN for that table.
+      */
+-    private Map valuesByColumn = new HashMap();
++    private Map tableSchemaNames = new HashMap();
++
++    // Entity information.
+ 
+     /**
+-     * Holds intances of Property keyed by Value objects.
++     * List with all the entities.
+      */
+-    private Map propsByValue = new HashMap();
++    private List entities = new ArrayList();
+ 
+     /**
+-     * List with all the tables.
++     * Map with the entities keyed by package name. The keys are Strings with
++     * the package names and the values are Lists of PersitentClass instances.
+      */
+-    private List tables = new ArrayList();
++    private Map entitiesByPackage = new HashMap();
+ 
+     /**
+-     * Map that holds the Schema FQN for each Table. The keys are Table
+-     * instances and the values are Strings with the Schema FQN for that table.
++     * Map with package names keyed by PersistentClass instances.
+      */
+-    private Map tableSchemaNames = new HashMap();
++    private Map packageNameByEntity = new HashMap();
++
++    /**
++     * Entity names keyed by PersistentClass instances.
++     */
++    private Map entityNameByEntity = new HashMap();
++
++    /**
++     * Map where the keys are column names (tableFQN.column) and the values are
++     * lists with the Value instances where those columns referenced.
++     */
++    private Map valuesByColumn = new HashMap();
++
++    /**
++     * Holds intances of Property keyed by Value objects.
++     */
++    private Map propsByValue = new HashMap();
+ 
+     /**
+      * The Dialect.
+@@ -83,7 +120,7 @@
+ 
+         this.cfg = cfg;
+ 
+-        dialect = Dialect.getDialect(cfg.getProperties() );
++        dialect = Dialect.getDialect(cfg.getProperties());
+ 
+         Settings settings = cfg.buildSettings();
+ 
+@@ -92,11 +129,11 @@
+         String defaultSchema = settings.getDefaultSchemaName();
+ 
+         if (defaultSchema == null) {
+-            defaultSchema = DEFAULT_NO_SCHEMA_NAME;
++            defaultSchema = DEFAULT_SCHEMA_NAME;
+         }
+ 
+         Iterator tablesIter = cfg.getTableMappings();
+-        while (tablesIter.hasNext() ) {
++        while (tablesIter.hasNext()) {
+             Table table = (Table) tablesIter.next();
+             tables.add(table);
+ 
+@@ -129,7 +166,7 @@
+             tableList.add(table);
+ 
+             Iterator columns = table.getColumnIterator();
+-            while (columns.hasNext() ) {
++            while (columns.hasNext()) {
+                 Column column = (Column) columns.next();
+                 String columnFQN = getQualifiedColumnName(table, column);
+                 List values = (List) valuesByColumn.get(columnFQN);
+@@ -137,24 +174,49 @@
+                     values = new ArrayList();
+                     valuesByColumn.put(columnFQN, values);
+                 }
+-                values.add(column.getValue() );
++                values.add(column.getValue());
+             }
+         }
+ 
+         Iterator classes = cfg.getClassMappings();
+-        while (classes.hasNext() ) {
+-            PersistentClass clazz = (PersistentClass) classes.next();
+-            Iterator properties = clazz.getPropertyIterator();
+-            while (properties.hasNext() ) {
+-                Property property = (Property) properties.next();
+-                Value value = property.getValue();
+-                List props = (List) propsByValue.get(value);
+-                if (props == null) {
+-                    props = new ArrayList();
+-                    propsByValue.put(value, props);
+-                }
+-                props.add(property);
++        while (classes.hasNext()) {
++            PersistentClass entity = (PersistentClass) classes.next();
++
++            entities.add(entity);
++
++            String entityFQN = entity.getEntityName();
++
++            int lastDotIndex = entityFQN.lastIndexOf('.');
++
++            String packageName = null;
++            String entityName = null;
++
++            if (lastDotIndex != -1) {
++                packageName = entityFQN.substring(0, lastDotIndex);
++                entityName = entityFQN.substring(lastDotIndex + 1);
++            } else {
++                packageName = DEFAULT_PACKAGE_NAME;
++                entityName = entityFQN;
+             }
++
++            packageNameByEntity.put(entity, packageName);
++            entityNameByEntity.put(entity, entityName);
++
++            List entityList = (List) entitiesByPackage.get(packageName);
++            if (entityList == null) {
++                entityList = new ArrayList();
++                entitiesByPackage.put(packageName, entityList);
++            }
++            entityList.add(entity);
++
++            /*
++             * Iterator properties = clazz.getPropertyIterator(); while
++             * (properties.hasNext()) { Property property = (Property)
++             * properties.next(); Value value = property.getValue(); List props =
++             * (List) propsByValue.get(value); if (props == null) { props = new
++             * ArrayList(); propsByValue.put(value, props); }
++             * props.add(property); }
++             */
+         }
+     }
+ 
+@@ -169,27 +231,24 @@
+     }
+ 
+     /**
+-     * Return a Map with the tables keyed by Schema. The keys are the schema
+-     * names and the values are Lists of tables.
++     * Return all the tables.
+      * 
+-     * @return a Map with the tables keyed by Schema Name.
++     * @return all the tables.
+      */
+-    public Map getTablesBySchema() {
++    public List getTables() {
+ 
+-        return tablesBySchema;
++        return tables;
+     }
+ 
+     /**
+-     * Returns a list with all the schemas.
++     * Return a Map with the tables keyed by Schema. The keys are the schema
++     * names and the values are Lists of tables.
+      * 
+-     * @return a list with all the schemas.
++     * @return a Map with the tables keyed by Schema Name.
+      */
+-    public List getSchemas() {
+-
+-        List schemas = new ArrayList(tablesBySchema.keySet() );
+-        Collections.sort(schemas);
++    public Map getTablesBySchema() {
+ 
+-        return schemas;
++        return tablesBySchema;
+     }
+ 
+     /**
+@@ -205,13 +264,16 @@
+     }
+ 
+     /**
+-     * Return all the tables.
++     * Returns a list with all the schemas.
+      * 
+-     * @return all the tables.
++     * @return a list with all the schemas.
+      */
+-    public List getTables() {
++    public List getSchemas() {
+ 
+-        return tables;
++        List schemas = new ArrayList(tablesBySchema.keySet());
++        Collections.sort(schemas);
++
++        return schemas;
+     }
+ 
+     /**
+@@ -266,9 +328,11 @@
+     public String getSQLTypeName(Column column) {
+ 
+         try {
++            if (dialect == null) {
++                return "N/D";
++            }
+             return column.getSqlType(dialect, null);
+-        } 
+-        catch (Exception ex) {
++        } catch (Exception ex) {
+ 
+             // TODO: Fix this when we find a way to get the type or
+             // the mapping.
+@@ -278,6 +342,63 @@
+     }
+ 
+     /**
++     * Return all the entities.
++     * 
++     * @return all the entities.
++     */
++    public List getEntities() {
++
++        return entities;
++    }
++
++    /**
++     * Returns an sorted list with the package names.
++     * 
++     * @return an sorted list.
++     */
++    public List getPackages() {
++
++        List packageList = new ArrayList(entitiesByPackage.keySet());
++        Collections.sort(packageList);
++
++        return packageList;
++    }
++
++    /**
++     * Returns the package name for a PersistentClass.
++     * 
++     * @param entity the entity.
++     * 
++     * @return the package name.
++     */
++    public String getPackageName(PersistentClass entity) {
++        return (String) packageNameByEntity.get(entity);
++    }
++
++    /**
++     * Returns the entity name for a PersistentClass.
++     * 
++     * @param entity the PersistentClass.
++     * 
++     * @return the entity name (without the package)
++     */
++    public String getEntityName(PersistentClass entity) {
++        return (String) entityNameByEntity.get(entity);
++    }
++
++    /**
++     * Return a list of entities for the specified package name.
++     * 
++     * @param packageName the name of the package.
++     * 
++     * @return a List with the entities for the specified package.
++     */
++    public List getEntities(String packageName) {
++
++        return (List) entitiesByPackage.get(packageName);
++    }
++
++    /**
+      * Returns the values that use the specified column.
+      * 
+      * @param table the table.
+@@ -292,8 +413,7 @@
+         if (values != null) {
+ 
+             return values;
+-        } 
+-        else {
++        } else {
+ 
+             return new ArrayList();
+         }
+@@ -311,7 +431,7 @@
+ 
+         List result = new ArrayList();
+         Iterator values = getValues(table, column).iterator();
+-        while (values.hasNext() ) {
++        while (values.hasNext()) {
+             Value value = (Value) values.next();
+             List props = (List) propsByValue.get(value);
+             if (props != null) {
+@@ -322,4 +442,92 @@
+         return result;
+     }
+ 
++    /**
++     * Return if the value is a Many-to-One or a One-to-One relationship.
++     * 
++     * @param value the value.
++     * 
++     * @return true if the value is a x-to-One relationship.
++     */
++    public boolean isToOne(Value value) {
++        return (value instanceof ToOne);
++    }
++
++    /**
++     * Return true if the value is a Many-to-One relationship.
++     * 
++     * @param value the value.
++     * 
++     * @return true if it's a many-to-one, false otherwise.
++     */
++    public boolean isManyToOne(Value value) {
++        return (value instanceof ManyToOne);
++    }
++    
++    /**
++     * Return true if the value is a One-to-One relationship.
++     * 
++     * @param value the value.
++     * 
++     * @return true if it's a one-to-one, false otherwise.
++     */
++    public boolean isOneToOne(Value value) {
++        return (value instanceof OneToOne);
++    }
++    
++    /**
++     * Return true if the value is a Collection.
++     * 
++     * @param value the value.
++     * 
++     * @return true if the value is a Collection.
++     */
++    public boolean isCollection(Value value) {
++        return (value instanceof Collection);
++    }
++
++    /**
++     * Return true if <code>clazz</code> is a RootClass.
++     * 
++     * @param clazz the class.
++     *  
++     * @return true if <code>clazz</code> is a RootClass.
++     */
++    public boolean isRootClass(PersistentClass clazz) {
++        return (clazz instanceof RootClass);
++    }
++
++    /**
++     * Returns true if <code>clazz</code> is a SingleTableSubclass.
++     * 
++     * @param clazz the class.
++     *  
++     * @return true if <code>clazz</code> is a SingleTableSubclass.
++     */
++    public boolean isSingleTableSubclass(PersistentClass clazz) {
++        return (clazz instanceof SingleTableSubclass);
++    }
++    
++    /**
++     * Returns true if <code>clazz</code> is a UnionSubclass.
++     * 
++     * @param clazz the class.
++     *  
++     * @return true if <code>clazz</code> is a UnionSubclass.
++     */
++    public boolean isUnionSubclass(PersistentClass clazz) {
++        return (clazz instanceof UnionSubclass);
++    }
++    
++    /**
++     * Returns true if <code>clazz</code> is a JoinedSubclass.
++     *
++     * @param clazz the class.
++     *  
++     * @return true if <code>clazz</code> is a JoinedSubclass.
++     */
++    public boolean isJoinedSubclass(PersistentClass clazz) {
++        return (clazz instanceof JoinedSubclass);
++    }
++
+ }
+\ No newline at end of file
+Index: tools/src/velocity/doc/header.html
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/doc/header.html,v
+retrieving revision 1.1
+diff -u -r1.1 header.html
+--- tools/src/velocity/doc/header.html	22 May 2005 17:01:00 -0000	1.1
++++ tools/src/velocity/doc/header.html	7 Jul 2005 21:33:44 -0000
+@@ -15,10 +15,10 @@
+ <TABLE WIDTH="100%" HEIGHT="40px" CELLPADDING="0" CELLSPACING="0" CLASS="HeaderTable">
+ 	<TR>
+ 		<TD WIDTH="20%"">
+-			<A HREF="#" CLASS="HeaderLink">TABLES</A>
++			<A HREF="tables/index.html" TARGET="mainFrame" CLASS="HeaderLink">TABLES</A>
+ 		</TD>
+ 		<TD WIDTH="20%">
+-			<A HREF="#" CLASS="HeaderLink">CLASSES</A>
++			<A HREF="entities/index.html" TARGET="mainFrame" CLASS="HeaderLink">ENTITIES</A>
+ 		</TD>
+ 		<TD WIDTH="20%">
+ 			<A HREF="#" CLASS="HeaderLink">QUERIES</A></B>
+Index: tools/src/velocity/doc/tables/summary.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/doc/tables/summary.vm,v
+retrieving revision 1.1
+diff -u -r1.1 summary.vm
+--- tools/src/velocity/doc/tables/summary.vm	22 May 2005 17:01:00 -0000	1.1
++++ tools/src/velocity/doc/tables/summary.vm	7 Jul 2005 21:33:44 -0000
+@@ -77,6 +77,7 @@
+ #end
+ 	</TBODY>
+ </TABLE>
++<BR>
+ #end
+ 
+ </BODY>
+\ No newline at end of file
+Index: test.log
+===================================================================
+RCS file: test.log
+diff -N test.log
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test.log	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,3 @@
++/*C3*/CONNECT USER SA
++SET AUTOCOMMIT FALSE
++DISCONNECT
+Index: test.properties
+===================================================================
+RCS file: test.properties
+diff -N test.properties
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test.properties	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,20 @@
++#HSQL database
++#Thu Jul 07 22:19:50 BST 2005
++hsqldb.cache_file_scale=1
++runtime.gc_interval=0
++hsqldb.first_identity=0
++version=1.7.2
++modified=yes
++hsqldb.script_format=0
++sql.enforce_size=false
++hsqldb.cache_size_scale=10
++hsqldb.cache_scale=14
++hsqldb.version=1.7.2
++hsqldb.log_size=200
++sql.enforce_strict_size=false
++readonly=false
++hsqldb.compatible_version=1.7.2
++hsqldb.original_version=1.7.2
++sql.compare_in_locale=false
++hsqldb.nio_data_file=true
++hsqldb.cache_version=1.7.0
+Index: test.script
+===================================================================
+RCS file: test.script
+diff -N test.script
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test.script	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,1 @@
++CREATE USER SA PASSWORD "" ADMIN
+Index: tools/src/java/.cvsignore
+===================================================================
+RCS file: tools/src/java/.cvsignore
+diff -N tools/src/java/.cvsignore
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/java/.cvsignore	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,1 @@
++log4j.properties
+Index: tools/src/java/DocExporterRunner.java
+===================================================================
+RCS file: tools/src/java/DocExporterRunner.java
+diff -N tools/src/java/DocExporterRunner.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/java/DocExporterRunner.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,36 @@
++
++import java.io.File;
++
++import org.hibernate.cfg.Configuration;
++import org.hibernate.tool.hbm2x.DocExporter;
++
++/**
++ * 
++ * 
++ * @author Ricardo C. Moral
++ */
++public class DocExporterRunner {
++
++    public static void main(String[] args) {
++        File output = new File(
++                "/Users/rcmoral/Documents/workspace/HibernateExt/tools/doc-output");
++
++        File cfgFile = new File(
++            "/Users/rcmoral/Documents/workspace/Hibernate3/test/org/hibernate/test/unionsubclass");
++
++        /*
++        File cfgFile = new File(
++                "/Users/rcmoral/Documents/workspace/CaveatEmptor-HiA-SE/src/java/hibernate.cfg.xml");
++         */
++
++        Configuration cfg = new Configuration();
++        // cfg.configure(cfgFile);
++        cfg.addDirectory(cfgFile);
++        cfg.buildMappings();
++
++        DocExporter docExporter = new DocExporter(cfg, output);
++
++        docExporter.start();
++    }
++
++}
+Index: tools/src/test/hibernate.properties
+===================================================================
+RCS file: tools/src/test/hibernate.properties
+diff -N tools/src/test/hibernate.properties
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/test/hibernate.properties	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,417 @@
++######################
++### Query Language ###
++######################
++
++## define query language constants / function names
++
++hibernate.query.substitutions true 1, false 0, yes 'Y', no 'N'
++
++
++
++#################
++### Platforms ###
++#################
++
++## JNDI Datasource
++
++#hibernate.connection.datasource jdbc/test
++#hibernate.connection.username db2
++#hibernate.connection.password db2
++
++
++## HypersonicSQL
++
++hibernate.dialect org.hibernate.dialect.HSQLDialect
++hibernate.connection.driver_class org.hsqldb.jdbcDriver
++hibernate.connection.username sa
++hibernate.connection.password
++#hibernate.connection.url jdbc:hsqldb:hsql://localhost
++hibernate.connection.url jdbc:hsqldb:test
++#hibernate.connection.url jdbc:hsqldb:.
++
++
++## MySQL
++
++#hibernate.dialect org.hibernate.dialect.MySQLDialect
++#hibernate.connection.driver_class org.gjt.mm.mysql.Driver
++#hibernate.connection.driver_class com.mysql.jdbc.Driver
++#hibernate.connection.url jdbc:mysql:///test
++#hibernate.connection.username gavin
++#hibernate.connection.password
++
++
++## Oracle
++
++#hibernate.dialect org.hibernate.dialect.OracleDialect
++#hibernate.dialect org.hibernate.dialect.Oracle9Dialect
++#hibernate.connection.driver_class oracle.jdbc.driver.OracleDriver
++#hibernate.connection.username max
++#hibernate.connection.password max
++#hibernate.connection.url jdbc:oracle:thin:@localhost:1521:orcl
++
++
++## PostgreSQL
++
++#hibernate.dialect org.hibernate.dialect.PostgreSQLDialect
++#hibernate.connection.driver_class org.postgresql.Driver
++#hibernate.connection.url jdbc:postgresql:template1
++#hibernate.connection.username pg
++#hibernate.connection.password
++#hibernate.query.substitutions yes 'Y', no 'N'
++
++
++## DB2
++
++#hibernate.dialect org.hibernate.dialect.DB2Dialect
++#hibernate.connection.driver_class COM.ibm.db2.jdbc.app.DB2Driver
++#hibernate.connection.url jdbc:db2:test
++#hibernate.connection.username db2
++#hibernate.connection.password db2
++
++
++## DB2/400
++
++#hibernate.dialect org.hibernate.dialect.DB2400Dialect
++#hibernate.connection.username user
++#hibernate.connection.password password
++
++## Native driver
++#hibernate.connection.driver_class COM.ibm.db2.jdbc.app.DB2Driver
++#hibernate.connection.url jdbc:db2://systemname
++
++## Toolbox driver
++#hibernate.connection.driver_class com.ibm.as400.access.AS400JDBCDriver
++#hibernate.connection.url jdbc:as400://systemname
++
++
++## Sybase
++
++#hibernate.dialect org.hibernate.dialect.SybaseDialect
++#hibernate.connection.driver_class com.sybase.jdbc2.jdbc.SybDriver
++#hibernate.connection.username sa
++#hibernate.connection.password sasasa
++#hibernate.connection.url jdbc:sybase:Tds:co3061835-a:5000/tempdb
++
++
++## Mckoi SQL
++
++#hibernate.dialect org.hibernate.dialect.MckoiDialect
++#hibernate.connection.driver_class com.mckoi.JDBCDriver
++#hibernate.connection.url jdbc:mckoi:///
++#hibernate.connection.url jdbc:mckoi:local://C:/mckoi1.00/db.conf
++#hibernate.connection.username admin
++#hibernate.connection.password nimda
++
++
++## SAP DB
++
++#hibernate.dialect org.hibernate.dialect.SAPDBDialect
++#hibernate.connection.driver_class com.sap.dbtech.jdbc.DriverSapDB
++#hibernate.connection.url jdbc:sapdb://localhost/TST
++#hibernate.connection.username TEST
++#hibernate.connection.password TEST
++#hibernate.query.substitutions yes 'Y', no 'N'
++
++
++## MS SQL Server
++
++#hibernate.dialect org.hibernate.dialect.SQLServerDialect
++#hibernate.connection.username sa
++#hibernate.connection.password sa
++
++## JSQL Driver
++#hibernate.connection.driver_class com.jnetdirect.jsql.JSQLDriver
++#hibernate.connection.url jdbc:JSQLConnect://1E1/test
++
++## JTURBO Driver
++#hibernate.connection.driver_class com.newatlanta.jturbo.driver.Driver
++#hibernate.connection.url jdbc:JTurbo://1E1:1433/test
++
++## WebLogic Driver
++#hibernate.connection.driver_class weblogic.jdbc.mssqlserver4.Driver
++#hibernate.connection.url jdbc:weblogic:mssqlserver4:1E1:1433
++
++## Microsoft Driver (not recommended!)
++#hibernate.connection.driver_class com.microsoft.jdbc.sqlserver.SQLServerDriver
++#hibernate.connection.url jdbc:microsoft:sqlserver://1E1;DatabaseName=test;SelectMethod=cursor
++
++## jTDS (since version 0.9)
++#hibernate.connection.driver_class net.sourceforge.jtds.jdbc.Driver
++#hibernate.connection.url jdbc:jtds:sqlserver://1E1/test
++
++## Interbase
++
++#hibernate.dialect org.hibernate.dialect.InterbaseDialect
++#hibernate.connection.username sysdba
++#hibernate.connection.password masterkey
++
++## DO NOT specify hibernate.connection.sqlDialect
++
++## InterClient
++
++#hibernate.connection.driver_class interbase.interclient.Driver
++#hibernate.connection.url jdbc:interbase://localhost:3060/C:/firebird/test.gdb
++
++## Pure Java
++
++#hibernate.connection.driver_class org.firebirdsql.jdbc.FBDriver
++#hibernate.connection.url jdbc:firebirdsql:localhost/3050:/firebird/test.gdb
++
++
++## Pointbase
++
++#hibernate.dialect org.hibernate.dialect.PointbaseDialect
++#hibernate.connection.driver_class com.pointbase.jdbc.jdbcUniversalDriver
++#hibernate.connection.url jdbc:pointbase:embedded:sample
++#hibernate.connection.username PBPUBLIC
++#hibernate.connection.password PBPUBLIC
++
++
++
++#################################
++### Hibernate Connection Pool ###
++#################################
++
++hibernate.connection.pool_size 1
++
++
++
++###########################
++### C3P0 Connection Pool###
++###########################
++
++#hibernate.c3p0.max_size 2
++#hibernate.c3p0.min_size 2
++#hibernate.c3p0.timeout 5000
++#hibernate.c3p0.max_statements 100
++#hibernate.c3p0.idle_test_period 3000
++#hibernate.c3p0.acquire_increment 2
++#hibernate.c3p0.validate false
++
++
++
++##############################
++### Proxool Connection Pool###
++##############################
++
++## Properties for external configuration of Proxool
++
++hibernate.proxool.pool_alias pool1
++
++## Only need one of the following
++
++#hibernate.proxool.existing_pool true
++#hibernate.proxool.xml proxool.xml
++#hibernate.proxool.properties proxool.properties
++
++
++
++#################################
++### Plugin ConnectionProvider ###
++#################################
++
++## use a custom ConnectionProvider (if not set, Hibernate will choose a built-in ConnectionProvider using hueristics)
++
++#hibernate.connection.provider_class org.hibernate.connection.DriverManagerConnectionProvider
++#hibernate.connection.provider_class org.hibernate.connection.DatasourceConnectionProvider
++#hibernate.connection.provider_class org.hibernate.connection.C3P0ConnectionProvider
++#hibernate.connection.provider_class org.hibernate.connection.DBCPConnectionProvider
++#hibernate.connection.provider_class org.hibernate.connection.ProxoolConnectionProvider
++
++
++
++#######################
++### Transaction API ###
++#######################
++
++## Enable automatic flush during the JTA beforeCompletion() callback
++## (This setting is relevant with or without the Transaction API)
++
++#hibernate.transaction.flush_before_completion
++
++
++## Enable automatic session close at the end of transaction
++## (This setting is relevant with or without the Transaction API)
++
++#hibernate.transaction.auto_close_session
++
++
++## the Transaction API abstracts application code from the underlying JTA or JDBC transactions
++
++#hibernate.transaction.factory_class org.hibernate.transaction.JTATransactionFactory
++#hibernate.transaction.factory_class org.hibernate.transaction.JDBCTransactionFactory
++
++
++## to use JTATransactionFactory, Hibernate must be able to locate the UserTransaction in JNDI
++## default is java:comp/UserTransaction
++## you do NOT need this setting if you specify hibernate.transaction.manager_lookup_class
++
++#jta.UserTransaction jta/usertransaction
++#jta.UserTransaction javax.transaction.UserTransaction
++#jta.UserTransaction UserTransaction
++
++
++## to use the second-level cache with JTA, Hibernate must be able to obtain the JTA TransactionManager
++
++#hibernate.transaction.manager_lookup_class org.hibernate.transaction.JBossTransactionManagerLookup
++#hibernate.transaction.manager_lookup_class org.hibernate.transaction.WeblogicTransactionManagerLookup
++#hibernate.transaction.manager_lookup_class org.hibernate.transaction.WebSphereTransactionManagerLookup
++#hibernate.transaction.manager_lookup_class org.hibernate.transaction.OrionTransactionManagerLookup
++#hibernate.transaction.manager_lookup_class org.hibernate.transaction.ResinTransactionManagerLookup
++
++
++
++##############################
++### Miscellaneous Settings ###
++##############################
++
++## print all generated SQL to the console
++
++#hibernate.show_sql true
++
++
++## add comments to the generated SQL
++
++#hibernate.use_sql_comments true
++
++
++## generate statistics
++
++#hibernate.generate_statistics true
++
++
++## auto schema export
++
++#hibernate.hbm2ddl.auto create-drop
++#hibernate.hbm2ddl.auto create
++#hibernate.hbm2ddl.auto update
++
++
++## rollback generated identifier values of deleted entities to default values
++
++#hibernate.use_identifer_rollback true
++
++
++## specify a default schema and catalog for unqualified tablenames
++
++#hibernate.default_schema 
++#hibernate.default_catalog 
++
++
++## set the maximum depth of the outer join fetch tree
++
++hibernate.max_fetch_depth 1
++
++
++## enable CGLIB reflection optimizer (enabled by default)
++
++#hibernate.cglib.use_reflection_optimizer false
++
++
++## use a custom stylesheet for XML generation (if not specified, hibernate-default.xslt will be used)
++
++#hibernate.xml.output_stylesheet C:/Hibernate/net/sf/hibernate/hibernate-default.xslt
++
++
++
++#####################
++### JDBC Settings ###
++#####################
++
++## specify a JDBC isolation level
++
++#hibernate.connection.isolation 4
++
++
++## enable JDBC autocommit (not recommended!)
++
++#hibernate.connection.autocommit true
++
++
++## set the JDBC fetch size
++
++#hibernate.jdbc.fetch_size 25
++
++
++## set the maximum JDBC 2 batch size (a nonzero value enables batching)
++
++#hibernate.jdbc.batch_size 5
++
++
++## enable batch updates even for versioned data
++
++hibernate.jdbc.batch_versioned_data true
++
++
++## enable use of JDBC 2 scrollable ResultSets (specifying a Dialect will cause Hibernate to use a sensible default)
++
++#hibernate.jdbc.use_scrollable_resultset true
++
++
++## use streams when writing binary types to / from JDBC
++
++hibernate.jdbc.use_streams_for_binary true
++
++
++## use JDBC 3 PreparedStatement.getGeneratedKeys() to get the identifier of an inserted row
++
++#hibernate.jdbc.use_get_generated_keys false
++
++
++
++##########################
++### Second-level Cache ###
++##########################
++
++## optimize chache for minimal "puts" instead of minimal "gets" (good for clustered cache)
++
++#hibernate.cache.use_minimal_puts true
++
++
++## set a prefix for cache region names
++
++hibernate.cache.region_prefix hibernate.test
++
++
++## disable the second-level cache
++
++#hibernate.cache.use_second_level_cache false
++
++
++## enable the query cache
++
++#hibernate.cache.use_query_cache true
++
++
++## choose a cache implementation
++
++#hibernate.cache.provider_class org.hibernate.cache.EhCacheProvider
++#hibernate.cache.provider_class org.hibernate.cache.EmptyCacheProvider
++hibernate.cache.provider_class org.hibernate.cache.HashtableCacheProvider
++#hibernate.cache.provider_class org.hibernate.cache.TreeCacheProvider
++#hibernate.cache.provider_class org.hibernate.cache.OSCacheProvider
++#hibernate.cache.provider_class org.hibernate.cache.SwarmCacheProvider
++
++
++
++############
++### JNDI ###
++############
++
++## specify a JNDI name for the SessionFactory
++
++#hibernate.session_factory_name hibernate/session_factory
++
++
++## Hibernate uses JNDI to bind a name to a SessionFactory and to look up the JTA UserTransaction;
++## if hibernate.jndi.* are not specified, Hibernate will use the default InitialContext() which
++## is the best approach in an application server
++
++#file system
++#hibernate.jndi.class com.sun.jndi.fscontext.RefFSContextFactory
++#hibernate.jndi.url file:/
++
++#WebSphere
++#hibernate.jndi.class com.ibm.websphere.naming.WsnInitialContextFactory
++#hibernate.jndi.url iiop://localhost:900/
++
+Index: tools/src/test/org/hibernate/tool/hbm2x/MyDocExporterTest.java
+===================================================================
+RCS file: tools/src/test/org/hibernate/tool/hbm2x/MyDocExporterTest.java
+diff -N tools/src/test/org/hibernate/tool/hbm2x/MyDocExporterTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/test/org/hibernate/tool/hbm2x/MyDocExporterTest.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,42 @@
++package org.hibernate.tool.hbm2x;
++
++import java.io.File;
++
++import org.hibernate.tool.NonReflectiveTestCase;
++
++public class MyDocExporterTest extends DocExporterTest {
++
++    File outputdir = new File("/Users/rcmoral/Documents/workspace/HibernateExt/tools/doc-output");
++
++    protected void setUp() throws Exception {
++        super.setUp();
++        DocExporter exporter = new DocExporter(getCfg(), outputdir);
++        exporter.start();
++    }
++
++	protected String[] getMappings() {
++		return new String[] { 
++				"Map.hbm.xml"
++		};
++	}
++
++    protected String getBaseForMappings() {
++		return "org/hibernate/test/legacy/";
++	}
++
++    public void testExporter() {
++        /*
++    	assertFileAndExists(new File(outputdir, "header.html") );
++    	assertFileAndExists(new File(outputdir, "index.html") );
++	 
++    	assertFileAndExists(new File(outputdir, "assets/doc-style.css") );
++    	assertFileAndExists(new File(outputdir, "assets/hibernate_logo.gif") );
++    	
++    	assertFileAndExists(new File(outputdir, "tables/default/summary.html") );
++    	assertFileAndExists(new File(outputdir, "tables/default/Customer.html") );
++        */
++    }
++
++    
++
++}
+Index: tools/src/velocity/doc/entities/entity-list.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/entity-list.vm
+diff -N tools/src/velocity/doc/entities/entity-list.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/entity-list.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,32 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Entity List</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<BODY>
++
++<TABLE BORDER="0" WIDTH="100%" SUMMARY="">
++	<TR>
++		<TD NOWRAP>
++			<FONT CLASS="ListTitleFont">
++				$title
++			</FONT>
++			<BR>
++#foreach($entity in $entityList)
++				<A HREF='$docFileManager.getRef($docFile, $docFileManager.getEntityDocFile($entity))' TARGET="generalFrame">$dochelper.getEntityName($entity)</A></FONT>
++			<BR>
++#end
++		</TD>
++	</TR>
++</TABLE>
++
++</BODY>
++
++</HTML>
+Index: tools/src/velocity/doc/entities/entity.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/entity.vm
+diff -N tools/src/velocity/doc/entities/entity.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/entity.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,366 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Entity Info</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<BODY>
++
++<H3>Entity: $entity.entityName</H3>
++
++<UL>
++	#if($entity.className)
++	<LI>
++		<B>Class:</B> $entity.className
++	</LI>
++	#end
++	#if($entity.superclass)
++	<LI>
++		<B>Superclass:</B>
++		<A HREF='$docFileManager.getRef($docFile, $docFileManager.getEntityDocFile($entity.superclass))' TARGET="generalFrame">
++			$entity.superclass.entityName
++		</A>
++	</LI>
++	#end
++	#if($entity.hasSubclasses())
++	<LI>
++		<B>Subclasses:</B><BR>
++		#foreach($subclass in $entity.directSubclasses)
++		<A HREF='$docFileManager.getRef($docFile, $docFileManager.getEntityDocFile($subclass))' TARGET="generalFrame">
++			$subclass.entityName<BR>
++		</A>		
++		#end
++	</LI>
++	#end
++	#if($entity.proxyInterfaceName)
++	<LI>
++		<B>Proxy Interface Name:</B> $entity.proxyInterfaceName
++	</LI>
++	#end
++	#if($entity.nodeName)
++	<LI>
++		<B>Node Name:</B> $entity.nodeName
++	</LI>
++	#end
++	#if($entity.discriminatorValue)
++	<LI>
++		<B>Discriminator Value:</B> $entity.discriminatorValue
++	</LI>
++	#end
++    <LI><B>Dynamic Insert: </B>$entity.useDynamicInsert()</LI>
++    <LI><B>Dynamic Update: </B>$entity.useDynamicUpdate()</LI>
++    <LI><B>Batch Size: </B>$entity.batchSize</LI></UL>
++    <LI><B>Select Before Update: </B>$entity.hasSelectBeforeUpdate()</LI>
++    <LI><B>Optimistic Lock: </B>$entity.optimisticLockMode</LI>
++	#if($entity.persister)
++	<LI>
++		<B>Persister:</B> $entity.persister
++	</LI>
++	#end
++    <LI><B>Lazy: </B>$entity.lazy</LI>
++    <LI><B>Abstract: </B>$entity.abstract</LI>
++
++	<LI>
++		<B>Table: </B>
++		<A HREF='$docFileManager.getRef($docFile, $docFileManager.getTableDocFile($entity.table))' TARGET="generalFrame">
++			$entity.table.name
++		</A>
++	</LI>
++    <LI><B>Mutable: </B>$entity.mutable</LI>
++    <LI><B>Explicit Polymorphism: </B>$entity.explicitProlymorphism</LI>
++    <LI><B>Where: </B>$entity.where</LI>
++    <LI><B>Entity Persister: </B>$entity.entityPersisterClass</LI>
++
++#if($entity.identifier)
++<A NAME="identifier_summary"></A>
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH CLASS="MainTableHeading" COLSPAN="2">
++				Identifier
++			</TH>
++		</TR>
++	</THEAD>
++	<TBODY>
++		<TR>
++			<TD>
++				Property
++			</TD>
++			<TD>
++				#if($entity.identifierProperty)
++				<A HREF="#property_detail_$entity.identifierProperty.name" TARGET="generalFrame">
++					$entity.identifierProperty.name
++				</A>
++				#else
++					No identifier property specified.
++				#end
++			</TD>
++		</TR>
++		<TR>
++			<TD WIDTH="50%">
++				Columns
++			</TD>
++			<TD WIDTH="50%">
++#foreach($column in $entity.identifier.columnIterator)
++        		<A HREF='$docFileManager.getRef($docFile, $docFileManager.getTableDocFile($entity.table))#column_detail_$column.name' TARGET="generalFrame">
++        			$column.name
++        		</A><BR>
++#end
++			</TD>
++		</TR>
++		<TR>
++			<TD>
++				Generator Strategy
++			</TD>
++			<TD>
++				$entity.identifier.identifierGeneratorStrategy
++			</TD>
++		</TR>
++		#if(!$entity.identifier.identifierGeneratorProperties.isEmpty())
++		<TR>
++			<TD>
++				Generator Properties
++			</TD>
++			<TD>
++#foreach($key in $entity.identifier.identifierGeneratorProperties.keySet())
++				$key = $entity.identifier.identifierGeneratorProperties.get($key)<BR>
++#end
++			</TD>
++		</TR>
++		#end
++		<TR>
++			<TD>
++				Null Value
++			</TD>
++			<TD>
++				</B> $entity.identifier.nullValue
++    		</TD>
++		</TR>
++	</TBODY>
++</TABLE>
++#end
++
++<BR>
++
++#if($entity.version)
++<A NAME="version_summary"></A>
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH CLASS="MainTableHeading" COLSPAN="2">
++				Version
++			</TH>
++		</TR>
++	</THEAD>
++	<TBODY>
++		<TR>
++			<TD WIDTH="50%">
++				Property
++			</TD>
++			<TD WIDTH="50%">
++				<A HREF="#property_detail_$entity.version.name" TARGET="generalFrame">
++					$entity.version.name
++				</A>
++			</TD>
++		</TR>
++		<TR>
++			<TD>
++				Null Value
++			</TD>
++			<TD>
++				$entity.version.value.nullValue
++    		</TD>
++		</TR>
++	</TBODY>
++</TABLE>
++#end
++
++<BR>
++
++<A NAME="property_summary"></A>
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH COLSPAN="9" CLASS="MainTableHeading">
++				Property Summary
++			</TH>
++		</TR>
++		<TR>
++			<TH WIDTH="14%">
++				Name
++			</TH>
++			<TH WIDTH="14%">
++				Type
++			</TH>
++			<TH WIDTH="14%">
++				Cascade Style
++			</TH>
++			<TH WIDTH="14%">
++				Precision
++			</TH>
++			<TH WIDTH="14%">
++				Scale
++			</TH>
++			<TH WIDTH="14%">
++				Nullable
++			</TH>
++			<TH WIDTH="14%">
++				Unique
++			</TH>
++		</TR>
++	</THEAD>
++	<TBODY>
++#foreach($property in $entity.propertyIterator)
++		<TR>
++			<TD>
++				<A HREF='#property_detail_$property.name'>
++					$property.name
++				</A>
++			</TD>
++			<TD>
++					$property.type.name
++			</TD>
++			<TD ALIGN="CENTER">
++					$property.cascade
++			</TD>
++			<TD ALIGN="RIGHT">
++				## $column.precision
++			</TD>
++			<TD ALIGN="RIGHT">
++				## $column.scale
++			</TD>
++			<TD ALIGN="CENTER">
++				## $column.nullable
++			</TD>
++			<TD ALIGN="CENTER">
++				## $column.unique
++			</TD>
++		</TR>
++#end
++	</TBODY>
++</TABLE>
++
++#if($entity.propertyIterator.hasNext())
++<P>
++
++<A NAME="property_detail"></A>
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH CLASS="MainTableHeading">
++    			Property Detail
++    		</TH>
++		</TR>
++	</THEAD>
++</TABLE>
++
++#foreach($property in $entity.propertyIterator)
++#set($value = $property.value)
++
++<A NAME='property_detail_$property.name'></A>
++
++<H3>$property.name</H3>
++
++<UL>
++	<LI><B>Cascade: </B>$property.cascade</LI>
++	<LI><B>Updateable: </B>$property.updateable</LI>
++	<LI><B>Insertable: </B>$property.insertable</LI>
++	<LI><B>Selectable: </B>$property.selectable</LI>
++	<LI><B>Optimistic Locked: </B>$property.optimisticLocked</LI>
++	<LI><B>Node Name: </B>$property.nodeName</LI>
++	<LI><B>Property Accessor Name: </B>$property.propertyAccessorName</LI>
++	<LI><B>Lazy: </B>$property.lazy</LI>
++	<LI><B>Optional: </B>$property.optional</LI>
++</UL>
++
++<UL>
++	<LI>
++		<B>Columns:</B><BR>
++#foreach($column in $value.columnIterator)
++		<A HREF='$docFileManager.getRef($docFile, $docFileManager.getTableDocFile($entity.table))#column_detail_$column.name' TARGET="generalFrame">
++			$column.name
++		</A><BR>
++#end
++	</LI>
++#if($value.isSimpleValue())
++#if($value.typeSpecified)
++	<LI>
++		<B>Type:</B> $value.typeName
++	</LI>
++#end
++	<LI>
++		<B>Cascade Delete Enabled:</B> $value.cascadeDeleteEnabled
++	</LI>
++#if($value.nullValue)
++	<LI>
++		<B>Null Value:</B> $value.nullValue
++	</LI>
++#end
++#if($value.foreignKeyName)
++	<LI>
++		<B>Foreign Key Name:</B> $value.foreignKeyName
++	</LI>
++#end
++	<LI>
++		<B>Alternate Unique Key:</B> $value.alternateUniqueKey
++	</LI>
++	<LI>
++		<B>Is Nullable:</B> $value.nullable
++	</LI>
++#end
++
++#if($dochelper.isToOne($value))
++Fetch Mode: $value.fetchMode<BR>
++Referenced Property Name: $value.referencedPropertyName<BR>
++Referenced Entity Name: $value.referencedEntityName<BR>
++Is Lazy: $value.lazy<BR>
++#end
++
++#if($dochelper.isOneToOne($value))
++Identifier: $value.identifier<BR>
++Property Name: $value.propertyName<BR>
++Entity Name: $value.entityName<BR>
++Foreign Key Type: $value.foreignKeyType<BR>
++#end
++
++#if($dochelper.isManyToOne($value))
++Ignore not found: $value.ignoreNotFound<BR>
++#end
++
++#if($dochelper.isCollection($property.value))
++Role: $property.value.role<BR>
++Inverse: $property.value.inverse<BR>
++Optimistic Locked: $property.value.optimisticLocked<BR>
++#if($property.value.orderBy)
++Order By: $property.value.orderBy<BR>
++#end
++#if($property.value.where)
++Where: $property.value.where<BR>
++#end
++Batch Size: $property.value.batchSize<BR>
++#if($property.value.nodeName)
++Node Name: $property.value.nodeName
++#end
++$property.value.embedded
++Persister Class: $property.value.collectionPersisterClass<BR>
++$property.value.typeName
++Subselect Loadable: $property.value.subselectLoadable<BR>
++#end
++
++</UL>
++
++<BR>
++
++#end
++
++#end
++
++</BODY>
++
++</HTML>
+Index: tools/src/velocity/doc/entities/index.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/index.vm
+diff -N tools/src/velocity/doc/entities/index.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/index.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,25 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Entity Mapping Information</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<FRAMESET cols="20%,80%">
++	<FRAMESET rows="30%,70%">
++		<FRAME src="allpackages.html" name="packagesFrame" title="All Packages">
++		<FRAME src="allentities.html" name="entitiesFrame" title="All Entities">
++	</FRAMESET>
++	<FRAME src="summary.html" name="generalFrame" title="Entity Descriptions" scrolling="yes">
++	<NOFRAMES>
++		<H2>Frame Alert</H2>
++		This document is designed to be viewed using the frames feature. If you see this message, you are using a non-frame-capable web browser.
++	</NOFRAMES>
++</FRAMESET>
++
++</HTML>
+Index: tools/src/velocity/doc/entities/package-list.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/package-list.vm
+diff -N tools/src/velocity/doc/entities/package-list.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/package-list.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,34 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Package List</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<BODY>
++
++<TABLE BORDER="0" WIDTH="100%" SUMMARY="">
++	<TR>
++		<TD NOWRAP>
++			<FONT CLASS="ListTitleFont">
++				$title
++			</FONT>
++			<BR>
++				<A HREF="$docFileManager.getRef($docFile, $docFileManager.getAllEntitiesDocFile())" TARGET="entitiesFrame">all entities</A>
++			<BR>
++#foreach($package in $packageList)
++				<A HREF="$docFileManager.getRef($docFile, $docFileManager.getPackageEntityListDocFile($package))" TARGET="entitiesFrame">$package</A>
++			<BR>
++#end
++		</TD>
++	</TR>
++</TABLE>
++
++</BODY>
++
++</HTML>
+Index: tools/src/velocity/doc/entities/package-summary.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/package-summary.vm
+diff -N tools/src/velocity/doc/entities/package-summary.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/package-summary.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,83 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Package Summary</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<BODY>
++
++<H1>Hibernate Mapping Documentation</H1>
++
++<H2>List of Entities for Package: $package</H2>
++
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH COLSPAN="2" CLASS="MainTableHeading">
++				Packages
++			</TH>
++		</TR>
++	</THEAD>
++#foreach($entity in $dochelper.getEntities($package))
++	<TBODY>
++		<TR>
++			<TD>
++				<B>$docHelper.getEntityName($entity)</B>
++			</TD>
++#*
++			<TD>
++				<A HREF='$docFileManager.getRef($docFile, $docFileManager.getTableDocFile($table))' TARGET="generalFrame">
++					<B>$table.name</B>
++				</A>
++			</TD>
++			<TD>
++				<TABLE BORDER="1" CELLPADDING="3" CELLSPACING="0">
++					<THEAD>
++						<TR>
++							<TH WIDTH="50%">
++								Name
++							</TH>
++							<TH WIDTH="30%">
++								SQL Type
++							</TH>
++							<TH WIDTH="15%">
++								Nullable
++							</TH>
++							<TH WIDTH="15%">
++								Unique
++							</TH>
++						</TR>
++					</THEAD>
++					<TBODY>
++#foreach($column in $table.columnIterator)
++						<TR>
++							<TD>
++								$column.name
++							</TD>
++							<TD>
++								$dochelper.getSQLTypeName($column)
++							</TD>
++							<TD ALIGN="CENTER">
++								$column.nullable
++							</TD>
++							<TD ALIGN="CENTER">
++								$column.unique
++							</TD>
++						</TR>
++#end
++					</TBODY>
++				</TABLE>
++			</TD>
++		</TR>
++*#
++#end
++	</TBODY>
++</TABLE>
++
++</BODY>
+Index: tools/src/velocity/doc/entities/summary.vm
+===================================================================
+RCS file: tools/src/velocity/doc/entities/summary.vm
+diff -N tools/src/velocity/doc/entities/summary.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ tools/src/velocity/doc/entities/summary.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,83 @@
++<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
++
++<HTML>
++
++<HEAD>
++
++<TITLE>Hibernate Mappings - Table Summary</TITLE>
++
++<LINK REL ="stylesheet" TYPE="text/css" HREF="$docFileManager.getRef($docFile, $docFileManager.getCssStylesDocFile())" TITLE="Style">
++
++</HEAD>
++
++<BODY>
++
++<H1>Hibernate Mapping Documentation</H1>
++
++<H2>List of Entities by Package</H2>
++
++#foreach($package in $dochelper.packages)
++<TABLE BORDER="1" WIDTH="100%" CELLPADDING="3" CELLSPACING="0">
++	<THEAD>
++		<TR>
++			<TH COLSPAN="2" CLASS="MainTableHeading">
++				$package
++			</TH>
++		</TR>
++	</THEAD>
++	<TBODY>
++#foreach($entity in $dochelper.getEntities($package))
++		<TR>
++			<TD>
++				<A HREF='$docFileManager.getRef($docFile, $docFileManager.getEntityDocFile($entity))' TARGET="generalFrame">
++					<B>$dochelper.getEntityName($entity)</B>
++				</A>
++			</TD>
++			<TD>
++				<TABLE BORDER="1" CELLPADDING="3" CELLSPACING="0">
++					<THEAD>
++						<TR>
++							<TH WIDTH="50%">
++								Name
++							</TH>
++							<TH WIDTH="30%">
++								SQL Type
++							</TH>
++							<TH WIDTH="15%">
++								Nullable
++							</TH>
++							<TH WIDTH="15%">
++								Unique
++							</TH>
++						</TR>
++					</THEAD>
++					<TBODY>
++#foreach($property in $entity.propertyIterator)
++						<TR>
++							<TD>
++								<A HREF='$docFileManager.getRef($docFile, $docFileManager.getEntityDocFile($entity))#property_detail_$property.name' TARGET="generalFrame">
++									$property.name
++								</A>
++							</TD>
++							<TD>
++								## $dochelper.getSQLTypeName($column)
++							</TD>
++							<TD ALIGN="CENTER">
++								## $column.nullable
++							</TD>
++							<TD ALIGN="CENTER">
++								## $column.unique
++							</TD>
++						</TR>
++#end
++					</TBODY>
++				</TABLE>
++			</TD>
++		</TR>
++#end
++	</TBODY>
++</TABLE>
++<BR>
++#end
++
++</BODY>

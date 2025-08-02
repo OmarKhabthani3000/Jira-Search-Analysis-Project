@@ -1,0 +1,403 @@
+Index: tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java	(revision 15916)
++++ tools/src/java/org/hibernate/tool/ant/Hbm2JavaExporterTask.java	(working copy)
+@@ -4,8 +4,12 @@
+  */
+ package org.hibernate.tool.ant;
+ 
++import java.util.ArrayList;
++import java.util.List;
++
+ import org.hibernate.tool.hbm2x.Exporter;
+ import org.hibernate.tool.hbm2x.POJOExporter;
++import org.hibernate.tool.hbm2x.POJOPairExporter;
+ 
+ /**
+  * @author max
+@@ -16,6 +20,7 @@
+ 	boolean ejb3 = false;
+ 
+ 	boolean jdk5 = false;
++	List<PojoPairConfig> pairConfigs = new ArrayList<PojoPairConfig>(2);
+ 
+ 	public Hbm2JavaExporterTask(HibernateToolTask parent) {
+ 		super( parent );
+@@ -28,7 +33,44 @@
+ 	public void setJdk5(boolean b) {
+ 		jdk5 = b;
+ 	}
++	
++	public PojoPairConfig createConcrete() {
++		ConcreteConfig c = new ConcreteConfig();
++		pairConfigs.add(c);
++		return c;
++	}
++	
++	public PojoPairConfig createBase() {
++		BaseConfig c = new BaseConfig();
++		pairConfigs.add(c);
++		return c;
++	}
++	
++	public static abstract class PojoPairConfig {
++		String transform;
++		boolean overwrite;
+ 
++		public void setTransform( String transform ) {
++			this.transform = transform;
++		}
++		public void setOverwrite(boolean overwrite) {
++			this.overwrite = overwrite;
++		}
++		public String getTransform() {
++			return this.transform;
++		}
++		public boolean getOverwrite() {
++			return this.overwrite;
++		}
++	}
++	
++	public static class ConcreteConfig extends PojoPairConfig {
++		
++	}
++	public static class BaseConfig extends PojoPairConfig {
++		
++	}
++
+ 	protected Exporter configureExporter(Exporter exp) {
+ 		POJOExporter exporter = (POJOExporter) exp;
+ 		super.configureExporter( exp );
+@@ -38,6 +80,9 @@
+ 	}
+ 
+ 	protected Exporter createExporter() {
++		if ( pairConfigs != null && pairConfigs.size() > 1 ) {
++			return new POJOPairExporter(pairConfigs);
++		}
+ 		return new POJOExporter();
+ 	}
+ 
+Index: tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java	(revision 15916)
++++ tools/src/java/org/hibernate/tool/hbm2x/GenericExporter.java	(working copy)
+@@ -148,8 +148,8 @@
+ 		producer.produce(additionalContext, getTemplateName(), new File(getOutputDirectory(),filename), templateName, element.toString());
+ 	}
+ 
+-	protected String resolveFilename(POJOClass element) {
+-		String filename = StringHelper.replace(filePattern, "{class-name}", getClassNameForFile( element )); 
++	protected String resolvePattern(String pattern, POJOClass element) {
++		String filename = StringHelper.replace(pattern, "{class-name}", getClassNameForFile( element )); 
+ 		String packageLocation = StringHelper.replace(getPackageNameForFile( element ),".", "/");
+ 		if(StringHelper.isEmpty(packageLocation)) {
+ 			packageLocation = "."; // done to ensure default package classes doesn't end up in the root of the filesystem when outputdir=""
+@@ -157,6 +157,9 @@
+ 		filename = StringHelper.replace(filename, "{package-name}", packageLocation);
+ 		return filename;
+ 	}
++	protected String resolveFilename(POJOClass element) {
++		return resolvePattern( this.filePattern, element );
++	}
+ 
+ 	protected String getPackageNameForFile(POJOClass element) {
+ 		return element.getPackageName(); 
+Index: tools/src/java/org/hibernate/tool/hbm2x/POJOPairExporter.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/POJOPairExporter.java	(revision 0)
++++ tools/src/java/org/hibernate/tool/hbm2x/POJOPairExporter.java	(revision 0)
+@@ -0,0 +1,184 @@
++package org.hibernate.tool.hbm2x;
++
++import static org.hibernate.tool.hbm2x.MetaAttributeConstants.*;
++
++import java.io.File;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++import org.apache.tools.ant.BuildException;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.MetaAttribute;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.tool.ant.Hbm2JavaExporterTask;
++import org.hibernate.tool.hbm2x.pojo.EntityPOJOClass;
++import org.hibernate.tool.hbm2x.pojo.POJOClass;
++
++public class POJOPairExporter extends POJOExporter {
++	List<Hbm2JavaExporterTask.PojoPairConfig> pairConfigs;
++	Hbm2JavaExporterTask.PojoPairConfig concreteConfig;
++	Hbm2JavaExporterTask.PojoPairConfig baseConfig;
++	
++	public POJOPairExporter(Configuration cfg, File outputdir) {
++		super(cfg, outputdir);
++	}
++
++	public POJOPairExporter() {
++		super();
++	}
++	
++	public POJOPairExporter( List<Hbm2JavaExporterTask.PojoPairConfig> pairConfigs ) {
++		super();
++		this.pairConfigs = pairConfigs;
++		assignConfigs();
++	}
++	
++	protected void assignConfigs() {
++		for ( Hbm2JavaExporterTask.PojoPairConfig c : this.pairConfigs ) {
++			if ( c instanceof Hbm2JavaExporterTask.BaseConfig ) {
++				this.baseConfig = c;
++			} else if ( c instanceof Hbm2JavaExporterTask.ConcreteConfig ) {
++				this.concreteConfig = c;
++			} else {
++				throw new BuildException("we don't support the config: '" + c.getClass().getName() + "'");
++			}
++		}
++		if ( this.concreteConfig == null ) {
++			throw new BuildException("need concrete part for pojo pair to work");
++		}
++		if ( this.baseConfig == null ) {
++			throw new BuildException("need base part for pojo pair to work");
++		}
++	}
++	
++	public void setPairConfigs( List<Hbm2JavaExporterTask.PojoPairConfig> pairConfigs ) {
++		this.pairConfigs = pairConfigs;
++		assignConfigs();
++	}
++
++	@Override
++	protected void doStart() {
++		// do components with standard pojo exporter settings
++		ModelIterator componentMI = (ModelIterator) modelIterators.get( "component");
++		componentMI.process( this );
++		
++		// base classes of entities
++		ModelIterator entityMI = (ModelIterator) modelIterators.get("entity");
++		getProperties().put("basePartOfPair","true");
++		getProperties().put("concretePartOfPair","false");
++		getTemplateHelper().putInContext( "basePartOfPair", Boolean.TRUE );
++		getTemplateHelper().putInContext( "concretePartOfPair", Boolean.FALSE );
++		entityMI.process( this );
++		
++		// concrete classes of entities
++		getProperties().put("basePartOfPair","false");
++		getProperties().put("concretePartOfPair","true");
++		getTemplateHelper().putInContext( "basePartOfPair", Boolean.FALSE );
++		getTemplateHelper().putInContext( "concretePartOfPair", Boolean.TRUE );
++		entityMI.process( this );
++		
++		pojoBaseMap.clear();
++	}
++	
++	// map the element to the base class name for "extends"
++	Map<String, String> pojoBaseMap = new HashMap<String, String>();
++	
++	@SuppressWarnings("unchecked")
++	@Override
++	protected void exportPersistentClass( Map additionalContext, POJOClass element ) {
++		Map metaAttributes = null;
++		PersistentClass pclz = null;
++		String originalClassName = element.getQualifiedDeclarationName();
++		if ( element instanceof EntityPOJOClass ) {
++			String baseProperty = getProperties().getProperty( "basePartOfPair", "false" );
++			String concreteProperty = getProperties().getProperty( "concretePartOfPair", "false" );
++			if ( Boolean.parseBoolean( baseProperty ) ) {
++				String resolvedPattern = resolvePattern( baseConfig.getTransform(), element );
++				resolvedPattern = resolvedPattern.replace( '/', '.' );
++				
++				EntityPOJOClass clz = (EntityPOJOClass) element;
++				pclz = (PersistentClass) clz.getDecoratedObject();
++				MetaAttribute ma = new MetaAttribute("scope-field");
++				ma.addValue( "protected" );
++				metaAttributes = pclz.getMetaAttributes();
++				metaAttributes.put( "scope-field", ma );
++				
++				ma = new MetaAttribute(SCOPE_CLASS);
++				ma.addValue( "public abstract" );
++				metaAttributes.put( SCOPE_CLASS, ma );
++				
++				ma = new MetaAttribute(GENERATED_CLASS);
++				ma.addValue( resolvedPattern );
++				metaAttributes.put( GENERATED_CLASS, ma );
++
++				pojoBaseMap.put( originalClassName, resolvedPattern );
++			} else if ( Boolean.parseBoolean( concreteProperty ) ) {
++				String resolvedPattern = resolvePattern( concreteConfig.getTransform(), element );
++				resolvedPattern = resolvedPattern.replace( '/', '.' );
++				
++				EntityPOJOClass clz = (EntityPOJOClass) element;
++				pclz = (PersistentClass) clz.getDecoratedObject();
++				
++				MetaAttribute ma;
++				metaAttributes = pclz.getMetaAttributes();
++				ma = new MetaAttribute(GENERATED_CLASS);
++				ma.addValue( resolvedPattern );
++				metaAttributes.put( GENERATED_CLASS, ma );
++				
++				ma = new MetaAttribute(GEN_PROPERTY);
++				ma.addValue( "false" );
++				metaAttributes.put( GEN_PROPERTY, ma );
++
++				String baseClass = pojoBaseMap.remove(originalClassName);
++				if ( baseClass == null ) {
++					log.error( "didn't find '" + originalClassName + "' in the list of base classes." );
++				}
++				ma = new MetaAttribute(EXTENDS);
++				ma.addValue( baseClass );
++				metaAttributes.put( EXTENDS, ma);
++			}
++		}
++		super.exportPersistentClass( additionalContext, element );
++		// reset everything to the default
++		if ( metaAttributes != null ) {
++			metaAttributes.remove( EXTENDS );
++			metaAttributes.remove( GEN_PROPERTY );
++			metaAttributes.remove( GENERATED_CLASS );
++			metaAttributes.remove( SCOPE_CLASS );
++			metaAttributes.remove( "scope-field" );
++		}
++	}
++	protected void doxStart() {
++		setForEach("component");
++		super.doStart();
++		
++		for (Hbm2JavaExporterTask.PojoPairConfig config : pairConfigs) {
++//			setFilePattern(config.getFilePattern());
++			setForEach( "entity" );
++			if ( config instanceof Hbm2JavaExporterTask.BaseConfig ) {
++				getTemplateHelper().putInContext( "basePartOfPair", Boolean.TRUE );
++				getTemplateHelper().putInContext( "concretePartOfPair", Boolean.FALSE );
++				getProperties().put("basePartOfPair","true");
++				getProperties().put("concretePartOfPair","false");
++			} else {
++				getTemplateHelper().putInContext( "basePartOfPair", Boolean.FALSE );
++				getTemplateHelper().putInContext( "concretePartOfPair", Boolean.TRUE );
++				getProperties().put("basePartOfPair","false");
++				getProperties().put("concretePartOfPair","true");
++			}
++			super.doStart();
++		}
++	}
++	
++	@Override
++	protected void setupContext() {
++		if ( !getProperties().containsKey( "basePartOfPair" )) {
++			getProperties().put("basePartOfPair","false");
++		}
++		if ( !getProperties().containsKey( "concretePartOfPair" )) {
++			getProperties().put("concretePartOfPair","false");
++		}
++		super.setupContext();
++	}
++}
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(revision 15916)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(working copy)
+@@ -38,7 +38,7 @@
+  */
+ abstract public class BasicPOJOClass implements POJOClass, MetaAttributeConstants {
+ 
+-	protected ImportContext importContext;
++	protected ImportContextImpl importContext;
+ 	protected MetaAttributable meta;
+ 	protected final Cfg2JavaTool c2j;
+ 	
+@@ -83,7 +83,11 @@
+ 	/** Return package name. Note: Does not handle inner classes */ 
+ 	public String getPackageName() {
+ 		String generatedClass = getGeneratedClassName();
+-		return StringHelper.qualifier(generatedClass.trim());
++		String qualifier = StringHelper.qualifier(generatedClass.trim());
++		if ( importContext != null ) {
++			importContext.setBasePackage( qualifier ); // make sure that the import context stays in-sync with any overrides to our class name
++		}
++		return qualifier;
+ 	}
+ 	
+ 	public String getShortName() {
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java	(revision 15916)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java	(working copy)
+@@ -148,4 +148,12 @@
+ 		}
+ 		return buf.toString();            
+ 	}
++
++	public String getBasePackage() {
++		return basePackage;
++	}
++
++	public void setBasePackage( String basePackage ) {
++		this.basePackage = basePackage;
++	}
+ }
+Index: tools/src/templates/pojo/Ejb3TypeDeclaration.ftl
+===================================================================
+--- tools/src/templates/pojo/Ejb3TypeDeclaration.ftl	(revision 15916)
++++ tools/src/templates/pojo/Ejb3TypeDeclaration.ftl	(working copy)
+@@ -2,6 +2,9 @@
+ <#if pojo.isComponent()>
+ @${pojo.importType("javax.persistence.Embeddable")}
+ <#else>
++<#if basePartOfPair>
++@${pojo.importType("javax.persistence.MappedSuperclass")}
++<#else>
+ @${pojo.importType("javax.persistence.Entity")}
+ @${pojo.importType("javax.persistence.Table")}(name="${clazz.table.name}"
+ <#if clazz.table.schema?exists>
+@@ -14,4 +17,5 @@
+     , uniqueConstraints = ${uniqueConstraint} 
+ </#if>)
+ </#if>
++</#if>
+ </#if>
+\ No newline at end of file
+Index: tools/src/templates/pojo/PojoFields.ftl
+===================================================================
+--- tools/src/templates/pojo/PojoFields.ftl	(revision 15916)
++++ tools/src/templates/pojo/PojoFields.ftl	(working copy)
+@@ -1,8 +1,9 @@
+ <#-- // Fields -->
+-
++<#if (!concretePartOfPair)>
+ <#foreach field in pojo.getAllPropertiesIterator()><#if pojo.getMetaAttribAsBool(field, "gen-property", true)> <#if pojo.hasMetaAttribute(field, "field-description")>    /**
+      ${pojo.getFieldJavaDoc(field, 0)}
+      */
+- </#if>    ${pojo.getFieldModifiers(field)} ${pojo.getJavaTypeName(field, jdk5)} ${field.name}<#if pojo.hasFieldInitializor(field, jdk5)> = ${pojo.getFieldInitialization(field, jdk5)}</#if>;
++ </#if>    <#if basePartOfPair?if_exists>protected<#else>${pojo.getFieldModifiers(field)}</#if> ${pojo.getJavaTypeName(field, jdk5)} ${field.name}<#if pojo.hasFieldInitializor(field, jdk5)> = ${pojo.getFieldInitialization(field, jdk5)}</#if>;
+ </#if>
+ </#foreach>
++</#if>
+Index: tools/src/templates/pojo/PojoPropertyAccessors.ftl
+===================================================================
+--- tools/src/templates/pojo/PojoPropertyAccessors.ftl	(revision 15916)
++++ tools/src/templates/pojo/PojoPropertyAccessors.ftl	(working copy)
+@@ -1,4 +1,5 @@
+ <#-- // Property accessors -->
++<#if !concretePartOfPair>
+ <#foreach property in pojo.getAllPropertiesIterator()>
+ <#if pojo.getMetaAttribAsBool(property, "gen-property", true)>
+  <#if pojo.hasFieldJavaDoc(property)>    
+@@ -16,3 +17,4 @@
+     }
+ </#if>
+ </#foreach>
++</#if>
+Index: tools/src/templates/pojo/PojoTypeDeclaration.ftl
+===================================================================
+--- tools/src/templates/pojo/PojoTypeDeclaration.ftl	(revision 15916)
++++ tools/src/templates/pojo/PojoTypeDeclaration.ftl	(working copy)
+@@ -1,5 +1,7 @@
+ /**
+-${pojo.getClassJavaDoc(pojo.getDeclarationName() + " generated by hbm2java", 0)}
++${pojo.getClassJavaDoc(pojo.getDeclarationName() + " generated by hbm2java", 0)}<#if basePartOfPair>
++ * Base part of a abstract/concrete pair.</#if><#if concretePartOfPair>
++ * Concrete part of a abstract/concrete pair.</#if>
+  */
+ <#include "Ejb3TypeDeclaration.ftl"/>
+ ${pojo.getClassModifiers()} ${pojo.getDeclarationType()} ${pojo.getDeclarationName()} ${pojo.getExtendsDeclaration()} ${pojo.getImplementsDeclaration()}
+\ No newline at end of file

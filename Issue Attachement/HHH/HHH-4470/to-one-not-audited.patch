@@ -1,0 +1,142 @@
+Index: src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java	(revision 17583)
++++ src/main/java/org/hibernate/envers/configuration/metadata/ToOneRelationMetadataGenerator.java	(working copy)
+@@ -24,20 +24,27 @@
+ package org.hibernate.envers.configuration.metadata;
+ 
+ import org.dom4j.Element;
++import org.hibernate.MappingException;
++import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.RelationTargetAuditMode;
++import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+ import org.hibernate.envers.entities.EntityConfiguration;
+ import org.hibernate.envers.entities.IdMappingData;
+ import org.hibernate.envers.entities.PropertyData;
+ import org.hibernate.envers.entities.mapper.CompositeMapperBuilder;
+ import org.hibernate.envers.entities.mapper.id.IdMapper;
++import org.hibernate.envers.entities.mapper.id.SingleIdMapper;
+ import org.hibernate.envers.entities.mapper.relation.OneToOneNotOwningMapper;
+ import org.hibernate.envers.entities.mapper.relation.ToOneIdMapper;
+-import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+-
+-import org.hibernate.MappingException;
++import org.hibernate.envers.entities.mapper.relation.ToOneNotAuditedIdMapper;
+ import org.hibernate.mapping.OneToOne;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.ToOne;
+ import org.hibernate.mapping.Value;
++import org.hibernate.type.ImmutableType;
++import org.hibernate.type.MutableType;
++import org.hibernate.type.Type;
+ 
+ /**
+  * Generates metadata for to-one relations (reference-valued properties).
+@@ -68,9 +75,41 @@
+ 			}
+ 		}
+ 		if (configuration == null) {
+-			throw new MappingException("An audited relation from " + entityName + "."
+-					+ propertyAuditingData.getName() + " to a not audited entity " + referencedEntityName + "!");
+-		}
++        	PersistentClass referencedEntity = mainGenerator.getCfg().getClassMapping(referencedEntityName);
++    		Property referencedEntityIdentifierProperty = referencedEntity.getIdentifierProperty();
++    		if (referencedEntityIdentifierProperty.isComposite()) {
++    			throw new MappingException("An audited relation to a non-audited entity " + referencedEntityName
++    				+ " is not supported when the referenced entity has a composite primary key");
++    		}
++    		Value referencedEntityIdentifierValue = referencedEntityIdentifierProperty.getValue();
++    		Type referencedEntityIdentifierType = referencedEntityIdentifierValue.getType();
++    		if (!(referencedEntityIdentifierType instanceof MutableType || referencedEntityIdentifierType instanceof ImmutableType)) {
++    			throw new MappingException("An audited relation to a non-audited entity " + referencedEntityName
++    				+ " is not supported when the referenced entity primary key is not mutable or immutable");
++    		}
++        	PersistentClass entity = mainGenerator.getCfg().getClassMapping(entityName);
++        	String propertyName = propertyAuditingData.getName();
++        	Property property = entity.getProperty(propertyName);
++        	
++        	Element prop_mapping = MetadataTools.addProperty(parent, propertyName, referencedEntityIdentifierType.getName(), insertable, false);
++    		MetadataTools.addColumns(prop_mapping, property.getColumnIterator());
++    		
++    		// Adding mapper for the id
++    		SingleIdMapper referencedEntityIdMapper = new SingleIdMapper();
++    		PropertyData referencedEntityIdPropertyData =
++    			new PropertyData(
++    				referencedEntityIdentifierProperty.getName(),
++    				referencedEntityIdentifierProperty.getName(),
++    				referencedEntityIdentifierProperty.getPropertyAccessorName(),
++    				ModificationStore.FULL);
++    		referencedEntityIdMapper.add(referencedEntityIdPropertyData);
++    		mapper.addComposite(
++    			propertyAuditingData.getPropertyData(),
++    			new ToOneNotAuditedIdMapper(
++    				referencedEntityIdMapper,
++    				propertyAuditingData.getPropertyData()));
++        	return;
++        }
+ 
+         IdMappingData idMapping = configuration.getIdMappingData();
+ 
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneNotAuditedIdMapper.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneNotAuditedIdMapper.java	(revision 0)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/ToOneNotAuditedIdMapper.java	(revision 0)
+@@ -0,0 +1,57 @@
++package org.hibernate.envers.entities.mapper.relation;
++
++import java.io.Serializable;
++import java.util.List;
++import java.util.Map;
++
++import org.hibernate.collection.PersistentCollection;
++import org.hibernate.engine.SessionImplementor;
++import org.hibernate.envers.configuration.AuditConfiguration;
++import org.hibernate.envers.entities.PropertyData;
++import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.PropertyMapper;
++import org.hibernate.envers.entities.mapper.id.IdMapper;
++import org.hibernate.envers.reader.AuditReaderImplementor;
++import org.hibernate.envers.tools.Tools;
++
++/**
++ * Used instead of {@link ToOneIdMapper} when the referenced entity of the to-one association is not
++ * audited.
++ * @author Nicolas Roug&eacute; (nicolas at nrouge dot com)
++ */
++public class ToOneNotAuditedIdMapper implements PropertyMapper {
++	
++	private final IdMapper delegate;
++	private final PropertyData propertyData;
++	
++	public ToOneNotAuditedIdMapper(IdMapper delegate, PropertyData propertyData) {
++		this.delegate = delegate;
++		this.propertyData = propertyData;
++	}
++	
++	public boolean mapToMapFromEntity(SessionImplementor session, Map<String, Object> data, Object newObj, Object oldObj) {
++		Object newId = delegate.mapToIdFromEntity(newObj);
++		Object oldId = delegate.mapToIdFromEntity(oldObj);
++		data.put(propertyData.getName(), newId);
++		return !Tools.objectsEqual(newId, oldId);
++	}
++	
++	public void mapToEntityFromMap(
++		AuditConfiguration verCfg,
++		Object obj,
++		Map data,
++		Object primaryKey,
++		AuditReaderImplementor versionsReader,
++		Number revision) {
++		throw new IllegalStateException("Not implemented");
++	}
++	
++	public List<PersistentCollectionChangeData> mapCollectionChanges(
++		String referencingPropertyName,
++		PersistentCollection newColl,
++		Serializable oldColl,
++		Serializable id) {
++		// not implemented since a to-one property is not an association
++		return null;
++	}
++}

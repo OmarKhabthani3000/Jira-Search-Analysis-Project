@@ -1,0 +1,262 @@
+Index: core/src/main/java/org/hibernate/criterion/SubqueryExpression.java
+===================================================================
+--- core/src/main/java/org/hibernate/criterion/SubqueryExpression.java	(revision 15151)
++++ core/src/main/java/org/hibernate/criterion/SubqueryExpression.java	(working copy)
+@@ -42,7 +42,7 @@
+  * @author Gavin King
+  */
+ public abstract class SubqueryExpression implements Criterion {
+-	
++
+ 	private CriteriaImpl criteriaImpl;
+ 	private String quantifier;
+ 	private String op;
+@@ -53,13 +53,13 @@
+ 	protected Type[] getTypes() {
+ 		return types;
+ 	}
+-	
++
+ 	protected SubqueryExpression(String op, String quantifier, DetachedCriteria dc) {
+ 		this.criteriaImpl = dc.getCriteriaImpl();
+ 		this.quantifier = quantifier;
+ 		this.op = op;
+ 	}
+-	
++
+ 	protected abstract String toLeftSqlString(Criteria criteria, CriteriaQuery outerQuery);
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+@@ -69,14 +69,16 @@
+ 		final OuterJoinLoadable persister = (OuterJoinLoadable) factory.getEntityPersister( criteriaImpl.getEntityOrClassName() );
+ 
+ 		createAndSetInnerQuery( criteriaQuery, factory );
+-		
++
++		criteriaImpl.setSession(((CriteriaImpl) criteria).getSession());
++
+ 		CriteriaJoinWalker walker = new CriteriaJoinWalker(
+ 				persister,
+ 				innerQuery,
+ 				factory,
+ 				criteriaImpl,
+ 				criteriaImpl.getEntityOrClassName(),
+-				new HashMap(),
++                ((CriteriaImpl) criteria).getSession().getEnabledFilters(),
+ 				innerQuery.getRootSQLALias());
+ 
+ 		String sql = walker.getSQLString();
+@@ -89,13 +91,13 @@
+ 			.toString();
+ 	}
+ 
+-	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery) 
++	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+ 		//the following two lines were added to ensure that this.params is not null, which
+ 		//can happen with two-deep nested subqueries
+ 		SessionFactoryImplementor factory = criteriaQuery.getFactory();
+ 		createAndSetInnerQuery(criteriaQuery, factory);
+-		
++
+ 		Type[] ppTypes = params.getPositionalParameterTypes();
+ 		Object[] ppValues = params.getPositionalParameterValues();
+ 		TypedValue[] tv = new TypedValue[ppTypes.length];
+Index: core/src/main/java/org/hibernate/engine/QueryParameters.java
+===================================================================
+--- core/src/main/java/org/hibernate/engine/QueryParameters.java	(revision 15151)
++++ core/src/main/java/org/hibernate/engine/QueryParameters.java	(working copy)
+@@ -69,13 +69,13 @@
+ 	private boolean callable = false;
+ 	private boolean autodiscovertypes = false;
+ 	private boolean isNaturalKeyLookup;
+-	
++
+ 	private final ResultTransformer resultTransformer; // why is all others non final ?
+-	
++
+ 	private String processedSQL;
+ 	private Type[] processedPositionalParameterTypes;
+ 	private Object[] processedPositionalParameterValues;
+-	
++
+ 	public QueryParameters() {
+ 		this( ArrayHelper.EMPTY_TYPE_ARRAY, ArrayHelper.EMPTY_OBJECT_ARRAY );
+ 	}
+@@ -104,13 +104,13 @@
+ 	) {
+ 		this(
+ 			positionalParameterTypes,
+-			postionalParameterValues, 
+-			null, 
+-			null, 
+-			false, 
+-			null, 
++			postionalParameterValues,
+ 			null,
++			null,
+ 			false,
++			null,
++			null,
++			false,
+ 			null
+ 		);
+ 	}
+@@ -142,8 +142,8 @@
+ 				null,
+ 				false,
+ 				false,
+-				null, 
+ 				null,
++				null,
+ 				collectionKeys,
+ 				null
+ 			);
+@@ -169,7 +169,7 @@
+ 			rowSelection,
+ 			false,
+ 			cacheable,
+-			cacheRegion, 
++			cacheRegion,
+ 			comment,
+ 			null,
+ 			transformer
+@@ -189,7 +189,7 @@
+ 			//final boolean forceCacheRefresh,
+ 			final String comment,
+ 			final Serializable[] collectionKeys,
+-			ResultTransformer transformer			
++			ResultTransformer transformer
+ 	) {
+ 		this.positionalParameterTypes = positionalParameterTypes;
+ 		this.positionalParameterValues = positionalParameterValues;
+@@ -204,7 +204,7 @@
+ 		this.readOnly = readOnly;
+ 		this.resultTransformer = transformer;
+ 	}
+-	
++
+ 	public QueryParameters(
+ 		final Type[] positionalParameterTypes,
+ 		final Object[] positionalParameterValues,
+@@ -223,13 +223,13 @@
+ 		final ResultTransformer transformer
+ 	) {
+ 		this(
+-			positionalParameterTypes, 
+-			positionalParameterValues, 
+-			namedParameters, 
+-			lockModes, 
+-			rowSelection, 
+-			readOnly, 
+-			cacheable, 
++			positionalParameterTypes,
++			positionalParameterValues,
++			namedParameters,
++			lockModes,
++			rowSelection,
++			readOnly,
++			cacheable,
+ 			cacheRegion,
+ 			comment,
+ 			collectionKeys,
+@@ -259,7 +259,7 @@
+ 	public RowSelection getRowSelection() {
+ 		return rowSelection;
+ 	}
+-	
++
+ 	public ResultTransformer getResultTransformer() {
+ 		return resultTransformer;
+ 	}
+@@ -292,8 +292,8 @@
+ 		Printer print = new Printer(factory);
+ 		if (positionalParameterValues.length!=0) {
+ 			log.trace(
+-					"parameters: " + 
+-					print.toString(positionalParameterTypes, positionalParameterValues) 
++					"parameters: " +
++					print.toString(positionalParameterTypes, positionalParameterValues)
+ 				);
+ 		}
+ 		if (namedParameters!=null) {
+@@ -322,7 +322,7 @@
+ 		int values = positionalParameterValues==null ? 0 : positionalParameterValues.length;
+ 		if (types!=values) {
+ 			throw new QueryException(
+-					"Number of positional parameter types:" + types + 
++					"Number of positional parameter types:" + types +
+ 					" does not match number of positional parameters: " + values
+ 				);
+ 		}
+@@ -385,19 +385,19 @@
+ 	}
+ 
+ 	public void setCallable(boolean callable) {
+-		this.callable = callable;		
++		this.callable = callable;
+ 	}
+ 
+ 	public boolean isCallable() {
+ 		return callable;
+ 	}
+-	
++
+ 	public boolean hasAutoDiscoverScalarTypes() {
+ 		return autodiscovertypes;
+ 	}
+ 
+ 	public void processFilters(String sql, SessionImplementor session) {
+-		
++
+ 		if ( session.getEnabledFilters().size()==0 || sql.indexOf(ParserHelper.HQL_VARIABLE_PREFIX)<0 ) {
+ 			// HELLA IMPORTANT OPTIMIZATION!!!
+ 			processedPositionalParameterValues = getPositionalParameterValues();
+@@ -405,7 +405,7 @@
+ 			processedSQL = sql;
+ 		}
+ 		else {
+-			
++
+ 			Dialect dialect = session.getFactory().getDialect();
+ 			String symbols = new StringBuffer().append( ParserHelper.HQL_SEPARATORS )
+ 					.append( dialect.openQuote() )
+@@ -413,11 +413,12 @@
+ 					.toString();
+ 			StringTokenizer tokens = new StringTokenizer( sql, symbols, true );
+ 			StringBuffer result = new StringBuffer();
+-		
++
+ 			List parameters = new ArrayList();
+ 			List parameterTypes = new ArrayList();
+-		
+-			while ( tokens.hasMoreTokens() ) {
++
++			int positionalIndex = 0;
++			while (tokens.hasMoreTokens()) {
+ 				final String token = tokens.nextToken();
+ 				if ( token.startsWith( ParserHelper.HQL_VARIABLE_PREFIX ) ) {
+ 					String filterParameterName = token.substring( 1 );
+@@ -442,15 +443,18 @@
+ 					}
+ 				}
+ 				else {
+-					result.append( token );
++					if ("?".equals(token) && positionalIndex < getPositionalParameterValues().length) {
++						parameters.add(getPositionalParameterValues()[positionalIndex]);
++						parameterTypes.add(getPositionalParameterTypes()[positionalIndex]);
++						positionalIndex++;
++					}
++					result.append(token);
+ 				}
+ 			}
+-			parameters.addAll( Arrays.asList( getPositionalParameterValues() ) );
+-			parameterTypes.addAll( Arrays.asList( getPositionalParameterTypes() ) );
+ 			processedPositionalParameterValues = parameters.toArray();
+ 			processedPositionalParameterTypes = ( Type[] ) parameterTypes.toArray( new Type[0] );
+ 			processedSQL = result.toString();
+-			
++
+ 		}
+ 	}
+ 

@@ -1,0 +1,1797 @@
+Index: ALEX - changelog.txt
+===================================================================
+--- ALEX - changelog.txt	(revision 0)
++++ ALEX - changelog.txt	(revision 0)
+@@ -0,0 +1,24 @@
++src/java/org/hibernate/tool/hbm2x
++    DAONewExporter.java     This class is coded mainly to accept additional parameters such as dao package name and provide flexible
++                            file naming that is used by Ant task. It would not be needed if I integrate my changes into GenericExporter.
++    
++src/templates/dao
++    crudDao.ftl             template for regeneratable CRUD interface
++    crudDaoImpl.ftl         template for regeneratable CRUD DAO implementation
++    dao.ftl                 template for customizable DAO interface that extends CRUD interface
++    daoImpl.ftl             template for customizable DAO implementation that extends CRUD implementation
++ 
++src/templates/dao/base
++    dao.ftl                 base interface for all DAOs
++    queryDao.ftl            base interface for all read-only entities
++    crudDao.ftl             base interface for all editable entities
++
++src/templates/dao/base/hibernate
++    abstractDao.ftl         base implementation of DAO using Hibernate
++    abstractQueryDao.ftl    base implementation of DAO for read-only entities using Hibernate
++    abstractCrudDao.ftl     base implementation of DAO for editable entities using Hibernate
++
++src/testsupport
++    codegen.properties      Test configuration to see DAO generation in action
++    codegen-build.xml       Test build file that generates DAOs for Author and Article and compiles generated code
++    
+Index: src/java/org/hibernate/tool/hbm2x/DAONewExporter.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/DAONewExporter.java	(revision 0)
++++ src/java/org/hibernate/tool/hbm2x/DAONewExporter.java	(revision 0)
+@@ -0,0 +1,125 @@
++package org.hibernate.tool.hbm2x;
++
++import java.io.File;
++import java.util.Map;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++import org.hibernate.cfg.Configuration;
++import org.hibernate.tool.hbm2x.GenericExporter;
++import org.hibernate.tool.hbm2x.pojo.POJOClass;
++
++/**
++ * Creates domain model abstract base classes from .hbm files
++ * @author Alex Kalinovsky
++ */
++public class DAONewExporter extends GenericExporter {
++	
++    // Store file pattern because it's declared private in GenericTemplateExporter
++    protected String filePattern;
++
++    public DAONewExporter(Configuration cfg, File outputdir)
++    {
++        super(cfg, outputdir);
++    }
++
++    public DAONewExporter()
++    {
++    }
++
++    protected void setupContext()
++    {
++        if(!getProperties().containsKey("ejb3"))
++            getProperties().put("ejb3", "false");
++        if(!getProperties().containsKey("jdk5"))
++            getProperties().put("jdk5", "false");
++
++        initFilePattern();
++        setTemplateName(getProperty("hibernatetool.template_name"));
++        
++        super.setupContext();
++    }
++
++	private void initFilePattern() {
++		filePattern = getProperty("hibernatetool.file_pattern");
++        if (filePattern == null)
++        	throw new IllegalStateException("Expected parameter file_pattern is not found");
++        filePattern = replaceParameters(filePattern, getProperties());
++        setFilePattern(filePattern);
++        log.debug("File pattern set to " + filePattern);
++	}
++
++    ///////////////////////////////////////////////////////////////////////////////////////////////////
++    //////////////////////////////////// USEFUL CODE STARTS HERE //////////////////////////////////////
++    /**
++     * Helper method to lookup a property
++     */
++    public String getProperty(String key)
++    {
++        return (String) getProperties().get(key); 
++    }
++    
++    /**
++     * Override to control file overwriting via isOverrite() method
++     */
++    public void doStart()
++    {
++        boolean doExport = true;
++        if(filePattern != null && filePattern.indexOf("{class-name}") == -1)
++        {
++            File file = new File(getOutputDirectory(), filePattern);
++            if (file.exists() && !isOverwrite()) {
++                log.warn("Skipping the generation of file " + file + " because target already exists");
++                doExport = false;
++            }
++        }
++        if (doExport) {
++            super.doStart();
++        }
++    }
++
++    /**
++     * Override to avoid overwriting the existing files
++     * In the final version this should be moved to GenericExporter 
++     */
++    protected void exportPOJO(Map additionalContext, POJOClass element)
++    {
++        String filename = resolveFilename(element);
++        File file = new File(getOutputDirectory(), filename);
++        if (file.exists() && !isOverwrite()) {
++            log.warn("Skipping the generation of file " + file + " because target already exists");
++        }
++        else {
++            super.exportPOJO(additionalContext, element);
++        }
++    }
++
++    /**
++     * Checks if the file overwriting is true (default) or false
++     * @return
++     */
++    public boolean isOverwrite() {
++        return "true".equalsIgnoreCase((String) getProperties().get("hibernatetool.overwrite"));
++    }
++
++    /**
++     * Helper method that replaces all parameters in a given pattern
++     * @param pattern String with parameters surrounded with braces, for instance "Today is {day} day of {month}"
++     * @param paramValues map with key-value pairs for parameter values
++     * @return string where parameters are replaced with their values
++     */
++    public String replaceParameters(String pattern, Map paramValues) {
++        Matcher matcher = Pattern.compile("\\{(.*?)\\}").matcher(pattern);
++        String output = pattern;
++        while (matcher.find()) {
++            String param = matcher.group(1);
++            String value = (String) paramValues.get(param);
++            if (value != null) {
++                value = value.replace('.', '/');
++                output = output.replaceAll("\\{" + param + "\\}", value);
++            }
++        }
++        return output;
++    }
++    
++}
+Index: src/templates/dao/base/crudDao.ftl
+===================================================================
+--- src/templates/dao/base/crudDao.ftl	(revision 0)
++++ src/templates/dao/base/crudDao.ftl	(revision 0)
+@@ -0,0 +1,42 @@
++package ${daoBasePackage};
++
++import java.io.Serializable;
++import java.util.Collection;
++
++/**
++ * Base interface for all editable entity DAOs
++ * @author Alex Kalinovsky
++ */
++public interface CrudDao extends QueryDao {
++
++	/**
++	 * Persist the object
++	 */
++	public Serializable save(Object obj);
++
++	/**
++	 * Either save() or update() the given instance, depending upon the value of
++	 * its identifier property.
++	 */
++	public void saveOrUpdate(Object obj);
++
++	/**
++	 * Update the persistent state associated with the given identifier. An
++	 * exception is thrown if there is a persistent instance with the same
++	 * identifier in the current session.
++	 * 
++	 * @param obj a transient instance containing updated state
++	 */
++	public void update(Object obj);
++
++	/**
++	 * Remove a persistent instance from the datastore
++	 */
++	public void delete(Object obj);
++
++	/**
++	 * Saves all instances in the given collection
++	 */
++	public void saveAll(Collection domainObjects);
++
++}
+\ No newline at end of file
+Index: src/templates/dao/base/dao.ftl
+===================================================================
+--- src/templates/dao/base/dao.ftl	(revision 0)
++++ src/templates/dao/base/dao.ftl	(revision 0)
+@@ -0,0 +1,10 @@
++package ${daoBasePackage};
++
++/**
++ * Base interface for all DAOs
++ * @author Alex Kalinovsky
++ *
++ */
++public interface Dao {
++
++}
+Index: src/templates/dao/base/queryDao.ftl
+===================================================================
+--- src/templates/dao/base/queryDao.ftl	(revision 0)
++++ src/templates/dao/base/queryDao.ftl	(revision 0)
+@@ -0,0 +1,34 @@
++package ${daoBasePackage};
++
++import java.io.Serializable;
++
++/**
++ * Base interface for all read-only entity DAOs
++ * @author Alex Kalinovsky
++ *
++ */
++public interface QueryDao extends Dao {
++
++	/**
++	 * Load a persistent object based on the Class (i.e. User) and the key (i.e.
++	 * userId) Load object matching the given key and return it.
++	 */
++	public Object findById(Serializable key);
++
++	/**
++	 * Eagerly intializes the object by loading it if it was proxied
++	 * Note that lazy collections and properties are not initialized
++	 * 
++	 * @param object to initialize
++     * @return initialized object
++	 */
++	public Object initialize(Object object);
++
++	/**
++	 * Returns true if the object still has lazy properties that are not loaded
++	 * @param object
++	 * @return true if the object is already initialized, false otherwise
++	 */
++	public boolean isInitialized(Object object);
++
++}
+\ No newline at end of file
+Index: src/templates/dao/base/crudDao.ftl
+===================================================================
+--- src/templates/dao/base/crudDao.ftl	(revision 0)
++++ src/templates/dao/base/crudDao.ftl	(revision 0)
+@@ -0,0 +1,42 @@
++package ${daoBasePackage};
++
++import java.io.Serializable;
++import java.util.Collection;
++
++/**
++ * Base interface for all editable entity DAOs
++ * @author Alex Kalinovsky
++ */
++public interface CrudDao extends QueryDao {
++
++	/**
++	 * Persist the object
++	 */
++	public Serializable save(Object obj);
++
++	/**
++	 * Either save() or update() the given instance, depending upon the value of
++	 * its identifier property.
++	 */
++	public void saveOrUpdate(Object obj);
++
++	/**
++	 * Update the persistent state associated with the given identifier. An
++	 * exception is thrown if there is a persistent instance with the same
++	 * identifier in the current session.
++	 * 
++	 * @param obj a transient instance containing updated state
++	 */
++	public void update(Object obj);
++
++	/**
++	 * Remove a persistent instance from the datastore
++	 */
++	public void delete(Object obj);
++
++	/**
++	 * Saves all instances in the given collection
++	 */
++	public void saveAll(Collection domainObjects);
++
++}
+\ No newline at end of file
+Index: src/templates/dao/base/dao.ftl
+===================================================================
+--- src/templates/dao/base/dao.ftl	(revision 0)
++++ src/templates/dao/base/dao.ftl	(revision 0)
+@@ -0,0 +1,10 @@
++package ${daoBasePackage};
++
++/**
++ * Base interface for all DAOs
++ * @author Alex Kalinovsky
++ *
++ */
++public interface Dao {
++
++}
+Index: src/templates/dao/base/hibernate/abstractQueryDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractQueryDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractQueryDao.ftl	(revision 0)
+@@ -0,0 +1,328 @@
++package ${daoBasePackage}.hibernate;
++
++import java.io.Serializable;
++import java.util.Collection;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
++import net.sf.cglib.transform.impl.InterceptFieldCallback;
++import net.sf.cglib.transform.impl.InterceptFieldEnabled;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Query;
++import org.hibernate.intercept.FieldInterceptor;
++import org.hibernate.metadata.ClassMetadata;
++
++import ${daoBasePackage}.QueryDao;
++
++/**
++ * Base DAO implementation for read-only entities set via modelClass property
++ * @author Alex Kalinovsky
++ *
++ */
++public class AbstractQueryDao extends AbstractDao implements QueryDao {
++
++    private Class modelClass;
++
++    // When set to true, LEFT JOIN FETCH queries that have multiple child rows
++    // will return single instances of parent
++    private boolean isDistinctResult = true;
++
++    /**
++     * Empty constructor - DAO still HAS to be initialized with the persistent model class!
++     */
++    public AbstractQueryDao() {
++    }
++
++    /**
++     * Initializes DAO with the given persistent model class
++     * @param modelClass
++     */
++    public AbstractQueryDao(Class modelClass) {
++        this.modelClass = modelClass;
++    }
++
++    /**
++     * @return Persistent model class associated with this DAO
++     */
++    public Class getModelClass() {
++        if (modelClass == null) {
++            throw new IllegalStateException("Model class must be set prior to using the accessor");
++        }
++        return modelClass;
++    }
++
++    /**
++     * Sets the class of the persistent model managed by this DAO 
++     * @param modelClass
++     */
++    public void setModelClass(Class modelClass) {
++        if (this.modelClass != null) {
++            throw new IllegalStateException("Model class can not be changed once set");
++        }
++        this.modelClass = modelClass;
++    }
++
++    /**
++     * Load a persistent object based on the Class (i.e. User) and the key (i.e.
++     * userId) Load object matching the given key and return it.
++     */
++    public Object findById(Serializable key) {
++        return getSession().get(getModelClass(), key);
++    }
++
++    
++    /**
++     * Eagerly intializes the object by loading it if it was proxied
++     * Note that lazy collections and properties are not initialized
++     * 
++     * @param record object to initialize
++     */
++    public Object initialize(Object object) {
++        if (logger.isDebugEnabled()) {
++            logger.debug("Initializing record " + object.getClass().getName());
++        }
++
++        Hibernate.initialize(object);
++        
++        if (logger.isDebugEnabled()) {
++            logger.debug("Record initialized");
++        }
++        return object;
++    }
++
++    /**
++     * Returns true if the object still has lazy properties that are not loaded
++     * @param object
++     * @return true if all lazy properties are loaded
++     */
++    public boolean isInitialized(Object object) {
++        if (object instanceof InterceptFieldEnabled) {
++            InterceptFieldCallback interceptor = ((InterceptFieldEnabled) object).getInterceptFieldCallback();
++            if (interceptor instanceof FieldInterceptor) {
++                FieldInterceptor fieldInterceptor = (FieldInterceptor) interceptor;
++                return fieldInterceptor.isInitialized();
++            }
++        }
++        return true;
++    }
++
++    /**
++     * Create a simple query based on the queryStr passed in
++     * 
++     * @param queryStr the query string for the query to create
++     * @return Query
++     */
++    protected Query createQuery(String queryStr) {
++        return getSession().createQuery(queryStr);
++    }
++
++    /**
++     * Create a query based on the query string and given parameter
++     * 
++     * @param queryStr the query string for the query to create
++     * @param param the first parameter to set
++     * @return Query instance
++     */
++    protected Query createQuery(String queryStr, String param) {
++        Query q = getSession().createQuery(queryStr);
++        q.setParameter(0, param);
++        return q;
++    }
++
++    /**
++     * Create a query based on a given query string and a map of parameters.
++     * Iterate over the map adding them into the hibernate query
++     * 
++     * @param queryStr the query string for the query to create
++     * @param params the parameter Map
++     * @return Query
++     */
++    protected Query createQuery(String queryStr, Map params) {
++        Query q = getSession().createQuery(queryStr);
++        if (null != params) {
++            for (Iterator i = params.entrySet().iterator(); i.hasNext();) {
++                Map.Entry entry = (Map.Entry) i.next();
++                q.setParameter((String) entry.getKey(), entry.getValue());
++            }
++        }
++        return q;
++    }
++
++    /**
++     * Finds the first lazy property of the object
++     * 
++     * @param lazy property name or null
++     * @return
++     */
++    protected String findLazyProperty(Object object) {
++        ClassMetadata metaData = getSessionFactory().getClassMetadata(object.getClass());
++
++        String lazyProperty = null;
++        if (metaData != null) {
++            boolean[] laziness = metaData.getPropertyLaziness();
++            for (int i = 0; i < laziness.length; i++) {
++                if (laziness[i] == true) {
++                    lazyProperty = metaData.getPropertyNames()[i];
++                    break;
++                }
++            }
++        }
++
++        return lazyProperty;
++    }
++
++    /**
++     * Loads all matching objects using the named query
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQuery(String queryName) {
++        Query queryObject = getSession().getNamedQuery(queryName);
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads all matching objects using the named query and one parameter
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQueryAndParam(String queryName, String paramName, Object value) {
++        if (paramName == null)
++            throw new IllegalArgumentException("Null parameter name");
++        if (value == null)
++            throw new IllegalArgumentException("Null parameter value");
++
++        Query queryObject = getSession().getNamedQuery(queryName);
++        if (value instanceof Collection) {
++            queryObject.setParameterList(paramName, (Collection) value);
++        } else {
++            queryObject.setParameter(paramName, value);
++        }
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads all matching objects using the named query and a map of parameter/value pairs
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQueryAndParams(String queryName, Map params) {
++        if (params == null)
++            throw new IllegalArgumentException("Null parameter map");
++        if (params.isEmpty())
++            throw new IllegalArgumentException("Empty parameter map");
++
++        Query queryObject = getSession().getNamedQuery(queryName);
++        for (Iterator i = params.entrySet().iterator(); i.hasNext();) {
++            Map.Entry entry = (Map.Entry) i.next();
++            queryObject.setParameter((String) entry.getKey(), entry.getValue());
++        }
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads ONE object using the named query
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQuery(String queryName) {
++        List results = findAllByNamedQuery(queryName);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Loads ONE object using the named query and one parameter
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQueryAndParam(String queryName, String paramName, Object value) {
++        List results = findAllByNamedQueryAndParam(queryName, paramName, value);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Loads ONE object using the named query and a map of parameter/value pairs
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQueryAndParams(String queryName, Map params) {
++        List results = findAllByNamedQueryAndParams(queryName, params);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Returns the object loaded using the query.
++     * @param queryName
++     * @param results
++     * @return null if query result is empty; object if 1 object is found
++     * @exception IllegalStateException if more then one object is returned by the query
++     */
++    protected Object getUniqueResult(String queryName, List results) {
++        if (results.size() == 0)
++            return null;
++        
++        if (results.size() > 1) {
++            throw new IllegalStateException("Named query " + queryName + " returned " + results.size() + " rows, but at most 1 was expected");
++        }
++        return results.get(0);
++    }
++
++    /**
++     * Helper method used to execute the query
++     * @param query
++     * @return
++     */
++    protected List executeQuery(Query query) {
++        List result = query.list();
++        return postProcessResult(result);
++    }
++
++    /**
++     * Used to remove duplicate instances of parent after a query with JOIN FETCH of one-to-many
++     * 
++     * @param objects loaded by a query
++     * @return processed list of objects
++     */
++    protected List postProcessResult(List rows) {
++        if (isDistinctResult()) {
++            // For join queries the result set can have multiple instances of
++            // the same record
++            // Placing them in a HashSet removes duplicates
++            HashSet objects = new HashSet();
++            for (int i = 0; i < rows.size();) {
++                Object row = rows.get(i);
++                if (objects.contains(row)) {
++                    // if (objectQuery.toUpperCase().indexOf(" JOIN ") != -1 &&
++                    // getIdQuery() == null)
++                    // throw new IllegalStateException("In order to use queries
++                    // with JOINs correctly you have to supply id query");
++                    rows.remove(row);
++                } else {
++                    objects.add(row);
++                    i++;
++                }
++            }
++        }
++        return rows;
++    }
++
++    /**
++     * @return true if query results should be processed to remove the duplicate instances
++     */
++    public boolean isDistinctResult() {
++        return isDistinctResult;
++    }
++
++    /**
++     * Controls the duplicate instance processing behavior
++     * @param isDistinctResult if true, duplicate instances of parent after a query with 
++     * JOIN FETCH of one-to-many will be removed from the query result
++     */
++    public void setDistinctResult(boolean isDistinctResult) {
++        this.isDistinctResult = isDistinctResult;
++    }
++
++}
+Index: src/templates/dao/base/hibernate/abstractCrudDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractCrudDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractCrudDao.ftl	(revision 0)
+@@ -0,0 +1,96 @@
++package ${daoBasePackage}.hibernate;
++
++import java.io.Serializable;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.Iterator;
++
++import ${daoBasePackage}.CrudDao;
++
++public abstract class AbstractCrudDao extends AbstractQueryDao implements CrudDao {
++
++    /**
++     * Persist the object
++     */
++	public Serializable save(Object obj) {
++		return getSession().save(obj);
++	}
++
++    /**
++     * Either save() or update() the given instance, depending upon the value of
++     * its identifier property.
++     */
++	public void saveOrUpdate(Object obj) {
++		getSession().saveOrUpdate(obj);
++	}
++
++    /**
++     * Update the persistent state associated with the given identifier. An
++     * exception is thrown if there is a persistent instance with the same
++     * identifier in the current session.
++     * 
++     * @param obj a transient instance containing updated state
++     */
++	public void update(Object obj) {
++		getSession().update(obj);
++	}
++
++    /**
++     * Remove a persistent instance from the datastore
++     */
++	public void delete(Object obj) {
++		getSession().delete(obj);
++	}
++
++    /**
++     * Saves all instances in the given collection
++     */
++	public void saveAll(Collection domainObjects) {
++		if (domainObjects == null || domainObjects.isEmpty())
++			throw new IllegalArgumentException("null or empty collection is passed to saveAll");
++		for(Iterator i = domainObjects.iterator(); i.hasNext();)
++			saveOrUpdate(i.next());
++	}
++	
++	/**
++	 * Used to save objects, commit DB changes and free up the memory
++	 *
++	 */
++	public void saveAndEvict(Collection entities, int maxObjectsInSession) {
++		Collection savedEntities = new ArrayList(maxObjectsInSession);
++		for(Iterator iter = entities.iterator(); iter.hasNext();) {
++			Object entity = iter.next();
++			if(logger.isDebugEnabled()) {
++				logger.debug("Saving record of type " + entity.getClass().getName());
++			}
++			getSession().save(entity);
++			savedEntities.add(entity);
++			if(savedEntities.size() % maxObjectsInSession == 0) {
++				// flush a batch of inserts and release memory
++				getSession().flush();
++				evictAll(savedEntities);
++				savedEntities.clear();
++			}
++		}
++	}
++
++	/**
++	 * Evicts all objects in the collection from Hibernate session
++	 * @param entities
++	 */
++	protected void evictAll(Collection entities) {
++		for(Iterator iter = entities.iterator(); iter.hasNext();) {
++			Object entity = iter.next();
++			getSession().evict(entity);
++		}
++	}
++
++	/**
++	 * Evicts all objects in the collection from Hibernate session
++	 * @param entities
++	 */
++	protected void evict(Object entity) {
++		getSession().evict(entity);
++	}
++
++}
+\ No newline at end of file
+Index: src/templates/dao/base/hibernate/abstractDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractDao.ftl	(revision 0)
+@@ -0,0 +1,47 @@
++package ${daoBasePackage}.hibernate;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.Session;
++import org.hibernate.SessionFactory;
++
++import ${daoBasePackage}.Dao;
++
++/**
++ * Base class for all DAOs implemented using Hibernate.
++ * DAO needs to be initialized with the session factory prior to use
++ * It is recommended to use dependency injection through a framework like Spring
++ * @author Alex Kalinovsky
++ *
++ */
++public class AbstractDao implements Dao {
++    
++    protected static final Log logger = LogFactory.getLog(AbstractDao.class);
++    private SessionFactory sessionFactory;
++    
++    public AbstractDao() {
++    }
++
++    /**
++     * @return Hibernate session factory associated with this DAO 
++     */
++    public SessionFactory getSessionFactory() {
++        return sessionFactory;
++    }
++
++    /**
++     * Associates this DAO with the Hibernate session factory
++     */
++    public void setSessionFactory(SessionFactory sessionFactory) {
++        this.sessionFactory = sessionFactory;
++    }
++
++    /**
++     * Returns the current thread bound session
++     * @return
++     */
++    public Session getSession() {
++        return getSessionFactory().getCurrentSession();
++    }
++
++}
+Index: src/templates/dao/base/hibernate/abstractCrudDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractCrudDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractCrudDao.ftl	(revision 0)
+@@ -0,0 +1,96 @@
++package ${daoBasePackage}.hibernate;
++
++import java.io.Serializable;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.Iterator;
++
++import ${daoBasePackage}.CrudDao;
++
++public abstract class AbstractCrudDao extends AbstractQueryDao implements CrudDao {
++
++    /**
++     * Persist the object
++     */
++	public Serializable save(Object obj) {
++		return getSession().save(obj);
++	}
++
++    /**
++     * Either save() or update() the given instance, depending upon the value of
++     * its identifier property.
++     */
++	public void saveOrUpdate(Object obj) {
++		getSession().saveOrUpdate(obj);
++	}
++
++    /**
++     * Update the persistent state associated with the given identifier. An
++     * exception is thrown if there is a persistent instance with the same
++     * identifier in the current session.
++     * 
++     * @param obj a transient instance containing updated state
++     */
++	public void update(Object obj) {
++		getSession().update(obj);
++	}
++
++    /**
++     * Remove a persistent instance from the datastore
++     */
++	public void delete(Object obj) {
++		getSession().delete(obj);
++	}
++
++    /**
++     * Saves all instances in the given collection
++     */
++	public void saveAll(Collection domainObjects) {
++		if (domainObjects == null || domainObjects.isEmpty())
++			throw new IllegalArgumentException("null or empty collection is passed to saveAll");
++		for(Iterator i = domainObjects.iterator(); i.hasNext();)
++			saveOrUpdate(i.next());
++	}
++	
++	/**
++	 * Used to save objects, commit DB changes and free up the memory
++	 *
++	 */
++	public void saveAndEvict(Collection entities, int maxObjectsInSession) {
++		Collection savedEntities = new ArrayList(maxObjectsInSession);
++		for(Iterator iter = entities.iterator(); iter.hasNext();) {
++			Object entity = iter.next();
++			if(logger.isDebugEnabled()) {
++				logger.debug("Saving record of type " + entity.getClass().getName());
++			}
++			getSession().save(entity);
++			savedEntities.add(entity);
++			if(savedEntities.size() % maxObjectsInSession == 0) {
++				// flush a batch of inserts and release memory
++				getSession().flush();
++				evictAll(savedEntities);
++				savedEntities.clear();
++			}
++		}
++	}
++
++	/**
++	 * Evicts all objects in the collection from Hibernate session
++	 * @param entities
++	 */
++	protected void evictAll(Collection entities) {
++		for(Iterator iter = entities.iterator(); iter.hasNext();) {
++			Object entity = iter.next();
++			getSession().evict(entity);
++		}
++	}
++
++	/**
++	 * Evicts all objects in the collection from Hibernate session
++	 * @param entities
++	 */
++	protected void evict(Object entity) {
++		getSession().evict(entity);
++	}
++
++}
+\ No newline at end of file
+Index: src/templates/dao/base/hibernate/abstractDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractDao.ftl	(revision 0)
+@@ -0,0 +1,47 @@
++package ${daoBasePackage}.hibernate;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.Session;
++import org.hibernate.SessionFactory;
++
++import ${daoBasePackage}.Dao;
++
++/**
++ * Base class for all DAOs implemented using Hibernate.
++ * DAO needs to be initialized with the session factory prior to use
++ * It is recommended to use dependency injection through a framework like Spring
++ * @author Alex Kalinovsky
++ *
++ */
++public class AbstractDao implements Dao {
++    
++    protected static final Log logger = LogFactory.getLog(AbstractDao.class);
++    private SessionFactory sessionFactory;
++    
++    public AbstractDao() {
++    }
++
++    /**
++     * @return Hibernate session factory associated with this DAO 
++     */
++    public SessionFactory getSessionFactory() {
++        return sessionFactory;
++    }
++
++    /**
++     * Associates this DAO with the Hibernate session factory
++     */
++    public void setSessionFactory(SessionFactory sessionFactory) {
++        this.sessionFactory = sessionFactory;
++    }
++
++    /**
++     * Returns the current thread bound session
++     * @return
++     */
++    public Session getSession() {
++        return getSessionFactory().getCurrentSession();
++    }
++
++}
+Index: src/templates/dao/base/hibernate/abstractQueryDao.ftl
+===================================================================
+--- src/templates/dao/base/hibernate/abstractQueryDao.ftl	(revision 0)
++++ src/templates/dao/base/hibernate/abstractQueryDao.ftl	(revision 0)
+@@ -0,0 +1,328 @@
++package ${daoBasePackage}.hibernate;
++
++import java.io.Serializable;
++import java.util.Collection;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
++import net.sf.cglib.transform.impl.InterceptFieldCallback;
++import net.sf.cglib.transform.impl.InterceptFieldEnabled;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Query;
++import org.hibernate.intercept.FieldInterceptor;
++import org.hibernate.metadata.ClassMetadata;
++
++import ${daoBasePackage}.QueryDao;
++
++/**
++ * Base DAO implementation for read-only entities set via modelClass property
++ * @author Alex Kalinovsky
++ *
++ */
++public class AbstractQueryDao extends AbstractDao implements QueryDao {
++
++    private Class modelClass;
++
++    // When set to true, LEFT JOIN FETCH queries that have multiple child rows
++    // will return single instances of parent
++    private boolean isDistinctResult = true;
++
++    /**
++     * Empty constructor - DAO still HAS to be initialized with the persistent model class!
++     */
++    public AbstractQueryDao() {
++    }
++
++    /**
++     * Initializes DAO with the given persistent model class
++     * @param modelClass
++     */
++    public AbstractQueryDao(Class modelClass) {
++        this.modelClass = modelClass;
++    }
++
++    /**
++     * @return Persistent model class associated with this DAO
++     */
++    public Class getModelClass() {
++        if (modelClass == null) {
++            throw new IllegalStateException("Model class must be set prior to using the accessor");
++        }
++        return modelClass;
++    }
++
++    /**
++     * Sets the class of the persistent model managed by this DAO 
++     * @param modelClass
++     */
++    public void setModelClass(Class modelClass) {
++        if (this.modelClass != null) {
++            throw new IllegalStateException("Model class can not be changed once set");
++        }
++        this.modelClass = modelClass;
++    }
++
++    /**
++     * Load a persistent object based on the Class (i.e. User) and the key (i.e.
++     * userId) Load object matching the given key and return it.
++     */
++    public Object findById(Serializable key) {
++        return getSession().get(getModelClass(), key);
++    }
++
++    
++    /**
++     * Eagerly intializes the object by loading it if it was proxied
++     * Note that lazy collections and properties are not initialized
++     * 
++     * @param record object to initialize
++     */
++    public Object initialize(Object object) {
++        if (logger.isDebugEnabled()) {
++            logger.debug("Initializing record " + object.getClass().getName());
++        }
++
++        Hibernate.initialize(object);
++        
++        if (logger.isDebugEnabled()) {
++            logger.debug("Record initialized");
++        }
++        return object;
++    }
++
++    /**
++     * Returns true if the object still has lazy properties that are not loaded
++     * @param object
++     * @return true if all lazy properties are loaded
++     */
++    public boolean isInitialized(Object object) {
++        if (object instanceof InterceptFieldEnabled) {
++            InterceptFieldCallback interceptor = ((InterceptFieldEnabled) object).getInterceptFieldCallback();
++            if (interceptor instanceof FieldInterceptor) {
++                FieldInterceptor fieldInterceptor = (FieldInterceptor) interceptor;
++                return fieldInterceptor.isInitialized();
++            }
++        }
++        return true;
++    }
++
++    /**
++     * Create a simple query based on the queryStr passed in
++     * 
++     * @param queryStr the query string for the query to create
++     * @return Query
++     */
++    protected Query createQuery(String queryStr) {
++        return getSession().createQuery(queryStr);
++    }
++
++    /**
++     * Create a query based on the query string and given parameter
++     * 
++     * @param queryStr the query string for the query to create
++     * @param param the first parameter to set
++     * @return Query instance
++     */
++    protected Query createQuery(String queryStr, String param) {
++        Query q = getSession().createQuery(queryStr);
++        q.setParameter(0, param);
++        return q;
++    }
++
++    /**
++     * Create a query based on a given query string and a map of parameters.
++     * Iterate over the map adding them into the hibernate query
++     * 
++     * @param queryStr the query string for the query to create
++     * @param params the parameter Map
++     * @return Query
++     */
++    protected Query createQuery(String queryStr, Map params) {
++        Query q = getSession().createQuery(queryStr);
++        if (null != params) {
++            for (Iterator i = params.entrySet().iterator(); i.hasNext();) {
++                Map.Entry entry = (Map.Entry) i.next();
++                q.setParameter((String) entry.getKey(), entry.getValue());
++            }
++        }
++        return q;
++    }
++
++    /**
++     * Finds the first lazy property of the object
++     * 
++     * @param lazy property name or null
++     * @return
++     */
++    protected String findLazyProperty(Object object) {
++        ClassMetadata metaData = getSessionFactory().getClassMetadata(object.getClass());
++
++        String lazyProperty = null;
++        if (metaData != null) {
++            boolean[] laziness = metaData.getPropertyLaziness();
++            for (int i = 0; i < laziness.length; i++) {
++                if (laziness[i] == true) {
++                    lazyProperty = metaData.getPropertyNames()[i];
++                    break;
++                }
++            }
++        }
++
++        return lazyProperty;
++    }
++
++    /**
++     * Loads all matching objects using the named query
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQuery(String queryName) {
++        Query queryObject = getSession().getNamedQuery(queryName);
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads all matching objects using the named query and one parameter
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQueryAndParam(String queryName, String paramName, Object value) {
++        if (paramName == null)
++            throw new IllegalArgumentException("Null parameter name");
++        if (value == null)
++            throw new IllegalArgumentException("Null parameter value");
++
++        Query queryObject = getSession().getNamedQuery(queryName);
++        if (value instanceof Collection) {
++            queryObject.setParameterList(paramName, (Collection) value);
++        } else {
++            queryObject.setParameter(paramName, value);
++        }
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads all matching objects using the named query and a map of parameter/value pairs
++     * @param queryName query name
++     * @return
++     */
++    protected List findAllByNamedQueryAndParams(String queryName, Map params) {
++        if (params == null)
++            throw new IllegalArgumentException("Null parameter map");
++        if (params.isEmpty())
++            throw new IllegalArgumentException("Empty parameter map");
++
++        Query queryObject = getSession().getNamedQuery(queryName);
++        for (Iterator i = params.entrySet().iterator(); i.hasNext();) {
++            Map.Entry entry = (Map.Entry) i.next();
++            queryObject.setParameter((String) entry.getKey(), entry.getValue());
++        }
++        return executeQuery(queryObject);
++    }
++
++    /**
++     * Loads ONE object using the named query
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQuery(String queryName) {
++        List results = findAllByNamedQuery(queryName);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Loads ONE object using the named query and one parameter
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQueryAndParam(String queryName, String paramName, Object value) {
++        List results = findAllByNamedQueryAndParam(queryName, paramName, value);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Loads ONE object using the named query and a map of parameter/value pairs
++     * @param queryName query name
++     * @return object or null if not found
++     */
++    protected Object findByNamedQueryAndParams(String queryName, Map params) {
++        List results = findAllByNamedQueryAndParams(queryName, params);
++        return getUniqueResult(queryName, results);
++    }
++
++    /**
++     * Returns the object loaded using the query.
++     * @param queryName
++     * @param results
++     * @return null if query result is empty; object if 1 object is found
++     * @exception IllegalStateException if more then one object is returned by the query
++     */
++    protected Object getUniqueResult(String queryName, List results) {
++        if (results.size() == 0)
++            return null;
++        
++        if (results.size() > 1) {
++            throw new IllegalStateException("Named query " + queryName + " returned " + results.size() + " rows, but at most 1 was expected");
++        }
++        return results.get(0);
++    }
++
++    /**
++     * Helper method used to execute the query
++     * @param query
++     * @return
++     */
++    protected List executeQuery(Query query) {
++        List result = query.list();
++        return postProcessResult(result);
++    }
++
++    /**
++     * Used to remove duplicate instances of parent after a query with JOIN FETCH of one-to-many
++     * 
++     * @param objects loaded by a query
++     * @return processed list of objects
++     */
++    protected List postProcessResult(List rows) {
++        if (isDistinctResult()) {
++            // For join queries the result set can have multiple instances of
++            // the same record
++            // Placing them in a HashSet removes duplicates
++            HashSet objects = new HashSet();
++            for (int i = 0; i < rows.size();) {
++                Object row = rows.get(i);
++                if (objects.contains(row)) {
++                    // if (objectQuery.toUpperCase().indexOf(" JOIN ") != -1 &&
++                    // getIdQuery() == null)
++                    // throw new IllegalStateException("In order to use queries
++                    // with JOINs correctly you have to supply id query");
++                    rows.remove(row);
++                } else {
++                    objects.add(row);
++                    i++;
++                }
++            }
++        }
++        return rows;
++    }
++
++    /**
++     * @return true if query results should be processed to remove the duplicate instances
++     */
++    public boolean isDistinctResult() {
++        return isDistinctResult;
++    }
++
++    /**
++     * Controls the duplicate instance processing behavior
++     * @param isDistinctResult if true, duplicate instances of parent after a query with 
++     * JOIN FETCH of one-to-many will be removed from the query result
++     */
++    public void setDistinctResult(boolean isDistinctResult) {
++        this.isDistinctResult = isDistinctResult;
++    }
++
++}
+Index: src/templates/dao/base/queryDao.ftl
+===================================================================
+--- src/templates/dao/base/queryDao.ftl	(revision 0)
++++ src/templates/dao/base/queryDao.ftl	(revision 0)
+@@ -0,0 +1,34 @@
++package ${daoBasePackage};
++
++import java.io.Serializable;
++
++/**
++ * Base interface for all read-only entity DAOs
++ * @author Alex Kalinovsky
++ *
++ */
++public interface QueryDao extends Dao {
++
++	/**
++	 * Load a persistent object based on the Class (i.e. User) and the key (i.e.
++	 * userId) Load object matching the given key and return it.
++	 */
++	public Object findById(Serializable key);
++
++	/**
++	 * Eagerly intializes the object by loading it if it was proxied
++	 * Note that lazy collections and properties are not initialized
++	 * 
++	 * @param object to initialize
++     * @return initialized object
++	 */
++	public Object initialize(Object object);
++
++	/**
++	 * Returns true if the object still has lazy properties that are not loaded
++	 * @param object
++	 * @return true if the object is already initialized, false otherwise
++	 */
++	public boolean isInitialized(Object object);
++
++}
+\ No newline at end of file
+Index: src/templates/dao/crudDao.ftl
+===================================================================
+--- src/templates/dao/crudDao.ftl	(revision 0)
++++ src/templates/dao/crudDao.ftl	(revision 0)
+@@ -0,0 +1,34 @@
++<#assign declarationName = pojo.getDeclarationName()>
++package ${daoPackage};
++// Generated ${date} by Hibernate Tools ${version}
++// DO NOT MODIFY AS THIS FILE IS INTENDED TO BE REGENERATED
++// PLACE CUSTOM CODE IN ${declarationName}Dao
++
++import ${daoBasePackage}.CrudDao;
++<#assign classbody>
++/**
++ * Dao object for domain model class ${declarationName}.
++ * @see ${pojo.getQualifiedDeclarationName()}
++ * @author
++ */
++
++public interface ${declarationName}CrudDao extends CrudDao {
++
++<#foreach queryName in cfg.namedQueries.keySet()>
++<#if queryName.startsWith(clazz.entityName)>
++<#assign methname = c2j.unqualify(queryName)>
++<#assign params = cfg.namedQueries.get(queryName).parameterTypes><#assign argList = c2j.asFinderArgumentList(params, clazz)>
++<#if methname.startsWith("findAll")>
++    public ${pojo.importType("java.util.List")} ${methname}(${argList});
++<#elseif methname.startsWith("count")>
++    public int ${methname}(${argList});
++<#else>
++    public ${pojo.getQualifiedDeclarationName()} ${methname}(${argList});
++</#if>
++</#if>
++</#foreach>
++
++}
++</#assign>
++${pojo.generateImports()}
++${classbody}
+Index: src/templates/dao/crudDaoImpl.ftl
+===================================================================
+--- src/templates/dao/crudDaoImpl.ftl	(revision 0)
++++ src/templates/dao/crudDaoImpl.ftl	(revision 0)
+@@ -0,0 +1,77 @@
++<#assign declarationName = pojo.getDeclarationName()>
++package ${daoPackage}.hibernate;
++// Generated ${date} by Hibernate Tools ${version}
++// DO NOT MODIFY AS THIS FILE IS INTENDED TO BE REGENERATED
++// PLACE CUSTOM CODE IN ${declarationName}DaoImpl
++
++import ${daoBasePackage}.hibernate.AbstractCrudDao;
++import ${daoPackage}.${declarationName}CrudDao;
++<#assign classbody>
++/**
++ * Dao object for domain model class ${declarationName}.
++ * @see ${pojo.getQualifiedDeclarationName()}
++ */
++<#if ejb3>
++@${pojo.importType("javax.ejb.Stateless")}
++</#if>
++
++public class ${declarationName}CrudDaoImpl extends AbstractCrudDao implements ${declarationName}CrudDao {
++
++    private static final ${pojo.importType("org.apache.commons.logging.Log")} log = ${pojo.importType("org.apache.commons.logging.LogFactory")}.getLog(${pojo.getDeclarationName()}DaoImpl.class);
++    
++<#foreach queryName in cfg.namedQueries.keySet()>
++<#if queryName.startsWith(clazz.entityName)>
++<#assign methname = c2j.unqualify(queryName)>
++<#assign params = cfg.namedQueries.get(queryName).parameterTypes><#assign argList = c2j.asFinderArgumentList(params, clazz)>
++
++<#if methname.startsWith("findAll")>
++    public ${pojo.importType("java.util.List")} ${methname}(${argList}) {
++<#elseif methname.startsWith("count")>
++    public int ${methname}(${argList}) {
++<#else>
++    public ${pojo.getQualifiedDeclarationName()} ${methname}(${argList}) {
++</#if>
++        ${pojo.importType("org.hibernate.Query")} query = getSession().getNamedQuery("${queryName}");
++<#foreach param in params.keySet()>
++<#if param.equals("maxResults")>
++		query.setMaxResults(maxResults);
++<#elseif param.equals("firstResult")>
++        query.setFirstResult(firstResult);
++<#else>
++<#assign type = params.get(param)>
++<#if type == "int" || type == "integer">
++        query.setInteger("${param}", ${param});
++<#elseif type == "long">
++        query.setLong("${param}", ${param});
++<#elseif type == "double">
++        query.setDouble("${param}", ${param});
++<#elseif type == "float">
++        query.setFloat("${param}", ${param});
++<#elseif type == "long">
++        query.setLong("${param}", ${param});
++<#elseif type == "boolean">
++        query.setBoolean("${param}", ${param});
++<#elseif type == "byte">
++        query.setByte("${param}", ${param});
++<#elseif type == "character">
++        query.setCharacter("${param}", ${param});
++<#else>
++        query.setParameter("${param}", ${param});
++</#if>
++</#if>
++</#foreach>
++        ${pojo.importType("java.util.List")} results = executeQuery(query);
++<#if methname.startsWith("findAll")>
++        return results;
++<#elseif methname.startsWith("count")>
++        return ( (Integer) getUniqueResult("${queryName}", results) ).intValue();
++<#else>
++        return (${pojo.getQualifiedDeclarationName()})getUniqueResult("${queryName}", results);
++</#if>
++    }
++</#if>
++</#foreach>
++}
++</#assign>
++${pojo.generateImports()}
++${classbody}
+Index: src/templates/dao/dao.ftl
+===================================================================
+--- src/templates/dao/dao.ftl	(revision 0)
++++ src/templates/dao/dao.ftl	(revision 0)
+@@ -0,0 +1,21 @@
++package ${daoPackage};
++// Generated ${date} by Hibernate Tools ${version}
++
++<#assign classbody>
++<#assign declarationName = pojo.getDeclarationName()>
++/**
++ * Dao object for domain model class ${declarationName}.
++ * @see ${pojo.getQualifiedDeclarationName()}
++ * @author
++ */
++
++public interface ${declarationName}Dao extends ${declarationName}CrudDao {
++
++    // Name to be used to refer to this DAO from external files such as Spring XML context
++    public static final String NAME = "${projectPackage}.${declarationName}Dao";
++
++    // TODO: place your custom method declarations here
++}
++</#assign>
++${pojo.generateImports()}
++${classbody}
+Index: src/templates/dao/daoImpl.ftl
+===================================================================
+--- src/templates/dao/daoImpl.ftl	(revision 0)
++++ src/templates/dao/daoImpl.ftl	(revision 0)
+@@ -0,0 +1,20 @@
++<#assign declarationName = pojo.getDeclarationName()>
++package ${daoPackage}.hibernate;
++// Generated ${date} by Hibernate Tools ${version}
++
++import ${daoPackage}.${declarationName}Dao;
++<#assign classbody>
++/**
++ * Dao object for domain model class ${declarationName}.
++ * @see ${pojo.getQualifiedDeclarationName()}
++ */
++
++public class ${declarationName}DaoImpl extends ${declarationName}CrudDaoImpl implements ${declarationName}Dao {
++
++    private static final ${pojo.importType("org.apache.commons.logging.Log")} log = ${pojo.importType("org.apache.commons.logging.LogFactory")}.getLog(${pojo.getDeclarationName()}DaoImpl.class);
++
++    // TODO: place your custom method implementations here    
++}
++</#assign>
++${pojo.generateImports()}
++${classbody}
+Index: src/test/org/hibernate/tool/hbm2x/Hbm2HibernateDAONewTest.java
+===================================================================
+--- src/test/org/hibernate/tool/hbm2x/Hbm2HibernateDAONewTest.java	(revision 0)
++++ src/test/org/hibernate/tool/hbm2x/Hbm2HibernateDAONewTest.java	(revision 0)
+@@ -0,0 +1,126 @@
++/*
++ * Created on 2004-12-01
++ *
++ */
++package org.hibernate.tool.hbm2x;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.tool.NonReflectiveTestCase;
++import org.hibernate.tool.test.TestHelper;
++
++/**
++ * @author Alex Kalinovsky
++ *
++ */
++public class Hbm2HibernateDAONewTest extends NonReflectiveTestCase {
++
++	public Hbm2HibernateDAONewTest(String name) {
++		super( name, "hbm2daonewoutput" );
++	}
++
++	protected void setUp() throws Exception {
++		super.setUp();
++		
++		POJOExporter javaExporter = new POJOExporter(getCfg(), getOutputDir() );
++		javaExporter.start();
++		
++		GenericExporter exporter = new DAONewExporter(getCfg(), getOutputDir() );
++		exporter.getProperties().setProperty("ejb3", "false");
++		exporter.getProperties().setProperty("jdk5", "false");
++		exporter.getProperties().setProperty("hibernatetool.overwrite", "true");
++		exporter.getProperties().setProperty("projectPackage", "org.hibernate.tool.hbm2x");
++		exporter.getProperties().setProperty("daoPackage", "org.hibernate.tool.hbm2x");
++		exporter.getProperties().setProperty("daoBasePackage", "org.hibernate.tool.hbm2x");
++		// Export common base classes
++		exportPojo(exporter, "dao/base/dao.ftl", "{daoBasePackage}/Dao.java");
++		exportPojo(exporter, "dao/base/queryDao.ftl", "{daoBasePackage}/QueryDao.java");
++		exportPojo(exporter, "dao/base/crudDao.ftl", "{daoBasePackage}/CrudDao.java");
++		exportPojo(exporter, "dao/base/hibernate/abstractDao.ftl", "{daoBasePackage}/hibernate/AbstractDao.java");
++		exportPojo(exporter, "dao/base/hibernate/abstractQueryDao.ftl", "{daoBasePackage}/hibernate/AbstractQueryDao.java");
++		exportPojo(exporter, "dao/base/hibernate/abstractCrudDao.ftl", "{daoBasePackage}/hibernate/AbstractCrudDao.java");
++		// Export entity-specific classes
++		exportPojo(exporter, "dao/crudDao.ftl", "{daoPackage}/{class-name}CrudDao.java");
++		exportPojo(exporter, "dao/crudDaoImpl.ftl", "{daoPackage}/hibernate/{class-name}CrudDaoImpl.java");
++		exportPojo(exporter, "dao/dao.ftl", "{daoPackage}/{class-name}Dao.java");
++		exportPojo(exporter, "dao/daoImpl.ftl", "{daoPackage}/hibernate/{class-name}DaoImpl.java");
++	}
++	
++	protected void exportPojo(GenericExporter exporter, String templateName, String filePattern) {
++    	exporter.getProperties().setProperty("hibernatetool.template_name", templateName);
++    	exporter.getProperties().setProperty("hibernatetool.file_pattern", filePattern);
++    	exporter.start();
++	}
++	
++	public void testFileExistence() {
++    	// Common base classes
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/Dao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/QueryDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/CrudDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractQueryDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractCrudDao.java") );
++		// Author generated classes
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/AuthorCrudDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/AuthorDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AuthorCrudDaoImpl.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AuthorDaoImpl.java") );
++		// Article generated classes
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/ArticleCrudDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/ArticleDao.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/ArticleCrudDaoImpl.java") );
++		assertFileAndExists(new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/ArticleDaoImpl.java") );
++	}
++	
++	public void testCompilable() {
++		
++		File file = new File("compilable");
++		file.mkdir();
++		
++		ArrayList list = new ArrayList();
++		List jars = new ArrayList();
++		jars.add("commons-logging-1.0.4.jar");
++		jars.add("hibernate3.jar");
++		jars.add("cglib-2.1.3.jar");
++		TestHelper.compile(getOutputDir(), file, TestHelper.visitAllFiles(getOutputDir(), list), "1.5", TestHelper.buildClasspath(jars) );
++		
++		
++		TestHelper.deleteDir(file);
++	}
++    
++	public void testNoVelocityLeftOvers() {
++		
++    	// Common base classes
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/Dao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/QueryDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/CrudDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractQueryDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AbstractCrudDao.java") ));
++		// Author generated classes
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/AuthorCrudDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/AuthorDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AuthorCrudDaoImpl.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/AuthorDaoImpl.java") ));
++		// Article generated classes
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/ArticleCrudDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/ArticleDao.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/ArticleCrudDaoImpl.java") ));
++		assertEquals(null,findFirstString("$",new File(getOutputDir(), "org/hibernate/tool/hbm2x/hibernate/ArticleDaoImpl.java") ));
++        
++	}
++
++	protected String getBaseForMappings() {
++		return "org/hibernate/tool/hbm2x/";
++	}
++	
++	protected String[] getMappings() {
++		return new String[] { 
++				"Article.hbm.xml",
++				"Author.hbm.xml"				
++		};
++	}
++
++}
+Index: src/testsupport/codegen-build.xml
+===================================================================
+--- src/testsupport/codegen-build.xml	(revision 0)
++++ src/testsupport/codegen-build.xml	(revision 0)
+@@ -0,0 +1,138 @@
++<?xml version="1.0"?>
++
++<project default="test">
++	<property name="hibernate-core.jar" location="../../../../hibernate-3.2/hibernate3.jar" />
++	<property name="hibernate-core.home" location="../../../../hibernate-3.2" />
++	<property name="hibernate-core.lib.dir" location="${hibernate-core.home}/lib" />
++	<property name="build.dir" location="../../build" />
++
++	<!-- Load user overrides -->
++	<property file="codegen.properties" />
++
++	<!-- Relative directories for various artifacts. Defaults follow Maven project structure -->
++	<property name="src.dir" value="${project.dir}/src/"/>
++	<property name="java.subdir" value="main/java"/>
++	<property name="resources.subdir" value="main/resources"/>
++	<property name="java.generated.subdir" value="main/java-generated"/>
++	<property name="resources.generated.subdir" value="main/resources-generated"/>
++	
++	<property name="templates.dir" value="${tools.dir}/src/${resources.subdir}/persist/hibernate/templates"/>
++	
++	<!-- Project properties based by default on "project.package" property -->
++	<property name="daoPackage" value="${project.package}.persist"/>
++	<property name="daoBasePackage" value="${project.package}.persist"/>
++	<property name="servicePackage" value="${project.package}.service"/>
++	<property name="webPackage" value="${project.package}.web"/>
++	
++	<path id="tasks.classpath">
++		<pathelement path="../../build/eclipse" />
++		<pathelement path="../../build/classes" />
++		<pathelement path="../../build/testclasses" />
++
++		<fileset dir="${hibernate-core.lib.dir}">
++			<include name="**/*.jar" />
++		</fileset>
++
++		<pathelement location="${hibernate-core.jar}" />
++		<pathelement path="../../lib/freemarker.jar" />
++		<pathelement path="${hibernate-core.home}\jdbc\hsqldb.jar" />
++	</path>
++	
++	<fileset dir="../../build/testclasses" id="configuration.files">
++		<include name="**/*Article.hbm.xml" />
++		<include name="**/*Author.hbm.xml" />
++	</fileset>
++	
++	<taskdef name="hibernatetool"
++		classname="org.hibernate.tool.ant.HibernateToolTask"
++		classpathref="tasks.classpath"/>
++	
++	<target name="dao" description="generate Java DAO classes">
++		<hibernatetool destdir="${src.dir}">
++			<classpath refid="tasks.classpath"/>
++			<configuration namingstrategy="org.hibernate.cfg.ImprovedNamingStrategy" entityresolver="DummyEntityResolver">
++				<fileset refid="configuration.files"/>
++			</configuration>
++			<property key="projectPackage" value="${project.package}"/>
++			<property key="daoPackage" value="${daoPackage}"/>
++			<property key="daoBasePackage" value="${daoBasePackage}"/>
++
++			<!-- Export Dao -->
++			<hbmtemplate template="dao/crudDao.ftl"	templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.generated.subdir}/{daoPackage}/{class-name}CrudDao.java"/>
++				<property key="hibernatetool.overwrite" value="true"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/crudDaoImpl.ftl"	templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.generated.subdir}/{daoPackage}/hibernate/{class-name}CrudDaoImpl.java"/>
++				<property key="hibernatetool.overwrite" value="true"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/dao.ftl"	templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoPackage}/{class-name}Dao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/daoImpl.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoPackage}/hibernate/{class-name}DaoImpl.java"/>
++			</hbmtemplate>
++		</hibernatetool>
++	</target>
++	
++	<target name="dao-base" description="generate base DAO classes">
++		<hibernatetool destdir="${src.dir}">
++			<classpath refid="tasks.classpath"/>
++			<configuration namingstrategy="org.hibernate.cfg.ImprovedNamingStrategy" entityresolver="DummyEntityResolver">
++				<fileset refid="configuration.files"/>
++			</configuration>
++			<property key="daoBasePackage" value="${daoBasePackage}"/>
++			<!-- DAO base classes -->
++			<hbmtemplate template="dao/base/dao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/Dao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/base/queryDao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/QueryDao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/base/crudDao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/CrudDao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/base/hibernate/abstractDao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/hibernate/AbstractDao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/base/hibernate/abstractQueryDao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/hibernate/AbstractQueryDao.java"/>
++			</hbmtemplate>
++			<hbmtemplate template="dao/base/hibernate/abstractCrudDao.ftl" templatepath="${templates.dir}" exporterclass="org.hibernate.tool.hbm2x.DAONewExporter" templateprefix="dao/">
++				<property key="hibernatetool.file_pattern" value="${java.subdir}/{daoBasePackage}/hibernate/AbstractCrudDao.java"/>
++			</hbmtemplate>
++		</hibernatetool>
++	</target>
++
++	<target name="hbm2java">
++		<hibernatetool destdir="${src.dir}/${java.subdir}">
++			<classpath refid="tasks.classpath"/>
++			<configuration namingstrategy="org.hibernate.cfg.ImprovedNamingStrategy" entityresolver="DummyEntityResolver">
++				<fileset refid="configuration.files"/>
++			</configuration>
++			
++			<hbm2java/>
++		</hibernatetool>
++	</target>
++	
++	<target name="compile-generated">
++        <available
++            classname="org.eclipse.core.launcher.Main"
++            property="build.compiler"
++            value="org.eclipse.jdt.core.JDTCompilerAdapter"
++            classpath="${java.class.path}"/>
++        <javac
++        	target="1.4"
++            source="1.4"   
++            destdir="${build.dir}/classes"
++            classpathref="tasks.classpath"
++            debug="${javac.debug}"
++            optimize="${javac.optimize}"
++            nowarn="on">
++            <src path="${src.dir}/${java.subdir}"/>
++            <src path="${src.dir}/${java.generated.subdir}"/>
++        </javac>
++    </target>
++    
++    <target name="test" depends="hbm2java, dao, dao-base, compile-generated"/>
++</project>
+\ No newline at end of file
+Index: src/testsupport/codegen.properties
+===================================================================
+--- src/testsupport/codegen.properties	(revision 0)
++++ src/testsupport/codegen.properties	(revision 0)
+@@ -0,0 +1,6 @@
++# Project directory
++project.dir=../../build/anttest/dao
++
++# The project level package where the generated Java packages will be added
++project.package=org.hibernate.tool.hbm2x
++

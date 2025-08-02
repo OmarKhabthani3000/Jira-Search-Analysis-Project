@@ -1,0 +1,335 @@
+Index: hibernate-orm/core/settings.gradle
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-orm/core/settings.gradle b/hibernate-orm/core/settings.gradle
+--- a/hibernate-orm/core/settings.gradle	(revision 6ba41aef717b95772b99d2e8f36abb9ad7bd7234)
++++ b/hibernate-orm/core/settings.gradle	(date 1614945096343)
+@@ -1,6 +1,6 @@
+ include 'Basic'
+ include 'FetchStrategies'
+-include 'Spatial'
++//include 'Spatial'
+ include 'ValueGeneration'
+ include 'Caching'
+ include 'Envers'
+Index: hibernate-orm/core/build.gradle
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-orm/core/build.gradle b/hibernate-orm/core/build.gradle
+--- a/hibernate-orm/core/build.gradle	(revision 6ba41aef717b95772b99d2e8f36abb9ad7bd7234)
++++ b/hibernate-orm/core/build.gradle	(date 1615272364404)
+@@ -1,6 +1,6 @@
+ ext {
+     gradleVersion = '4.4'
+-    hibernateVersion = '5.2.13.Final'
++    hibernateVersion = '5.4.29.Final'
+     javaLanguageLevel = '1.8'
+ }
+ 
+@@ -29,6 +29,7 @@
+     }
+     
+     dependencies {
++        compile( 'jakarta.persistence:jakarta.persistence-api:2.2.3')
+ 		compile( 'org.hibernate:hibernate-core:' + rootProject.hibernateVersion )
+ 		compile( 'org.hibernate:hibernate-entitymanager:' + rootProject.hibernateVersion )
+ 		runtime( 'com.h2database:h2:1.3.175' )
+Index: hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/User.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/User.java b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/User.java
+--- a/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/User.java	(revision 6ba41aef717b95772b99d2e8f36abb9ad7bd7234)
++++ b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/User.java	(date 1615293740612)
+@@ -1,27 +1,22 @@
+ package org.hibernate.brmeyer.demo.entity;
+ 
+ import java.util.ArrayList;
++import java.util.HashSet;
+ import java.util.List;
++import java.util.Set;
+ 
++import javax.persistence.*;
+ import javax.persistence.Entity;
+-import javax.persistence.GeneratedValue;
+-import javax.persistence.Id;
+-import javax.persistence.ManyToMany;
+-import javax.persistence.OneToMany;
+-import javax.persistence.OrderColumn;
++import javax.persistence.Table;
+ 
+ import org.hibernate.Hibernate;
+-import org.hibernate.annotations.BatchSize;
+-import org.hibernate.annotations.Fetch;
+-import org.hibernate.annotations.FetchMode;
+-import org.hibernate.annotations.LazyCollection;
+-import org.hibernate.annotations.LazyCollectionOption;
+-import org.hibernate.annotations.NaturalId;
++import org.hibernate.annotations.*;
+ 
+ /**
+  * The Class User.
+  */
+-@Entity
++@Entity(name = "User")
++@Table(name = "USERS")
+ public class User {
+ 	
+ 	/** The id. */
+@@ -50,8 +45,10 @@
+ 	
+ 	/** The skills. */
+ 	@ManyToMany
+-	@Fetch(FetchMode.SUBSELECT)
+-	private List<Skill> skills = new ArrayList<Skill>();
++	@JoinTable(name = "USER_TO_SKILL",
++			joinColumns = @JoinColumn(name = "PARENT_ID"),
++			inverseJoinColumns = @JoinColumn(name = "ENTITY_ID"))
++	private List<Skill> skills = new ArrayList<>();
+ 	
+ 	/** The tools. */
+ 	@ManyToMany
+Index: hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/BasicJpaDemo_1.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/BasicJpaDemo_1.java b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/BasicJpaDemo_1.java
+new file mode 100644
+--- /dev/null	(date 1615293740594)
++++ b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/BasicJpaDemo_1.java	(date 1615293740594)
+@@ -0,0 +1,178 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * JBoss, Home of Professional Open Source
++ * Copyright 2014 Red Hat Inc. and/or its affiliates and other contributors
++ * as indicated by the @authors tag. All rights reserved.
++ * See the copyright.txt in the distribution for a
++ * full listing of individual contributors.
++ *
++ * This copyrighted material is made available to anyone wishing to use,
++ * modify, copy, or redistribute it subject to the terms and conditions
++ * of the GNU Lesser General Public License, v. 2.1.
++ * This program is distributed in the hope that it will be useful, but WITHOUT A
++ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
++ * PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more details.
++ * You should have received a copy of the GNU Lesser General Public License,
++ * v.2.1 along with this distribution; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
++ * MA  02110-1301, USA.
++ */
++package org.hibernate.brmeyer.demo;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Session;
++import org.hibernate.brmeyer.demo.entity.Skill;
++import org.hibernate.brmeyer.demo.entity.Tool;
++import org.hibernate.brmeyer.demo.entity.User;
++import org.hibernate.graph.RootGraph;
++import org.hibernate.query.Query;
++
++import javax.persistence.EntityGraph;
++import javax.persistence.EntityManager;
++import javax.persistence.EntityManagerFactory;
++import javax.persistence.Persistence;
++import java.sql.SQLException;
++import java.util.*;
++
++/**
++ * The Class BasicJpaDemo.
++ *
++ * @author Brett Meyer
++ */
++public class BasicJpaDemo_1 {
++
++    /**
++     * The main method.
++     *
++     * @param args the arguments
++     */
++    public static void main(String[] args) {
++        try {
++            List<Skill> skills = new ArrayList<>();
++
++            Skill skill1 = new Skill();
++            // Note: id generated by Hibernate
++            skill1.setName("Hammering Things #1");
++            insertSkill(skill1);
++
++            skills.add(skill1);
++
++            Skill skill2 = new Skill();
++            // Note: id generated by Hibernate
++            skill2.setName("Hammering Things #2");
++            skill2.setDeleted(new Date());
++            insertSkill(skill2);
++
++            skills.add(skill2);
++
++            User user = new User();
++            // Note: id generated by Hibernate
++            user.setName("Brett Meyer");
++            user.setEmail("foo@foo.com");
++            user.setPhone("123-456-7890");
++            user.setSkills(skills);
++
++            insertUser(user);
++
++            user = getUser(user.getId());
++            System.out.println("Skill size: " + user.getSkills().size());
++
++            user = findUserById(user.getId());
++            System.out.println("Skill size: " + user.getSkills().size());
++        } catch (Exception e) {
++            e.printStackTrace();
++        }
++        System.exit(0);
++    }
++
++    /**
++     * Insert user.
++     *
++     * @param user the user
++     * @throws Exception the exception
++     */
++    private static void insertUser(User user) throws Exception {
++        EntityManager entityManager = openEntityManager();
++        entityManager.getTransaction().begin();
++        entityManager.persist(user); // cascades the tool & skill relationships
++        entityManager.getTransaction().commit();
++    }
++
++    /**
++     * Insert skill.
++     *
++     * @param skill the skill
++     * @throws SQLException the SQL exception
++     */
++    private static void insertSkill(Skill skill) throws SQLException {
++        EntityManager entityManager = openEntityManager();
++        entityManager.getTransaction().begin();
++        entityManager.persist(skill);
++        entityManager.getTransaction().commit();
++    }
++
++    /**
++     * Gets the user.
++     *
++     * @param id the id
++     * @return the user
++     * @throws SQLException the SQL exception
++     */
++    private static User getUser(int id) throws SQLException {
++        Session entityManager = (Session) openEntityManager();
++
++        RootGraph<User> entityGraph = entityManager.createEntityGraph(User.class);
++        entityGraph.addAttributeNode("skills");
++
++        Map<String, Object> properties = new HashMap<>();
++        properties.put("javax.persistence.fetchgraph", entityGraph);
++
++        User user1 = entityManager.find( User.class, id, properties);
++
++        entityManager.close();
++
++        return user1;
++    }
++
++    /**
++     * Gets the user.
++     *
++     * @param id the id
++     * @return the user
++     * @throws SQLException the SQL exception
++     */
++    private static User findUserById(int id) throws SQLException {
++        Session entityManager = (Session) openEntityManager();
++
++        RootGraph<User> entityGraph = entityManager.createEntityGraph(User.class);
++        entityGraph.addAttributeNode("skills");
++
++        Query<User> query = entityManager.createQuery("select u from User u where u.id = :id ", User.class);
++        query.applyLoadGraph(entityGraph);
++        User user = query
++                .setParameter("id", id)
++                .getSingleResult();
++
++        entityManager.close();
++
++        return user;
++    }
++
++    /**
++     * The entity manager factory.
++     */
++    private static EntityManagerFactory entityManagerFactory = null;
++
++    /**
++     * Open entity manager.
++     *
++     * @return the entity manager
++     */
++    private static EntityManager openEntityManager() {
++        if (entityManagerFactory == null) {
++            entityManagerFactory = Persistence.createEntityManagerFactory("Demo");
++        }
++        return entityManagerFactory.createEntityManager();
++    }
++}
+Index: hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/Skill.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/Skill.java b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/Skill.java
+--- a/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/Skill.java	(revision 6ba41aef717b95772b99d2e8f36abb9ad7bd7234)
++++ b/hibernate-orm/core/Basic/src/main/java/org/hibernate/brmeyer/demo/entity/Skill.java	(date 1615292877835)
+@@ -1,13 +1,19 @@
+ package org.hibernate.brmeyer.demo.entity;
+ 
++import org.hibernate.annotations.Where;
++
+ import javax.persistence.Entity;
+ import javax.persistence.GeneratedValue;
+ import javax.persistence.Id;
++import javax.persistence.Table;
++import java.util.Date;
+ 
+ /**
+  * The Class Skill.
+  */
+-@Entity
++@Entity(name = "Skill")
++@Table(name = "SKILLS")
++@Where(clause = "deleted is null")
+ public class Skill {
+ 	
+ 	/** The id. */
+@@ -18,6 +24,8 @@
+ 	/** The name. */
+ 	private String name;
+ 
++	private Date deleted;
++
+ 	/**
+ 	 * Gets the id.
+ 	 *
+@@ -53,4 +61,12 @@
+ 	public void setName(String name) {
+ 		this.name = name;
+ 	}
++
++	public Date getDeleted() {
++		return deleted;
++	}
++
++	public void setDeleted(Date deleted) {
++		this.deleted = deleted;
++	}
+ }

@@ -1,0 +1,758 @@
+From b921bcae05a85e1e92defa4ee4cddea6eb3d3d1e Mon Sep 17 00:00:00 2001
+From: Hardy Ferentschik <hibernate@ferentschik.de>
+Date: Mon, 27 Jan 2014 14:15:45 +0100
+Subject: [PATCH] HSEARCH-1447 Failure to boot if a non-indexed entity is
+ having a complex ID for which no appropriate TwoWayFieldBridge can be guessed
+
+---
+ .../metadata/impl/AnnotationMetadataProvider.java  |   6 ++
+ .../engine/metadata/impl/MetadataProvider.java     |   2 +
+ .../search/engine/spi/AbstractDocumentBuilder.java |  13 +--
+ .../engine/spi/DocumentBuilderContainedEntity.java |   8 +-
+ .../engine/spi/DocumentBuilderIndexedEntity.java   |   4 +-
+ .../search/impl/MappingModelMetadataProvider.java  |   3 +-
+ .../hibernate/search/spi/SearchFactoryBuilder.java |  12 ++-
+ .../search/util/impl/ReflectionHelper.java         |  51 ++++++++++
+ .../test/util/impl/ReflectionHelperTest.java       | 109 +++++++++++++++++++++
+ .../search/test/analyzer/AnalyzerTest.java         |  13 ++-
+ .../bootstrapfailure/BootstrapTest.java            |  66 +++++++++++++
+ .../bootstrapfailure/EmbeddedEntity.java           |  72 ++++++++++++++
+ .../bootstrapfailure/IndexedEntity.java            |  73 ++++++++++++++
+ .../bootstrapfailure/NoSearchEntity.java           |  48 +++++++++
+ .../search/test/id/UnorderedIdScanTest.java        |   6 ++
+ 15 files changed, 463 insertions(+), 23 deletions(-)
+ create mode 100644 engine/src/test/java/org/hibernate/search/test/util/impl/ReflectionHelperTest.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/BootstrapTest.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/EmbeddedEntity.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/IndexedEntity.java
+ create mode 100644 orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/NoSearchEntity.java
+
+diff --git a/engine/src/main/java/org/hibernate/search/engine/metadata/impl/AnnotationMetadataProvider.java b/engine/src/main/java/org/hibernate/search/engine/metadata/impl/AnnotationMetadataProvider.java
+index 352b36b..3f786b5 100644
+--- a/engine/src/main/java/org/hibernate/search/engine/metadata/impl/AnnotationMetadataProvider.java
++++ b/engine/src/main/java/org/hibernate/search/engine/metadata/impl/AnnotationMetadataProvider.java
+@@ -128,6 +128,12 @@ public TypeMetadata getTypeMetadataFor(Class<?> clazz) {
+ 		return typeMetadataBuilder.build();
+ 	}
+ 
++	@Override
++	public boolean containsSearchMetadata(Class<?> clazz) {
++		XClass xClass = reflectionManager.toXClass( clazz );
++		return ReflectionHelper.containsSearchAnnotations( xClass );
++	}
++
+ 	protected void checkDocumentId(XProperty member,
+ 			TypeMetadata.Builder typeMetadataBuilder,
+ 			boolean isRoot,
+diff --git a/engine/src/main/java/org/hibernate/search/engine/metadata/impl/MetadataProvider.java b/engine/src/main/java/org/hibernate/search/engine/metadata/impl/MetadataProvider.java
+index 0802f42..70a2397 100644
+--- a/engine/src/main/java/org/hibernate/search/engine/metadata/impl/MetadataProvider.java
++++ b/engine/src/main/java/org/hibernate/search/engine/metadata/impl/MetadataProvider.java
+@@ -36,4 +36,6 @@
+ 	 * @return the {@code TypeMetadata} for the specified type
+ 	 */
+ 	TypeMetadata getTypeMetadataFor(Class<?> clazz);
++
++	boolean containsSearchMetadata(Class<?> clazz);
+ }
+diff --git a/engine/src/main/java/org/hibernate/search/engine/spi/AbstractDocumentBuilder.java b/engine/src/main/java/org/hibernate/search/engine/spi/AbstractDocumentBuilder.java
+index 51f0aa5..2762f6e 100644
+--- a/engine/src/main/java/org/hibernate/search/engine/spi/AbstractDocumentBuilder.java
++++ b/engine/src/main/java/org/hibernate/search/engine/spi/AbstractDocumentBuilder.java
+@@ -31,7 +31,6 @@
+ import java.util.Map;
+ import java.util.Set;
+ 
+-import org.hibernate.search.exception.AssertionFailure;
+ import org.hibernate.annotations.common.reflection.ReflectionManager;
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.XMember;
+@@ -40,13 +39,11 @@
+ import org.hibernate.search.engine.BoostStrategy;
+ import org.hibernate.search.engine.impl.DefaultBoostStrategy;
+ import org.hibernate.search.engine.impl.WorkPlan;
+-import org.hibernate.search.engine.metadata.impl.AnnotationMetadataProvider;
+ import org.hibernate.search.engine.metadata.impl.ContainedInMetadata;
+ import org.hibernate.search.engine.metadata.impl.EmbeddedTypeMetadata;
+-import org.hibernate.search.engine.metadata.impl.MetadataProvider;
+ import org.hibernate.search.engine.metadata.impl.PropertyMetadata;
+ import org.hibernate.search.engine.metadata.impl.TypeMetadata;
+-import org.hibernate.search.impl.ConfigContext;
++import org.hibernate.search.exception.AssertionFailure;
+ import org.hibernate.search.spi.InstanceInitializer;
+ import org.hibernate.search.util.impl.ReflectionHelper;
+ import org.hibernate.search.util.impl.ScopedAnalyzer;
+@@ -77,13 +74,13 @@
+ 	 * Constructor.
+ 	 *
+ 	 * @param xClass The class for which to build a document builder
+-	 * @param configContext Handle to default configuration settings
++	 * @param typeMetadata metadata for the specified class
+ 	 * @param reflectionManager Reflection manager to use for processing the annotations
+ 	 * @param optimizationBlackList keeps track of types on which we need to disable collection events optimizations
+ 	 * @param instanceInitializer a {@link org.hibernate.search.spi.InstanceInitializer} object.
+ 	 */
+ 	public AbstractDocumentBuilder(XClass xClass,
+-			ConfigContext configContext,
++			TypeMetadata typeMetadata,
+ 			ReflectionManager reflectionManager,
+ 			Set<XClass> optimizationBlackList,
+ 			InstanceInitializer instanceInitializer) {
+@@ -95,9 +92,7 @@ public AbstractDocumentBuilder(XClass xClass,
+ 		this.entityState = EntityState.CONTAINED_IN_ONLY;
+ 		this.beanXClass = xClass;
+ 		this.beanClass = reflectionManager.toClass( xClass );
+-
+-		MetadataProvider metadataProvider = new AnnotationMetadataProvider( reflectionManager, configContext );
+-		this.typeMetadata = metadataProvider.getTypeMetadataFor( reflectionManager.toClass( xClass ) );
++		this.typeMetadata = typeMetadata;
+ 
+ 		optimizationBlackList.addAll( typeMetadata.getOptimizationBlackList() );
+ 	}
+diff --git a/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderContainedEntity.java b/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderContainedEntity.java
+index 3bd8723..a6a64fc 100644
+--- a/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderContainedEntity.java
++++ b/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderContainedEntity.java
+@@ -31,7 +31,7 @@
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.search.backend.LuceneWork;
+ import org.hibernate.search.bridge.spi.ConversionContext;
+-import org.hibernate.search.impl.ConfigContext;
++import org.hibernate.search.engine.metadata.impl.TypeMetadata;
+ import org.hibernate.search.spi.InstanceInitializer;
+ 
+ /**
+@@ -49,17 +49,17 @@
+ 	 * Constructor used on contained entities not annotated with {@code @Indexed} themselves.
+ 	 *
+ 	 * @param xClass The class for which to build a {@code DocumentBuilderContainedEntity}.
+-	 * @param context Handle to default configuration settings.
++	 * @param typeMetadata metadata for the given type
+ 	 * @param reflectionManager Reflection manager to use for processing the annotations.
+ 	 * @param optimizationBlackList mutable register, keeps track of types on which we need to disable collection events optimizations
+ 	 * @param instanceInitializer a {@link org.hibernate.search.spi.InstanceInitializer} object.
+ 	 */
+ 	public DocumentBuilderContainedEntity(XClass xClass,
+-			ConfigContext context,
++			TypeMetadata typeMetadata,
+ 			ReflectionManager reflectionManager,
+ 			Set<XClass> optimizationBlackList,
+ 			InstanceInitializer instanceInitializer) {
+-		super( xClass, context, reflectionManager, optimizationBlackList, instanceInitializer );
++		super( xClass, typeMetadata, reflectionManager, optimizationBlackList, instanceInitializer );
+ 
+ 		//done after init:
+ 		if ( getTypeMetadata().getContainedInMetadata().isEmpty() ) {
+diff --git a/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderIndexedEntity.java b/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderIndexedEntity.java
+index 804eafc..8335745 100644
+--- a/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderIndexedEntity.java
++++ b/engine/src/main/java/org/hibernate/search/engine/spi/DocumentBuilderIndexedEntity.java
+@@ -144,9 +144,9 @@
+ 	 * @param optimizationBlackList mutable register, keeps track of types on which we need to disable collection events optimizations
+ 	 * @param instanceInitializer helper class for class object graph navigation
+ 	 */
+-	public DocumentBuilderIndexedEntity(XClass clazz, ConfigContext context,
++	public DocumentBuilderIndexedEntity(XClass clazz, TypeMetadata typeMetadata, ConfigContext context,
+ 			ReflectionManager reflectionManager, Set<XClass> optimizationBlackList, InstanceInitializer instanceInitializer) {
+-		super( clazz, context, reflectionManager, optimizationBlackList, instanceInitializer );
++		super( clazz, typeMetadata, reflectionManager, optimizationBlackList, instanceInitializer );
+ 
+ 		idPropertyMetadata = providedIdMetadata( clazz, context, reflectionManager );
+ 		if ( idPropertyMetadata == null ) {
+diff --git a/engine/src/main/java/org/hibernate/search/impl/MappingModelMetadataProvider.java b/engine/src/main/java/org/hibernate/search/impl/MappingModelMetadataProvider.java
+index 8fa4218..a901a23 100644
+--- a/engine/src/main/java/org/hibernate/search/impl/MappingModelMetadataProvider.java
++++ b/engine/src/main/java/org/hibernate/search/impl/MappingModelMetadataProvider.java
+@@ -775,7 +775,8 @@ private void delegatesAnnotationReading() {
+ 		@Override
+ 		public Annotation[] getAnnotations() {
+ 			initAnnotations();
+-			return new Annotation[0];
++			Collection<Annotation> tmpCollection = annotations.values();
++			return tmpCollection.toArray( new Annotation[tmpCollection.size()] );
+ 		}
+ 	}
+ }
+diff --git a/engine/src/main/java/org/hibernate/search/spi/SearchFactoryBuilder.java b/engine/src/main/java/org/hibernate/search/spi/SearchFactoryBuilder.java
+index bce1952..ffe503c 100644
+--- a/engine/src/main/java/org/hibernate/search/spi/SearchFactoryBuilder.java
++++ b/engine/src/main/java/org/hibernate/search/spi/SearchFactoryBuilder.java
+@@ -42,6 +42,8 @@
+ import org.hibernate.annotations.common.reflection.ReflectionManager;
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.java.JavaReflectionManager;
++import org.hibernate.search.engine.metadata.impl.AnnotationMetadataProvider;
++import org.hibernate.search.engine.metadata.impl.TypeMetadata;
+ import org.hibernate.search.util.StringHelper;
+ import org.hibernate.search.Environment;
+ import org.hibernate.search.SearchException;
+@@ -320,6 +322,8 @@ private void initDocumentBuilders(SearchConfiguration cfg, BuildContext buildCon
+ 
+ 		//we process the @Indexed classes last, so we first start all IndexManager(s).
+ 		final List<XClass> rootIndexedEntities = new LinkedList<XClass>();
++		final org.hibernate.search.engine.metadata.impl.MetadataProvider metadataProvider =
++				new AnnotationMetadataProvider( cfg.getReflectionManager(), context );
+ 
+ 		for ( Map.Entry<XClass, Class<?>> mapping : classMappings.entrySet() ) {
+ 
+@@ -336,11 +340,13 @@ private void initDocumentBuilders(SearchConfiguration cfg, BuildContext buildCon
+ 				rootIndexedEntities.add( mappedXClass );
+ 				indexingHierarchy.addIndexedClass( mappedClass );
+ 			}
+-			else {
++			else if ( metadataProvider.containsSearchMetadata( mappedClass ) ) {
+ 				//FIXME DocumentBuilderIndexedEntity needs to be built by a helper method receiving Class<T> to infer T properly
+ 				//XClass unfortunately is not (yet) genericized: TODO?
++
++				TypeMetadata typeMetadata = metadataProvider.getTypeMetadataFor( mappedClass);
+ 				final DocumentBuilderContainedEntity<?> documentBuilder = new DocumentBuilderContainedEntity(
+-						mappedXClass, context, cfg.getReflectionManager(), optimizationBlackListedTypes, cfg.getInstanceInitializer()
++						mappedXClass, typeMetadata, cfg.getReflectionManager(), optimizationBlackListedTypes, cfg.getInstanceInitializer()
+ 				);
+ 				//TODO enhance that, I don't like to expose EntityState
+ 				if ( documentBuilder.getEntityState() != EntityState.NON_INDEXABLE ) {
+@@ -366,9 +372,11 @@ private void initDocumentBuilders(SearchConfiguration cfg, BuildContext buildCon
+ 			// Create all DocumentBuilderIndexedEntity
+ 			// FIXME DocumentBuilderIndexedEntity needs to be built by a helper method receiving Class<T> to infer T properly
+ 			// XClass unfortunately is not (yet) genericized: TODO ?
++			TypeMetadata typeMetadata = metadataProvider.getTypeMetadataFor( mappedClass);
+ 			final DocumentBuilderIndexedEntity<?> documentBuilder =
+ 					new DocumentBuilderIndexedEntity(
+ 							mappedXClass,
++							typeMetadata,
+ 							context,
+ 							cfg.getReflectionManager(),
+ 							optimizationBlackListedTypes,
+diff --git a/engine/src/main/java/org/hibernate/search/util/impl/ReflectionHelper.java b/engine/src/main/java/org/hibernate/search/util/impl/ReflectionHelper.java
+index 42375ea..f38fac8 100644
+--- a/engine/src/main/java/org/hibernate/search/util/impl/ReflectionHelper.java
++++ b/engine/src/main/java/org/hibernate/search/util/impl/ReflectionHelper.java
+@@ -23,6 +23,7 @@
+  */
+ package org.hibernate.search.util.impl;
+ 
++import java.lang.annotation.Annotation;
+ import java.lang.reflect.AccessibleObject;
+ import java.lang.reflect.Member;
+ import java.lang.reflect.Modifier;
+@@ -31,6 +32,7 @@
+ 
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.XMember;
++import org.hibernate.annotations.common.reflection.XProperty;
+ import org.hibernate.search.util.StringHelper;
+ 
+ /**
+@@ -115,4 +117,53 @@ public static Object getMemberValue(Object bean, XMember getter) {
+ 		}
+ 		return hierarchy;
+ 	}
++
++	/**
++	 * Checks whether the specified class contains any Search specific annotations.
++	 *
++	 * @param mappedClass the {@code XClass} to check for Search annotations
++	 *
++	 * @return Returns {@code true} if the class contains at least one Search annotation, {@code false} otherwise
++	 */
++	public static boolean containsSearchAnnotations(XClass mappedClass) {
++		// check the type annotations
++		if ( containsSearchAnnotation( mappedClass.getAnnotations() ) ) {
++			return true;
++		}
++
++		for ( XProperty method : mappedClass.getDeclaredProperties( XClass.ACCESS_PROPERTY ) ) {
++			if ( containsSearchAnnotation( method.getAnnotations() ) ) {
++				return true;
++			}
++		}
++
++		for ( XProperty field : mappedClass.getDeclaredProperties( XClass.ACCESS_FIELD ) ) {
++			if ( containsSearchAnnotation( field.getAnnotations() ) ) {
++				return true;
++			}
++		}
++
++		return false;
++	}
++
++	/**
++	 * Checks if the annotation is a Search annotation by comparing the package of the annotation.
++	 *
++	 * @param annotation the annotation to check
++	 *
++	 * @return Returns {@code true} if the annotation is a Search annotation, {@code false} otherwise
++	 */
++	public static boolean isSearchAnnotation(Annotation annotation) {
++		return "org.hibernate.search.annotations".equals( annotation.annotationType().getPackage().getName() );
++	}
++
++	private static boolean containsSearchAnnotation(Annotation[] annotations) {
++		for ( Annotation annotation : annotations ) {
++			if ( isSearchAnnotation( annotation ) ) {
++				return true;
++			}
++		}
++		return false;
++	}
++
+ }
+diff --git a/engine/src/test/java/org/hibernate/search/test/util/impl/ReflectionHelperTest.java b/engine/src/test/java/org/hibernate/search/test/util/impl/ReflectionHelperTest.java
+new file mode 100644
+index 0000000..9ca47e9
+--- /dev/null
++++ b/engine/src/test/java/org/hibernate/search/test/util/impl/ReflectionHelperTest.java
+@@ -0,0 +1,109 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.util.impl;
++
++import java.lang.annotation.Annotation;
++import java.util.List;
++
++import org.hibernate.annotations.common.annotationfactory.AnnotationDescriptor;
++import org.hibernate.annotations.common.annotationfactory.AnnotationFactory;
++import org.hibernate.annotations.common.reflection.ReflectionManager;
++import org.hibernate.annotations.common.reflection.java.JavaReflectionManager;
++import org.hibernate.search.annotations.Analyzer;
++import org.hibernate.search.annotations.Field;
++import org.hibernate.search.annotations.FieldBridge;
++import org.hibernate.search.annotations.IndexedEmbedded;
++import org.hibernate.search.util.impl.ReflectionHelper;
++import org.junit.Test;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++/**
++ * @author Hardy Ferentschik
++ */
++public class ReflectionHelperTest {
++
++	@Test
++	public void testIsSearchAnnotation() throws Exception {
++		AnnotationDescriptor descriptor = new AnnotationDescriptor( IndexedEmbedded.class );
++		Annotation annotation = AnnotationFactory.create( descriptor );
++		assertTrue( ReflectionHelper.isSearchAnnotation( annotation ) );
++
++		descriptor = new AnnotationDescriptor( Override.class );
++		annotation = AnnotationFactory.create( descriptor );
++		assertFalse( ReflectionHelper.isSearchAnnotation( annotation ) );
++	}
++
++	@Test
++	public void testIsSearchEnabled() throws Exception {
++		ReflectionManager reflectionManager = new JavaReflectionManager();
++
++		assertTrue(
++				"Should be a search enabled class",
++				ReflectionHelper.containsSearchAnnotations( reflectionManager.toXClass( A.class ) )
++		);
++		assertTrue(
++				"Should be a search enabled class",
++				ReflectionHelper.containsSearchAnnotations( reflectionManager.toXClass( B.class ) )
++		);
++		assertTrue(
++				"Should be a search enabled class",
++				ReflectionHelper.containsSearchAnnotations( reflectionManager.toXClass( C.class ) )
++		);
++		assertTrue(
++				"Should be a search enabled class",
++				ReflectionHelper.containsSearchAnnotations( reflectionManager.toXClass( D.class ) )
++		);
++
++		assertFalse(
++				"Should not be a search enabled class",
++				ReflectionHelper.containsSearchAnnotations( reflectionManager.toXClass( E.class ) )
++		);
++	}
++
++	public class A {
++		@Field
++		private String name;
++	}
++
++	public class B {
++		@IndexedEmbedded
++		private List<A> aList;
++	}
++
++	public class C {
++		@FieldBridge
++		public String getFoo() {
++			return null;
++		}
++	}
++
++	@Analyzer
++	public class D {
++	}
++
++	public class E {
++	}
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java b/orm/src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java
+index 310604c..8716bc0 100644
+--- a/orm/src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java
++++ b/orm/src/test/java/org/hibernate/search/test/analyzer/AnalyzerTest.java
+@@ -39,8 +39,8 @@
+ import org.hibernate.search.SearchFactory;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.cfg.impl.SearchConfigurationFromHibernateCore;
+-import org.hibernate.search.engine.impl.HibernateStatelessInitializer;
+-import org.hibernate.search.engine.spi.DocumentBuilderContainedEntity;
++import org.hibernate.search.engine.metadata.impl.AnnotationMetadataProvider;
++import org.hibernate.search.engine.metadata.impl.MetadataProvider;
+ import org.hibernate.search.impl.ConfigContext;
+ import org.hibernate.search.test.SearchTestCase;
+ import org.hibernate.search.test.TestConstants;
+@@ -96,11 +96,14 @@ public void testMultipleAnalyzerDiscriminatorDefinitions() {
+ 		SearchConfigurationFromHibernateCore searchConfig = new SearchConfigurationFromHibernateCore( getCfg() );
+ 		ReflectionManager reflectionManager = searchConfig.getReflectionManager();
+ 		XClass xclass = reflectionManager.toXClass( BlogEntry.class );
+-		Set<XClass> optimizationBlackList = new HashSet<XClass>();
+ 		ConfigContext context = new ConfigContext( searchConfig );
++		MetadataProvider metadataProvider = new AnnotationMetadataProvider(
++				searchConfig.getReflectionManager(),
++				context
++		);
++
+ 		try {
+-			new DocumentBuilderContainedEntity( xclass, context, reflectionManager,
+-					optimizationBlackList, HibernateStatelessInitializer.INSTANCE );
++			metadataProvider.getTypeMetadataFor( reflectionManager.toClass( xclass ) );
+ 			fail();
+ 		}
+ 		catch (SearchException e) {
+diff --git a/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/BootstrapTest.java b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/BootstrapTest.java
+new file mode 100644
+index 0000000..cc2358d
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/BootstrapTest.java
+@@ -0,0 +1,66 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.configuration.bootstrapfailure;
++
++import java.util.Set;
++
++import org.hibernate.search.test.SearchTestCaseJUnit4;
++import org.hibernate.search.test.util.TestForIssue;
++import org.junit.Test;
++
++import static org.junit.Assert.assertNull;
++import static org.junit.Assert.assertTrue;
++
++/**
++ * @author Hardy Ferentschik
++ */
++@TestForIssue(jiraKey = "HSEARCH-1447")
++public class BootstrapTest extends SearchTestCaseJUnit4 {
++
++	@Test
++	public void testCreateIndexSearchEntityWithLobField() {
++		Set<Class<?>> indexedTypes = getSearchFactory().getIndexedTypes();
++
++		assertTrue( "There should only be one indexed entity", indexedTypes.size() == 1 );
++		assertTrue(
++				"Unexpected indexed type: " + getSearchFactory().getIndexedTypes(),
++				getSearchFactory().getIndexedTypes().contains( IndexedEntity.class )
++		);
++
++		assertNull(
++				"NoSearchEntity should not have a DocumentBuilderContainedEntity",
++				getSearchFactoryImpl().getDocumentBuilderContainedEntity( NoSearchEntity.class )
++		);
++	}
++
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class[] {
++				// just adding NoSearchEntity causes an exception, even though it is not used from a Search perspective
++				IndexedEntity.class, EmbeddedEntity.class, NoSearchEntity.class
++		};
++	}
++}
++
++
+diff --git a/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/EmbeddedEntity.java b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/EmbeddedEntity.java
+new file mode 100644
+index 0000000..8fc9b4b
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/EmbeddedEntity.java
+@@ -0,0 +1,72 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.configuration.bootstrapfailure;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++
++import org.hibernate.search.annotations.ContainedIn;
++
++/**
++ * @author Hardy Ferentschik
++ */
++@Entity
++public class EmbeddedEntity {
++	@Id
++	@GeneratedValue
++	private long id;
++
++	@ManyToOne
++	@ContainedIn
++	private IndexedEntity indexedEntity;
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public IndexedEntity getIndexedEntity() {
++		return indexedEntity;
++	}
++
++	public void setIndexedEntity(IndexedEntity indexedEntity) {
++		this.indexedEntity = indexedEntity;
++	}
++
++	@Override
++	public String toString() {
++		final StringBuilder sb = new StringBuilder( "EmbeddedEntity{" );
++		sb.append( "id=" ).append( id );
++		sb.append( ", indexedEntity=" ).append( indexedEntity );
++		sb.append( '}' );
++		return sb.toString();
++	}
++}
++
++
+diff --git a/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/IndexedEntity.java b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/IndexedEntity.java
+new file mode 100644
+index 0000000..a2db67a
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/IndexedEntity.java
+@@ -0,0 +1,73 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.configuration.bootstrapfailure;
++
++import java.util.List;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++
++import org.hibernate.search.annotations.Indexed;
++import org.hibernate.search.annotations.IndexedEmbedded;
++
++/**
++ * @author Hardy Ferentschik
++ */
++@Entity
++@Indexed
++public class IndexedEntity {
++	@Id
++	@GeneratedValue
++	private long id;
++
++	@IndexedEmbedded
++	@OneToMany
++	private List<EmbeddedEntity> embedded;
++
++	public long getId() {
++		return id;
++	}
++
++	public void setId(long id) {
++		this.id = id;
++	}
++
++	public List<EmbeddedEntity> getEmbedded() {
++		return embedded;
++	}
++
++	public void setEmbedded(List<EmbeddedEntity> embedded) {
++		this.embedded = embedded;
++	}
++
++	@Override
++	public String toString() {
++		final StringBuilder sb = new StringBuilder( "IndexedEntity{" );
++		sb.append( "id=" ).append( id );
++		sb.append( ", embedded=" ).append( embedded );
++		sb.append( '}' );
++		return sb.toString();
++	}
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/NoSearchEntity.java b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/NoSearchEntity.java
+new file mode 100644
+index 0000000..2c86f96
+--- /dev/null
++++ b/orm/src/test/java/org/hibernate/search/test/configuration/bootstrapfailure/NoSearchEntity.java
+@@ -0,0 +1,48 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2014, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.configuration.bootstrapfailure;
++
++import java.sql.Timestamp;
++
++import javax.persistence.Entity;
++import javax.persistence.Id;
++
++/**
++ * @author Hardy Ferentschik
++ */
++@Entity
++public class NoSearchEntity {
++
++	@Id
++	private Timestamp id;
++
++	public Timestamp getId() {
++		return id;
++	}
++
++	public void setId(Timestamp id) {
++		this.id = id;
++	}
++
++}
+diff --git a/orm/src/test/java/org/hibernate/search/test/id/UnorderedIdScanTest.java b/orm/src/test/java/org/hibernate/search/test/id/UnorderedIdScanTest.java
+index ab7ae68..3fc7796 100644
+--- a/orm/src/test/java/org/hibernate/search/test/id/UnorderedIdScanTest.java
++++ b/orm/src/test/java/org/hibernate/search/test/id/UnorderedIdScanTest.java
+@@ -34,6 +34,9 @@
+ import org.hibernate.annotations.common.reflection.XMethod;
+ import org.hibernate.annotations.common.reflection.XProperty;
+ import org.hibernate.annotations.common.reflection.java.JavaReflectionManager;
++import org.hibernate.search.engine.metadata.impl.AnnotationMetadataProvider;
++import org.hibernate.search.engine.metadata.impl.MetadataProvider;
++import org.hibernate.search.engine.metadata.impl.TypeMetadata;
+ import org.hibernate.search.engine.spi.DocumentBuilderIndexedEntity;
+ import org.hibernate.search.impl.ConfigContext;
+ import org.hibernate.search.impl.SimpleInitializer;
+@@ -73,7 +76,10 @@ public void invertedSortAnnotationsRead() {
+ 	private static void tryCreatingDocumentBuilder(XClass mappedXClass, ReflectionManager reflectionManager) {
+ 		ManualConfiguration cfg = new ManualConfiguration();
+ 		ConfigContext context = new ConfigContext( cfg );
++		MetadataProvider metadataProvider = new AnnotationMetadataProvider( reflectionManager, context );
++		TypeMetadata typeMetadata = metadataProvider.getTypeMetadataFor( reflectionManager.toClass( mappedXClass ));
+ 		new DocumentBuilderIndexedEntity( mappedXClass,
++				typeMetadata,
+ 				context,
+ 				reflectionManager,
+ 				new HashSet(),
+-- 
+1.8.3.1
+

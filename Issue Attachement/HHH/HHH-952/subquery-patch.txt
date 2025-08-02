@@ -1,0 +1,99 @@
+Index: src/org/hibernate/criterion/SubqueryExpression.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/criterion/SubqueryExpression.java,v
+retrieving revision 1.8
+diff -r1.8 SubqueryExpression.java
+3a4,5
+> import java.util.HashMap;
+> 
+11a14
+> import org.hibernate.loader.criteria.CriteriaJoinWalker;
+14d16
+< import org.hibernate.sql.Select;
+47c49
+< 		CriteriaQueryTranslator innerQuery = new CriteriaQueryTranslator( 
+---
+> 		final CriteriaQueryTranslator innerQuery = new CriteriaQueryTranslator( 
+54,55c56,57
+< 		
+< 		params = innerQuery.getQueryParameters(); //TODO: bad lifecycle....
+---
+> 
+>         params = innerQuery.getQueryParameters(); //TODO: bad lifecycle....
+59,69c61,91
+< 		
+< 		String sql = new Select( factory.getDialect() )
+< 			.setWhereClause( innerQuery.getWhereCondition() )
+< 			.setGroupByClause( innerQuery.getGroupBy() )
+< 			.setSelectClause( innerQuery.getSelect() )
+< 			.setFromClause(
+< 					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+< 					persister.fromJoinFragment( innerQuery.getRootSQLALias(), true, false )
+< 				)
+< 			.toStatementString();
+< 		
+---
+> 
+> //this old way didn't generate joins
+> //		String sql = new Select( factory.getDialect() )
+> //			.setWhereClause( innerQuery.getWhereCondition() )
+> //			.setGroupByClause( innerQuery.getGroupBy() )
+> //			.setSelectClause( innerQuery.getSelect() )
+> //			.setFromClause(
+> //					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+> //					persister.fromJoinFragment( innerQuery.getRootSQLALias(), true, false )
+> //				)
+> //			.toStatementString();
+> 		
+>         //patch to generate joins on subqueries
+>         //stolen from CriteriaLoader
+>         CriteriaJoinWalker walker = new CriteriaJoinWalker(
+>                 persister, 
+>                 innerQuery,
+>                 factory, 
+>                 criteriaImpl, 
+>                 criteriaImpl.getEntityOrClassName(), 
+>                 new HashMap()
+>         ) {
+>             //need to override default of "this_" to whatever the innerQuery is using
+>             protected String generateRootAlias(final String description) {
+>                 return innerQuery.getRootSQLALias();
+>             }
+>         };
+> 
+>         String sql = walker.getSQLString();
+>         //end join patch
+> 
+Index: test/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/criteria/CriteriaQueryTest.java,v
+retrieving revision 1.27
+diff -r1.27 CriteriaQueryTest.java
+118,119c118,119
+< 		//TODO: join in subselect
+< 		/*DetachedCriteria dc3 = DetachedCriteria.forClass(Student.class, "st")
+---
+> 		//patch: join in subselect
+> 		DetachedCriteria dc3 = DetachedCriteria.forClass(Student.class, "st")
+127c127
+< 			.list();*/
+---
+> 			.list();
+Index: test/org/hibernate/test/hql/BulkManipulationTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/hql/BulkManipulationTest.java,v
+retrieving revision 1.33
+diff -r1.33 BulkManipulationTest.java
+311c311
+< 				wait(300);
+---
+> 				wait(1000);
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/build.xml,v
+retrieving revision 1.54
+diff -r1.54 build.xml
+511c511
+< 					<exclude name="org/hibernate/test/*PerformanceTest.class"/>
+---
+> 					<exclude name="org/hibernate/test/**/*PerformanceTest.class"/>

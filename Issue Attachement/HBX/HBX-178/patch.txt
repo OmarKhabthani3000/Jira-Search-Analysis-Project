@@ -1,0 +1,116 @@
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/build.xml,v
+retrieving revision 1.13
+diff -u -r1.13 build.xml
+--- build.xml	24 Mar 2005 00:23:07 -0000	1.13
++++ build.xml	3 Apr 2005 19:14:58 -0000
+@@ -100,6 +100,32 @@
+         
+     </target>
+ 
++  <path id="tasks.classpath">
++    <fileset dir="${hibernate-core.lib.dir}">
++      <include name="**/*.jar" />
++    </fileset>
++      <fileset dir="lib">
++        <include name="**/*.jar" />
++      </fileset>    
++    <pathelement location="${hibernate-core.jar}"/>
++    <pathelement path="build/classes"/>
++  </path>
++  
++  <target name="testanthbm2java" depends="jar">
++    
++ <taskdef name="hibernatetool" classname="org.hibernate.tool.ant.HibernateToolTask" classpathref="tasks.classpath"/>
++      <hibernatetool destdir="${build.dir}/bottomup">
++        <configuration propertyfile="etc/hibernate.properties">
++          <fileset dir="src/test/org/hibernate/tool/hbm2x">
++            <include name="**/*.hbm.xml" />
++          </fileset>        
++        </configuration>
++          
++              <hbm2java ejb3="true"/>
++      </hibernatetool>   
++      
++  </target>  
++  
+     <target name="testantannotationcfg" depends="jar">
+         <taskdef name="hibernatetoolx" classname="org.hibernate.tool.ant.HibernateToolTask" classpath="${hibernate-core.jar};build/classes;../metadata/build/classes;"/>   
+         <hibernatetoolx destdir="${build.dir}/bottomup">
+Index: src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java,v
+retrieving revision 1.12
+diff -u -r1.12 Cfg2JavaTool.java
+--- src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	3 Apr 2005 00:51:31 -0000	1.12
++++ src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	3 Apr 2005 19:14:58 -0000
+@@ -508,6 +508,13 @@
+     	try {
+     		v = p.getValue();
+     		
++        //use native types when the value is not nullable
++        if (v.getClass().equals(SimpleValue.class) && (!v.isNullable())) {
++          String typename = ((SimpleValue) v).getTypeName();
++          if (typename.equals("integer")) return "int";
++          return typename;
++        }
++        
+     		if(v instanceof Array) { // array has a string rep.inside. 
+     			Array a = (Array)v;
+     			if(a.isPrimitiveArray()) {
+@@ -531,9 +538,13 @@
+     			{
+     				Collection collection = (Collection) v;
+     				OneToMany oneToMany = (OneToMany) collection.getElement();
+-    				String entityType = oneToMany.getAssociatedClass().getClassName();
++            if (oneToMany != null) {
++
++              //String entityType = oneToMany.getAssociatedClass().getClassName();
++              String entityType = oneToMany.getReferencedEntityName();
+     				
+-    				return toName(p.getType()) + "<" + entityType + ">";
++              return toName(p.getType()) + "<" + entityType + ">";
++            }
+     			}
+         	}
+         	
+Index: src/test/org/hibernate/tool/hbm2x/Article.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/hbm2x/Article.hbm.xml,v
+retrieving revision 1.2
+diff -u -r1.2 Article.hbm.xml
+--- src/test/org/hibernate/tool/hbm2x/Article.hbm.xml	18 Mar 2005 10:38:38 -0000	1.2
++++ src/test/org/hibernate/tool/hbm2x/Article.hbm.xml	3 Apr 2005 19:14:58 -0000
+@@ -22,6 +22,8 @@
+     	</id>
+ 
+     	<property name="name" type="string" not-null="true" length="100"/>
++    	<property name="count" type="int" not-null="true"/>
++    	<property name="count2" type="int"/>
+     	<property name="content" type="string" not-null="true" length="10000"/>
+ 
+ 		<many-to-one
+Index: src/test/org/hibernate/tool/hbm2x/Author.hbm.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/test/org/hibernate/tool/hbm2x/Author.hbm.xml,v
+retrieving revision 1.2
+diff -u -r1.2 Author.hbm.xml
+--- src/test/org/hibernate/tool/hbm2x/Author.hbm.xml	18 Mar 2005 10:38:38 -0000	1.2
++++ src/test/org/hibernate/tool/hbm2x/Author.hbm.xml	3 Apr 2005 19:14:58 -0000
+@@ -33,6 +33,15 @@
+     		<one-to-many class="Article"/>
+     		
+     	</set>
++    	<bag name="bagarticles"
++    		inverse="true"
++    		cascade="save-update">
++    		
++    		<key column="authorId"/>
++    		
++    		<one-to-many class="Article"/>
++    		
++    	</bag>
+ 
+ 	</class>
+ 

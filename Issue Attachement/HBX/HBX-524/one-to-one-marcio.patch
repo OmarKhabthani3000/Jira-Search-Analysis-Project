@@ -1,0 +1,282 @@
+Index: src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java
+===================================================================
+--- src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	(revision 14961)
++++ src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	(working copy)
+@@ -5,6 +5,7 @@
+ 
+ import java.util.HashSet;
+ import java.util.Iterator;
++import java.util.List;
+ import java.util.Map;
+ import java.util.Properties;
+ import java.util.Set;
+@@ -18,6 +19,7 @@
+ import org.hibernate.engine.query.sql.NativeSQLQueryRootReturn;
+ import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.Column;
++import org.hibernate.mapping.ForeignKey;
+ import org.hibernate.mapping.Formula;
+ import org.hibernate.mapping.JoinedSubclass;
+ import org.hibernate.mapping.ManyToOne;
+@@ -22,6 +24,7 @@
+ import org.hibernate.mapping.JoinedSubclass;
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.OneToMany;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.PersistentClassVisitor;
+ import org.hibernate.mapping.Property;
+@@ -29,6 +32,7 @@
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.SingleTableSubclass;
+ import org.hibernate.mapping.Subclass;
++import org.hibernate.mapping.Table;
+ import org.hibernate.mapping.UnionSubclass;
+ import org.hibernate.mapping.Value;
+ import org.hibernate.persister.entity.JoinedSubclassEntityPersister;
+@@ -157,7 +161,79 @@
+         }
+         return false;
+     }
++    
++    public boolean isOneToOne(Property property) {
++        return (property.getValue() != null)
++                && (property.getValue() instanceof OneToOne);
++    }
++    
++    public boolean isOneToOneOwner(PersistentClass pojo, Property property) {
++        if (!isOneToOne(property))
++            throw new IllegalArgumentException("Property must be OneToOne");
++
++        boolean foundOwner = false;
++        Table propTable = ((OneToOne) property.getValue()).getTable();
++
++        Iterator fkIterator = pojo.getTable().getForeignKeyIterator();
++        while (!foundOwner && fkIterator.hasNext()) {
++            ForeignKey fk = (ForeignKey) fkIterator.next();
++
++            foundOwner = fk.getReferencedTable().equals(propTable);
++        }
++
++        return !foundOwner;
++    }
++
++    public boolean isOneToOneOwned(PersistentClass pojo) {
+ 
++        boolean foundOwner = false;
++
++        Iterator fkIterator = pojo.getTable().getForeignKeyIterator();
++
++        List pkColumns = null;
++        List fkColumns = null;
++
++        if (pojo.getTable().hasPrimaryKey())
++            pkColumns = pojo.getTable().getPrimaryKey().getColumns();
++        else
++            return false;
++
++        while (!foundOwner && fkIterator.hasNext()) {
++            ForeignKey fk = (ForeignKey) fkIterator.next();
++            fkColumns = fk.getColumns();
++
++            boolean equals =
++                    fkColumns != null && pkColumns != null
++                            && fkColumns.size() == pkColumns.size();
++
++            Iterator columns = fk.getColumnIterator();
++            while (equals && columns.hasNext()) {
++                Column fkColumn = (Column) columns.next();
++                equals = equals && pkColumns.contains(fkColumn);
++            }
++
++            foundOwner = equals;
++        }
++
++        return foundOwner;
++    }
++
++    public Property getOneToOneOwner(PersistentClass pojo) {
++        Property prop = new Property();
++
++        Iterator propIterator = pojo.getPropertyIterator();
++        while (propIterator.hasNext()) {
++            Property property = (Property) propIterator.next();
++
++            if (isOneToOne(property) && !isOneToOneOwner(pojo, property)) {
++                prop = property;
++                break;
++            }
++        }
++
++        return prop;
++    }
++    
+ 	public boolean isCollection(Property property) {
+         return property.getValue() != null && property.getValue() instanceof Collection;
+     }
+Index: src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- src/java/org/hibernate/cfg/JDBCBinder.java	(revision 14961)
++++ src/java/org/hibernate/cfg/JDBCBinder.java	(working copy)
+@@ -38,6 +38,7 @@
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.MetaAttribute;
+ import org.hibernate.mapping.OneToMany;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.RootClass;
+@@ -200,6 +201,15 @@
+ 						TableIdentifier.create(foreignKey.getReferencedTable() ),
+ 						foreignKey.getReferencedColumns())) {
+ 					log.debug("Rev.eng excluded one-to-many for foreignkey " + foreignKey.getName());
++                
++				} else if (isOneToOne(foreignKey)) {
++
++                    Property property =
++                            bindOneToOne(rc, foreignKey.getTable(), foreignKey,
++                                    processed);
++
++                    rc.addProperty(property);
++
+ 				} else {
+ 										
+ 					Property property = bindOneToMany(rc, foreignKey, processed, mapping);
+@@ -208,6 +218,62 @@
+ 			}
+ 		}
+ 	}
++	
++    protected boolean isOneToOne(ForeignKey foreignKey) {
++        List fkColumns = foreignKey.getColumns();
++        List pkForeignTableColumns = null;
++
++        if (foreignKey.getTable().hasPrimaryKey())
++            pkForeignTableColumns =
++                    foreignKey.getTable().getPrimaryKey().getColumns();
++
++        boolean equals =
++                fkColumns != null && pkForeignTableColumns != null
++                        && fkColumns.size() == pkForeignTableColumns.size();
++
++        Iterator columns = foreignKey.getColumnIterator();
++        while (equals && columns.hasNext()) {
++            Column fkColumn = (Column) columns.next();
++            equals = equals && pkForeignTableColumns.contains(fkColumn);
++        }
++
++        return equals;
++    }
++
++    /**
++     * @param table
++     * @param fk
++     * @param columnsToBind
++     * @param processedColumns
++     * @param rc
++     * @param propName
++     */
++    private Property bindOneToOne(PersistentClass rc, Table table,
++            ForeignKey fk, Set processedColumns) {
++
++        OneToOne value = new OneToOne(table, rc);
++        value.setReferencedEntityName(revengStrategy
++                .tableToClassName(TableIdentifier.create(table)));
++
++        boolean isUnique = isUniqueReference(fk);
++        String propertyName =
++                revengStrategy.foreignKeyToEntityName(fk.getName(),
++                        TableIdentifier.create(fk.getReferencedTable()), fk
++                                .getReferencedColumns(), TableIdentifier
++                                .create(table), fk.getColumns(), isUnique);
++
++        Iterator columns = fk.getColumnIterator();
++        while (columns.hasNext()) {
++            Column fkcolumn = (Column) columns.next();
++            checkColumn(fkcolumn);
++            value.addColumn(fkcolumn);
++            processedColumns.add(fkcolumn);
++        }
++
++        value.setFetchMode(FetchMode.SELECT);
++        return makeProperty(TableIdentifier.create(table), propertyName, value,
++                true, true, value.getFetchMode() != FetchMode.JOIN, null, null);
++    }	
+ 
+     /**
+      * @param table
+@@ -470,8 +536,35 @@
+ 		Property property = makeProperty(tableIdentifier, makeUnique(rc,idPropertyname), id, true, true, false, null, null);
+ 		rc.setIdentifierProperty(property);            
+ 		rc.setIdentifier(id);
+-			
++		
++        ForeignKey oneToOneFk = findOneToOneOwnerFK(rc);
++
++        if (oneToOneFk != null) {
++
++            Property prop =
++                    bindOneToOne(rc, oneToOneFk.getReferencedTable(),
++                            oneToOneFk, processed);
++
++            rc.addProperty(prop);
++        }		
+ 	}
++	
++    protected ForeignKey findOneToOneOwnerFK(RootClass rc) {
++        ForeignKey found = null;
++        boolean isOneToOne = false;
++
++        Iterator foreignKeys = rc.getTable().getForeignKeyIterator();
++        while (!isOneToOne && foreignKeys.hasNext()) {
++            ForeignKey fk = (ForeignKey) foreignKeys.next();
++            isOneToOne = isOneToOne(fk);
++
++            if (isOneToOne)
++                found = fk;
++        }
++
++        return found;
++    }
++	
+ 
+ 	/**
+ 	 * bind many-to-ones
+Index: src/templates/pojo/Ejb3PropertyGetAnnotation.ftl
+===================================================================
+--- src/templates/pojo/Ejb3PropertyGetAnnotation.ftl	(revision 14961)
++++ src/templates/pojo/Ejb3PropertyGetAnnotation.ftl	(working copy)
+@@ -1,12 +1,25 @@
+ <#if ejb3>
+-<#if pojo.hasIdentifierProperty()>
+-<#if property.equals(clazz.identifierProperty)>
+- ${pojo.generateAnnIdGenerator()}
+-<#-- if this is the id property (getter)-->
+-<#-- explicitly set the column name for this property-->
+-</#if>
+-</#if>
+-<#if c2h.isManyToOne(property)>
++<#if pojo.hasIdentifierProperty() && property.equals(clazz.identifierProperty) 
++  && !c2j.isComponent(property)>
++  ${pojo.generateAnnIdGenerator()}
++  <#if c2h.isOneToOneOwned(clazz)>
++    @${pojo.importType("javax.persistence.GeneratedValue")}(generator="foreignKeyGenerator") 
++    @${pojo.importType("org.hibernate.annotations.GenericGenerator")}(name="foreignKeyGenerator", strategy="foreign", parameters=@${pojo.importType("org.hibernate.annotations.Parameter")}(name="property", value="${c2h.getOneToOneOwner(clazz).getName()}"))
++  <#elseif c2h.hasNumericIdentifier(clazz)>
++    @${pojo.importType("javax.persistence.GeneratedValue")}(strategy = ${pojo.importType("javax.persistence.GenerationType")}.AUTO)
++  </#if>
++  ${pojo.generateBasicAnnotation(property)}
++  ${pojo.generateAnnColumnAnnotation(property)}  
++<#elseif pojo.hasIdentifierProperty() && property.equals(clazz.identifierProperty) 
++  && c2j.isComponent(property)>
++  @${pojo.importType("javax.persistence.EmbeddedId")}
++<#elseif c2h.isOneToOne(property)>
++  @${pojo.importType("javax.persistence.OneToOne")}(fetch = ${pojo.importType("javax.persistence.FetchType")}.LAZY)
++  <#if c2h.isOneToOneOwner(clazz,property)>
++  @${pojo.importType("org.hibernate.annotations.Cascade")}({org.hibernate.annotations.CascadeType.ALL, org.hibernate.annotations.CascadeType.DELETE_ORPHAN})
++  </#if>
++  @${pojo.importType("javax.persistence.PrimaryKeyJoinColumn")}
++<#elseif c2h.isManyToOne(property)>
+ <#--TODO support @OneToOne true and false-->    
+ ${pojo.generateManyToOneAnnotation(property)}
+ <#--TODO support optional and targetEntity-->    

@@ -1,0 +1,757 @@
+Index: src/main/java/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/HbmBinder.java	(revision 18789)
++++ src/main/java/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -43,6 +43,7 @@
+ import org.hibernate.engine.FilterDefinition;
+ import org.hibernate.engine.NamedQueryDefinition;
+ import org.hibernate.engine.Versioning;
++import org.hibernate.id.GeneratorProperties;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+ import org.hibernate.mapping.Any;
+ import org.hibernate.mapping.Array;
+@@ -1975,12 +1976,14 @@
+ 					);
+ 			}
+ 			else if ( "parent".equals( name ) ) {
++				value = new OneToOne( component.getTable(), component.getOwner() );
++				bindParent(mappings, subnode, propertyName, value);
+ 				component.setParentProperty( propertyName );
+ 			}
+ 
+ 			if ( value != null ) {
+ 				Property property = createProperty( value, propertyName, component
+-					.getComponentClassName(), subnode, mappings, inheritedMetas );
++					.getComponentClassName(), subnode, mappings, inheritedMetas, "parent".equals(name));
+ 				if (isIdentifierMapper) {
+ 					property.setInsertable(false);
+ 					property.setUpdateable(false);
+@@ -2006,6 +2009,16 @@
+ 		}
+ 	}
+ 
++	private static void bindParent(Mappings mappings, Element subnode, String propertyName, Value value) {
++		bindOneToOne( subnode, (OneToOne) value, propertyName, false, mappings );
++		Column column = new Column();
++		column.setName(propertyName);
++		column.setValue(value);
++		column.setNullable(false);
++		column.setUnique(true);
++		((OneToOne) value).addColumn(column);
++	}
++
+ 	public static String getTypeFromXML(Element node) throws MappingException {
+ 		// TODO: handle TypeDefs
+ 		Attribute typeNode = node.attribute( "type" );
+@@ -2068,9 +2081,8 @@
+ 			final String generatorClass = subnode.attributeValue( "class" );
+ 			model.setIdentifierGeneratorStrategy( generatorClass );
+ 
+-			Properties params = new Properties();
+-			// YUCK!  but cannot think of a clean way to do this given the string-config based scheme
+-			params.put( PersistentIdentifierGenerator.IDENTIFIER_NORMALIZER, mappings.getObjectNameNormalizer() );
++			GeneratorProperties params = new GeneratorProperties();
++			params.setNormalizer(mappings.getObjectNameNormalizer() );
+ 
+ 			if ( mappings.getSchemaName() != null ) {
+ 				params.setProperty(
+@@ -2246,7 +2258,6 @@
+ 
+ 		}
+ 	}
+-
+ 	private static Property createProperty(
+ 			final Value value,
+ 	        final String propertyName,
+@@ -2254,12 +2265,27 @@
+ 	        final Element subnode,
+ 	        final Mappings mappings,
+ 			java.util.Map inheritedMetas) throws MappingException {
++		return createProperty(value, propertyName, className, subnode, mappings, inheritedMetas, false);
++	}
++
++	private static Property createProperty(
++			final Value value,
++	        final String propertyName,
++			final String className,
++	        final Element subnode,
++	        final Mappings mappings,
++			java.util.Map inheritedMetas,
++			final boolean isParent) throws MappingException {
+ 
+ 		if ( StringHelper.isEmpty( propertyName ) ) {
+ 			throw new MappingException( subnode.getName() + " mapping must defined a name attribute [" + className + "]" );
+ 		}
+ 
+-		value.setTypeUsingReflection( className, propertyName );
++		if(isParent) {
++			((OneToOne) value).setReferencedEntityName(((OneToOne) value).getEntityName());
++		} else {
++			value.setTypeUsingReflection( className, propertyName );
++		}
+ 
+ 		// this is done here 'cos we might only know the type here (ugly!)
+ 		// TODO: improve this a lot:
+Index: src/main/java/org/hibernate/cfg/Configuration.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Configuration.java	(revision 18789)
++++ src/main/java/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -64,6 +64,7 @@
+ import org.hibernate.InvalidMappingException;
+ import org.hibernate.MappingException;
+ import org.hibernate.MappingNotFoundException;
++import org.hibernate.MultiSchemaEntityException;
+ import org.hibernate.SessionFactory;
+ import org.hibernate.SessionFactoryObserver;
+ import org.hibernate.DuplicateMappingException;
+@@ -312,7 +313,14 @@
+ 	 * @return the entity mapping information
+ 	 */
+ 	public PersistentClass getClassMapping(String entityName) {
+-		return (PersistentClass) classes.get( entityName );
++		Object ret = classes.get( entityName );
++		if(ret == null) {
++			return null;
++		}
++		if(ret.getClass() == HashMap.class) {
++			throw new MultiSchemaEntityException(entityName, ((HashMap)ret).keySet().toArray());
++		}
++		return (PersistentClass) ret;
+ 	}
+ 
+ 	/**
+@@ -788,22 +796,15 @@
+ 
+ 		Iterator iter = classes.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			PersistentClass pc = ( PersistentClass ) iter.next();
+-			if ( !pc.isInherited() ) {
+-				IdentifierGenerator ig = pc.getIdentifier().createIdentifierGenerator(
+-						getIdentifierGeneratorFactory(),
+-						dialect,
+-						defaultCatalog,
+-						defaultSchema,
+-						(RootClass) pc
+-				);
+-
+-				if ( ig instanceof PersistentIdentifierGenerator ) {
+-					generators.put( ( (PersistentIdentifierGenerator) ig ).generatorKey(), ig );
++			Object o = iter.next();
++			if(o instanceof Map) {
++				Map m = (Map) o;
++				for (Iterator iterator = m.values().iterator(); iterator.hasNext();) {
++					PersistentClass pc = (PersistentClass) iterator.next();
++					createIdentifierGenerator(dialect, generators, defaultCatalog, defaultSchema, pc);
+ 				}
+-				else if ( ig instanceof IdentifierGeneratorAggregator ) {
+-					( (IdentifierGeneratorAggregator) ig ).registerPersistentGenerators( generators );
+-				}
++			} else {
++				createIdentifierGenerator(dialect, generators, defaultCatalog, defaultSchema, (PersistentClass) o);
+ 			}
+ 		}
+ 
+@@ -828,6 +829,26 @@
+ 		return generators.values().iterator();
+ 	}
+ 
++	private void createIdentifierGenerator(Dialect dialect, TreeMap generators, String defaultCatalog,
++			String defaultSchema, PersistentClass pc) {
++		if ( !pc.isInherited() ) {
++			IdentifierGenerator ig = pc.getIdentifier().createIdentifierGenerator(
++					getIdentifierGeneratorFactory(),
++					dialect,
++					defaultCatalog,
++					defaultSchema,
++					(RootClass) pc
++			);
++
++			if ( ig instanceof PersistentIdentifierGenerator ) {
++				generators.put( ( (PersistentIdentifierGenerator) ig ).generatorKey(), ig );
++			}
++			else if ( ig instanceof IdentifierGeneratorAggregator ) {
++				( (IdentifierGeneratorAggregator) ig ).registerPersistentGenerators( generators );
++			}
++		}
++	}
++
+ 	/**
+ 	 * Generate DDL for dropping tables
+ 	 *
+@@ -1190,7 +1211,16 @@
+ 	private void validate() throws MappingException {
+ 		Iterator iter = classes.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			( (PersistentClass) iter.next() ).validate( mapping );
++			Object o = iter.next();
++			if(o instanceof Map) {
++				Map m = (Map) o;
++				for (Iterator iterator = m.values().iterator(); iterator.hasNext();) {
++					PersistentClass pc = (PersistentClass) iterator.next();
++					pc.validate( mapping );
++				}
++			} else {
++				((PersistentClass) o).validate( mapping );
++			}
+ 		}
+ 		iter = collections.values().iterator();
+ 		while ( iter.hasNext() ) {
+@@ -1338,8 +1368,8 @@
+ 				if ( log.isDebugEnabled() ) {
+ 					log.debug( "resolving reference to class: " + referencedEntityName );
+ 				}
+-				PersistentClass referencedClass = (PersistentClass) classes.get( referencedEntityName );
+-				if ( referencedClass == null ) {
++				Object o =  classes.get( referencedEntityName );
++				if ( o == null ) {
+ 					throw new MappingException(
+ 							"An association from the table " +
+ 							fk.getTable().getName() +
+@@ -1347,7 +1377,16 @@
+ 							referencedEntityName
+ 						);
+ 				}
+-				if ( referencedClass.isJoinedSubclass() ) {
++				if(o instanceof Map) {
++					throw new MappingException(
++							"An association from the table " +
++							fk.getTable().getName() +
++							" refers to multiple entities: " +
++							referencedEntityName, 
++							new MultiSchemaEntityException(referencedEntityName, ((Map) o).keySet().toArray()));
++				}
++				PersistentClass referencedClass = (PersistentClass) o;
++				if (referencedClass.isJoinedSubclass() ) {
+ 					secondPassCompileForeignKeys( referencedClass.getSuperclass().getTable(), done );
+ 				}
+ 				fk.setReferencedTable( referencedClass.getTable() );
+@@ -2210,18 +2249,26 @@
+ 			 * Returns the identifier type of a mapped class
+ 			 */
+ 			public Type getIdentifierType(String persistentClass) throws MappingException {
+-				PersistentClass pc = ( (PersistentClass) classes.get( persistentClass ) );
+-				if ( pc == null ) {
++				Object o =  classes.get(persistentClass);
++				if (o == null) {
+ 					throw new MappingException( "persistent class not known: " + persistentClass );
+ 				}
++				if(o instanceof Map) {
++					throw new MultiSchemaEntityException(persistentClass, ((Map) o).keySet().toArray());
++				}
++				PersistentClass pc = ( (PersistentClass) classes.get( persistentClass ) );
+ 				return pc.getIdentifier().getType();
+ 			}
+ 
+ 			public String getIdentifierPropertyName(String persistentClass) throws MappingException {
+-				final PersistentClass pc = (PersistentClass) classes.get( persistentClass );
+-				if ( pc == null ) {
++				Object o =  classes.get(persistentClass);
++				if (o == null) {
+ 					throw new MappingException( "persistent class not known: " + persistentClass );
+ 				}
++				if(o instanceof Map) {
++					throw new MultiSchemaEntityException(persistentClass, ((Map) o).keySet().toArray());
++				}
++				PersistentClass pc = ( (PersistentClass) classes.get( persistentClass ) );
+ 				if ( !pc.hasIdentifierProperty() ) {
+ 					return null;
+ 				}
+@@ -2229,10 +2276,14 @@
+ 			}
+ 
+ 			public Type getReferencedPropertyType(String persistentClass, String propertyName) throws MappingException {
+-				final PersistentClass pc = (PersistentClass) classes.get( persistentClass );
+-				if ( pc == null ) {
++				Object o =  classes.get(persistentClass);
++				if (o == null) {
+ 					throw new MappingException( "persistent class not known: " + persistentClass );
+ 				}
++				if(o instanceof Map) {
++					throw new MultiSchemaEntityException(persistentClass, ((Map) o).keySet().toArray());
++				}
++				PersistentClass pc = ( (PersistentClass) classes.get( persistentClass ) );
+ 				Property prop = pc.getReferencedProperty( propertyName );
+ 				if ( prop == null ) {
+ 					throw new MappingException(
+@@ -2387,7 +2438,11 @@
+ 		}
+ 
+ 		public PersistentClass getClass(String entityName) {
+-			return ( PersistentClass ) classes.get( entityName );
++			Object ret = classes.get( entityName );
++			if(ret instanceof Map) {
++				throw new MultiSchemaEntityException(entityName, ((Map) ret).keySet().toArray());
++			}
++			return ( PersistentClass ) ret;
+ 		}
+ 
+ 		public PersistentClass locatePersistentClassByEntityName(String entityName) {
+@@ -2402,9 +2457,47 @@
+ 		}
+ 
+ 		public void addClass(PersistentClass persistentClass) throws DuplicateMappingException {
+-			Object old = classes.put( persistentClass.getEntityName(), persistentClass );
++			/*
++			 * Struture of HashMap 'classes':
++			 *  - PersistentClass
++			 *  -- Schema/Catalog
++			 *  
++			 *  This structure will solve the multischema ambiguos entities
++			 *  when reverse enginnering detect TWO or more entities with same
++			 *  name in diferrents schemas/catalogs
++			 *  
++			 *  Thus, the HashMap 'classes' keep the same one-entity behavior,
++			 *  except in reverse enginnering ambiguos entities
++			 */
++			Object old = classes.get(persistentClass.getEntityName());
+ 			if ( old != null ) {
+-				throw new DuplicateMappingException( "class/entity", persistentClass.getEntityName() );
++				//More than 1 entity with a same name
++				Map schemas = null;
++				if(old instanceof PersistentClass) {
++					schemas = new HashMap();
++					String schemaName = ((PersistentClass) old).getTable().getSchema();
++					String catalogName = ((PersistentClass) old).getTable().getCatalog();
++					StringBuilder sb = new StringBuilder();
++					String key = sb.append(catalogName).append('.').append(schemaName).toString();
++					schemas.put(key, old);
++				} else {
++					schemas = (Map) old;
++				}
++				String schemaName = persistentClass.getTable().getSchema();
++				String catalogName = persistentClass.getTable().getCatalog();
++				StringBuilder sb = new StringBuilder();
++				String key = sb.append(catalogName).append('.').append(schemaName).toString();
++				old = schemas.get(key);
++				if(old != null) {
++					//Same entity name in same schema/catalog
++					String entityName = Table.qualify(persistentClass.getTable().getCatalog(), schemaName, persistentClass.getEntityName());
++					throw new DuplicateMappingException( "class/entity", entityName );
++				} else {
++					schemas.put(key, persistentClass);
++				}
++				classes.put(persistentClass.getEntityName(), schemas);
++			} else {
++				classes.put(persistentClass.getEntityName(), persistentClass);				
+ 			}
+ 		}
+ 
+@@ -2820,5 +2913,9 @@
+ 		public NamingStrategy getNamingStrategy() {
+ 			return namingStrategy;
+ 		}
++		
++		public String toString() {
++			return super.toString();
++		}
+ 	}
+ }
+Index: src/main/java/org/hibernate/MultiSchemaEntityException.java
+===================================================================
+--- src/main/java/org/hibernate/MultiSchemaEntityException.java	(revision 0)
++++ src/main/java/org/hibernate/MultiSchemaEntityException.java	(revision 0)
+@@ -0,0 +1,33 @@
++package org.hibernate;
++
++import java.util.Arrays;
++import java.util.Collections;
++
++import org.hibernate.DuplicateMappingException;
++
++public class MultiSchemaEntityException extends DuplicateMappingException {
++
++	public MultiSchemaEntityException(String entityName, Object[] schemas) {
++		super("Multiple '" + entityName + "' entities founded with a same name in follow schemas: " + format(schemas), "class/entity", entityName);
++	}
++
++	private static String format(Object[] schemas) {
++		Arrays.sort(schemas);
++		if(schemas == null || schemas.length == 0) {
++			return "null";
++		}
++		StringBuffer sb = new StringBuffer();
++		for (int i = 0; i < schemas.length; i++) {
++			if(schemas[i] == null) {
++				sb.append("undefined");
++			} else {
++				sb.append("'").append(schemas[i]).append("'");
++			}
++			if(i + 1 < schemas.length) {
++				sb.append(", ");
++			}
++		}
++		return sb.toString();
++	}
++
++}
+Index: src/main/java/org/hibernate/mapping/Property.java
+===================================================================
+--- src/main/java/org/hibernate/mapping/Property.java	(revision 18789)
++++ src/main/java/org/hibernate/mapping/Property.java	(working copy)
+@@ -25,7 +25,9 @@
+ package org.hibernate.mapping;
+ 
+ import java.io.Serializable;
++import java.util.HashMap;
+ import java.util.Iterator;
++import java.util.Map;
+ import java.util.StringTokenizer;
+ 
+ import org.hibernate.MappingException;
+@@ -311,4 +313,12 @@
+ 	public void setNaturalIdentifier(boolean naturalIdentifier) {
+ 		this.naturalIdentifier = naturalIdentifier;
+ 	}
++
++	public void addMetaAttribute(Map m) {
++		if(metaAttributes == null) {
++			metaAttributes = m;
++		} else {
++			metaAttributes.putAll(m);
++		}
++	}
+ }
+Index: src/main/java/org/hibernate/mapping/SimpleValue.java
+===================================================================
+--- src/main/java/org/hibernate/mapping/SimpleValue.java	(revision 18789)
++++ src/main/java/org/hibernate/mapping/SimpleValue.java	(working copy)
+@@ -33,6 +33,7 @@
+ import org.hibernate.MappingException;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.Mapping;
++import org.hibernate.id.GeneratorProperties;
+ import org.hibernate.id.IdentifierGenerator;
+ import org.hibernate.id.IdentityGenerator;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+@@ -126,8 +127,8 @@
+ 			String defaultCatalog, 
+ 			String defaultSchema, 
+ 			RootClass rootClass) throws MappingException {
+-		
+-		Properties params = new Properties();
++		// if has identifier, instantiate a GeneratorProperties
++		Properties params = identifierGeneratorProperties != null ? new GeneratorProperties() : new Properties();
+ 		
+ 		//if the hibernate-mapping did not specify a schema/catalog, use the defaults
+ 		//specified by properties - but note that if the schema/catalog were specified
+@@ -171,6 +172,7 @@
+ 
+ 		if (identifierGeneratorProperties!=null) {
+ 			params.putAll(identifierGeneratorProperties);
++			((GeneratorProperties) params).setNormalizer(((GeneratorProperties) identifierGeneratorProperties).getNormalizer());
+ 		}
+ 
+ 		identifierGeneratorFactory.setDialect( dialect );
+Index: src/main/java/org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- src/main/java/org/hibernate/mapping/PersistentClass.java	(revision 18789)
++++ src/main/java/org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -429,13 +429,21 @@
+ 	}
+ 
+ 	private Property getProperty(String propertyName, Iterator iterator) throws MappingException {
++		Property ret =  findProperty(propertyName, iterator);
++		if(ret == null) {
++			throw new MappingException( "property [" + propertyName + "] not found on entity [" + getEntityName() + "]" );
++		}
++		return ret;
++	}
++
++	private Property findProperty(String propertyName, Iterator iterator) {
+ 		while ( iterator.hasNext() ) {
+ 			Property prop = (Property) iterator.next();
+ 			if ( prop.getName().equals( StringHelper.root(propertyName) ) ) {
+ 				return prop;
+ 			}
+ 		}
+-		throw new MappingException( "property [" + propertyName + "] not found on entity [" + getEntityName() + "]" );
++		return null;
+ 	}
+ 
+ 	public Property getProperty(String propertyName) throws MappingException {
+@@ -446,9 +454,15 @@
+ 				) {
+ 			return identifierProperty;
+ 		}
+-		else {
+-			return getProperty( propertyName, iter );
++		Property prop = findProperty(propertyName, iter);
++		if(prop == null) {
++			if(identifierProperty != null && identifierProperty.isComposite()) {
++				prop = getProperty(propertyName, ((Component) identifierProperty.getValue()).getPropertyIterator());
++			} else {
++				throw new MappingException( "property [" + propertyName + "] not found on entity [" + getEntityName() + "]" );
++			}
+ 		}
++		return prop;
+ 	}
+ 
+ 	abstract public int getOptimisticLockMode();
+Index: src/main/java/org/hibernate/id/PersistentIdentifierGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/PersistentIdentifierGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/PersistentIdentifierGenerator.java	(working copy)
+@@ -69,11 +69,6 @@
+     public static final String CATALOG = "catalog";
+ 
+ 	/**
+-	 * The key under whcih to find the {@link org.hibernate.cfg.ObjectNameNormalizer} in the config param map.
+-	 */
+-	public static final String IDENTIFIER_NORMALIZER = "identifier_normalizer";
+-
+-	/**
+ 	 * The SQL required to create the underlying database objects.
+ 	 *
+ 	 * @param dialect The dialect against which to generate the create command(s)
+Index: src/main/java/org/hibernate/id/TableGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/TableGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/TableGenerator.java	(working copy)
+@@ -96,7 +96,7 @@
+ 	public void configure(Type type, Properties params, Dialect dialect) {
+ 		identifierType = type;
+ 
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++		ObjectNameNormalizer normalizer = ((GeneratorProperties) params).getNormalizer();
+ 
+ 		tableName = PropertiesHelper.getString( TABLE, params, DEFAULT_TABLE_NAME );
+ 		if ( tableName.indexOf( '.' ) < 0 ) {
+Index: src/main/java/org/hibernate/id/MultipleHiLoPerTableGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/MultipleHiLoPerTableGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/MultipleHiLoPerTableGenerator.java	(working copy)
+@@ -224,7 +224,7 @@
+ 	}
+ 
+ 	public void configure(Type type, Properties params, Dialect dialect) throws MappingException {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++		ObjectNameNormalizer normalizer = ((GeneratorProperties) params).getNormalizer();
+ 
+ 		tableName = normalizer.normalizeIdentifierQuoting( PropertiesHelper.getString( ID_TABLE, params, DEFAULT_TABLE ) );
+ 		if ( tableName.indexOf( '.' ) < 0 ) {
+Index: src/main/java/org/hibernate/id/GeneratorProperties.java
+===================================================================
+--- src/main/java/org/hibernate/id/GeneratorProperties.java	(revision 0)
++++ src/main/java/org/hibernate/id/GeneratorProperties.java	(revision 0)
+@@ -0,0 +1,18 @@
++package org.hibernate.id;
++
++import java.util.Properties;
++
++import org.hibernate.cfg.ObjectNameNormalizer;
++
++public class GeneratorProperties extends Properties {
++
++	private ObjectNameNormalizer normalizer;
++
++	public void setNormalizer(ObjectNameNormalizer normalizer) {
++		this.normalizer = normalizer;
++	}
++
++	public ObjectNameNormalizer getNormalizer() {
++		return normalizer;
++	}
++}
+Index: src/main/java/org/hibernate/id/SequenceGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/SequenceGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/SequenceGenerator.java	(working copy)
+@@ -73,7 +73,7 @@
+ 	private String sql;
+ 
+ 	public void configure(Type type, Properties params, Dialect dialect) throws MappingException {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++		ObjectNameNormalizer normalizer = ((GeneratorProperties) params).getNormalizer();
+ 		sequenceName = normalizer.normalizeIdentifierQuoting(
+ 				PropertiesHelper.getString( SEQUENCE, params, "hibernate_sequence" )
+ 		);
+Index: src/main/java/org/hibernate/id/IncrementGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/IncrementGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/IncrementGenerator.java	(working copy)
+@@ -29,8 +29,6 @@
+ import java.sql.SQLException;
+ import java.util.Properties;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.cfg.ObjectNameNormalizer;
+@@ -40,6 +38,8 @@
+ import org.hibernate.mapping.Table;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * <b>increment</b><br>
+@@ -72,8 +72,7 @@
+ 	public void configure(Type type, Properties params, Dialect dialect) throws MappingException {
+ 		returnClass = type.getReturnedClass();
+ 
+-		ObjectNameNormalizer normalizer =
+-				( ObjectNameNormalizer ) params.get( PersistentIdentifierGenerator.IDENTIFIER_NORMALIZER );
++		ObjectNameNormalizer normalizer = ((GeneratorProperties) params).getNormalizer();
+ 
+ 		String column = params.getProperty( "column" );
+ 		if ( column == null ) {
+Index: src/main/java/org/hibernate/id/enhanced/TableGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/enhanced/TableGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/enhanced/TableGenerator.java	(working copy)
+@@ -24,36 +24,36 @@
+  */
+ package org.hibernate.id.enhanced;
+ 
+-import java.sql.Types;
++import java.io.Serializable;
+ import java.sql.Connection;
+-import java.sql.SQLException;
+ import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+-import java.util.Properties;
++import java.sql.SQLException;
++import java.sql.Types;
+ import java.util.Collections;
+ import java.util.Map;
+-import java.io.Serializable;
++import java.util.Properties;
+ 
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-import org.hibernate.engine.TransactionHelper;
++import org.hibernate.HibernateException;
++import org.hibernate.LockMode;
++import org.hibernate.LockOptions;
++import org.hibernate.MappingException;
++import org.hibernate.cfg.ObjectNameNormalizer;
++import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.engine.TransactionHelper;
++import org.hibernate.id.Configurable;
++import org.hibernate.id.GeneratorProperties;
+ import org.hibernate.id.IdentifierGeneratorHelper;
+ import org.hibernate.id.IntegralDataTypeHolder;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+-import org.hibernate.id.Configurable;
+-import org.hibernate.type.Type;
+-import org.hibernate.dialect.Dialect;
+-import org.hibernate.HibernateException;
+-import org.hibernate.MappingException;
+-import org.hibernate.LockOptions;
+-import org.hibernate.LockMode;
+-import org.hibernate.cfg.ObjectNameNormalizer;
+ import org.hibernate.jdbc.util.FormatStyle;
+ import org.hibernate.mapping.Table;
++import org.hibernate.type.Type;
+ import org.hibernate.util.PropertiesHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * An enhanced version of table-based id generation.
+@@ -289,9 +289,9 @@
+ 	public void configure(Type type, Properties params, Dialect dialect) throws MappingException {
+ 		identifierType = type;
+ 
+-		tableName = determineGeneratorTableName( params, dialect );
+-		segmentColumnName = determineSegmentColumnName( params, dialect );
+-		valueColumnName = determineValueColumnName( params, dialect );
++		tableName = determineGeneratorTableName( (GeneratorProperties) params, dialect );
++		segmentColumnName = determineSegmentColumnName( (GeneratorProperties) params, dialect );
++		valueColumnName = determineValueColumnName( (GeneratorProperties) params, dialect );
+ 
+ 		segmentValue = determineSegmentValue( params );
+ 
+@@ -318,11 +318,11 @@
+ 	 * @param dialect The dialect in effect
+ 	 * @return The table name to use.
+ 	 */
+-	protected String determineGeneratorTableName(Properties params, Dialect dialect) {
++	protected String determineGeneratorTableName(GeneratorProperties params, Dialect dialect) {
+ 		String name = PropertiesHelper.getString( TABLE_PARAM, params, DEF_TABLE );
+ 		boolean isGivenNameUnqualified = name.indexOf( '.' ) < 0;
+ 		if ( isGivenNameUnqualified ) {
+-			ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++			ObjectNameNormalizer normalizer = params.getNormalizer();
+ 			name = normalizer.normalizeIdentifierQuoting( name );
+ 			// if the given name is un-qualified we may neen to qualify it
+ 			String schemaName = normalizer.normalizeIdentifierQuoting( params.getProperty( SCHEMA ) );
+@@ -351,8 +351,8 @@
+ 	 * @param dialect The dialect in effect
+ 	 * @return The name of the segment column
+ 	 */
+-	protected String determineSegmentColumnName(Properties params, Dialect dialect) {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++	protected String determineSegmentColumnName(GeneratorProperties params, Dialect dialect) {
++		ObjectNameNormalizer normalizer = params.getNormalizer();
+ 		String name = PropertiesHelper.getString( SEGMENT_COLUMN_PARAM, params, DEF_SEGMENT_COLUMN );
+ 		return dialect.quote( normalizer.normalizeIdentifierQuoting( name ) );
+ 	}
+@@ -367,8 +367,8 @@
+ 	 * @param dialect The dialect in effect
+ 	 * @return The name of the value column
+ 	 */
+-	protected String determineValueColumnName(Properties params, Dialect dialect) {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++	protected String determineValueColumnName(GeneratorProperties params, Dialect dialect) {
++		ObjectNameNormalizer normalizer = params.getNormalizer();
+ 		String name = PropertiesHelper.getString( VALUE_COLUMN_PARAM, params, DEF_VALUE_COLUMN );
+ 		return dialect.quote( normalizer.normalizeIdentifierQuoting( name ) );
+ 	}
+Index: src/main/java/org/hibernate/id/enhanced/SequenceStyleGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/id/enhanced/SequenceStyleGenerator.java	(revision 18789)
++++ src/main/java/org/hibernate/id/enhanced/SequenceStyleGenerator.java	(working copy)
+@@ -30,6 +30,7 @@
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
++import org.hibernate.id.GeneratorProperties;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+ import org.hibernate.id.Configurable;
+ import org.hibernate.HibernateException;
+@@ -161,7 +162,7 @@
+ 		this.identifierType = type;
+ 		boolean forceTableUse = PropertiesHelper.getBoolean( FORCE_TBL_PARAM, params, false );
+ 
+-		final String sequenceName = determineSequenceName( params, dialect );
++		final String sequenceName = determineSequenceName((GeneratorProperties) params, dialect);
+ 
+ 		final int initialValue = determineInitialValue( params );
+ 		int incrementSize = determineIncrementSize( params );
+@@ -202,8 +203,8 @@
+ 	 * @param dialect The dialect in effect
+ 	 * @return The sequence name
+ 	 */
+-	protected String determineSequenceName(Properties params, Dialect dialect) {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++	protected String determineSequenceName(GeneratorProperties params, Dialect dialect) {
++		ObjectNameNormalizer normalizer = params.getNormalizer();
+ 		String sequenceName = PropertiesHelper.getString( SEQUENCE_PARAM, params, DEF_SEQUENCE_NAME );
+ 		if ( sequenceName.indexOf( '.' ) < 0 ) {
+ 			sequenceName = normalizer.normalizeIdentifierQuoting( sequenceName );
+@@ -233,8 +234,8 @@
+ 	 * @param dialect The dialect in effect.
+ 	 * @return The value column name
+ 	 */
+-	protected String determineValueColumnName(Properties params, Dialect dialect) {
+-		ObjectNameNormalizer normalizer = ( ObjectNameNormalizer ) params.get( IDENTIFIER_NORMALIZER );
++	protected String determineValueColumnName(GeneratorProperties params, Dialect dialect) {
++		ObjectNameNormalizer normalizer = params.getNormalizer();
+ 		String name = PropertiesHelper.getString( VALUE_COLUMN_PARAM, params, DEF_VALUE_COLUMN );
+ 		return dialect.quote( normalizer.normalizeIdentifierQuoting( name ) );
+ 	}
+@@ -320,7 +321,7 @@
+ 			return new SequenceStructure( dialect, sequenceName, initialValue, incrementSize, type.getReturnedClass() );
+ 		}
+ 		else {
+-			String valueColumnName = determineValueColumnName( params, dialect );
++			String valueColumnName = determineValueColumnName((GeneratorProperties) params, dialect);
+ 			return new TableStructure( dialect, sequenceName, valueColumnName, initialValue, incrementSize, type.getReturnedClass() );
+ 		}
+ 	}

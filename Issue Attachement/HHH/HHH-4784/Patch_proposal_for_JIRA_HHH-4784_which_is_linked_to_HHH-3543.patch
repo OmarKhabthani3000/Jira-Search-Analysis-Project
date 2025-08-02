@@ -1,0 +1,157 @@
+Index: core/src/main/java/org/hibernate/transaction/JDBCTransaction.java
+===================================================================
+--- core/src/main/java/org/hibernate/transaction/JDBCTransaction.java	(revision 14993)
++++ core/src/main/java/org/hibernate/transaction/JDBCTransaction.java	(revision )
+@@ -137,13 +137,13 @@
+ 			transactionContext.managedFlush(); //if an exception occurs during flush, user must call rollback()
+ 		}
+ 
++		try {
+-		notifyLocalSynchsBeforeTransactionCompletion();
++      notifyLocalSynchsBeforeTransactionCompletion();
+-		if ( callback ) {
++      if (callback) {
+-			jdbcContext.beforeTransactionCompletion( this );
++        jdbcContext.beforeTransactionCompletion(this);
+-		}
++      }
+ 
+-		try {
+-			commitAndResetAutoCommit();
++      commitAndResetAutoCommit();
+ 			log.debug("committed JDBC Connection");
+ 			committed = true;
+ 			if ( callback ) {
+@@ -151,7 +151,7 @@
+ 			}
+ 			notifyLocalSynchsAfterTransactionCompletion( Status.STATUS_COMMITTED );
+ 		}
+-		catch (SQLException e) {
++		catch (Exception e) {
+ 			log.error("JDBC commit failed", e);
+ 			commitFailed = true;
+ 			if ( callback ) {
+@@ -266,15 +266,16 @@
+ 		synchronizations.add(sync);
+ 	}
+ 
+-	private void notifyLocalSynchsBeforeTransactionCompletion() {
++	private void notifyLocalSynchsBeforeTransactionCompletion() throws Exception {
+ 		if (synchronizations!=null) {
+ 			for ( int i=0; i<synchronizations.size(); i++ ) {
+ 				Synchronization sync = (Synchronization) synchronizations.get(i);
+ 				try {
+ 					sync.beforeCompletion();
+ 				}
+-				catch (Throwable t) {
+-					log.error("exception calling user Synchronization", t);
++				catch (Exception e) {
++					log.error("exception calling user Synchronization", e);
++          throw e;
+ 				}
+ 			}
+ 		}
+Index: envers/src/main/java/org/hibernate/envers/synchronization/AuditSync.java
+===================================================================
+--- envers/src/main/java/org/hibernate/envers/synchronization/AuditSync.java	(revision 18208)
++++ envers/src/main/java/org/hibernate/envers/synchronization/AuditSync.java	(revision )
+@@ -23,21 +23,19 @@
+  */
+ package org.hibernate.envers.synchronization;
+ 
+-import java.util.HashMap;
+-import java.util.LinkedList;
+-import java.util.Map;
+-import java.util.Queue;
+-import javax.transaction.Synchronization;
+-
++import org.hibernate.Session;
++import org.hibernate.Transaction;
+ import org.hibernate.envers.revisioninfo.RevisionInfoGenerator;
+ import org.hibernate.envers.synchronization.work.AuditWorkUnit;
+ import org.hibernate.envers.tools.Pair;
+-
+-import org.hibernate.FlushMode;
+-import org.hibernate.Session;
+-import org.hibernate.Transaction;
+ import org.hibernate.event.EventSource;
+ 
++import javax.transaction.Synchronization;
++import java.util.HashMap;
++import java.util.LinkedList;
++import java.util.Map;
++import java.util.Queue;
++
+ /**
+  * @author Adam Warski (adam at warski dot org)
+  */
+@@ -138,41 +136,14 @@
+         if (workUnits.size() == 0 && undoQueue.size() == 0) {
+             return;
+         }
+-
+-		try {
++      try {
+-			// see: http://www.jboss.com/index.html?module=bb&op=viewtopic&p=4178431
+-			if (FlushMode.isManualFlushMode(session.getFlushMode()) || session.isClosed()) {
+-				Session temporarySession = null;
+-				try {
+-					temporarySession = session.getFactory().openTemporarySession();
+-
+-					executeInSession(temporarySession);
+-
+-					temporarySession.flush();
+-				} finally {
+-					if (temporarySession != null) {
+-						temporarySession.close();
+-					}
+-				}
+-			} else {
+-				executeInSession(session);
++        executeInSession(session);
+-
+-				// Explicity flushing the session, as the auto-flush may have already happened.
++        /* Explicity flushing the session, as the auto-flush may have already happened. */
+-				session.flush();
++        session.flush();
+-			}
+-		} catch (RuntimeException e) {
++      } catch (RuntimeException e) {
+-			// Rolling back the transaction in case of any exceptions
+-			//noinspection finally
+-            try {
+-                if (session.getTransaction().isActive()) {
+-    			    session.getTransaction().rollback();
+-                }
+-            } finally {
+-                //noinspection ThrowFromFinallyBlock
+-                throw e;
+-            }
+-		}
++        throw e;
++      }
++    }
+-    }
+ 
+     public void afterCompletion(int i) {
+         manager.remove(transaction);
+Index: envers/src/test/java/org/hibernate/envers/test/integration/flush/ManualFlush.java
+===================================================================
+--- envers/src/test/java/org/hibernate/envers/test/integration/flush/ManualFlush.java	(revision 18208)
++++ envers/src/test/java/org/hibernate/envers/test/integration/flush/ManualFlush.java	(revision )
+@@ -71,12 +71,13 @@
+         fe = em.find(StrTestEntity.class, fe.getId());
+         fe.setStr("z");
+         em.flush();
++        em.getTransaction().commit();
+ 
++        em.getTransaction().begin();
+         fe = em.find(StrTestEntity.class, fe.getId());
+         fe.setStr("z2");
++        em.getTransaction().rollback();
+ 
+-        em.getTransaction().commit();
+-
+         //
+ 
+         id = fe.getId();

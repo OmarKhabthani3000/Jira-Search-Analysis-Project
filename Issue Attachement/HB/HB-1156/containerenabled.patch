@@ -1,0 +1,438 @@
+Index: src/net/sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.34
+diff -u -r1.34 Configuration.java
+--- src/net/sf/hibernate/cfg/Configuration.java	21 Jul 2004 06:32:58 -0000	1.34
++++ src/net/sf/hibernate/cfg/Configuration.java	11 Aug 2004 10:58:56 -0000
+@@ -88,8 +88,8 @@
+ 	private Interceptor interceptor = EMPTY_INTERCEPTOR;
+ 	private Properties properties = Environment.getProperties();
+ 	private Map caches = new HashMap();
+-	
+-	private NamingStrategy namingStrategy = DefaultNamingStrategy.INSTANCE; 
++
++	private NamingStrategy namingStrategy = DefaultNamingStrategy.INSTANCE;
+ 
+ 	private static Log log = LogFactory.getLog(Configuration.class);
+ 
+@@ -118,9 +118,15 @@
+ 			return ( (PersistentClass) classes.get(persistentClass) ).getProperty(propertyName).getType();
+ 		}
+ 	};
+-	
+ 
+-	public Configuration() {
++    private final SettingsFactory settingsFactory;
++
++    public Configuration() {
++        this(new SettingsFactory());
++    }
++
++    public Configuration(SettingsFactory settingsFactory) {
++        this.settingsFactory = settingsFactory;
+ 		reset();
+ 	}
+ 
+@@ -263,14 +269,14 @@
+ 	 */
+ 	public Mappings createMappings() {
+ 		return new Mappings(
+-			classes, 
+-			collections, 
+-			tables, 
+-			namedQueries, 
+-			namedSqlQueries, 
+-			imports, 
+-			caches, 
+-			secondPasses, 
++			classes,
++			collections,
++			tables,
++			namedQueries,
++			namedSqlQueries,
++			imports,
++			caches,
++			secondPasses,
+ 			propertyReferences,
+ 			namingStrategy
+ 		);
+@@ -298,9 +304,9 @@
+ 		finally {
+ 			try{
+ 				xmlInputStream.close();
+-			} 
++			}
+ 			catch (IOException ioe){
+-				log.error("could not close input stream", ioe);	
++				log.error("could not close input stream", ioe);
+ 			}
+ 		}
+ 	}
+@@ -316,12 +322,12 @@
+ 		if (rsrc==null) throw new MappingException("Resource: " + path + " not found");
+ 		try {
+ 			return addInputStream(rsrc);
+-		} 
++		}
+ 		catch (MappingException me) {
+ 			throw new MappingException("Error reading resource: " + path, me);
+ 		}
+ 	}
+-  
++
+     /**
+      * Read mappings from an application resource trying different classloaders.
+      * This method will try to load the resource first from the thread context
+@@ -338,7 +344,7 @@
+         catch (MappingException me) {
+             throw new MappingException("Error reading resource: " + path, me);
+         }
+-    }    
++    }
+ 
+ 	/**
+ 	 * Read a mapping from an application resource, using a convention.
+@@ -352,7 +358,7 @@
+ 		if (rsrc==null) throw new MappingException("Resource: " + fileName + " not found");
+ 		try {
+ 			return addInputStream(rsrc);
+-		} 
++		}
+ 		catch (MappingException me) {
+ 			throw new MappingException("Error reading resource: " + fileName, me);
+ 		}
+@@ -364,8 +370,8 @@
+ 	 * @deprecated use <tt>addJar(java.io.File)</tt>
+ 	 */
+ 	public Configuration addJar(String resource) throws MappingException {
+-		return addJar( new File( 
+-			Thread.currentThread().getContextClassLoader().getResource(resource).getFile() 
++		return addJar( new File(
++			Thread.currentThread().getContextClassLoader().getResource(resource).getFile()
+ 		) );
+ 	}
+ 	/**
+@@ -408,7 +414,7 @@
+ 		return this;
+ 
+ 	}
+-	
++
+ 	/**
+ 	 * Read all mapping documents from a directory tree. Assume that any
+ 	 * file named <tt>*.hbm.xml</tt> is a mapping document.
+@@ -523,7 +529,7 @@
+ 				Index index = (Index) subIter.next();
+ 				script.add( index.sqlCreateString(dialect, mapping) );
+ 			}
+-			
++
+ 			if ( dialect.hasAlterTable() ) {
+ 				subIter = table.getForeignKeyIterator();
+ 				while ( subIter.hasNext() ) {
+@@ -580,7 +586,7 @@
+ 					}
+ 				}
+ 			}
+-			
++
+ 			/*//broken, 'cos we don't generate these with names in SchemaExport
+ 			subIter = table.getIndexIterator();
+ 			while ( subIter.hasNext() ) {
+@@ -613,7 +619,7 @@
+ 
+ 		return ArrayHelper.toStringArray(script);
+ 	}
+-	
++
+ 	private void validate() throws MappingException {
+ 		Iterator iter = classes.values().iterator();
+ 		while ( iter.hasNext() ) ( (PersistentClass) iter.next() ).validate(mapping);
+@@ -632,9 +638,9 @@
+ 			sp.doSecondPass(classes);
+ 			iter.remove();
+ 		}
+-		
++
+ 		log.info("processing one-to-one association property references");
+-		
++
+ 		iter = propertyReferences.iterator();
+ 		while ( iter.hasNext() ) {
+ 			Mappings.UniquePropertyReference upr = (Mappings.UniquePropertyReference) iter.next();
+@@ -650,24 +656,24 @@
+ 					break;
+ 				}
+ 			}
+-			if (!found) throw new MappingException( 
+-				"property-ref not found: " + upr.propertyName + 
+-				" in class: " + upr.referencedClass.getName() 
++			if (!found) throw new MappingException(
++				"property-ref not found: " + upr.propertyName +
++				" in class: " + upr.referencedClass.getName()
+ 			);
+ 		}
+-		
++
+ 		//TODO: Somehow add the newly created foreign keys to the internal collection
+ 
+ 		log.info("processing foreign key constraints");
+-		
++
+ 		iter = getTableMappings();
+ 		Set done = new HashSet();
+ 		while ( iter.hasNext() ) {
+ 			secondPassCompileForeignKeys( (Table) iter.next(), done );
+ 		}
+-		
++
+ 	}
+-	
++
+ 	private void secondPassCompileForeignKeys(Table table, Set done) throws MappingException {
+ 
+ 		Iterator iter = table.getForeignKeyIterator();
+@@ -960,12 +966,12 @@
+ 		finally {
+ 			try{
+ 				stream.close();
+-			} 
++			}
+ 			catch (IOException ioe){
+-				log.error("could not close stream on: " + resourceName, ioe);	
++				log.error("could not close stream on: " + resourceName, ioe);
+ 			}
+ 		}
+-		
++
+ 		return doConfigure(doc);
+ 
+ 	}
+@@ -1043,7 +1049,7 @@
+ 				Collection collection = getCollectionMapping(role);
+ 				Attribute regionNode = mapElement.attribute("region");
+ 				final String region = (regionNode==null) ? role : regionNode.getValue();
+-				CacheConcurrencyStrategy cache = CacheFactory.createCache( 
++				CacheConcurrencyStrategy cache = CacheFactory.createCache(
+ 					mapElement, region, collection.getOwner().isMutable()
+ 				);
+ 				setCacheConcurrencyStrategy(role, cache, region);
+@@ -1056,7 +1062,7 @@
+ 		return this;
+ 
+ 	}
+-	
++
+ 	RootClass getRootClassMapping(Class clazz) throws MappingException {
+ 		try {
+ 			return (RootClass) getClassMapping(clazz);
+@@ -1065,7 +1071,7 @@
+ 			throw new MappingException("You may only specify a cache for root <class> mappings");
+ 		}
+ 	}
+-	
++
+ 	/**
+ 	 * Set up a cache for an entity class
+ 	 * @param clazz
+@@ -1073,19 +1079,19 @@
+ 	 * @return Configuration
+ 	 * @throws MappingException
+ 	 */
+-	public Configuration setCacheConcurrencyStrategy(Class clazz, CacheConcurrencyStrategy concurrencyStrategy) 
++	public Configuration setCacheConcurrencyStrategy(Class clazz, CacheConcurrencyStrategy concurrencyStrategy)
+ 	throws MappingException {
+ 		setCacheConcurrencyStrategy( clazz, concurrencyStrategy, clazz.getName() );
+ 		return this;
+ 	}
+-	
+-	void setCacheConcurrencyStrategy(Class clazz, CacheConcurrencyStrategy concurrencyStrategy, String region) 
++
++	void setCacheConcurrencyStrategy(Class clazz, CacheConcurrencyStrategy concurrencyStrategy, String region)
+ 	throws MappingException {
+ 		RootClass rootClass = getRootClassMapping(clazz);
+ 		rootClass.setCache(concurrencyStrategy);
+ 		caches.put( rootClass.getMappedClass().getName(), concurrencyStrategy );
+ 	}
+-	
++
+ 	/**
+ 	 * Set up a cache for a collection role
+ 	 * @param collectionRole
+@@ -1093,30 +1099,30 @@
+ 	 * @return Configuration
+ 	 * @throws MappingException
+ 	 */
+-	public Configuration setCacheConcurrencyStrategy(String collectionRole, CacheConcurrencyStrategy concurrencyStrategy) 
++	public Configuration setCacheConcurrencyStrategy(String collectionRole, CacheConcurrencyStrategy concurrencyStrategy)
+ 	throws MappingException {
+ 		setCacheConcurrencyStrategy(collectionRole, concurrencyStrategy, collectionRole);
+ 		return this;
+ 	}
+-	
+-	void setCacheConcurrencyStrategy(String collectionRole, CacheConcurrencyStrategy concurrencyStrategy, String region) 
++
++	void setCacheConcurrencyStrategy(String collectionRole, CacheConcurrencyStrategy concurrencyStrategy, String region)
+ 	throws MappingException {
+ 		Collection collection = getCollectionMapping(collectionRole);
+ 		collection.setCache(concurrencyStrategy);
+ 		Object old = caches.put( collection.getRole(), concurrencyStrategy );
+ 		if (old!=null) throw new MappingException("duplicate cache region");
+ 	}
+-	
++
+ 	protected void configureCaches(Settings settings) throws HibernateException {
+-		
++
+ 		//TODO: this is actually broken, I guess, since changing the
+ 		//      cache provider property and rebuilding the SessionFactory
+ 		//      will affect existing SessionFactory!
+ 
+ 		log.info("instantiating and configuring caches");
+-		
++
+ 		String prefix = properties.getProperty(Environment.CACHE_REGION_PREFIX);
+-		
++
+ 		Iterator iter = caches.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			Map.Entry me = (Map.Entry) iter.next();
+@@ -1135,7 +1141,7 @@
+ 			strat.setCache(cache);
+ 			strat.setMinimalPuts( settings.isMinimalPutsEnabled() );
+ 		}
+-		
++
+ 		caches.clear();
+ 	}
+ 
+@@ -1152,7 +1158,7 @@
+ 	 * Create an object-oriented view of the configuration properties
+ 	 */
+ 	protected Settings buildSettings() throws HibernateException {
+-		return SettingsFactory.buildSettings(properties);
++		return settingsFactory.buildSettings(properties);
+ 	}
+ 
+ 	public Map getNamedSQLQueries() {
+@@ -1168,7 +1174,7 @@
+ 
+ 	/**
+ 	 * Set a custom naming strategy
+-	 * 
++	 *
+ 	 * @param namingStrategy the NamingStrategy to set
+ 	 */
+ 	public void setNamingStrategy(NamingStrategy namingStrategy) {
+Index: src/net/sf/hibernate/cfg/SettingsFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/SettingsFactory.java,v
+retrieving revision 1.9
+diff -u -r1.9 SettingsFactory.java
+--- src/net/sf/hibernate/cfg/SettingsFactory.java	30 Jul 2004 17:28:50 -0000	1.9
++++ src/net/sf/hibernate/cfg/SettingsFactory.java	11 Aug 2004 11:14:48 -0000
+@@ -27,14 +27,14 @@
+ 
+ /**
+  * Reads configuration properties and configures a <tt>Settings</tt> instance.
+- * 
++ *
+  * @author Gavin King
+  */
+-public final class SettingsFactory {
+-	
+-	private static final Log log = LogFactory.getLog(SettingsFactory.class);
+-	
+-	public static Settings buildSettings(Properties properties) throws HibernateException {
++public class SettingsFactory {
++
++	protected static final Log log = LogFactory.getLog(SettingsFactory.class);
++
++	public Settings buildSettings(Properties properties) throws HibernateException {
+ 
+ 		Settings settings = new Settings();
+ 
+@@ -62,9 +62,9 @@
+ 		boolean useOuterJoin = PropertiesHelper.getBoolean(Environment.USE_OUTER_JOIN, properties, true);
+ 		log.info("Use outer join fetching: " + useOuterJoin);
+ 
+-		ConnectionProvider connections = ConnectionProviderFactory.newConnectionProvider(properties);
+-		TransactionFactory transactionFactory = TransactionFactoryFactory.buildTransactionFactory(properties);
+-		TransactionManagerLookup transactionManagerLookup = TransactionManagerLookupFactory.getTransactionManagerLookup(properties);
++		ConnectionProvider connections = createConnectionProvider(properties);
++		TransactionFactory transactionFactory = createTransactionFactory(properties);
++		TransactionManagerLookup transactionManagerLookup = createTransactionManagerLookup(properties);
+ 
+ 		boolean metaSupportsScrollable = false;
+ 		boolean metaSupportsGetGeneratedKeys = false;
+@@ -125,26 +125,13 @@
+ 			settings.setAutoDropSchema(true);
+ 		}
+ 
+-		String cacheClassName = PropertiesHelper.getString(Environment.CACHE_PROVIDER, properties, "net.sf.hibernate.cache.EhCacheProvider");
+-		log.info("cache provider: " + cacheClassName);
+-		try {
+-			settings.setCacheProvider( (CacheProvider) ReflectHelper.classForName(cacheClassName).newInstance() );
+-		}
+-		catch (Exception cnfe) {
+-			throw new HibernateException("could not instantiate CacheProvider: " + cacheClassName, cnfe);
+-		}
++        CacheProvider cacheProvider = createCacheProvider(properties, PropertiesHelper.getString(Environment.CACHE_PROVIDER, properties, "net.sf.hibernate.cache.EhCacheProvider"));
++        settings.setCacheProvider(cacheProvider);
+ 
+ 		boolean useQueryCache = PropertiesHelper.getBoolean(Environment.USE_QUERY_CACHE, properties);
+ 
+ 		if (useQueryCache) {
+-			String queryCacheFactoryClassName = PropertiesHelper.getString(Environment.QUERY_CACHE_FACTORY, properties, "net.sf.hibernate.cache.StandardQueryCacheFactory");
+-			log.info("query cache factory: " + queryCacheFactoryClassName);
+-			try {
+-				settings.setQueryCacheFactory( (QueryCacheFactory) ReflectHelper.classForName(queryCacheFactoryClassName).newInstance() );
+-			}
+-			catch (Exception cnfe) {
+-				throw new HibernateException("could not instantiate QueryCacheFactory: " + queryCacheFactoryClassName, cnfe);
+-			}
++            settings.setQueryCacheFactory(createQueryCacheFactory(properties, PropertiesHelper.getString(Environment.QUERY_CACHE_FACTORY, properties, "net.sf.hibernate.cache.StandardQueryCacheFactory")));
+ 		}
+ 
+ 		String sessionFactoryName = properties.getProperty(Environment.SESSION_FACTORY_NAME);
+@@ -175,7 +162,36 @@
+ 		return settings;
+ 
+ 	}
+-	
+-	private SettingsFactory() {}
+-	
++
++    protected QueryCacheFactory createQueryCacheFactory(Properties properties, String queryCacheFactoryClassName) throws HibernateException {
++        log.info("query cache factory: " + queryCacheFactoryClassName);
++        try {
++            return (QueryCacheFactory) ReflectHelper.classForName(queryCacheFactoryClassName).newInstance();
++        }
++        catch (Exception cnfe) {
++            throw new HibernateException("could not instantiate QueryCacheFactory: " + queryCacheFactoryClassName, cnfe);
++        }
++    }
++
++    protected CacheProvider createCacheProvider(Properties properties, String cacheClassName) throws HibernateException {
++		log.info("cache provider: " + cacheClassName);
++		try {
++            return (CacheProvider) ReflectHelper.classForName(cacheClassName).newInstance();
++        }
++        catch (Exception cnfe) {
++            throw new HibernateException("could not instantiate CacheProvider: " + cacheClassName, cnfe);
++        }
++    }
++
++    protected TransactionManagerLookup createTransactionManagerLookup(Properties properties) throws HibernateException {
++        return TransactionManagerLookupFactory.getTransactionManagerLookup(properties);
++    }
++
++    protected TransactionFactory createTransactionFactory(Properties properties) throws HibernateException {
++        return TransactionFactoryFactory.buildTransactionFactory(properties);
++    }
++
++    protected ConnectionProvider createConnectionProvider(Properties properties) throws HibernateException {
++        return ConnectionProviderFactory.newConnectionProvider(properties);
++    }
+ }

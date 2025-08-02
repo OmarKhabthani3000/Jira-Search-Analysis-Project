@@ -1,0 +1,119 @@
+? bin
+? doc/reference/build
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/build.xml,v
+retrieving revision 1.39
+diff -u -r1.39 build.xml
+--- build.xml	9 Aug 2004 04:26:48 -0000	1.39
++++ build.xml	29 Sep 2004 00:10:52 -0000
+@@ -154,6 +154,7 @@
+ 			classpathref="lib.class.path" 
+ 			debug="${javac.debug}"
+ 			optimize="${javac.optimize}"
++			source="1.4"
+ 			nowarn="on">
+ 		</javac>
+ 	</target>
+Index: changelog.txt
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/changelog.txt,v
+retrieving revision 1.54
+diff -u -r1.54 changelog.txt
+--- changelog.txt	9 Aug 2004 06:22:05 -0000	1.54
++++ changelog.txt	29 Sep 2004 05:49:54 -0000
+@@ -4,6 +4,8 @@
+ Changes in version 2.1.7 (x.x.2004)
+ ------------------------------------
+ 
++* fixed entity persisters to be more lenient towards classes without default constructors (Scott Haug)
++
+ 
+ Changes in version 2.1.6 (9.8.2004)
+ ------------------------------------
+Index: doc/reference/en/modules/persistent_classes.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/doc/reference/en/modules/persistent_classes.xml,v
+retrieving revision 1.1
+diff -u -r1.1 persistent_classes.xml
+--- doc/reference/en/modules/persistent_classes.xml	25 Mar 2004 22:10:23 -0000	1.1
++++ doc/reference/en/modules/persistent_classes.xml	29 Sep 2004 05:17:02 -0000
+@@ -124,6 +124,15 @@
+                 persistent classes must have a default constructor (which may be non-public) so 
+                 Hibernate can instantiate them using <literal>Constructor.newInstance()</literal>.
+             </para>
++
++            <para>
++                An exception to this requirement is when an <literal>Interceptor</literal>
++                instance is configured for the <literal>Session</literal> with an appropriate
++                <literal>instantiate()</literal> implementation. The <listeral>instantiate</listeral>
++                method is given the opportunity to provide an instance of the specified class for
++                a particular identifier. If a non-null instance is returned, the default constructor
++                for that class (if any) is never called, and this requirement is no longer valid.
++            </para>
+         </sect2>
+ 
+         <sect2 id="persistent-classes-pojo-identifier">
+Index: src/net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.45
+diff -u -r1.45 AbstractEntityPersister.java
+--- src/net/sf/hibernate/persister/AbstractEntityPersister.java	24 Sep 2004 14:31:32 -0000	1.45
++++ src/net/sf/hibernate/persister/AbstractEntityPersister.java	29 Sep 2004 05:40:47 -0000
+@@ -345,6 +345,7 @@
+ 		}
+ 		else {
+ 			if (abstractClass) throw new HibernateException("Cannot instantiate abstract class or interface: " + className);
++			if (constructor == null) throw new HibernateException("Class does not provide default constructor: " + className);
+ 			final Object result;
+ 			if (optimizer != null) { 
+ 				try {
+@@ -565,7 +566,7 @@
+ 		
+ 		batchSize = model.getBatchSize();
+ 		
+-		constructor = ReflectHelper.getDefaultConstructor(mappedClass);
++		constructor = ReflectHelper.findDefaultConstructor(mappedClass);
+ 		abstractClass = ReflectHelper.isAbstractClass(mappedClass);
+ 		
+ 		entityType = Hibernate.entity(mappedClass);
+Index: src/net/sf/hibernate/util/ReflectHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/util/ReflectHelper.java,v
+retrieving revision 1.20
+diff -u -r1.20 ReflectHelper.java
+--- src/net/sf/hibernate/util/ReflectHelper.java	24 Sep 2004 14:31:34 -0000	1.20
++++ src/net/sf/hibernate/util/ReflectHelper.java	29 Sep 2004 05:41:34 -0000
+@@ -142,7 +142,30 @@
+ 		}
+ 		
+ 	}
+-	
++
++	/**
++	 * Similar to #getDefaultConstructor, but returns null instead of throwing if no default
++	 * constructor available.
++	 * @param clazz
++	 * @return the default constructor, or <code>null</code> if none available
++	 */
++	public static Constructor findDefaultConstructor(Class clazz) {
++
++		if ( isAbstractClass(clazz) ) return null;
++
++		final Constructor[] candidates = clazz.getDeclaredConstructors();
++		for (int i = 0; i < candidates.length; i++) {
++			final Constructor constructor = candidates[i];
++			final Class[] params = constructor.getParameterTypes();
++			if ( params == null || params.length == 0 ) {
++				return constructor;
++			}
++		}
++
++		return null;
++
++	}
++
+ 	public static boolean isAbstractClass(Class clazz) {
+ 		int modifier = clazz.getModifiers();
+ 		return Modifier.isAbstract(modifier) || Modifier.isInterface(modifier);

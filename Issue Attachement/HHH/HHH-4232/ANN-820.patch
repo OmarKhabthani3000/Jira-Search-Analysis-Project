@@ -1,0 +1,190 @@
+Index: src/main/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17355)
++++ src/main/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -429,6 +429,11 @@
+ 		//TODO: be more strict with secondarytable allowance (not for ids, not for secondary table join columns etc)
+ 		InheritanceState inheritanceState = inheritanceStatePerClass.get( clazzToProcess );
+ 		AnnotatedClassType classType = mappings.getClassType( clazzToProcess );
++		
++		if ( AnnotatedClassType.EMBEDDABLE_SUPERCLASS.equals( classType ) ){
++			bindTypeDefs(clazzToProcess, mappings);			
++		}
++				
+ 		if ( AnnotatedClassType.EMBEDDABLE_SUPERCLASS.equals( classType ) //will be processed by their subentities
+ 				|| AnnotatedClassType.NONE.equals( classType ) //to be ignored
+ 				|| AnnotatedClassType.EMBEDDABLE.equals( classType ) //allow embeddable element declaration
+@@ -1936,6 +1941,9 @@
+ 		);
+ 		List<PropertyData> classElements = new ArrayList<PropertyData>();
+ 		XClass returnedClassOrElement = inferredData.getClassOrElement();
++		
++		bindTypeDefs(returnedClassOrElement, mappings);
++		
+ 		addElementsOfAClass(
+ 				classElements,
+ 				subHolder,
+Index: src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(revision 17355)
++++ src/test/java/org/hibernate/test/annotations/entity/BasicHibernateAnnotationsTest.java	(working copy)
+@@ -143,6 +143,33 @@
+ 
+ 	}
+ 
++	//Test import of TypeDefs from MappedSuperclass and 
++	//Embedded classes  
++	public void testImportTypeDefinitions() throws Exception {
++		Name name = new Name();
++		name.setFirstName("SHARATH");
++		LastName lastName = new LastName();
++		lastName.setName("reddy");
++		name.setLastName(lastName);
++		Session s;
++		Transaction tx;
++		s = openSession();
++		tx = s.beginTransaction();
++		s.persist(name);
++		tx.commit();
++		s.close();
++		
++		s = openSession();
++		tx = s.beginTransaction();
++		name = (Name) s.get( Name.class, name.getId() );
++		assertNotNull( name );
++		assertEquals( "sharath", name.getFirstName() );
++		assertEquals( "REDDY", name.getLastName().getName() );
++		s.delete(name);
++		tx.commit();
++		s.close();
++	}
++
+ 	public void testNonLazy() throws Exception {
+ 		Session s;
+ 		Transaction tx;
+@@ -325,7 +352,8 @@
+ 				Tree.class,
+ 				Ransom.class,
+ 				ZipCode.class,
+-				Flight.class
++				Flight.class,
++				Name.class
+ 		};
+ 	}
+ 
+Index: src/test/java/org/hibernate/test/annotations/entity/FirstName.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/FirstName.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/FirstName.java	(revision 0)
+@@ -0,0 +1,33 @@
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.MappedSuperclass;
++
++import org.hibernate.annotations.Type;
++import org.hibernate.annotations.TypeDef;
++import org.hibernate.annotations.Parameter;
++
++
++@TypeDef(
++		name = "lowerCase",
++		typeClass = CasterStringType.class,
++		parameters = {
++			@Parameter(name = "cast", value = "lower")
++		}
++)
++
++@MappedSuperclass
++public class FirstName {
++
++	@Type(type="lowerCase")
++	private String firstName;
++
++	public String getFirstName() {
++		return firstName;
++	}
++
++	public void setFirstName(String lowerCaseName) {
++		this.firstName = lowerCaseName;
++	}
++	
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/LastName.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/LastName.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/LastName.java	(revision 0)
+@@ -0,0 +1,33 @@
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.Embeddable;
++
++import org.hibernate.annotations.Parameter;
++import org.hibernate.annotations.Type;
++import org.hibernate.annotations.TypeDef;
++
++
++@TypeDef(
++		name = "upperCase",
++		typeClass = CasterStringType.class,
++		parameters = {
++			@Parameter(name = "cast", value = "upper")
++		}
++)
++
++@Embeddable
++public class LastName {
++	
++	@Type(type="upperCase")
++	private String lastName;
++
++	public String getName() {
++		return lastName;
++	}
++
++	public void setName(String lowerCaseName) {
++		this.lastName = lowerCaseName;
++	}
++	
++	
++}
+Index: src/test/java/org/hibernate/test/annotations/entity/Name.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/entity/Name.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/entity/Name.java	(revision 0)
+@@ -0,0 +1,35 @@
++package org.hibernate.test.annotations.entity;
++
++import javax.persistence.Embedded;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.Transient;
++
++@Entity
++public class Name extends FirstName {
++
++	@Id
++	@GeneratedValue
++	private Integer id;
++
++	@Embedded
++	private LastName lastName;
++	
++	public Integer getId() {
++		return id;
++	}
++
++	public void setId(Integer id) {
++		this.id = id;
++	}
++
++	public LastName getLastName() {
++		return lastName;
++	}
++
++	public void setLastName(LastName val) {
++		this.lastName = val;
++	}
++
++}

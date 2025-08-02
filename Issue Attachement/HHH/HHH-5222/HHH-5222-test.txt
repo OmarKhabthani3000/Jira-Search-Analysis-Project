@@ -1,0 +1,107 @@
+    // TODO: This is wrong as well, should be javax.persistence.OptimisticLockException
+    @Test(expectedExceptions = org.hibernate.OptimisticLockException.class)
+    public void lockOptimistic() throws Exception {
+        final Long[] categoryIds = storeCategoriesAndItems();
+        final Long firstCategoryId = categoryIds[0];
+        final Long lastCategoryId = categoryIds[categoryIds.length - 1];
+
+        final CountDownLatch concurrentModificationLatch = new CountDownLatch(1);
+        Thread concurrentModification = new Thread() {
+
+            @Override
+            public void run() {
+                UserTransaction tx = TM.getUserTransaction();
+                try {
+                    // Moving the first item from the first category into the last category
+                    tx.begin();
+                    EntityManager em = JPA.createEntityManager();
+
+                    List<Item> items =
+                            em.createQuery("select i from Item i where i.category.id = :catId")
+                                    .setParameter("catId", firstCategoryId)
+                                    .getResultList();
+
+                    Category lastCategory = em.getReference(Category.class, lastCategoryId);
+                    items.iterator().next().setCategory(lastCategory);
+
+                    tx.commit();
+                    em.close();
+                    concurrentModificationLatch.countDown();
+                } catch (Exception ex) {
+                    TM.rollback();
+                    throw new RuntimeException(ex);
+                }
+            }
+        };
+
+        UserTransaction tx = TM.getUserTransaction();
+        try {
+
+            tx.begin();
+            EntityManager em = JPA.createEntityManager();
+
+            BigDecimal total = new BigDecimal(0);
+            for (Long categoryId : categoryIds) {
+                total = total.add(sumCategory(em, categoryId));
+
+                if (categoryId.equals(firstCategoryId)) {
+                    concurrentModification.setDaemon(true);
+                    concurrentModification.start();
+                    concurrentModificationLatch.await();
+                }
+
+            }
+
+            tx.commit();
+            em.close();
+
+            assertEquals(total.toString(), "108.00");
+
+        } finally {
+            TM.rollback();
+        }
+    }
+
+    protected BigDecimal sumCategory(EntityManager em, Long categoryId) {
+        List<Item> items =
+                em.createQuery("select i from Item i where i.category.id = :catId")
+                        // TODO: This works
+                        // .setLockMode(LockModeType.OPTIMISTIC)
+                        .setParameter("catId", categoryId)
+                        .getResultList();
+
+        BigDecimal sum = new BigDecimal(0);
+        for (Item item : items) {
+            // TODO: None of these work, the item should be version checked (and incremented) at the end of the transaction
+            em.lock(item, LockModeType.OPTIMISTIC);
+            //em.lock(item, LockModeType.OPTIMISTIC_FORCE_INCREMENT);
+            sum = sum.add(item.getBuyNowPrice());
+        }
+        return sum;
+    }
+
+    protected Long[] storeCategoriesAndItems() throws Exception {
+        // Store a bunch of categories with items, return their identifiers so we can load them later
+        UserTransaction tx = TM.getUserTransaction();
+        tx.begin();
+        EntityManager em = JPA.createEntityManager();
+        Long[] ids = new Long[3];
+        for (int i = 1; i <= ids.length; i++) {
+
+            Category category = new Category();
+            category.setName("Category: " + i);
+            em.persist(category);
+            ids[i - 1] = category.getId();
+
+            for (int j = 1; j <= ids.length; j++) {
+                Item item = new Item();
+                item.setCategory(category);
+                item.setName("Item " + j);
+                item.setBuyNowPrice(new BigDecimal(10 + j));
+                em.persist(item);
+            }
+        }
+        tx.commit();
+        em.close();
+        return ids;
+    }

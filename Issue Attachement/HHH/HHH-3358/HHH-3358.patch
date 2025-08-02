@@ -1,0 +1,156 @@
+Index: core/src/main/java/org/hibernate/transaction/JTATransactionFactory.java
+===================================================================
+--- core/src/main/java/org/hibernate/transaction/JTATransactionFactory.java	(revision 14790)
++++ core/src/main/java/org/hibernate/transaction/JTATransactionFactory.java	Wed Jun 25 17:02:35 EDT 2008
+@@ -44,8 +44,24 @@
+ 
+ /**
+  * Factory for {@link JTATransaction} instances.
++ * <p/>
++ * The <tt>JTATransaction</tt> class essentially wraps an underlying
++ * {@link UserTransaction UserTransaction}, which is acquired by looking it
++ * up from JNDI via the
++ * {@link #getUserTransaction(javax.naming.InitialContext, String)} method.
++ * Standalone <tt>TransactionManager</tt>s that don't require JNDI
++ * (e.g. Atomikos, Jotm, etc) can override this method to acquire the
++ * UserTransaction in an implementation specific manner. 
++ * <p/>
++ * The JNDI lookup can be customized by the following properties:
++ * <ul>
++ * <li><tt>hibernate.jndi.url</tt> : JNDI initial context URL</li>
++ * <li><tt>hibernate.jndi.class</tt> : JNDI provider class</li>
++ * <li><tt>jta.UserTransaction</tt> : JNDI namespace</li>
++ * </ul>
+  *
+  * @author Gavin King
++ * @author Les Hazlewood
+  */
+ public class JTATransactionFactory implements TransactionFactory {
+ 
+@@ -78,12 +94,35 @@
+ 		}
+ 	}
+ 
+-	public Transaction createTransaction(JDBCContext jdbcContext, Context transactionContext)
++    public Transaction createTransaction(JDBCContext jdbcContext, Context transactionContext)
+ 			throws HibernateException {
+-		return new JTATransaction( context, utName, jdbcContext, transactionContext );
++        UserTransaction ut = getUserTransaction( context, utName );
++        return new JTATransaction( ut, jdbcContext, transactionContext );
+ 	}
+ 
++    protected UserTransaction getUserTransaction(InitialContext context, String userTransactionName) {
++
++        log.debug("Looking for UserTransaction under: " + userTransactionName);
++
++        UserTransaction ut;
++
++        try {
++            ut = (UserTransaction) context.lookup(userTransactionName);
++        }
++        catch (NamingException ne) {
++            log.error("Could not find UserTransaction in JNDI", ne);
++            throw new TransactionException("Could not find UserTransaction in JNDI: ", ne);
++        }
++        if (ut == null) {
++            throw new TransactionException("A naming service lookup returned null");
++        }
++
++        log.debug("Obtained UserTransaction");
++
++        return ut;
++    }
++
+-	public ConnectionReleaseMode getDefaultReleaseMode() {
++    public ConnectionReleaseMode getDefaultReleaseMode() {
+ 		return ConnectionReleaseMode.AFTER_STATEMENT;
+ 	}
+ 
+@@ -120,15 +159,10 @@
+ 				return JTAHelper.isInProgress( jdbcContext.getFactory().getTransactionManager().getStatus() );
+ 			}
+ 			else {
+-				try {
+-					UserTransaction ut = ( UserTransaction ) context.lookup( utName );
++                UserTransaction ut = getUserTransaction( context, utName );
+-					return ut != null && JTAHelper.isInProgress( ut.getStatus() );
+-				}
++                return ut != null && JTAHelper.isInProgress( ut.getStatus() );
++			}
+-				catch ( NamingException ne ) {
+-					throw new TransactionException( "Unable to locate UserTransaction to check status", ne );
+-				}
++		}
+-			}
+-		}
+ 		catch ( SystemException se ) {
+ 			throw new TransactionException( "Unable to check transaction status", se );
+ 		}
+Index: core/src/main/java/org/hibernate/transaction/JTATransaction.java
+===================================================================
+--- core/src/main/java/org/hibernate/transaction/JTATransaction.java	(revision 14790)
++++ core/src/main/java/org/hibernate/transaction/JTATransaction.java	Wed Jun 25 16:54:33 EDT 2008
+@@ -23,8 +23,6 @@
+  */
+ package org.hibernate.transaction;
+ 
+-import javax.naming.InitialContext;
+-import javax.naming.NamingException;
+ import javax.transaction.Status;
+ import javax.transaction.Synchronization;
+ import javax.transaction.SystemException;
+@@ -33,7 +31,6 @@
+ 
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+-import org.hibernate.AssertionFailure;
+ import org.hibernate.HibernateException;
+ import org.hibernate.Transaction;
+ import org.hibernate.TransactionException;
+@@ -56,6 +53,7 @@
+  * </ul>
+  *
+  * @author Gavin King
++ * @author Les Hazlewood
+  */
+ public class JTATransaction implements Transaction {
+ 
+@@ -70,33 +68,14 @@
+ 	private boolean commitFailed;
+ 	private boolean commitSucceeded;
+ 	private boolean callback;
+-	
++
+-	public JTATransaction(
+-			InitialContext context, 
+-			String utName, 
+-			JDBCContext jdbcContext, 
+-			TransactionFactory.Context transactionContext
+-	) {
++    public JTATransaction( UserTransaction ut, JDBCContext jdbcContext, TransactionFactory.Context transactionContext ) {
+ 		this.jdbcContext = jdbcContext;
+ 		this.transactionContext = transactionContext;
+-
+-		log.debug("Looking for UserTransaction under: " + utName);
+-		
+-		try {
+-			ut = (UserTransaction) context.lookup(utName);
++        this.ut = ut;
+-		}
++	}
+-		catch (NamingException ne) {
+-			log.error("Could not find UserTransaction in JNDI", ne);
+-			throw new TransactionException("Could not find UserTransaction in JNDI: ", ne);
+-		}
+-		if (ut==null) {
+-			throw new AssertionFailure("A naming service lookup returned null");
+-		}
+ 
+-		log.debug("Obtained UserTransaction");
+-	}
+-
+-	/**
++    /**
+ 	 * {@inheritDoc}
+ 	 */
+ 	public void begin() throws HibernateException {

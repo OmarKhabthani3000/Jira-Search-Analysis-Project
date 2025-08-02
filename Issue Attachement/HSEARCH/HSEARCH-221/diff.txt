@@ -1,0 +1,137 @@
+Index: src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java
+===================================================================
+--- src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(working copy)
+@@ -11,6 +11,7 @@
+ import org.apache.lucene.index.IndexWriter;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.index.TermDocs;
++import org.apache.lucene.analysis.Analyzer;
+ import org.hibernate.annotations.common.AssertionFailure;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.backend.AddLuceneWork;
+@@ -59,15 +60,21 @@
+ 		Class entity = work.getEntityClass();
+ 		Serializable id = work.getId();
+ 		Document document = work.getDocument();
+-		add( entity, id, document, provider );
++        add( entity, id, document, provider, work.getAnalyzer() );
+ 	}
+ 
+-	private void add(Class entity, Serializable id, Document document, DirectoryProvider provider) {
++    private void add(Class entity, Serializable id, Document document, DirectoryProvider provider, Analyzer analyzer) {
+ 		if ( log.isTraceEnabled() )
+ 			log.trace( "add to Lucene index: " + entity + "#" + id + ": " + document );
+ 		IndexWriter writer = workspace.getIndexWriter( provider, entity, true );
+ 		try {
+-			writer.addDocument( document );
++            if (analyzer == null) {
++                writer.addDocument( document );
++            } else {
++                if ( log.isTraceEnabled() )
++                    log.trace( "Lucene analyzer: " + analyzer);
++                writer.addDocument( document, analyzer );
++            }
+ 		}
+ 		catch (IOException e) {
+ 			throw new SearchException( "Unable to add to Lucene index: " + entity + "#" + id, e );
+Index: src/java/org/hibernate/search/backend/AddLuceneWork.java
+===================================================================
+--- src/java/org/hibernate/search/backend/AddLuceneWork.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/AddLuceneWork.java	(working copy)
+@@ -4,12 +4,24 @@
+ import java.io.Serializable;
+ 
+ import org.apache.lucene.document.Document;
++import org.apache.lucene.analysis.Analyzer;
+ 
+ /**
+  * @author Emmanuel Bernard
+  */
+ public class AddLuceneWork extends LuceneWork {
+-	public AddLuceneWork(Serializable id, String idInString, Class entity, Document document) {
++    private Analyzer analyzer;
++
++    public AddLuceneWork(Serializable id, String idInString, Class entity, Document document) {
+ 		super( id, idInString, entity, document );
+ 	}
++
++    public AddLuceneWork(Serializable id, String idInString, Class entity, Document document, Analyzer analyzer) {
++		super( id, idInString, entity, document );
++        this.analyzer = analyzer;
++    }
++
++    public Analyzer getAnalyzer() {
++        return analyzer;
++    }
+ }
+Index: src/java/org/hibernate/search/annotations/Analyzer.java
+===================================================================
+--- src/java/org/hibernate/search/annotations/Analyzer.java	(revision 14800)
++++ src/java/org/hibernate/search/annotations/Analyzer.java	(working copy)
+@@ -23,4 +23,5 @@
+ 
+ public @interface Analyzer {
+ 	Class impl() default void.class;
++    String factoryMethodName() default "";
+ }
+Index: src/java/org/hibernate/search/engine/DocumentBuilder.java
+===================================================================
+--- src/java/org/hibernate/search/engine/DocumentBuilder.java	(revision 14800)
++++ src/java/org/hibernate/search/engine/DocumentBuilder.java	(working copy)
+@@ -3,6 +3,9 @@
+ 
+ import java.io.Serializable;
+ import java.lang.reflect.Modifier;
++import java.lang.reflect.Method;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.annotation.Annotation;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -411,11 +414,27 @@
+ 			}
+ 
+ 		}
+-		boolean searchForContainers = false;
++
++        Analyzer analyzer = null;
++        org.hibernate.search.annotations.Analyzer analyzerAnn = entity.getClass().getAnnotation(org.hibernate.search.annotations.Analyzer.class);
++        if (analyzerAnn != null && analyzerAnn.factoryMethodName() != null && analyzerAnn.factoryMethodName().length() > 0) {
++            try {
++                Method method = entity.getClass().getMethod(analyzerAnn.factoryMethodName());
++                analyzer = (Analyzer) method.invoke(entity);
++            } catch (NoSuchMethodException e) {
++                log.warn(e.getMessage(), e);                
++            } catch (IllegalAccessException e) {
++                log.warn(e.getMessage(), e);
++            } catch (InvocationTargetException e) {
++                log.warn(e.getMessage(), e);
++            }
++        }
++
++        boolean searchForContainers = false;
+ 		String idInString = idBridge.objectToString( id );
+ 		if ( workType == WorkType.ADD ) {
+ 			Document doc = getDocument( entity, id );
+-			queue.add( new AddLuceneWork( id, idInString, entityClass, doc ) );
++			queue.add( new AddLuceneWork( id, idInString, entityClass, doc, analyzer ) );
+ 			searchForContainers = true;
+ 		}
+ 		else if ( workType == WorkType.DELETE || workType == WorkType.PURGE ) {
+@@ -434,13 +453,13 @@
+ 			 * double file opening.
+ 			 */
+ 			queue.add( new DeleteLuceneWork( id, idInString, entityClass ) );
+-			queue.add( new AddLuceneWork( id, idInString, entityClass, doc ) );
++			queue.add( new AddLuceneWork( id, idInString, entityClass, doc, analyzer ) );
+ 			searchForContainers = true;
+ 		}
+ 		else if ( workType == WorkType.INDEX ) {
+ 			Document doc = getDocument( entity, id );
+ 			queue.add( new DeleteLuceneWork( id, idInString, entityClass ) );
+-			LuceneWork work = new AddLuceneWork( id, idInString, entityClass, doc );
++			LuceneWork work = new AddLuceneWork( id, idInString, entityClass, doc, analyzer );
+ 			work.setBatch( true );
+ 			queue.add( work );
+ 			searchForContainers = true;

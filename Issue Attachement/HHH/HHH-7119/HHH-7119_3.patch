@@ -1,0 +1,62 @@
+# HG changeset patch
+# User Arturas Sirvinskas <asirvinskas@eisgroup.com>
+HHH-7119 Hibernate filter's parameters are not populated when an entity's Collection is populated using a fetch mode of subselect.
+
+diff -r 3d7a74c69b7a -r 9f719e31e294 hibernate/hibernate-core-3.x/src/main/java/org/hibernate/engine/QueryParameters.java
+--- a/hibernate/hibernate-core-3.x/src/main/java/org/hibernate/engine/QueryParameters.java	Mon Nov 24 19:26:34 2014 +0200
++++ b/hibernate/hibernate-core-3.x/src/main/java/org/hibernate/engine/QueryParameters.java	Wed Nov 26 12:09:55 2014 +0200
+@@ -471,7 +471,13 @@
+ 	}
+ 	
+ 	public void bindDynamicParameter(Type paramType, Object paramValue, int position) {
+-		int length = processedPositionalParameterTypes.length;
++	    if(processedPositionalParameterTypes == null) {
++	        processedPositionalParameterTypes = getPositionalParameterTypes();
++	    }
++	    if(processedPositionalParameterValues == null) {
++	        processedPositionalParameterValues = getPositionalParameterValues();
++	    }
++	    int length = processedPositionalParameterTypes.length;
+ 		if(dynamicParameterPositions == null) {
+ 		    dynamicParameterPositions = new int[length];
+ 		}
+diff -r 3d7a74c69b7a -r 9f719e31e294 hibernate/hibernate-core-3.x/src/main/java/org/hibernate/loader/Loader.java
+--- a/hibernate/hibernate-core-3.x/src/main/java/org/hibernate/loader/Loader.java	Mon Nov 24 19:26:34 2014 +0200
++++ b/hibernate/hibernate-core-3.x/src/main/java/org/hibernate/loader/Loader.java	Wed Nov 26 12:09:55 2014 +0200
+@@ -1755,22 +1755,23 @@
+ 	protected int bindParameterValues(
+ 			PreparedStatement statement,
+ 			QueryParameters queryParameters,
+-			int span,
++			int startIndex,
+ 			SessionImplementor session) throws SQLException {
+ 		
+ 		final TypedValue[] namedParams = getNamedParameters(queryParameters);
++		int span = 0;
+ 		int j = 0; // named param index
+ 		
+         final Object[] values = queryParameters.getFilteredPositionalParameterValues();
+         final Type[] types = queryParameters.getFilteredPositionalParameterTypes();
+         final int[] positions = queryParameters.getDynamicParameterPositions();
+         for ( int i = 0; i < values.length; ) {
+-            if(positions == null || positions[i] == (span + j)) { // No gaps, everything ok
+-                types[i].nullSafeSet( statement, values[i], span + j, session );
++            if(positions == null || positions[i] == (startIndex + span + j)) { // No gaps, everything ok
++                types[i].nullSafeSet( statement, values[i], startIndex + span + j, session );
+                 span += types[i].getColumnSpan( getFactory() );
+                 i++;
+             } else if(j < namedParams.length) { // Named param in the gap           
+-                namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), j + span, session );
++                namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), startIndex + span + j, session );
+                 j++;
+             } else {
+                 throw new IllegalArgumentException("Named and positional parameters doesnt match up, named parameter indexes: " + Arrays.toString(positions));
+@@ -1778,7 +1779,7 @@
+         }
+ 
+         for(; j < namedParams.length; j++) {
+-            namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), j + span, session );
++            namedParams[j].getType().nullSafeSet( statement, namedParams[j].getValue(), startIndex + span + j, session );
+         }
+         
+ 		return span + j;

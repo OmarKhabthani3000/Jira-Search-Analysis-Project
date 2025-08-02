@@ -1,0 +1,183 @@
+Index: hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(date 1512554218000)
++++ hibernate-core/src/main/java/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision )
+@@ -991,11 +991,13 @@
+ 			final Object ce = CacheHelper.fromSharedCache( session, cacheKey, cache );
+ 			if ( ce != null ) {
+ 				final CacheEntry cacheEntry = (CacheEntry) getCacheEntryStructure().destructure( ce, factory );
+-				final Object initializedValue = initializeLazyPropertiesFromCache( fieldName, entity, session, entry, cacheEntry );
+-				interceptor.attributeInitialized( fieldName );
++				final Object initializedValue = initializeLazyPropertiesFromCache( fieldName, entity, interceptor, session, entry, cacheEntry );
++				if (initializedValue != LazyPropertyInitializer.UNFETCHED_PROPERTY) {
++					interceptor.attributeInitialized(fieldName);
+ 
+-				// NOTE EARLY EXIT!!!
+-				return initializedValue;
++					// NOTE EARLY EXIT!!!
++					return initializedValue;
++				}
+ 			}
+ 		}
+ 
+@@ -1140,6 +1142,7 @@
+ 	private Object initializeLazyPropertiesFromCache(
+ 			final String fieldName,
+ 			final Object entity,
++			final InterceptorImplementor interceptor,
+ 			final SharedSessionContractImplementor session,
+ 			final EntityEntry entry,
+ 			final CacheEntry cacheEntry) {
+@@ -1150,14 +1153,28 @@
+ 		Serializable[] disassembledValues = cacheEntry.getDisassembledState();
+ 		final Object[] snapshot = entry.getLoadedState();
+ 		for ( int j = 0; j < lazyPropertyNames.length; j++ ) {
+-			final Object propValue = lazyPropertyTypes[j].assemble(
+-					disassembledValues[lazyPropertyNumbers[j]],
++			final Serializable cachedValue = disassembledValues[lazyPropertyNumbers[j]];
++			final Type lazyPropertyType = lazyPropertyTypes[j];
++			final String propertyName = lazyPropertyNames[j];
++			if (cachedValue == LazyPropertyInitializer.UNFETCHED_PROPERTY) {
++				if (fieldName.equals(propertyName)) {
++					result = LazyPropertyInitializer.UNFETCHED_PROPERTY;
++				}
++				else {
++					continue;
++				}
++			}
++			final Object propValue = lazyPropertyType.assemble(
++					cachedValue,
+ 					session,
+ 					entity
+ 			);
+ 			if ( initializeLazyProperty( fieldName, entity, session, snapshot, j, propValue ) ) {
+ 				result = propValue;
+ 			}
++			else {
++				interceptor.attributeInitialized(propertyName);
++			}
+ 		}
+ 
+ 		LOG.trace( "Done initializing lazy properties" );
+Index: hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/cache/LazyCollectionsInCacheTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+--- hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/cache/LazyCollectionsInCacheTest.java	(revision )
++++ hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/cache/LazyCollectionsInCacheTest.java	(revision )
+@@ -0,0 +1,111 @@
++package org.hibernate.test.bytecode.enhancement.lazy.cache;
++
++import javax.persistence.Basic;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.ManyToOne;
++import javax.persistence.OneToMany;
++import javax.persistence.Table;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.atomic.AtomicLong;
++
++import org.hibernate.Hibernate;
++import org.hibernate.annotations.Cache;
++import org.hibernate.annotations.CacheConcurrencyStrategy;
++import org.hibernate.cfg.AvailableSettings;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.testing.bytecode.enhancement.BytecodeEnhancerRunner;
++import org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;
++import org.hibernate.testing.transaction.TransactionUtil;
++import org.junit.Assert;
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++@RunWith(BytecodeEnhancerRunner.class)
++public class LazyCollectionsInCacheTest extends BaseCoreFunctionalTestCase {
++
++	@Override
++	public Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[]{Employee.class};
++	}
++
++	@Override
++	protected void configure(Configuration configuration) {
++		configuration.setProperty(AvailableSettings.USE_SECOND_LEVEL_CACHE, "true");
++		configuration.setProperty(AvailableSettings.ENABLE_LAZY_LOAD_NO_TRANS, "false");
++	}
++
++	@Test
++	public void attributeLoadingFromCache() {
++		final AtomicLong bossId = new AtomicLong();
++		final AtomicLong teamleaderId = new AtomicLong();
++		final AtomicLong teammemberId = new AtomicLong();
++
++		TransactionUtil.doInJPA(this::sessionFactory, (em) -> {
++			Employee boss = new Employee();
++			Employee teamleader = new Employee();
++			Employee teammember = new Employee();
++			boss.regularString = "boss";
++			teamleader.regularString = "leader";
++			teammember.regularString = "member";
++			em.persist(boss);
++			em.persist(teamleader);
++			em.persist(teammember);
++			boss.subordinates.add(teamleader);
++			teamleader.superior = boss;
++			teamleader.subordinates.add(teammember);
++			teammember.superior = teamleader;
++			bossId.set(boss.id);
++			teamleaderId.set(teamleader.id);
++			teammemberId.set(teammember.id);
++		});
++
++		TransactionUtil.doInJPA(this::sessionFactory, (em) -> {
++			em.getEntityManagerFactory().getCache().evictAll();
++		});
++
++		TransactionUtil.doInJPA(this::sessionFactory, (em) -> {
++			final Employee boss = em.find(Employee.class, bossId.get());
++			Assert.assertEquals("boss", boss.regularString);
++			final Employee leader = em.find(Employee.class, teamleaderId.get());
++			Assert.assertEquals("leader", leader.regularString);
++			final Employee member = em.find(Employee.class, teammemberId.get());
++			Assert.assertEquals("member", member.regularString);
++			Assert.assertFalse(Hibernate.isPropertyInitialized(leader, "superior"));
++			Assert.assertFalse(Hibernate.isPropertyInitialized(leader, "subordinates"));
++		});
++
++		TransactionUtil.doInJPA(this::sessionFactory, (em) -> {
++			final Employee boss = em.find(Employee.class, bossId.get());
++			final Employee leader = em.find(Employee.class, teamleaderId.get());
++			Assert.assertEquals(boss, leader.superior);
++			final Employee member = em.find(Employee.class, teammemberId.get());
++			Assert.assertEquals(member, leader.subordinates.iterator().next());
++		});
++	}
++
++	@Entity
++	@Table(name = "EMPLOYEE_TABLE")
++	@Cache(usage = CacheConcurrencyStrategy.NONSTRICT_READ_WRITE)
++	private static class Employee {
++
++		@Id
++		@GeneratedValue(strategy = GenerationType.AUTO)
++		Long id;
++
++		@ManyToOne(fetch = FetchType.LAZY)
++		@JoinColumn(name = "SUPERIOR")
++		Employee superior;
++
++		@OneToMany(mappedBy = "superior")
++		List<Employee> subordinates = new ArrayList<>();
++
++		@Basic
++		String regularString;
++	}
++}

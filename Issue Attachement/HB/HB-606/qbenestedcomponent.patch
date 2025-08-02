@@ -1,0 +1,1097 @@
+Index: src/net/sf/hibernate/expression/Example.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/expression/Attic/Example.java,v
+retrieving revision 1.1.2.9
+diff -u -r1.1.2.9 Example.java
+--- src/net/sf/hibernate/expression/Example.java	12 Nov 2003 15:27:44 -0000	1.1.2.9
++++ src/net/sf/hibernate/expression/Example.java	5 Jan 2004 22:40:06 -0000
+@@ -1,322 +1,340 @@
+-//$Id: Example.java,v 1.1.2.9 2003/11/12 15:27:44 oneovthafew Exp $
+-package net.sf.hibernate.expression;
+-
+-import java.util.ArrayList;
+-import java.util.HashSet;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+-import net.sf.hibernate.HibernateException;
+-import net.sf.hibernate.engine.SessionFactoryImplementor;
+-import net.sf.hibernate.engine.TypedValue;
+-import net.sf.hibernate.metadata.ClassMetadata;
+-import net.sf.hibernate.type.AbstractComponentType;
+-import net.sf.hibernate.type.Type;
+-import net.sf.hibernate.util.StringHelper;
+-
+-/**
+- * Support for query by example.
+- * <pre>
+- * List results = session.createCriteria(Parent.class)
+- *     .add( Example.create(parent).ignoreCase() )
+- *     .createCriteria("child")
+- *         .add( Example.create( parent.getChild() ) )
+- *     .list();
+- * </pre>
+- * "Examples" may be mixed and matched with "Expressions" in the same <tt>Criteria</tt>.
+- * @see net.sf.hibernate.Criteria
+- * @author Gavin King
+- */
+-public class Example extends AbstractCriterion {
+-	
+-	private final Object entity;
+-	private final Set excludedProperties = new HashSet();
+-	private PropertySelector selector;
+-	private boolean isLikeEnabled;
+-	private boolean isIgnoreCaseEnabled;
+-	private MatchMode matchMode;
+-	
+-	/**
+-	 * A strategy for choosing property values for inclusion in the query
+-	 * criteria
+-	 */
+-	public static interface PropertySelector {
+-		public boolean include(Object propertyValue, String propertyName, Type type);
+-	}
+-	
+-	private static final PropertySelector NOT_NULL = new NotNullPropertySelector();
+-	private static final PropertySelector ALL = new AllPropertySelector();
+-	private static final PropertySelector NOT_NULL_OR_ZERO = new NotNullOrZeroPropertySelector();
+-		
+-	static final class AllPropertySelector implements PropertySelector {
+-		public boolean include(Object object, String propertyName, Type type) { 
+-			return true;
+-		}
+-	}
+-	
+-	static final class NotNullPropertySelector implements PropertySelector {
+-		public boolean include(Object object, String propertyName, Type type) { 
+-			return object!=null;
+-		}
+-	}
+-	
+-	static final class NotNullOrZeroPropertySelector implements PropertySelector {
+-		public boolean include(Object object, String propertyName, Type type) { 
+-			return object!=null && (
+-				!(object instanceof Number) || ( (Number) object ).longValue()!=0
+-			);
+-		}
+-	}
+-	
+-	/**
+-	 * Set the property selector
+-	 */
+-	public Example setPropertySelector(PropertySelector selector) {
+-		this.selector = selector;
+-		return this;
+-	}
+-	
+-	/**
+-	 * Exclude zero-valued properties
+-	 */
+-	public Example excludeZeroes() {
+-		setPropertySelector(NOT_NULL_OR_ZERO);
+-		return this;
+-	}
+-	
+-	/**
+-	 * Don't exclude null or zero-valued properties
+-	 */
+-	public Example excludeNone() {
+-		setPropertySelector(ALL);
+-		return this;
+-	}
+-	
+-	/**
+-	 * Use the "like" operator for all string-valued properties
+-	 */
+-	public Example enableLike(MatchMode matchMode) {
+-		isLikeEnabled = true;
+-		this.matchMode = matchMode;
+-		return this;
+-	}
+-	
+-	/**
+-	 * Use the "like" operator for all string-valued properties
+-	 */
+-	public Example enableLike() {
+-		return enableLike(MatchMode.EXACT);
+-	}
+-
+-	/**
+-	 * Ignore case for all string-valued properties
+-	 */
+-	public Example ignoreCase() {
+-		isIgnoreCaseEnabled = true;
+-		return this;
+-	}
+-	
+-	/**
+-	 * Exclude a particular named property
+-	 */
+-	public Example excludeProperty(String name) {
+-		excludedProperties.add(name);
+-		return this;
+-	}
+-	
+-	/**
+-	 * Create a new instance, which includes all non-null properties 
+-	 * by default
+-	 * @param entity
+-	 * @return a new instance of <tt>Example</tt>
+-	 */
+-	public static Example create(Object entity) {
+-		if (entity==null) throw new NullPointerException("null example");
+-		return new Example(entity, NOT_NULL);
+-	}
+-
+-	protected Example(Object entity, PropertySelector selector) {
+-		this.entity = entity;
+-		this.selector = selector;
+-	}
+-
+-	public String toString() {
+-		return entity.toString();
+-	}
+-	
+-	private boolean isPropertyIncluded(Object value, String name, Type type) {
+-		return !excludedProperties.contains(name) &&
+-			!type.isAssociationType() &&
+-			selector.include(value, name, type);
+-	}
+-
+-	public String toSqlString(
+-		SessionFactoryImplementor sessionFactory,
+-		Class persistentClass,
+-		String alias,
+-		Map aliasClasses)
+-		throws HibernateException {
+-		
+-		StringBuffer buf = new StringBuffer().append(StringHelper.OPEN_PAREN);
+-		ClassMetadata meta = sessionFactory.getClassMetadata(persistentClass);
+-		String[] propertyNames = meta.getPropertyNames();
+-		Type[] propertyTypes = meta.getPropertyTypes();
+-		Object[] propertyValues = meta.getPropertyValues(entity);
+-		for (int i=0; i<propertyNames.length; i++) {
+-			Object propertyValue = propertyValues[i];
+-			String propertyName = propertyNames[i];
+-			
+-			boolean isPropertyIncluded = i!=meta.getVersionProperty() && 
+-				isPropertyIncluded( propertyValue, propertyName, propertyTypes[i] );
+-			if (isPropertyIncluded) {
+-				if ( propertyTypes[i].isComponentType() ) {
+-					appendComponentCondition(
+-						propertyName, 
+-						propertyValue, 
+-						(AbstractComponentType) propertyTypes[i], 
+-						persistentClass,
+-						alias,
+-						aliasClasses,
+-						sessionFactory,
+-						buf
+-					);
+-				}
+-				else {
+-					appendPropertyCondition(
+-						propertyName, 
+-						propertyValue, 
+-						persistentClass,
+-						alias,
+-						aliasClasses,
+-						sessionFactory,
+-						buf
+-					);
+-				}
+-			}
+-		}
+-		if ( buf.length()==1 ) buf.append("1=1"); //yuck!
+-		return buf.append(StringHelper.CLOSE_PAREN).toString();
+-	}
+-	
+-	private static final Object[] TYPED_VALUES = new TypedValue[0];
+-
+-	public TypedValue[] getTypedValues(
+-		SessionFactoryImplementor sessionFactory,
+-		Class persistentClass,
+-		Map aliasClasses)
+-		throws HibernateException {
+-
+-		ClassMetadata meta = sessionFactory.getClassMetadata(persistentClass);
+-		String[] propertyNames = meta.getPropertyNames();
+-		Type[] propertyTypes = meta.getPropertyTypes();
+-		Object[] values = meta.getPropertyValues(entity);
+-		List list = new ArrayList();
+-		for (int i=0; i<propertyNames.length; i++) {
+-			Object value = values[i];
+-			Type type = propertyTypes[i];
+-			String name = propertyNames[i];
+-			
+-			boolean isPropertyIncluded = i!=meta.getVersionProperty() && 
+-				isPropertyIncluded(value, name, type);
+-			
+-			if (isPropertyIncluded) {
+-				if ( propertyTypes[i].isComponentType() ) {
+-					addComponentTypedValues(name, value, (AbstractComponentType) type, list);
+-				}
+-				else {
+-					addPropertyTypedValue(value, type, list);
+-				}
+-			}
+-		}
+-		return (TypedValue[]) list.toArray(TYPED_VALUES);
+-	}
+-	
+-	protected void addPropertyTypedValue(Object value, Type type, List list) {
+-		if ( value!=null ) {
+-			if ( value instanceof String ) {
+-				String string = (String) value;
+-				if (isIgnoreCaseEnabled) string = string.toLowerCase();
+-				if (isLikeEnabled) string = matchMode.toMatchString(string);
+-				value = string;
+-			}
+-			list.add( new TypedValue(type, value) );
+-		}
+-	}
+-	
+-	protected void addComponentTypedValues(String path, Object component, AbstractComponentType type, List list) 
+-		throws HibernateException {
+-		
+-		if (component!=null) {
+-			String[] propertyNames = type.getPropertyNames();
+-			Type[] subtypes = type.getSubtypes();
+-			Object[] values = type.getPropertyValues(component);
+-			for (int i=0; i<propertyNames.length; i++) {
+-				Object value = values[i];
+-				Type subtype = subtypes[i];
+-				String subpath = StringHelper.qualify( path, propertyNames[i] );
+-				if ( isPropertyIncluded(value, subpath, subtype) ) {
+-					addPropertyTypedValue(value, subtype, list);
+-				}
+-			}
+-		}
+-	}
+-	
+-	protected void appendPropertyCondition(
+-		String propertyName, 
+-		Object propertyValue, 
+-		Class persistentClass,
+-		String alias,
+-		Map aliasClasses,
+-		SessionFactoryImplementor sessionFactory,
+-		StringBuffer buf) 
+-	throws HibernateException {
+-		
+-		if ( buf.length()>1 ) buf.append(" and ");
+-		Criterion crit;
+-		if ( propertyValue!=null ) {
+-			boolean isString = propertyValue instanceof String;
+-			crit = ( isLikeEnabled && isString ) ?
+-				(Criterion) new LikeExpression( propertyName, propertyValue, isIgnoreCaseEnabled ) :
+-				(Criterion) new EqExpression( propertyName, propertyValue, isIgnoreCaseEnabled && isString );
+-					
+-		}
+-		else {
+-			crit = new NullExpression(propertyName);
+-		}
+-		buf.append( crit.toSqlString(sessionFactory, persistentClass, alias, aliasClasses) );
+-	}
+-	
+-	protected void appendComponentCondition(
+-		String path, 
+-		Object component, 
+-		AbstractComponentType type, 
+-		Class persistentClass,
+-		String alias,
+-		Map aliasClasses,
+-		SessionFactoryImplementor sessionFactory,
+-		StringBuffer buf) 
+-	throws HibernateException {
+-		
+-		if (component!=null) {
+-			String[] propertyNames = type.getPropertyNames();
+-			Object[] values = type.getPropertyValues(component);
+-			Type[] subtypes = type.getSubtypes();
+-			for (int i=0; i<propertyNames.length; i++) {
+-				String subpath = StringHelper.qualify( path, propertyNames[i] );
+-				Object value = values[i];
+-				if ( isPropertyIncluded( value, subpath, subtypes[i] ) ) {
+-					appendPropertyCondition( 
+-						subpath,
+-						value, 
+-						persistentClass,
+-						alias,
+-						aliasClasses,
+-						sessionFactory,
+-						buf
+-					);
+-				}
+-			}
+-		}
+-	}
+-}
++//$Id: Example.java,v 1.1.2.9 2003/11/12 15:27:44 oneovthafew Exp $
++package net.sf.hibernate.expression;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.TypedValue;
++import net.sf.hibernate.metadata.ClassMetadata;
++import net.sf.hibernate.type.AbstractComponentType;
++import net.sf.hibernate.type.Type;
++import net.sf.hibernate.util.StringHelper;
++
++/**
++ * Support for query by example.
++ * <pre>
++ * List results = session.createCriteria(Parent.class)
++ *     .add( Example.create(parent).ignoreCase() )
++ *     .createCriteria("child")
++ *         .add( Example.create( parent.getChild() ) )
++ *     .list();
++ * </pre>
++ * "Examples" may be mixed and matched with "Expressions" in the same <tt>Criteria</tt>.
++ * @see net.sf.hibernate.Criteria
++ * @author Gavin King
++ */
++public class Example extends AbstractCriterion {
++	
++	private final Object entity;
++	private final Set excludedProperties = new HashSet();
++	private PropertySelector selector;
++	private boolean isLikeEnabled;
++	private boolean isIgnoreCaseEnabled;
++	private MatchMode matchMode;
++	
++	/**
++	 * A strategy for choosing property values for inclusion in the query
++	 * criteria
++	 */
++	public static interface PropertySelector {
++		public boolean include(Object propertyValue, String propertyName, Type type);
++	}
++	
++	private static final PropertySelector NOT_NULL = new NotNullPropertySelector();
++	private static final PropertySelector ALL = new AllPropertySelector();
++	private static final PropertySelector NOT_NULL_OR_ZERO = new NotNullOrZeroPropertySelector();
++		
++	static final class AllPropertySelector implements PropertySelector {
++		public boolean include(Object object, String propertyName, Type type) { 
++			return true;
++		}
++	}
++	
++	static final class NotNullPropertySelector implements PropertySelector {
++		public boolean include(Object object, String propertyName, Type type) { 
++			return object!=null;
++		}
++	}
++	
++	static final class NotNullOrZeroPropertySelector implements PropertySelector {
++		public boolean include(Object object, String propertyName, Type type) { 
++			return object!=null && (
++				!(object instanceof Number) || ( (Number) object ).longValue()!=0
++			);
++		}
++	}
++	
++	/**
++	 * Set the property selector
++	 */
++	public Example setPropertySelector(PropertySelector selector) {
++		this.selector = selector;
++		return this;
++	}
++	
++	/**
++	 * Exclude zero-valued properties
++	 */
++	public Example excludeZeroes() {
++		setPropertySelector(NOT_NULL_OR_ZERO);
++		return this;
++	}
++	
++	/**
++	 * Don't exclude null or zero-valued properties
++	 */
++	public Example excludeNone() {
++		setPropertySelector(ALL);
++		return this;
++	}
++	
++	/**
++	 * Use the "like" operator for all string-valued properties
++	 */
++	public Example enableLike(MatchMode matchMode) {
++		isLikeEnabled = true;
++		this.matchMode = matchMode;
++		return this;
++	}
++	
++	/**
++	 * Use the "like" operator for all string-valued properties
++	 */
++	public Example enableLike() {
++		return enableLike(MatchMode.EXACT);
++	}
++
++	/**
++	 * Ignore case for all string-valued properties
++	 */
++	public Example ignoreCase() {
++		isIgnoreCaseEnabled = true;
++		return this;
++	}
++	
++	/**
++	 * Exclude a particular named property
++	 */
++	public Example excludeProperty(String name) {
++		excludedProperties.add(name);
++		return this;
++	}
++	
++	/**
++	 * Create a new instance, which includes all non-null properties 
++	 * by default
++	 * @param entity
++	 * @return a new instance of <tt>Example</tt>
++	 */
++	public static Example create(Object entity) {
++		if (entity==null) throw new NullPointerException("null example");
++		return new Example(entity, NOT_NULL);
++	}
++
++	protected Example(Object entity, PropertySelector selector) {
++		this.entity = entity;
++		this.selector = selector;
++	}
++
++	public String toString() {
++		return entity.toString();
++	}
++	
++	private boolean isPropertyIncluded(Object value, String name, Type type) {
++		return !excludedProperties.contains(name) &&
++			!type.isAssociationType() &&
++			selector.include(value, name, type);
++	}
++
++	public String toSqlString(
++		SessionFactoryImplementor sessionFactory,
++		Class persistentClass,
++		String alias,
++		Map aliasClasses)
++		throws HibernateException {
++		
++		StringBuffer buf = new StringBuffer().append(StringHelper.OPEN_PAREN);
++		ClassMetadata meta = sessionFactory.getClassMetadata(persistentClass);
++		String[] propertyNames = meta.getPropertyNames();
++		Type[] propertyTypes = meta.getPropertyTypes();
++		Object[] propertyValues = meta.getPropertyValues(entity);
++		for (int i=0; i<propertyNames.length; i++) {
++			Object propertyValue = propertyValues[i];
++			String propertyName = propertyNames[i];
++			
++			boolean isPropertyIncluded = i!=meta.getVersionProperty() && 
++				isPropertyIncluded( propertyValue, propertyName, propertyTypes[i] );
++			if (isPropertyIncluded) {
++				if ( propertyTypes[i].isComponentType() ) {
++					appendComponentCondition(
++						propertyName, 
++						propertyValue, 
++						(AbstractComponentType) propertyTypes[i], 
++						persistentClass,
++						alias,
++						aliasClasses,
++						sessionFactory,
++						buf
++					);
++				}
++				else {
++					appendPropertyCondition(
++						propertyName, 
++						propertyValue, 
++						persistentClass,
++						alias,
++						aliasClasses,
++						sessionFactory,
++						buf
++					);
++				}
++			}
++		}
++		if ( buf.length()==1 ) buf.append("1=1"); //yuck!
++		return buf.append(StringHelper.CLOSE_PAREN).toString();
++	}
++	
++	private static final Object[] TYPED_VALUES = new TypedValue[0];
++
++	public TypedValue[] getTypedValues(
++		SessionFactoryImplementor sessionFactory,
++		Class persistentClass,
++		Map aliasClasses)
++		throws HibernateException {
++
++		ClassMetadata meta = sessionFactory.getClassMetadata(persistentClass);
++		String[] propertyNames = meta.getPropertyNames();
++		Type[] propertyTypes = meta.getPropertyTypes();
++		Object[] values = meta.getPropertyValues(entity);
++		List list = new ArrayList();
++		for (int i=0; i<propertyNames.length; i++) {
++			Object value = values[i];
++			Type type = propertyTypes[i];
++			String name = propertyNames[i];
++			
++			boolean isPropertyIncluded = i!=meta.getVersionProperty() && 
++				isPropertyIncluded(value, name, type);
++            
++			if (isPropertyIncluded) {
++				if ( propertyTypes[i].isComponentType() ) {
++					addComponentTypedValues(name, value, (AbstractComponentType) type, list);
++				}
++				else {
++					addPropertyTypedValue(value, type, list);
++				}
++			}
++		}
++		return (TypedValue[]) list.toArray(TYPED_VALUES);
++	}
++	
++	protected void addPropertyTypedValue(Object value, Type type, List list) {
++		if ( value!=null ) {
++			if ( value instanceof String ) {
++				String string = (String) value;
++				if (isIgnoreCaseEnabled) string = string.toLowerCase();
++				if (isLikeEnabled) string = matchMode.toMatchString(string);
++				value = string;
++			}
++			list.add( new TypedValue(type, value) );
++		}
++	}
++	
++	protected void addComponentTypedValues(String path, Object component, AbstractComponentType type, List list) 
++		throws HibernateException {
++		
++		if (component!=null) {
++			String[] propertyNames = type.getPropertyNames();
++            Type[] subtypes = type.getSubtypes();
++			Object[] values = type.getPropertyValues(component);
++			for (int i=0; i<propertyNames.length; i++) {
++				Object value = values[i];
++				Type subtype = subtypes[i];
++				String subpath = StringHelper.qualify( path, propertyNames[i] );
++                if ( isPropertyIncluded(value, subpath, subtype) ) {
++                    if (subtype.isComponentType() ) {
++                        addComponentTypedValues(subpath, value, (AbstractComponentType) subtype, list);
++                    } else {
++                        addPropertyTypedValue(value, subtype, list);
++                    }
++				}
++			}
++		}
++	}
++	
++	protected void appendPropertyCondition(
++		String propertyName, 
++		Object propertyValue, 
++		Class persistentClass,
++		String alias,
++		Map aliasClasses,
++		SessionFactoryImplementor sessionFactory,
++		StringBuffer buf) 
++	throws HibernateException {
++		
++		if ( buf.length()>1 ) buf.append(" and ");
++		Criterion crit;
++		if ( propertyValue!=null ) {
++			boolean isString = propertyValue instanceof String;
++			crit = ( isLikeEnabled && isString ) ?
++				(Criterion) new LikeExpression( propertyName, propertyValue, isIgnoreCaseEnabled ) :
++				(Criterion) new EqExpression( propertyName, propertyValue, isIgnoreCaseEnabled && isString );
++					
++		}
++		else {
++			crit = new NullExpression(propertyName);
++		}
++		buf.append( crit.toSqlString(sessionFactory, persistentClass, alias, aliasClasses) );
++	}
++	
++	protected void appendComponentCondition(
++		String path, 
++		Object component, 
++		AbstractComponentType type, 
++		Class persistentClass,
++		String alias,
++		Map aliasClasses,
++		SessionFactoryImplementor sessionFactory,
++		StringBuffer buf) 
++	throws HibernateException {
++		
++		if (component!=null) {
++			String[] propertyNames = type.getPropertyNames();
++			Object[] values = type.getPropertyValues(component);
++			Type[] subtypes = type.getSubtypes();
++			for (int i=0; i<propertyNames.length; i++) {
++				String subpath = StringHelper.qualify( path, propertyNames[i] );
++				Object value = values[i];
++				if ( isPropertyIncluded( value, subpath, subtypes[i] ) ) {
++                    Type subtype = subtypes[i];
++                    if (subtype.isComponentType() ) {
++                        appendComponentCondition(
++                            subpath, 
++                            value, 
++                            (AbstractComponentType) subtype, 
++                            persistentClass,
++                            alias,
++                            aliasClasses,
++                            sessionFactory,
++                            buf
++                        );
++                    } else {
++                        appendPropertyCondition( 
++                            subpath,
++                            value, 
++                            persistentClass,
++                            alias,
++                            aliasClasses,
++                            sessionFactory,
++                            buf
++                        );
++                    }
++				}
++			}
++		}
++	}
++}
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/test/org/hibernate/test/Attic/AllTests.java,v
+retrieving revision 1.1.2.1
+diff -u -r1.1.2.1 AllTests.java
+--- test/org/hibernate/test/AllTests.java	8 Nov 2003 09:17:42 -0000	1.1.2.1
++++ test/org/hibernate/test/AllTests.java	5 Jan 2004 22:40:06 -0000
+@@ -1,34 +1,35 @@
+-//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
+-package org.hibernate.test;
+-
+-import junit.framework.Test;
+-import junit.framework.TestSuite;
+-import junit.textui.TestRunner;
+-
+-/**
+- * @author Gavin King
+- */
+-public class AllTests {
+-	
+-	public static Test suite() {
+-
+-		TestSuite suite = new TestSuite();
+-
+-		suite.addTest( FooBarTest.suite() );
+-		suite.addTest( FumTest.suite() );
+-		suite.addTest( MasterDetailTest.suite() );
+-		suite.addTest( ParentChildTest.suite() );
+-		suite.addTest( ABCTest.suite() );
+-		suite.addTest( ABCProxyTest.suite() );
+-		suite.addTest( SQLFunctionsTest.suite() );
+-		suite.addTest( SQLLoaderTest.suite() );
+-		suite.addTest( ODMGTest.suite() );
+-		suite.addTest( MultiTableTest.suite() );
+-		
+-		return suite;
+-	}
+-
+-	public static void main(String args[]) {
+-		TestRunner.run( suite() );
+-	}
+-}
++//$Id: AllTests.java,v 1.1.2.1 2003/11/08 09:17:42 oneovthafew Exp $
++package org.hibernate.test;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++
++/**
++ * @author Gavin King
++ */
++public class AllTests {
++	
++	public static Test suite() {
++
++		TestSuite suite = new TestSuite();
++
++		suite.addTest( FooBarTest.suite() );
++		suite.addTest( FumTest.suite() );
++		suite.addTest( MasterDetailTest.suite() );
++		suite.addTest( ParentChildTest.suite() );
++		suite.addTest( ABCTest.suite() );
++		suite.addTest( ABCProxyTest.suite() );
++		suite.addTest( SQLFunctionsTest.suite() );
++		suite.addTest( SQLLoaderTest.suite() );
++		suite.addTest( ODMGTest.suite() );
++		suite.addTest( MultiTableTest.suite() );
++        suite.addTest( QueryByExample.suite() );
++		
++		return suite;
++	}
++
++	public static void main(String args[]) {
++		TestRunner.run( suite() );
++	}
++}
+Index: test/org/hibernate/test/Component.java
+===================================================================
+RCS file: test/org/hibernate/test/Component.java
+diff -N test/org/hibernate/test/Component.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Component.java	5 Jan 2004 22:40:06 -0000
+@@ -0,0 +1,42 @@
++package org.hibernate.test;
++
++
++/**
++ * Component
++ * 
++ * @author emmanuel
++ */
++public class Component {
++    private String _name;
++    
++    private SubComponent _subComponent;
++
++    /**
++     * @return
++     */
++    public String getName() {
++        return _name;
++    }
++
++    /**
++     * @param string
++     */
++    public void setName(String string) {
++        _name = string;
++    }
++
++    /**
++     * @return
++     */
++    public SubComponent getSubComponent() {
++        return _subComponent;
++    }
++
++    /**
++     * @param component
++     */
++    public void setSubComponent(SubComponent component) {
++        _subComponent = component;
++    }
++
++}
+Index: test/org/hibernate/test/Componentizable.hbm.xml
+===================================================================
+RCS file: test/org/hibernate/test/Componentizable.hbm.xml
+diff -N test/org/hibernate/test/Componentizable.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Componentizable.hbm.xml	5 Jan 2004 22:40:06 -0000
+@@ -0,0 +1,19 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE hibernate-mapping 
++	PUBLIC "-//Hibernate/Hibernate Mapping DTD 2.0//EN" 
++	"http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd">
++<hibernate-mapping>
++	<class name="org.hibernate.test.Componentizable">
++		<id name="id">
++			<generator class="identity"/>
++		</id>
++		<property name="nickName"/>
++		<component name="component" access="property" class="org.hibernate.test.Component">
++			<property name="name"/>
++			<component name="subComponent" class="org.hibernate.test.SubComponent">
++		   	<property name="subName"/>
++		   	<property name="subName1"/>
++	  	</component>
++		</component>
++	</class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: test/org/hibernate/test/Componentizable.java
+===================================================================
+RCS file: test/org/hibernate/test/Componentizable.java
+diff -N test/org/hibernate/test/Componentizable.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/Componentizable.java	5 Jan 2004 22:40:06 -0000
+@@ -0,0 +1,61 @@
++package org.hibernate.test;
++
++import junit.framework.Test;
++
++/**
++ * contains components
++ * 
++ * @author emmanuel
++ */
++public class Componentizable {
++	/** surrogate id */
++	private Integer _id;
++    
++    public String _nickName;
++	
++	/** component */
++    private Component _component;
++
++    /**
++     * @return
++     */
++    public Integer getId() {
++        return _id;
++    }
++
++    /**
++     * @param integer
++     */
++    public void setId(Integer integer) {
++        _id = integer;
++    }
++
++    /**
++     * @return
++     */
++    public Component getComponent() {
++        return _component;
++    }
++
++    /**
++     * @param component
++     */
++    public void setComponent(Component component) {
++        _component = component;
++    }
++
++    /**
++     * @return
++     */
++    public String getNickName() {
++        return _nickName;
++    }
++
++    /**
++     * @param string
++     */
++    public void setNickName(String string) {
++        _nickName = string;
++    }
++
++}
+Index: test/org/hibernate/test/QueryByExample.java
+===================================================================
+RCS file: test/org/hibernate/test/QueryByExample.java
+diff -N test/org/hibernate/test/QueryByExample.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/QueryByExample.java	5 Jan 2004 22:40:07 -0000
+@@ -0,0 +1,151 @@
++package org.hibernate.test;
++
++import java.util.List;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++
++import net.sf.hibernate.Criteria;
++import net.sf.hibernate.Session;
++import net.sf.hibernate.Transaction;
++import net.sf.hibernate.expression.Example;
++import net.sf.hibernate.expression.Expression;
++
++
++/**
++ * Query by example test to allow nested components
++ * 
++ * @author emmanuel
++ */
++public class QueryByExample extends TestCase {
++
++    /**
++     * @param name test name
++     */
++    public QueryByExample(String name) {
++        super(name);
++    }
++    
++    public void setUp() throws Exception {
++        super.setUp();
++        initData();
++    }
++    
++    public void tearDown() throws Exception {
++        deleteData();
++        super.tearDown();
++    }
++
++    /** 
++     * @see org.hibernate.test.TestCase#getMappings()
++     */
++    protected String[] getMappings() {
++        return new String[] { "Componentizable.hbm.xml" };
++    }
++
++    public void testSimpleQBE() throws Exception {
++        
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        Componentizable master = getMaster("hibernate", null, "open%");
++        Criteria crit = s.createCriteria(Componentizable.class);
++        Example ex = Example.create(master).enableLike();
++        crit.add(ex);
++        List result = crit.list();
++        assertNotNull(result);
++        assertEquals(1, result.size());
++        t.commit();
++        s.close();
++    }
++    
++    public void testJunctionNotExpressionQBE() throws Exception {
++        
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        Componentizable master = getMaster("hibernate", null, "open%");
++        Criteria crit = s.createCriteria(Componentizable.class);
++        Example ex = Example.create(master).enableLike();
++        
++        crit.add(Expression.or(Expression.not(ex), ex));
++        
++        List result = crit.list();
++        assertNotNull(result);
++        assertEquals(3, result.size());
++        t.commit();
++        s.close();
++        
++    }
++    
++    public void testExcludingQBE() throws Exception {
++        
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        Componentizable master = getMaster("hibernate", null, "open%");
++        Criteria crit = s.createCriteria(Componentizable.class);
++        Example ex = Example.create(master).enableLike()
++            .excludeProperty("component.subComponent");
++        crit.add(ex);
++        List result = crit.list();
++        assertNotNull(result);
++        assertEquals(3, result.size());
++        
++        master = getMaster("hibernate", "ORM tool", "fake stuff");
++        crit = s.createCriteria(Componentizable.class);
++        ex = Example.create(master).enableLike()
++            .excludeProperty("component.subComponent.subName1");
++        crit.add(ex);
++        result = crit.list();
++        assertNotNull(result);
++        assertEquals(1, result.size());
++        t.commit();
++        s.close();
++                
++        
++    }
++    
++    private void initData() throws Exception {
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        Componentizable master = getMaster("hibernate", "ORM tool", "ORM tool1");
++        s.saveOrUpdate(master);
++        master = getMaster("hibernate", "open source", "open source1");
++        s.saveOrUpdate(master);
++        master = getMaster("hibernate", null, null);
++        s.saveOrUpdate(master);
++        t.commit();
++        s.close();
++    }
++    
++    private void deleteData() throws Exception {
++        Session s = openSession();
++        Transaction t = s.beginTransaction();
++        s.delete("from Componentizable");
++        t.commit();
++        s.close();
++    }
++
++    private Componentizable getMaster(String name, String subname, String subname1) {
++        Componentizable master = new Componentizable();
++        if (name != null) {
++            Component masterComp = new Component();
++            masterComp.setName(name);
++            if (subname != null || subname1 != null) {
++                SubComponent subComponent = new SubComponent();
++                subComponent.setSubName(subname);
++                subComponent.setSubName1(subname1);
++                masterComp.setSubComponent(subComponent); 
++            }
++            master.setComponent(masterComp);
++        }
++        return master;
++    }
++    
++    public static Test suite() {
++        return new TestSuite(QueryByExample.class);
++    }
++    
++    public static void main(String[] args) throws Exception {
++        TestRunner.run( suite() );
++    }
++}
+Index: test/org/hibernate/test/SubComponent.java
+===================================================================
+RCS file: test/org/hibernate/test/SubComponent.java
+diff -N test/org/hibernate/test/SubComponent.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ test/org/hibernate/test/SubComponent.java	5 Jan 2004 22:40:07 -0000
+@@ -0,0 +1,41 @@
++package org.hibernate.test;
++
++/**
++ * Sub component
++ * 
++ * @author emmanuel
++ */
++public class SubComponent {
++    private String _subName;
++    
++    private String _subName1;
++    
++    /**
++     * @return
++     */
++    public String getSubName() {
++        return _subName;
++    }
++
++    /**
++     * @param string
++     */
++    public void setSubName(String string) {
++        _subName = string;
++    }
++
++    /**
++     * @return
++     */
++    public String getSubName1() {
++        return _subName1;
++    }
++
++    /**
++     * @param string
++     */
++    public void setSubName1(String string) {
++        _subName1 = string;
++    }
++
++}

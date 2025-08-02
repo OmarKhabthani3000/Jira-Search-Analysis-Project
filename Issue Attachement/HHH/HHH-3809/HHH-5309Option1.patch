@@ -1,0 +1,628 @@
+Index: core/src/main/java/org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(revision 15151)
++++ core/src/main/java/org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -80,12 +80,12 @@
+ 
+ 		final CacheKey ck;
+ 		if ( persister.hasCache() ) {
+-			ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+ 			lock = persister.getCacheAccessStrategy().lockItem( ck, version );
+ 		}
+@@ -96,9 +96,9 @@
+ 		if ( !isCascadeDeleteEnabled && !veto ) {
+ 			persister.delete( id, version, instance, session );
+ 		}
+-		
++
+ 		//postDelete:
+-		// After actually deleting a row, record the fact that the instance no longer 
++		// After actually deleting a row, record the fact that the instance no longer
+ 		// exists on the database (needed for identity-column key generation), and
+ 		// remove it from the session cache
+ 		final PersistenceContext persistenceContext = session.getPersistenceContext();
+@@ -111,7 +111,7 @@
+ 		EntityKey key = new EntityKey( entry.getId(), entry.getPersister(), session.getEntityMode() );
+ 		persistenceContext.removeEntity(key);
+ 		persistenceContext.removeProxy(key);
+-		
++
+ 		if ( persister.hasCache() ) persister.getCacheAccessStrategy().remove( ck );
+ 
+ 		postDelete();
+@@ -144,7 +144,7 @@
+ 					getId(),
+ 					state,
+ 					getPersister(),
+-					(EventSource) getSession() 
++					(EventSource) getSession()
+ 			);
+ 			for ( int i = 0; i < postListeners.length; i++ ) {
+ 				postListeners[i].onPostDelete(postEvent);
+@@ -153,29 +153,31 @@
+ 	}
+ 
+ 	private void postCommitDelete() {
+-		PostDeleteEventListener[] postListeners = getSession().getListeners()
+-				.getPostCommitDeleteEventListeners();
+-		if (postListeners.length>0) {
+-			PostDeleteEvent postEvent = new PostDeleteEvent(
+-					getInstance(),
+-					getId(),
+-					state,
+-					getPersister(),
+-					(EventSource) getSession()
+-			);
+-			for ( int i = 0; i < postListeners.length; i++ ) {
+-				postListeners[i].onPostDelete(postEvent);
++		if (getSession().isPostCommitListenersEnabled()) {
++			PostDeleteEventListener[] postListeners = getSession().getListeners()
++					.getPostCommitDeleteEventListeners();
++			if (postListeners.length > 0) {
++				PostDeleteEvent postEvent = new PostDeleteEvent(
++						getInstance(),
++						getId(),
++						state,
++						getPersister(),
++						(EventSource) getSession()
++				);
++				for (int i = 0; i < postListeners.length; i++) {
++					postListeners[i].onPostDelete(postEvent);
++				}
+ 			}
+ 		}
+ 	}
+ 
+ 	public void afterTransactionCompletion(boolean success) throws HibernateException {
+ 		if ( getPersister().hasCache() ) {
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					getPersister().getIdentifierType(), 
++			final CacheKey ck = new CacheKey(
++					getId(),
++					getPersister().getIdentifierType(),
+ 					getPersister().getRootEntityName(),
+-					getSession().getEntityMode(), 
++					getSession().getEntityMode(),
+ 					getSession().getFactory()
+ 				);
+ 			getPersister().getCacheAccessStrategy().unlockItem( ck, lock );
+@@ -184,7 +186,7 @@
+ 	}
+ 
+ 	protected boolean hasPostCommitEventListeners() {
+-		return getSession().getListeners().getPostCommitDeleteEventListeners().length>0;
++		return getSession().isPostCommitListenersEnabled() && getSession().getListeners().getPostCommitDeleteEventListeners().length>0;
+ 	}
+ 
+ }
+Index: core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(revision 15151)
++++ core/src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(working copy)
+@@ -57,11 +57,11 @@
+ 	}
+ 
+ 	public void execute() throws HibernateException {
+-		
++
+ 		final EntityPersister persister = getPersister();
+ 		final SessionImplementor session = getSession();
+ 		final Object instance = getInstance();
+-		
++
+ 		boolean veto = preInsert();
+ 
+ 		// Don't need to lock the cache here, since if someone
+@@ -85,7 +85,7 @@
+ 			cacheEntry = new CacheEntry(object, persister, session);
+ 			persister.getCache().insert(generatedId, cacheEntry);
+ 		}*/
+-		
++
+ 		postInsert();
+ 
+ 		if ( session.getFactory().getStatistics().isStatisticsEnabled() && !veto ) {
+@@ -116,18 +116,20 @@
+ 	}
+ 
+ 	private void postCommitInsert() {
+-		PostInsertEventListener[] postListeners = getSession().getListeners()
+-				.getPostCommitInsertEventListeners();
+-		if (postListeners.length>0) {
+-			PostInsertEvent postEvent = new PostInsertEvent(
+-					getInstance(),
+-					generatedId,
+-					state,
+-					getPersister(),
+-					(EventSource) getSession() 
+-			);
+-			for ( int i = 0; i < postListeners.length; i++ ) {
+-				postListeners[i].onPostInsert(postEvent);
++		if (getSession().isPostCommitListenersEnabled()) {
++			PostInsertEventListener[] postListeners = getSession().getListeners()
++					.getPostCommitInsertEventListeners();
++			if (postListeners.length > 0) {
++				PostInsertEvent postEvent = new PostInsertEvent(
++						getInstance(),
++						generatedId,
++						state,
++						getPersister(),
++						(EventSource) getSession()
++				);
++				for (int i = 0; i < postListeners.length; i++) {
++					postListeners[i].onPostInsert(postEvent);
++				}
+ 			}
+ 		}
+ 	}
+@@ -162,9 +164,9 @@
+ 	}
+ 
+ 	protected boolean hasPostCommitEventListeners() {
+-		return getSession().getListeners().getPostCommitInsertEventListeners().length>0;
++		return getSession().isPostCommitListenersEnabled() && getSession().getListeners().getPostCommitInsertEventListeners().length>0;
+ 	}
+-	
++
+ 	public final Serializable getGeneratedId() {
+ 		return generatedId;
+ 	}
+Index: core/src/main/java/org/hibernate/action/EntityInsertAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityInsertAction.java	(revision 15151)
++++ core/src/main/java/org/hibernate/action/EntityInsertAction.java	(working copy)
+@@ -75,16 +75,16 @@
+ 		// else inserted the same pk first, the insert would fail
+ 
+ 		if ( !veto ) {
+-			
++
+ 			persister.insert( id, state, instance, session );
+-		
++
+ 			EntityEntry entry = session.getPersistenceContext().getEntry( instance );
+ 			if ( entry == null ) {
+ 				throw new AssertionFailure( "possible nonthreadsafe access to session" );
+ 			}
+-			
++
+ 			entry.postInsert();
+-	
++
+ 			if ( persister.hasInsertGeneratedProperties() ) {
+ 				persister.processInsertGeneratedProperties( id, instance, state, session );
+ 				if ( persister.isVersionPropertyGenerated() ) {
+@@ -92,37 +92,37 @@
+ 				}
+ 				entry.postUpdate(instance, state, version);
+ 			}
+-			
++
+ 		}
+ 
+ 		final SessionFactoryImplementor factory = getSession().getFactory();
+ 
+ 		if ( isCachePutEnabled( persister, session ) ) {
+-			
++
+ 			CacheEntry ce = new CacheEntry(
+ 					state,
+-					persister, 
++					persister,
+ 					persister.hasUninitializedLazyProperties( instance, session.getEntityMode() ),
+ 					version,
+ 					session,
+ 					instance
+ 				);
+-			
++
+ 			cacheEntry = persister.getCacheEntryStructure().structure(ce);
+-			final CacheKey ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			final CacheKey ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 				);
+ //			boolean put = persister.getCache().insert(ck, cacheEntry);
+ 			boolean put = persister.getCacheAccessStrategy().insert( ck, cacheEntry, version );
+-			
++
+ 			if ( put && factory.getStatistics().isStatisticsEnabled() ) {
+ 				factory.getStatisticsImplementor().secondLevelCachePut( getPersister().getCacheAccessStrategy().getRegion().getName() );
+ 			}
+-			
++
+ 		}
+ 
+ 		postInsert();
+@@ -152,18 +152,20 @@
+ 	}
+ 
+ 	private void postCommitInsert() {
+-		PostInsertEventListener[] postListeners = getSession().getListeners()
+-				.getPostCommitInsertEventListeners();
+-		if ( postListeners.length > 0 ) {
+-			PostInsertEvent postEvent = new PostInsertEvent(
+-					getInstance(),
+-					getId(),
+-					state,
+-					getPersister(),
+-					(EventSource) getSession() 
+-			);
+-			for ( int i = 0; i < postListeners.length; i++ ) {
+-				postListeners[i].onPostInsert(postEvent);
++		if (getSession().isPostCommitListenersEnabled()) {
++			PostInsertEventListener[] postListeners = getSession().getListeners()
++					.getPostCommitInsertEventListeners();
++			if (postListeners.length > 0) {
++				PostInsertEvent postEvent = new PostInsertEvent(
++						getInstance(),
++						getId(),
++						state,
++						getPersister(),
++						(EventSource) getSession()
++				);
++				for (int i = 0; i < postListeners.length; i++) {
++					postListeners[i].onPostInsert(postEvent);
++				}
+ 			}
+ 		}
+ 	}
+@@ -185,15 +187,15 @@
+ 	public void afterTransactionCompletion(boolean success) throws HibernateException {
+ 		EntityPersister persister = getPersister();
+ 		if ( success && isCachePutEnabled( persister, getSession() ) ) {
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					getSession().getEntityMode(), 
+-					getSession().getFactory() 
++			final CacheKey ck = new CacheKey(
++					getId(),
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					getSession().getEntityMode(),
++					getSession().getFactory()
+ 				);
+ 			boolean put = persister.getCacheAccessStrategy().afterInsert( ck, cacheEntry, version );
+-			
++
+ 			if ( put && getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+ 				getSession().getFactory().getStatisticsImplementor()
+ 						.secondLevelCachePut( getPersister().getCacheAccessStrategy().getRegion().getName() );
+@@ -203,12 +205,12 @@
+ 	}
+ 
+ 	protected boolean hasPostCommitEventListeners() {
+-		return getSession().getListeners().getPostCommitInsertEventListeners().length>0;
++		return getSession().isPostCommitListenersEnabled() && getSession().getListeners().getPostCommitInsertEventListeners().length>0;
+ 	}
+-	
++
+ 	private boolean isCachePutEnabled(EntityPersister persister, SessionImplementor session) {
+-		return persister.hasCache() && 
+-				!persister.isCacheInvalidationRequired() && 
++		return persister.hasCache() &&
++				!persister.isCacheInvalidationRequired() &&
+ 				session.getCacheMode().isPutEnabled();
+ 	}
+ 
+Index: core/src/main/java/org/hibernate/action/EntityUpdateAction.java
+===================================================================
+--- core/src/main/java/org/hibernate/action/EntityUpdateAction.java	(revision 15151)
++++ core/src/main/java/org/hibernate/action/EntityUpdateAction.java	(working copy)
+@@ -95,15 +95,15 @@
+ 			// multiple actions queued during the same flush
+ 			previousVersion = persister.getVersion( instance, session.getEntityMode() );
+ 		}
+-		
++
+ 		final CacheKey ck;
+ 		if ( persister.hasCache() ) {
+-			ck = new CacheKey( 
+-					id, 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					session.getEntityMode(), 
+-					session.getFactory() 
++			ck = new CacheKey(
++					id,
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					session.getEntityMode(),
++					session.getFactory()
+ 			);
+ 			lock = persister.getCacheAccessStrategy().lockItem( ck, previousVersion );
+ 		}
+@@ -112,16 +112,16 @@
+ 		}
+ 
+ 		if ( !veto ) {
+-			persister.update( 
+-					id, 
+-					state, 
+-					dirtyFields, 
+-					hasDirtyCollection, 
+-					previousState, 
+-					previousVersion, 
+-					instance, 
+-					rowId, 
+-					session 
++			persister.update(
++					id,
++					state,
++					dirtyFields,
++					hasDirtyCollection,
++					previousState,
++					previousVersion,
++					instance,
++					rowId,
++					session
+ 			);
+ 		}
+ 
+@@ -129,7 +129,7 @@
+ 		if ( entry == null ) {
+ 			throw new AssertionFailure( "possible nonthreadsafe access to session" );
+ 		}
+-		
++
+ 		if ( entry.getStatus()==Status.MANAGED || persister.isVersionPropertyGenerated() ) {
+ 			// get the updated snapshot of the entity state by cloning current state;
+ 			// it is safe to copy in place, since by this time no-one else (should have)
+@@ -161,9 +161,9 @@
+ 			else {
+ 				//TODO: inefficient if that cache is just going to ignore the updated state!
+ 				CacheEntry ce = new CacheEntry(
+-						state, 
+-						persister, 
+-						persister.hasUninitializedLazyProperties( instance, session.getEntityMode() ), 
++						state,
++						persister,
++						persister.hasUninitializedLazyProperties( instance, session.getEntityMode() ),
+ 						nextVersion,
+ 						getSession(),
+ 						instance
+@@ -188,13 +188,13 @@
+ 		PostUpdateEventListener[] postListeners = getSession().getListeners()
+ 				.getPostUpdateEventListeners();
+ 		if (postListeners.length>0) {
+-			PostUpdateEvent postEvent = new PostUpdateEvent( 
+-					getInstance(), 
+-					getId(), 
+-					state, 
+-					previousState, 
++			PostUpdateEvent postEvent = new PostUpdateEvent(
++					getInstance(),
++					getId(),
++					state,
++					previousState,
+ 					getPersister(),
+-					(EventSource) getSession() 
++					(EventSource) getSession()
+ 				);
+ 			for ( int i = 0; i < postListeners.length; i++ ) {
+ 				postListeners[i].onPostUpdate(postEvent);
+@@ -203,19 +203,21 @@
+ 	}
+ 
+ 	private void postCommitUpdate() {
+-		PostUpdateEventListener[] postListeners = getSession().getListeners()
+-				.getPostCommitUpdateEventListeners();
+-		if (postListeners.length>0) {
+-			PostUpdateEvent postEvent = new PostUpdateEvent( 
+-					getInstance(), 
+-					getId(), 
+-					state, 
+-					previousState, 
+-					getPersister(),
+-					(EventSource) getSession()
++		if (getSession().isPostCommitListenersEnabled()) {
++			PostUpdateEventListener[] postListeners = getSession().getListeners()
++					.getPostCommitUpdateEventListeners();
++			if (postListeners.length > 0) {
++				PostUpdateEvent postEvent = new PostUpdateEvent(
++						getInstance(),
++						getId(),
++						state,
++						previousState,
++						getPersister(),
++						(EventSource) getSession()
+ 				);
+-			for ( int i = 0; i < postListeners.length; i++ ) {
+-				postListeners[i].onPostUpdate(postEvent);
++				for (int i = 0; i < postListeners.length; i++) {
++					postListeners[i].onPostUpdate(postEvent);
++				}
+ 			}
+ 		}
+ 	}
+@@ -225,11 +227,11 @@
+ 				.getPreUpdateEventListeners();
+ 		boolean veto = false;
+ 		if (preListeners.length>0) {
+-			PreUpdateEvent preEvent = new PreUpdateEvent( 
+-					getInstance(), 
+-					getId(), 
+-					state, 
+-					previousState, 
++			PreUpdateEvent preEvent = new PreUpdateEvent(
++					getInstance(),
++					getId(),
++					state,
++					previousState,
+ 					getPersister(),
+ 					(EventSource)getSession()
+ 				);
+@@ -243,18 +245,18 @@
+ 	public void afterTransactionCompletion(boolean success) throws CacheException {
+ 		EntityPersister persister = getPersister();
+ 		if ( persister.hasCache() ) {
+-			
+-			final CacheKey ck = new CacheKey( 
+-					getId(), 
+-					persister.getIdentifierType(), 
+-					persister.getRootEntityName(), 
+-					getSession().getEntityMode(), 
+-					getSession().getFactory() 
++
++			final CacheKey ck = new CacheKey(
++					getId(),
++					persister.getIdentifierType(),
++					persister.getRootEntityName(),
++					getSession().getEntityMode(),
++					getSession().getFactory()
+ 				);
+-			
++
+ 			if ( success && cacheEntry!=null /*!persister.isCacheInvalidationRequired()*/ ) {
+ 				boolean put = persister.getCacheAccessStrategy().afterUpdate( ck, cacheEntry, nextVersion, previousVersion, lock );
+-				
++
+ 				if ( put && getSession().getFactory().getStatistics().isStatisticsEnabled() ) {
+ 					getSession().getFactory().getStatisticsImplementor().secondLevelCachePut( getPersister().getCacheAccessStrategy().getRegion().getName() );
+ 				}
+@@ -267,9 +269,9 @@
+ 	}
+ 
+ 	protected boolean hasPostCommitEventListeners() {
+-		return getSession().getListeners().getPostCommitUpdateEventListeners().length>0;
++		return getSession().isPostCommitListenersEnabled() && getSession().getListeners().getPostCommitUpdateEventListeners().length>0;
+ 	}
+-	
++
+ }
+ 
+ 
+Index: core/src/main/java/org/hibernate/impl/AbstractSessionImpl.java
+===================================================================
+--- core/src/main/java/org/hibernate/impl/AbstractSessionImpl.java	(revision 15151)
++++ core/src/main/java/org/hibernate/impl/AbstractSessionImpl.java	(working copy)
+@@ -43,13 +43,14 @@
+ 
+ /**
+  * Functionality common to stateless and stateful sessions
+- * 
++ *
+  * @author Gavin King
+  */
+ public abstract class AbstractSessionImpl implements SessionImplementor {
+ 
+ 	protected transient SessionFactoryImpl factory;
+ 	private boolean closed = false;
++	private boolean postCommitListenersEnabled = true;
+ 
+ 	protected AbstractSessionImpl(SessionFactoryImpl factory) {
+ 		this.factory = factory;
+@@ -170,4 +171,11 @@
+ 		return scrollCustomQuery( getNativeSQLQueryPlan( spec ).getCustomQuery(), queryParameters );
+ 	}
+ 
++	public boolean isPostCommitListenersEnabled() {
++		return postCommitListenersEnabled;
++	}
++
++	public void setPostCommitListenersEnabled(boolean enabled) {
++		postCommitListenersEnabled = enabled;
++	}
+ }
+Index: core/src/main/java/org/hibernate/Session.java
+===================================================================
+--- core/src/main/java/org/hibernate/Session.java	(revision 15151)
++++ core/src/main/java/org/hibernate/Session.java	(working copy)
+@@ -48,12 +48,12 @@
+  * <tt>persist()</tt> or <tt>saveOrUpdate()</tt>. Persistent instances may be made transient
+  * by calling<tt> delete()</tt>. Any instance returned by a <tt>get()</tt> or
+  * <tt>load()</tt> method is persistent. Detached instances may be made persistent
+- * by calling <tt>update()</tt>, <tt>saveOrUpdate()</tt>, <tt>lock()</tt> or <tt>replicate()</tt>. 
++ * by calling <tt>update()</tt>, <tt>saveOrUpdate()</tt>, <tt>lock()</tt> or <tt>replicate()</tt>.
+  * The state of a transient or detached instance may also be made persistent as a new
+  * persistent instance by calling <tt>merge()</tt>.<br>
+  * <br>
+  * <tt>save()</tt> and <tt>persist()</tt> result in an SQL <tt>INSERT</tt>, <tt>delete()</tt>
+- * in an SQL <tt>DELETE</tt> and <tt>update()</tt> or <tt>merge()</tt> in an SQL <tt>UPDATE</tt>. 
++ * in an SQL <tt>DELETE</tt> and <tt>update()</tt> or <tt>merge()</tt> in an SQL <tt>UPDATE</tt>.
+  * Changes to <i>persistent</i> instances are detected at flush time and also result in an SQL
+  * <tt>UPDATE</tt>. <tt>saveOrUpdate()</tt> and <tt>replicate()</tt> result in either an
+  * <tt>INSERT</tt> or an <tt>UPDATE</tt>.<br>
+@@ -103,7 +103,7 @@
+ 	 * Session inherits the connection, transaction, and other context
+ 	 * information from the primary Session. It doesn't need to be flushed
+ 	 * or closed by the developer.
+-	 * 
++	 *
+ 	 * @param entityMode The entity mode to use for the new session.
+ 	 * @return The new session
+ 	 */
+@@ -717,10 +717,10 @@
+ 	 */
+ 	public Object get(String entityName, Serializable id, LockMode lockMode) throws HibernateException;
+ 
+-	
++
+ 	/**
+ 	 * Return the entity name for a persistent entity
+-	 *   
++	 *
+ 	 * @param object a persistent entity
+ 	 * @return the entity name
+ 	 * @throws HibernateException
+@@ -749,17 +749,17 @@
+ 	 * @param filterName The name of the filter to be disabled.
+ 	 */
+ 	public void disableFilter(String filterName);
+-	
++
+ 	/**
+ 	 * Get the statistics for this session.
+ 	 */
+ 	public SessionStatistics getStatistics();
+-	
++
+ 	/**
+ 	 * Set an unmodified persistent object to read only mode, or a read only
+ 	 * object to modifiable mode. In read only mode, no snapshot is maintained
+ 	 * and the instance is never dirty checked.
+-	 * 
++	 *
+ 	 * @see Query#setReadOnly(boolean)
+ 	 */
+ 	public void setReadOnly(Object entity, boolean readOnly);
+@@ -813,4 +813,16 @@
+ 	 * @see #disconnect()
+ 	 */
+ 	void reconnect(Connection connection) throws HibernateException;
++
++	/**
++	 * Enable/disable post commit listeners for the session
++	 * @param enabled true if enabled, false otherwise
++	 */
++	void setPostCommitListenersEnabled(boolean enabled);
++
++	/**
++	 * Checks whether or not post commit listeners are enabled
++	 * @return true if enabled, false otherwise
++	 */
++	boolean isPostCommitListenersEnabled();
+ }

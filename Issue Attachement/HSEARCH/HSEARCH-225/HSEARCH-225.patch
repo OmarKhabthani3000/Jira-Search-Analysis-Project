@@ -1,0 +1,99 @@
+Index: src/java/org/hibernate/search/impl/SearchFactoryImpl.java
+===================================================================
+--- src/java/org/hibernate/search/impl/SearchFactoryImpl.java	(revision 14939)
++++ src/java/org/hibernate/search/impl/SearchFactoryImpl.java	(working copy)
+@@ -22,7 +22,6 @@
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.java.JavaReflectionManager;
+ import org.hibernate.annotations.common.util.StringHelper;
+-import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.search.Environment;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.Version;
+Index: src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java
+===================================================================
+--- src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(revision 14939)
++++ src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(working copy)
+@@ -83,11 +83,34 @@
+ 		/**
+ 		 * even with Lucene 2.1, use of indexWriter to delete is not an option
+ 		 * We can only delete by term, and the index doesn't have a termt that
+-		 * uniquely identify the entry. See logic below
++		 * uniquely identify the entry. See logic below.
++		 * This might change with Lucene 2.4 where deletion by Query using the 
++		 * IndexWriter is possible. See HSEARCH-225
+ 		 */
+-		log.trace( "remove from Lucene index: {}#{}", entity, id );
+ 		DocumentBuilder builder = workspace.getDocumentBuilder( entity );
+ 		Term term = builder.getTerm( id );
++		
++		if (workspace.containsOnlySingleEntity(provider)) {
++			log.trace( "remove from Lucene index using IndexWriter: {}#{}", entity, id );
++			deleteUsingIndexWriter(entity, id, provider, term);
++		} else {	
++			log.trace( "remove from Lucene index using IndexReader: {}#{}", entity, id );
++			deleteUsingIndexReader(entity, id, provider, term);
++		}
++	}
++
++	private void deleteUsingIndexWriter(Class entity, Serializable id,
++			DirectoryProvider provider, Term term) {
++		IndexWriter writer = workspace.getIndexWriter( provider, entity, true );
++		try {
++			writer.deleteDocuments(term);
++		} catch (Exception e) {
++			throw new SearchException( "Unable to remove from Lucene index: " + entity + "#" + id, e );
++		}
++	}
++
++	private void deleteUsingIndexReader(Class entity, Serializable id,
++			DirectoryProvider provider, Term term) {
+ 		IndexReader reader = workspace.getIndexReader( provider, entity );
+ 		TermDocs termDocs = null;
+ 		try {
+@@ -115,7 +138,6 @@
+ 				log.warn( "Unable to close termDocs properly", e );
+ 			}
+ 		}
+-
+ 	}
+ 
+ 	public void performWork(OptimizeLuceneWork work, DirectoryProvider provider) {
+Index: src/java/org/hibernate/search/backend/Workspace.java
+===================================================================
+--- src/java/org/hibernate/search/backend/Workspace.java	(revision 14939)
++++ src/java/org/hibernate/search/backend/Workspace.java	(working copy)
+@@ -4,6 +4,7 @@
+ import java.io.IOException;
+ import java.util.HashMap;
+ import java.util.Map;
++import java.util.Set;
+ import java.util.concurrent.locks.Lock;
+ 
+ import org.apache.lucene.analysis.Analyzer;
+@@ -17,8 +18,8 @@
+ import org.hibernate.search.engine.SearchFactoryImplementor;
+ import org.hibernate.search.store.DirectoryProvider;
+ import org.hibernate.search.store.optimization.OptimizerStrategy;
++import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+-import org.slf4j.Logger;
+ 
+ /**
+  * Lucene workspace.
+@@ -75,6 +76,15 @@
+ 	public DocumentBuilder getDocumentBuilder(Class entity) {
+ 		return searchFactoryImplementor.getDocumentBuilders().get( entity );
+ 	}
++	
++	public boolean containsOnlySingleEntity(DirectoryProvider provider) {
++		Set<Class> classes = searchFactoryImplementor.getClassesInDirectoryProvider(provider);
++		if (classes.size() == 1) {
++			return true;
++		} else {
++			return false;
++		}
++	}
+ 
+ 	/**
+ 	 * Retrieve a read write IndexReader; the purpose should be to

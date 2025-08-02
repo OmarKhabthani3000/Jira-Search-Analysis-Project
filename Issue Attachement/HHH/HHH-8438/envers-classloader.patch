@@ -1,0 +1,81 @@
+diff -wur ./org/hibernate/envers/configuration/AuditConfiguration.java /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java
+--- ./org/hibernate/envers/configuration/AuditConfiguration.java	2013-07-03 10:58:10.000000000 +0200
++++ /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java	2013-08-13 13:00:07.630400819 +0200
+@@ -91,6 +91,10 @@
+ 		return auditStrategy;
+ 	}
+ 
++	public ClassLoaderService getClassLoaderService() {
++	    return classLoaderService;
++	}
++
+ 	public AuditConfiguration(Configuration cfg) {
+ 		this( cfg, null );
+ 	}
+diff -wur ./org/hibernate/envers/entities/EntityInstantiator.java /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/EntityInstantiator.java
+--- ./org/hibernate/envers/entities/EntityInstantiator.java	2013-07-03 10:58:10.000000000 +0200
++++ /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/EntityInstantiator.java	2013-08-13 13:06:12.165400428 +0200
+@@ -96,7 +96,13 @@
+         		entCfg = verCfg.getEntCfg().getNotVersionEntityConfiguration(entityName);
+         	}
+ 
+-            Class<?> cls = ReflectHelper.classForName(entCfg.getEntityClassName());
++        	Class<?> cls;
++        	if ( verCfg.getClassLoaderService() != null ) {
++                cls = verCfg.getClassLoaderService().classForName( entCfg.getEntityClassName() );
++            }
++            else {
++                cls = ReflectHelper.classForName( entCfg.getEntityClassName() );
++            }
+             ret = ReflectHelper.getDefaultConstructor(cls).newInstance();
+         } catch (Exception e) {
+             throw new AuditException(e);
+diff -wur ./org/hibernate/envers/entities/mapper/ComponentPropertyMapper.java /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/ComponentPropertyMapper.java
+--- ./org/hibernate/envers/entities/mapper/ComponentPropertyMapper.java	2013-07-03 10:58:10.000000000 +0200
++++ /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/ComponentPropertyMapper.java	2013-08-13 13:06:00.280400440 +0200
+@@ -120,8 +120,14 @@
+ 		} else {
+ 			// set the component
+ 			try {
+-				Object subObj = ReflectHelper.getDefaultConstructor(
+-						ReflectHelper.classForName(componentClassName)).newInstance();
++			    Class<?> cls;
++	            if ( verCfg.getClassLoaderService() != null ) {
++	                cls = verCfg.getClassLoaderService().classForName( componentClassName );
++	            }
++	            else {
++	                cls = ReflectHelper.classForName( componentClassName );
++	            }
++				Object subObj = ReflectHelper.getDefaultConstructor(cls).newInstance();
+ 				setter.set(obj, subObj, null);
+ 				delegate.mapToEntityFromMap(verCfg, subObj, data, primaryKey, versionsReader, revision);
+ 			} catch (Exception e) {
+diff -wur ./org/hibernate/envers/entities/mapper/id/AbstractCompositeIdMapper.java /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/id/AbstractCompositeIdMapper.java
+--- ./org/hibernate/envers/entities/mapper/id/AbstractCompositeIdMapper.java	2013-07-03 10:58:10.000000000 +0200
++++ /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/id/AbstractCompositeIdMapper.java	2013-08-13 13:06:56.938400380 +0200
+@@ -54,6 +54,7 @@
+ 
+         Object ret;
+         try {
++            // TODO: this needs to use the ClassLoaderService
+             final Class clazz = ReflectHelper.classForName(compositeIdClass);
+             ret = ReflectHelper.getDefaultConstructor(clazz).newInstance();
+         } catch (Exception e) {
+diff -wur ./org/hibernate/envers/entities/mapper/relation/AbstractToOneMapper.java /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/relation/AbstractToOneMapper.java
+--- ./org/hibernate/envers/entities/mapper/relation/AbstractToOneMapper.java	2013-07-03 10:58:10.000000000 +0200
++++ /home/mbechler/AgNO3/Workspaces/main/orchestrator-root/dependencies/db-deps/hibernate-deps/hibernate-envers/src/main/java/org/hibernate/envers/entities/mapper/relation/AbstractToOneMapper.java	2013-08-13 13:06:06.526400434 +0200
+@@ -63,8 +63,14 @@
+         }
+         Class entityClass;
+         try {
++            Class<?> cls;
++            if ( verCfg.getClassLoaderService() != null ) {
++                entityClass = verCfg.getClassLoaderService().classForName( entCfg.getEntityClassName() );
++            }
++            else {
+ 			entityClass = ReflectHelper.classForName(entCfg.getEntityClassName());
+ 		}
++		}
+ 		catch ( ClassNotFoundException e ) {
+ 			throw new AuditException( e );
+ 		}

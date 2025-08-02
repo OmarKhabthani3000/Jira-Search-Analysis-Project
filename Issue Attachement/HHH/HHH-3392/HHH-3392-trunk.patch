@@ -1,0 +1,339 @@
+Index: core/src/main/java/org/hibernate/criterion/CriteriaSpecification.java
+===================================================================
+--- core/src/main/java/org/hibernate/criterion/CriteriaSpecification.java	(revision 15140)
++++ core/src/main/java/org/hibernate/criterion/CriteriaSpecification.java	Tue Sep 09 22:32:40 CDT 2008
+@@ -43,22 +43,22 @@
+ 	/**
+ 	 * Each row of results is a <tt>Map</tt> from alias to entity instance
+ 	 */
+-	public static final ResultTransformer ALIAS_TO_ENTITY_MAP = new AliasToEntityMapResultTransformer();
++	public static final ResultTransformer ALIAS_TO_ENTITY_MAP = AliasToEntityMapResultTransformer.INSTANCE;
+ 
+ 	/**
+ 	 * Each row of results is an instance of the root entity
+ 	 */
+-	public static final ResultTransformer ROOT_ENTITY = new RootEntityResultTransformer();
++	public static final ResultTransformer ROOT_ENTITY = RootEntityResultTransformer.INSTANCE;
+ 
+ 	/**
+ 	 * Each row of results is a distinct instance of the root entity
+ 	 */
+-	public static final ResultTransformer DISTINCT_ROOT_ENTITY = new DistinctRootEntityResultTransformer();
++	public static final ResultTransformer DISTINCT_ROOT_ENTITY = DistinctRootEntityResultTransformer.INSTANCE;
+ 
+ 	/**
+ 	 * This result transformer is selected implicitly by calling <tt>setProjection()</tt>
+ 	 */
+-	public static final ResultTransformer PROJECTION = new PassThroughResultTransformer();
++	public static final ResultTransformer PROJECTION = PassThroughResultTransformer.INSTANCE;
+ 
+ 	/**
+ 	 * Specifies joining to an entity based on an inner join.
+Index: core/src/main/java/org/hibernate/transform/AliasToBeanResultTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/AliasToBeanResultTransformer.java	(revision 15140)
++++ core/src/main/java/org/hibernate/transform/AliasToBeanResultTransformer.java	Tue Sep 09 22:53:46 CDT 2008
+@@ -55,7 +55,7 @@
+ public class AliasToBeanResultTransformer implements ResultTransformer {
+ 
+ 	// IMPL NOTE : due to the delayed population of setters (setters cached
+-	// 		for performance), we really cannot pro0perly define equality for
++	// 		for performance), we really cannot properly define equality for
+ 	// 		this transformer
+ 
+ 	private final Class resultClass;
+Index: core/src/main/java/org/hibernate/transform/PassThroughResultTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/PassThroughResultTransformer.java	(revision 15140)
++++ core/src/main/java/org/hibernate/transform/PassThroughResultTransformer.java	Tue Sep 09 22:36:47 CDT 2008
+@@ -36,13 +36,14 @@
+ 	public static final PassThroughResultTransformer INSTANCE = new PassThroughResultTransformer();
+ 
+ 	/**
+-	 * Instamtiate a PassThroughResultTransformer.
+-	 *
+-	 * @deprecated Use the {@link #INSTANCE} reference instead of explicitly creating a new one.
++	 * Disallow instantiation of PassThroughResultTransformer.
+ 	 */
+-	public PassThroughResultTransformer() {
++	private PassThroughResultTransformer() {
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public Object transformTuple(Object[] tuple, String[] aliases) {
+ 		return tuple.length==1 ? tuple[0] : tuple;
+ 	}
+@@ -56,9 +57,4 @@
+ 		return INSTANCE;
+ 	}
+ 
+-	public boolean equals(Object obj) {
+-		// todo : we can remove this once the deprecated ctor can be made private...
+-		return PassThroughResultTransformer.class.isInstance( obj );
+-	}
++}
+-
+-}
+Index: core/src/main/java/org/hibernate/transform/RootEntityResultTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/RootEntityResultTransformer.java	(revision 15140)
++++ core/src/main/java/org/hibernate/transform/RootEntityResultTransformer.java	Tue Sep 09 23:03:46 CDT 2008
+@@ -24,7 +24,6 @@
+  */
+ package org.hibernate.transform;
+ 
+-import java.util.List;
+ import java.io.Serializable;
+ 
+ /**
+@@ -42,11 +41,9 @@
+ 	public static final RootEntityResultTransformer INSTANCE = new RootEntityResultTransformer();
+ 
+ 	/**
+-	 * Instantiate RootEntityResultTransformer.
+-	 *
+-	 * @deprecated Use the {@link #INSTANCE} reference instead of explicitly creating a new one.
++	 * Disallow instantiation of RootEntityResultTransformer.
+ 	 */
+-	public RootEntityResultTransformer() {
++	private RootEntityResultTransformer() {
+ 	}
+ 
+ 	/**
+@@ -64,9 +61,4 @@
+ 	private Object readResolve() {
+ 		return INSTANCE;
+ 	}
+-
+-	public boolean equals(Object obj) {
+-		// todo : we can remove this once the deprecated ctor can be made private...
+-		return RootEntityResultTransformer.class.isInstance( obj );
+-	}
++}
+-}
+Index: testsuite/src/test/java/org/hibernate/test/sql/hand/query/NativeSQLQueriesTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/sql/hand/query/NativeSQLQueriesTest.java	(revision 15071)
++++ testsuite/src/test/java/org/hibernate/test/sql/hand/query/NativeSQLQueriesTest.java	Tue Sep 09 22:49:35 CDT 2008
+@@ -6,6 +6,7 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.HashMap;
+ 
+ import junit.framework.Test;
+ 
+@@ -29,6 +30,7 @@
+ import org.hibernate.transform.DistinctRootEntityResultTransformer;
+ import org.hibernate.transform.Transformers;
+ import org.hibernate.transform.AliasToEntityMapResultTransformer;
++import org.hibernate.transform.BasicTransformerAdapter;
+ 
+ /**
+  * Tests of various features of native SQL queries.
+@@ -177,7 +179,7 @@
+ 			       "     left outer join EMPLOYMENT emp on org.ORGID = emp.EMPLOYER, ORGANIZATION org2" )
+ 		.addEntity("org", Organization.class)
+ 		.addJoin("emp", "org.employments")
+-		.setResultTransformer(new DistinctRootEntityResultTransformer())
++		.setResultTransformer( DistinctRootEntityResultTransformer.INSTANCE )
+ 		.list();
+ 		assertEquals( l.size(), 2 );
+ 
+@@ -608,13 +610,16 @@
+ 		}
+ 	}
+ 
+-	private static class UpperCasedAliasToEntityMapResultTransformer extends AliasToEntityMapResultTransformer {
++	private static class UpperCasedAliasToEntityMapResultTransformer extends BasicTransformerAdapter implements Serializable {
+ 		public Object transformTuple(Object[] tuple, String[] aliases) {
+-			String[] ucAliases = new String[aliases.length];
+-			for ( int i = 0; i < aliases.length; i++ ) {
+-				ucAliases[i] = aliases[i].toUpperCase();
++			Map result = new HashMap( tuple.length );
++			for ( int i = 0; i < tuple.length; i++ ) {
++				String alias = aliases[i];
++				if ( alias != null ) {
++					result.put( alias.toUpperCase(), tuple[i] );
+-			}
++				}
+-			return super.transformTuple( tuple, ucAliases );
+-		}
++			}
++			return result;
+-	}
+-}
++		}
++	}
++}
+Index: core/src/main/java/org/hibernate/cache/QueryKey.java
+===================================================================
+--- core/src/main/java/org/hibernate/cache/QueryKey.java	(revision 15140)
++++ core/src/main/java/org/hibernate/cache/QueryKey.java	Tue Sep 09 23:39:08 CDT 2008
+@@ -25,6 +25,7 @@
+ package org.hibernate.cache;
+ 
+ import java.io.Serializable;
++import java.io.IOException;
+ import java.util.Map;
+ import java.util.Set;
+ 
+@@ -48,11 +49,16 @@
+ 	private final Map namedParameters;
+ 	private final EntityMode entityMode;
+ 	private final Set filters;
+-	private final int hashCode;
+ 	
+ 	// the user provided resulttransformer, not the one used with "select new". Here to avoid mangling transformed/non-transformed results.
+ 	private final ResultTransformer customTransformer;
+-	
++
++	/**
++	 * For performance reasons, the hashCode is cached; however, it is marked transient so that it can be
++	 * recalculated as part of the serialization process which allows distributed query caches to work properly.
++	 */
++	private transient int hashCode;
++
+ 	public QueryKey(String queryString, QueryParameters queryParameters, Set filters, EntityMode entityMode) {
+ 		this.sqlQueryString = queryString;
+ 		this.types = queryParameters.getPositionalParameterTypes();
+@@ -70,9 +76,28 @@
+ 		this.entityMode = entityMode;
+ 		this.filters = filters;
+ 		this.customTransformer = queryParameters.getResultTransformer();
+-		this.hashCode = getHashCode();
++		this.hashCode = generateHashCode();
+ 	}
+-	
++
++	private void readObject(java.io.ObjectInputStream in) throws IOException, ClassNotFoundException {
++		in.defaultReadObject();
++		this.hashCode = generateHashCode();
++	}
++
++	private int generateHashCode() {
++		int result = 13;
++		result = 37 * result + ( firstRow==null ? 0 : firstRow.hashCode() );
++		result = 37 * result + ( maxRows==null ? 0 : maxRows.hashCode() );
++		for ( int i=0; i<values.length; i++ ) {
++			result = 37 * result + ( values[i]==null ? 0 : types[i].getHashCode( values[i], entityMode ) );
++		}
++		result = 37 * result + ( namedParameters==null ? 0 : namedParameters.hashCode() );
++		result = 37 * result + ( filters==null ? 0 : filters.hashCode() );
++		result = 37 * result + ( customTransformer==null ? 0 : customTransformer.hashCode() );
++		result = 37 * result + sqlQueryString.hashCode();
++		return result;
++	}
++	
+ 	public boolean equals(Object other) {
+ 		if (!(other instanceof QueryKey)) return false;
+ 		QueryKey that = (QueryKey) other;
+@@ -98,21 +123,7 @@
+ 	public int hashCode() {
+ 		return hashCode;
+ 	}
+-	
++
+-	private int getHashCode() {
+-		int result = 13;
+-		result = 37 * result + ( firstRow==null ? 0 : firstRow.hashCode() );
+-		result = 37 * result + ( maxRows==null ? 0 : maxRows.hashCode() );
+-		for ( int i=0; i<values.length; i++ ) {
+-			result = 37 * result + ( values[i]==null ? 0 : types[i].getHashCode( values[i], entityMode ) );
+-		}
+-		result = 37 * result + ( namedParameters==null ? 0 : namedParameters.hashCode() );
+-		result = 37 * result + ( filters==null ? 0 : filters.hashCode() );
+-		result = 37 * result + ( customTransformer==null ? 0 : customTransformer.hashCode() );
+-		result = 37 * result + sqlQueryString.hashCode();
+-		return result;
+-	}
+-
+ 	public String toString() {
+ 		StringBuffer buf = new StringBuffer()
+ 			.append("sql: ")
+Index: core/src/main/java/org/hibernate/transform/AliasToEntityMapResultTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/AliasToEntityMapResultTransformer.java	(revision 15140)
++++ core/src/main/java/org/hibernate/transform/AliasToEntityMapResultTransformer.java	Tue Sep 09 22:49:03 CDT 2008
+@@ -43,14 +43,14 @@
+ 	public static final AliasToEntityMapResultTransformer INSTANCE = new AliasToEntityMapResultTransformer();
+ 
+ 	/**
+-	 * Instantiate AliasToEntityMapResultTransformer.
+-	 *
+-	 * @deprecated Use the {@link #INSTANCE} reference instead of explicitly creating a new one.
++	 * Disallow instantiation of AliasToEntityMapResultTransformer.
+ 	 */
+-	public AliasToEntityMapResultTransformer() {
+-		// todo : make private
++	private AliasToEntityMapResultTransformer() {
+ 	}
+ 
++	/**
++	 * {@inheritDoc}
++	 */
+ 	public Object transformTuple(Object[] tuple, String[] aliases) {
+ 		Map result = new HashMap(tuple.length);
+ 		for ( int i=0; i<tuple.length; i++ ) {
+@@ -70,30 +70,4 @@
+ 	private Object readResolve() {
+ 		return INSTANCE;
+ 	}
+-
+-
+-	// all AliasToEntityMapResultTransformer are considered equal ~~~~~~~~~~~~~
+-
+-	/**
+-	 * All AliasToEntityMapResultTransformer are considered equal
+-	 *
+-	 * @param other The other instance to check for equality
+-	 * @return True if (non-null) other is a instance of
+-	 * AliasToEntityMapResultTransformer.
+-	 */
+-	public boolean equals(Object other) {
+-		// todo : we can remove this once the deprecated ctor can be made private...
+-		return other != null && AliasToEntityMapResultTransformer.class.isInstance( other );
+-	}
++}
+-
+-	/**
+-	 * All AliasToEntityMapResultTransformer are considered equal
+-	 *
+-	 * @return We simply return the hashCode of the
+-	 * AliasToEntityMapResultTransformer class name string.
+-	 */
+-	public int hashCode() {
+-		// todo : we can remove this once the deprecated ctor can be made private...
+-		return getClass().getName().hashCode();
+-	}
+-}
+Index: core/src/main/java/org/hibernate/transform/DistinctRootEntityResultTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/DistinctRootEntityResultTransformer.java	(revision 15140)
++++ core/src/main/java/org/hibernate/transform/DistinctRootEntityResultTransformer.java	Tue Sep 09 22:35:27 CDT 2008
+@@ -42,11 +42,9 @@
+ 	public static final DistinctRootEntityResultTransformer INSTANCE = new DistinctRootEntityResultTransformer();
+ 
+ 	/**
+-	 * Instantiate a DistinctRootEntityResultTransformer.
+-	 *
+-	 * @deprecated Use the {@link #INSTANCE} reference instead of explicitly creating a new one.
++	 * Disallow instantiation of DistinctRootEntityResultTransformer.
+ 	 */
+-	public DistinctRootEntityResultTransformer() {
++	private DistinctRootEntityResultTransformer() {
+ 	}
+ 
+ 	/**
+@@ -79,8 +77,4 @@
+ 		return INSTANCE;
+ 	}
+ 
+-	public boolean equals(Object obj) {
+-		// todo : we can remove this once the deprecated ctor can be made private...
+-		return DistinctRootEntityResultTransformer.class.isInstance( obj );
+-	}
++}
+-}

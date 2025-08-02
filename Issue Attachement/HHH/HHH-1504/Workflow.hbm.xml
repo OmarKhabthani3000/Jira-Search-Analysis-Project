@@ -1,0 +1,147 @@
+<?xml version="1.0"?>
+<!DOCTYPE hibernate-mapping PUBLIC
+    "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+    "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
+<hibernate-mapping>
+    <typedef class="com.j2fe.hibernate.ClassType" name="java.lang.Class"/>
+    <class name="com.j2fe.workflow.definition.Workflow" table="FT_O_WFDF">
+        <meta attribute="implement-equals">true</meta>
+        <meta attribute="class-code" inherit="false">
+    public void addNode(Node n)
+    {
+        NodeHelper.addToWorkflow(this,n);
+    }
+    public void removeNode(Node n)
+    {
+        if (n.getWorkflow() != this)
+            throw new IllegalArgumentException("Node not part of this workflow");
+        n.setWorkflow(null);
+        nodes.remove(n);
+    }
+    public void setStartNode(Node n)
+    {
+/*        if (n != null &amp;&amp; n.getType() != NodeType.START)
+            throw new IllegalArgumentException("Not a Start Node");*/
+        Node old = getStartNode();
+        if (old != null)
+        {
+            removeNode(old);
+            startNodes.clear();
+        }
+        if (n == null)
+            return;
+        if (n.getWorkflow() != this)
+            addNode(n);
+        if (startNodes == null)
+            startNodes = new java.util.HashSet&lt;Node>();
+        startNodes.add(n);
+    }
+    public Node getStartNode(){if (startNodes == null || startNodes.isEmpty())return null; return startNodes.iterator().next();}
+    public void setEndNode(Node n)
+    {
+        /*if (n != null &amp;&amp; n.getType() != NodeType.END)
+            throw new IllegalArgumentException("Not an End Node");*/
+        Node old = getEndNode();
+        if (old != null)
+        {
+            removeNode(old);
+            endNodes.clear();
+        }
+        if (n == null)
+            return;
+        if (n.getWorkflow() != this)
+        {
+            addNode(n);
+        }
+        if (endNodes == null)
+            endNodes = new java.util.HashSet&lt;Node>();
+        endNodes.add(n);
+    }
+    public Node getEndNode(){if (endNodes == null || endNodes.isEmpty())return null; return endNodes.iterator().next();}
+
+        </meta>
+        <cache usage="nonstrict-read-write"/>
+        <id name="id" type="string" >
+            <generator class="com.j2fe.hibernate.OIDGenerator">
+                <param name="TemplateGenerator">TransactionIdTemplateGenerator</param>
+            </generator>
+        </id>
+        <property name="name" type="string" not-null="true" />
+        <property name="description" type="string" not-null="false"/>
+        <!--
+                <many-to-one name="startNode" class="com.j2fe.workflow.definition.StartNode" not-null="true" column="start_node" cascade="save-update" />
+                <many-to-one name="endNode" class="com.j2fe.workflow.definition.EndNode" not-null="true" column="end_node" cascade="save-update" />
+        -->
+
+        <property name="startTimestamp" column="START_TMS" type="timestamp" not-null="true"/>
+        <property name="endTimestamp" column="END_TMS" type="timestamp" not-null="false"/>
+
+        <property name="group" column="grp" type="string" not-null="false"/>
+        <property name="valid" column="valid" type="yes_no" not-null="false"/>
+        <property name="purgeAtEnd" column="PURGE_AT_END" type="yes_no" not-null="true"/>
+        <property name="alwaysPersist" column="ALWAYS_PERSIST" type="yes_no" not-null="true"/>
+        <property name="clustered" column="CLUSTERED" type="yes_no" not-null="true"/>
+        <property name="retries" column="retries" type="integer" not-null="true"/>  
+
+        <set name="nodes" inverse="true" cascade="save-update,delete-orphan" >
+            <meta attribute="scope-set"></meta>
+            <meta attribute="property-type">Set&lt;Node></meta>
+            <key column="workflow_id" />
+            <one-to-many class="com.j2fe.workflow.definition.Node" />
+        </set>
+
+        <set name="startNodes" where="type = 'START'" cascade="none" inverse="true" >
+            <meta attribute="scope-set">private</meta>
+            <meta attribute="scope-get">private</meta>
+            <meta attribute="property-type">Set&lt;Node></meta>
+            <!-- Cached internally already my workflow framework
+            <cache usage="nonstrict-read-write"/>-->
+            <key column="workflow_id" />
+            <one-to-many class="com.j2fe.workflow.definition.Node"/>
+        </set>
+
+        <set name="endNodes" where="type='END'" cascade="none" inverse="true">
+            <meta attribute="scope-set">private</meta>
+            <meta attribute="scope-get">private</meta>
+            <meta attribute="property-type">Set&lt;Node></meta>
+            <key column="workflow_id" />
+            <one-to-many class="com.j2fe.workflow.definition.Node"/>
+        </set>
+
+        <map name="parameter" table="FT_O_WFIO" cascade="save-update" lazy="true" >
+            <meta attribute="property-type">Map&lt;String,WorkflowParameter></meta>
+            <!-- Cached internally already my workflow framework
+            <cache usage="nonstrict-read-write"/>-->
+            <key column="workflow_id" not-null="true"/> <!--on-delete="cascade"-->
+            <map-key type="string" column="name" />
+            <composite-element class="com.j2fe.workflow.definition.WorkflowParameter">
+                <property name="clazz" type="java.lang.Class" column="classname" not-null="true"/>
+                <property name="input" type="yes_no" column="input" not-null="true"/>
+                <property name="required" type="yes_no" column="required" not-null="true"/>
+                <property name="output" type="yes_no" column="output" not-null="true"/>
+                <property name="description" type="string" column="description" not-null="false"/>
+            </composite-element>
+        </map>
+
+        <map name="variables" table="FT_O_WFGV" cascade="save-update" lazy="true" >
+            <meta attribute="property-type">Map&lt;String,GlobalVariable></meta>
+            <!-- Cached internally already my workflow framework
+            <cache usage="nonstrict-read-write"/>-->
+            <key column="workflow_id" not-null="true"/> <!--on-delete="cascade"-->
+            <map-key type="string" column="name"/>
+            <composite-element class="com.j2fe.workflow.definition.GlobalVariable">
+                <property name="clazz" type="java.lang.Class" column="classname" not-null="true"/>
+                <property name="value" type="com.j2fe.hibernate.SerializableType" column="value" not-null="false">
+                    <meta attribute="property-type">Object</meta>
+
+                </property>
+                <property name="persistent" type="yes_no" column="persistent" not-null="true"/>
+                <property name="description" type="string" column="description" not-null="false"/>
+            </composite-element>
+        </map>
+    </class>
+    <query name="com.j2fe.workflow.definition.Workflow.getByName" cacheable="true" fetch-size="1">
+        <![CDATA[from Workflow w where w.name = :name and w.startTimestamp < sysdate and
+                (w.endTimestamp is null or sysdate < w.endTimestamp) and w.valid = 'Y']]>
+    </query>
+</hibernate-mapping>

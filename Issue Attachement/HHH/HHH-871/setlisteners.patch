@@ -1,0 +1,90 @@
+diff -Naur hibernate-3.1beta2/src/org/hibernate/cfg/Configuration.java hibernate-3.1beta2-patches/src/org/hibernate/cfg/Configuration.java
+--- hibernate-3.1beta2/src/org/hibernate/cfg/Configuration.java	Wed Aug 17 17:25:41 2005
++++ hibernate-3.1beta2-patches/src/org/hibernate/cfg/Configuration.java	Wed Aug 17 17:21:47 2005
+@@ -1466,7 +1466,7 @@
+ 	}
+ 
+ 	public void setListeners(String type, String[] listenerClasses) {
+-		Object[] listeners = new Object[listenerClasses.length];
++		Object[] listeners = (Object[]) Array.newInstance( eventListeners.getListenerClassFor(type), listenerClasses.length );
+ 		for ( int i = 0; i < listeners.length ; i++ ) {
+ 			try {
+ 				listeners[i] = ReflectHelper.classForName( listenerClasses[i] ).newInstance();
+@@ -1486,7 +1486,7 @@
+ 			setListener( type, null );
+ 		}
+ 		else {
+-			Object[] listeners = (Object[]) Array.newInstance( listener.getClass(), 1 );
++			Object[] listeners = (Object[]) Array.newInstance( eventListeners.getListenerClassFor(type), 1 );
+ 			listeners[0] = listener;
+ 			setListeners( type, listeners );
+ 		}
+diff -Naur hibernate-3.1beta2/src/org/hibernate/event/EventListeners.java hibernate-3.1beta2-patches/src/org/hibernate/event/EventListeners.java
+--- hibernate-3.1beta2/src/org/hibernate/event/EventListeners.java	Tue Aug 16 15:07:05 2005
++++ hibernate-3.1beta2-patches/src/org/hibernate/event/EventListeners.java	Wed Aug 17 17:22:00 2005
+@@ -3,6 +3,8 @@
+ 
+ import java.io.Serializable;
+ import java.lang.reflect.Field;
++import java.util.Map;
++import java.util.HashMap;
+ 
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.cfg.Configuration;
+@@ -67,6 +69,56 @@
+ 	private SaveOrUpdateEventListener[] updateEventListeners = { new DefaultUpdateEventListener() };
+ 	private MergeEventListener[] saveOrUpdateCopyEventListeners = { new DefaultSaveOrUpdateCopyEventListener() };//saveOrUpdateCopy() is deprecated!
+ 
++	private Map typeNamesToClassNamesDictionary = null;
++
++	private Map getTypeNamesToClassNamesDictionary() {
++		if (this.typeNamesToClassNamesDictionary == null) {
++			typeNamesToClassNamesDictionary = new HashMap();
++
++			typeNamesToClassNamesDictionary.put("auto-flush", AutoFlushEventListener.class);
++			typeNamesToClassNamesDictionary.put("merge", MergeEventListener.class);
++			typeNamesToClassNamesDictionary.put("create", PersistEventListener.class);
++			typeNamesToClassNamesDictionary.put("delete", DeleteEventListener.class);
++			typeNamesToClassNamesDictionary.put("dirty-check", DirtyCheckEventListener.class);
++			typeNamesToClassNamesDictionary.put("evict", EvictEventListener.class);
++			typeNamesToClassNamesDictionary.put("flush", FlushEventListener.class);
++			typeNamesToClassNamesDictionary.put("flush-entity", FlushEntityEventListener.class);
++			typeNamesToClassNamesDictionary.put("load", LoadEventListener.class);
++			typeNamesToClassNamesDictionary.put("load-collection", InitializeCollectionEventListener.class);
++			typeNamesToClassNamesDictionary.put("lock", LockEventListener.class);
++			typeNamesToClassNamesDictionary.put("refresh", RefreshEventListener.class);
++			typeNamesToClassNamesDictionary.put("replicate", ReplicateEventListener.class);
++			typeNamesToClassNamesDictionary.put("save-update", SaveOrUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("save", SaveOrUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("update", SaveOrUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("pre-load", PreLoadEventListener.class);
++			typeNamesToClassNamesDictionary.put("pre-update", PreUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("pre-delete", PreDeleteEventListener.class);
++			typeNamesToClassNamesDictionary.put("pre-insert", PreInsertEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-load", PostLoadEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-update", PostUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-delete", PostDeleteEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-insert", PostInsertEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-commit-update", PostUpdateEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-commit-delete", PostDeleteEventListener.class);
++			typeNamesToClassNamesDictionary.put("post-commit-insert", PostInsertEventListener.class);
++		}
++
++		return this.typeNamesToClassNamesDictionary;
++	}
++
++	public Class getListenerClassFor(String type) {
++		Class clazz = null;
++		
++		clazz = (Class)getTypeNamesToClassNamesDictionary().get(type);
++		
++		if (clazz == null) {
++			throw new IllegalArgumentException("Unrecognized listener type [" + type + "]");
++		}
++
++		return clazz;
++	}
++
+     public LoadEventListener[] getLoadEventListeners() {
+         return loadEventListeners;
+     }

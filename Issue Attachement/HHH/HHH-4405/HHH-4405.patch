@@ -1,0 +1,1065 @@
+Index: src/test/java/org/hibernate/test/annotations/TestCase.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/TestCase.java	(revision 17576)
++++ src/test/java/org/hibernate/test/annotations/TestCase.java	(working copy)
+@@ -101,15 +101,24 @@
+ 	
+ 	protected void runTest() throws Throwable {
+ 		try {
+-			if ( !skip ) {
+-				runTestMethod(runMethod);
+-				handleUnclosedSession();
++			if (!skip) {
++				if (appliesTo(dialect)) {
++					runTestMethod(runMethod);
++					handleUnclosedSession();
++				} else {
++					log.warn("skipping database-specific test ["
++							+ getClass().getName() + "] for dialect ["
++							+ dialect.getClass().getName() + "]");
++				}
+ 			}
+-		} catch ( Throwable e ) {
++		} catch (Throwable e) {
+ 			closeSession(e);
+ 		}
+ 	}
+ 
++	protected boolean appliesTo(Dialect dialect) {
++		return true;
++	}
+ 	private void checkSkip( Method runMethod ) {
+ 		Set<Class<? extends Dialect>> dialectList = new HashSet<Class<? extends Dialect>>();
+ 
+Index: src/test/java/org/hibernate/test/annotations/lob/ImageHolder.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/ImageHolder.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/ImageHolder.java	(revision 0)
+@@ -0,0 +1,81 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++/**
++ * An entity containing data that is materialized into a byte array immediately.
++ * The hibernate type mapped for {@link #longByteArray} determines the SQL type
++ * asctually used.
++ * 
++ * @author Gail Badner
++ */
++@Entity
++public class ImageHolder {
++	private Long id;
++	private byte[] longByteArray;
++	private Dog dog;
++	private Byte[] picByteArray;
++
++	@Id
++	@GeneratedValue
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++	
++	@org.hibernate.annotations.Type(type="image")
++	public byte[] getLongByteArray() {
++		return longByteArray;
++	}
++
++	public void setLongByteArray(byte[] longByteArray) {
++		this.longByteArray = longByteArray;
++	}
++	@org.hibernate.annotations.Type(type="serializable_image")
++	public Dog getDog() {
++		return dog;
++	}
++
++	public void setDog(Dog dog) {
++		this.dog = dog;
++	}
++	@org.hibernate.annotations.Type(type="wrapped_image")
++	public Byte[] getPicByteArray() {
++		return picByteArray;
++	}
++
++	public void setPicByteArray(Byte[] picByteArray) {
++		this.picByteArray = picByteArray;
++	}
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/test/annotations/lob/CharacterArrayTextType.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/CharacterArrayTextType.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/CharacterArrayTextType.java	(revision 0)
+@@ -0,0 +1,79 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++
++import org.hibernate.HibernateException;
++
++/**
++ * A type that maps an SQL LONGVARCHAR to a Java Character [].
++ * 
++ * @author Strong Liu
++ */
++public class CharacterArrayTextType extends PrimitiveCharacterArrayTextType {
++	
++	public Class getReturnedClass() {
++		return Character[].class;
++	}
++
++	@Override
++	public Object get(ResultSet rs, String name) throws HibernateException,
++			SQLException {
++		char[] text = (char[]) super.get(rs, name);
++		if (text == null)
++			return null;
++		return wrapPrimitive(text);
++	}
++
++	@Override
++	public void set(PreparedStatement st, Object value, int index)
++			throws HibernateException, SQLException {
++		Character[] cs = (Character[]) value;
++		super.set(st, unwrapNonPrimitive(cs), index);
++	}
++
++	private Character[] wrapPrimitive(char[] bytes) {
++		int length = bytes.length;
++		Character[] result = new Character[length];
++		for (int index = 0; index < length; index++) {
++			result[index] = Character.valueOf(bytes[index]);
++		}
++		return result;
++	}
++
++	private char[] unwrapNonPrimitive(Character[] bytes) {
++		int length = bytes.length;
++		char[] result = new char[length];
++		for (int i = 0; i < length; i++) {
++			result[i] = bytes[i].charValue();
++		}
++		return result;
++	}
++
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/ImageTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/ImageTest.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/ImageTest.java	(revision 0)
+@@ -0,0 +1,168 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import junit.framework.AssertionFailedError;
++
++import org.hibernate.Session;
++import org.hibernate.dialect.SQLServerDialect;
++import org.hibernate.dialect.Sybase11Dialect;
++import org.hibernate.dialect.SybaseASE15Dialect;
++import org.hibernate.dialect.SybaseDialect;
++import org.hibernate.test.annotations.RequiresDialect;
++import org.hibernate.test.annotations.TestCase;
++import org.hibernate.util.ArrayHelper;
++
++/**
++ * Tests eager materialization and mutation of data mapped by
++ * {@link org.hibernate.type.ImageType}.
++ * 
++ * @author Gail Badner
++ */
++@RequiresDialect( { SybaseASE15Dialect.class, SQLServerDialect.class,
++		SybaseDialect.class, Sybase11Dialect.class })
++public class ImageTest extends TestCase {
++	private static final int ARRAY_SIZE = 10000;
++
++	public void testBoundedLongByteArrayAccess() {
++		byte[] original = buildRecursively(ARRAY_SIZE, true);
++		byte[] changed = buildRecursively(ARRAY_SIZE, false);
++
++		Session s = openSession();
++		s.beginTransaction();
++		ImageHolder entity = new ImageHolder();
++		s.save(entity);
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (ImageHolder) s.get(ImageHolder.class, entity.getId());
++		assertNull(entity.getLongByteArray());
++		assertNull(entity.getDog());
++		assertNull(entity.getPicByteArray());
++		entity.setLongByteArray(original);
++		Dog dog = new Dog();
++		dog.setName("rabbit");
++		entity.setDog(dog);
++		entity.setPicByteArray(wrapPrimitive(original));
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (ImageHolder) s.get(ImageHolder.class, entity.getId());
++		assertEquals(ARRAY_SIZE, entity.getLongByteArray().length);
++		assertEquals(original, entity.getLongByteArray());
++		assertEquals(ARRAY_SIZE, entity.getPicByteArray().length);
++		assertEquals(original, unwrapNonPrimitive(entity.getPicByteArray()));
++		assertNotNull(entity.getDog());
++		assertEquals(dog.getName(), entity.getDog().getName());
++		entity.setLongByteArray(changed);
++		entity.setPicByteArray(wrapPrimitive(changed));
++		dog.setName("papa");
++		entity.setDog(dog);
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (ImageHolder) s.get(ImageHolder.class, entity.getId());
++		assertEquals(ARRAY_SIZE, entity.getLongByteArray().length);
++		assertEquals(changed, entity.getLongByteArray());
++		assertEquals(ARRAY_SIZE, entity.getPicByteArray().length);
++		assertEquals(changed, unwrapNonPrimitive(entity.getPicByteArray()));
++		assertNotNull(entity.getDog());
++		assertEquals(dog.getName(), entity.getDog().getName());
++		entity.setLongByteArray(null);
++		entity.setPicByteArray(null);
++		entity.setDog(null);
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (ImageHolder) s.get(ImageHolder.class, entity.getId());
++		assertNull(entity.getLongByteArray());
++		assertNull(entity.getDog());
++		assertNull(entity.getPicByteArray());
++		s.delete(entity);
++		s.getTransaction().commit();
++		s.close();
++	}
++
++	private Byte[] wrapPrimitive(byte[] bytes) {
++		int length = bytes.length;
++		Byte[] result = new Byte[length];
++		for (int index = 0; index < length; index++) {
++			result[index] = Byte.valueOf(bytes[index]);
++		}
++		return result;
++	}
++
++	private byte[] unwrapNonPrimitive(Byte[] bytes) {
++		int length = bytes.length;
++		byte[] result = new byte[length];
++		for (int i = 0; i < length; i++) {
++			result[i] = bytes[i].byteValue();
++		}
++		return result;
++	}
++
++	private byte[] buildRecursively(int size, boolean on) {
++		byte[] data = new byte[size];
++		data[0] = mask(on);
++		for (int i = 0; i < size; i++) {
++			data[i] = mask(on);
++			on = !on;
++		}
++		return data;
++	}
++
++	private byte mask(boolean on) {
++		return on ? (byte) 1 : (byte) 0;
++	}
++
++	public static void assertEquals(byte[] val1, byte[] val2) {
++		if (!ArrayHelper.isEquals(val1, val2)) {
++			throw new AssertionFailedError("byte arrays did not match");
++		}
++	}
++
++	public ImageTest(String name) {
++		super(name);
++	}
++
++	@Override
++	protected String[] getAnnotatedPackages() {
++		return new String[] { "org.hibernate.test.annotations.lob" };
++	}
++
++	public Class<?>[] getMappings() {
++		return new Class[] { ImageHolder.class };
++	}
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/test/annotations/lob/LongStringHolder.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/LongStringHolder.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/LongStringHolder.java	(revision 0)
+@@ -0,0 +1,82 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
++import org.hibernate.annotations.Type;
++
++/**
++ * An entity containing data that is materialized into a String immediately.
++ * The hibernate type mapped for {@link #LONGVARCHAR} determines the SQL type
++ * asctually used.
++ * 
++ * @author Gail Badner
++ */
++@Entity
++public class LongStringHolder {
++	private Long id;
++	private char[] name;
++	private Character[] whatEver;
++	private String longString;
++
++	@Id
++	@GeneratedValue
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	@Type(type = "text")
++	public String getLongString() {
++		return longString;
++	}
++
++	public void setLongString(String longString) {
++		this.longString = longString;
++	}
++	@Type(type = "char_text")
++	public char[] getName() {
++		return name;
++	}
++
++	public void setName(char[] name) {
++		this.name = name;
++	}
++	@Type(type = "wrapped_char_text")
++	public Character[] getWhatEver() {
++		return whatEver;
++	}
++
++	public void setWhatEver(Character[] whatEver) {
++		this.whatEver = whatEver;
++	}
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/TextTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/TextTest.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/TextTest.java	(revision 0)
+@@ -0,0 +1,163 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import junit.framework.AssertionFailedError;
++
++import org.hibernate.Session;
++import org.hibernate.dialect.SQLServerDialect;
++import org.hibernate.dialect.Sybase11Dialect;
++import org.hibernate.dialect.SybaseASE15Dialect;
++import org.hibernate.dialect.SybaseDialect;
++import org.hibernate.test.annotations.RequiresDialect;
++import org.hibernate.test.annotations.TestCase;
++import org.hibernate.util.ArrayHelper;
++
++/**
++ * Tests eager materialization and mutation of long strings.
++ * 
++ * @author Steve Ebersole
++ */
++@RequiresDialect({SybaseASE15Dialect.class,SQLServerDialect.class,SybaseDialect.class,Sybase11Dialect.class})
++public class TextTest extends TestCase {
++
++	@Override
++	protected Class<?>[] getMappings() {
++		return new Class[] { LongStringHolder.class };
++	}
++
++	private static final int LONG_STRING_SIZE = 10000;
++
++	public void testBoundedLongStringAccess() {
++		String original = buildRecursively(LONG_STRING_SIZE, 'x');
++		String changed = buildRecursively(LONG_STRING_SIZE, 'y');
++
++		Session s = openSession();
++		s.beginTransaction();
++		LongStringHolder entity = new LongStringHolder();
++		s.save(entity);
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (LongStringHolder) s.get(LongStringHolder.class, entity
++				.getId());
++		assertNull(entity.getLongString());
++		assertNull(entity.getName());
++		assertNull(entity.getWhatEver());
++		entity.setLongString(original);
++		entity.setName(original.toCharArray());
++		entity.setWhatEver(wrapPrimitive(original.toCharArray()));
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (LongStringHolder) s.get(LongStringHolder.class, entity
++				.getId());
++		assertEquals(LONG_STRING_SIZE, entity.getLongString().length());
++		assertEquals(original, entity.getLongString());
++		assertNotNull(entity.getName());
++		assertEquals(LONG_STRING_SIZE, entity.getName().length);
++		assertEquals(original.toCharArray(), entity.getName());
++		assertNotNull(entity.getWhatEver());
++		assertEquals(LONG_STRING_SIZE, entity.getWhatEver().length);
++		assertEquals(original.toCharArray(), unwrapNonPrimitive(entity.getWhatEver()));
++		entity.setLongString(changed);
++		entity.setName(changed.toCharArray());
++		entity.setWhatEver(wrapPrimitive(changed.toCharArray()));
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (LongStringHolder) s.get(LongStringHolder.class, entity
++				.getId());
++		assertEquals(LONG_STRING_SIZE, entity.getLongString().length());
++		assertEquals(changed, entity.getLongString());
++		assertNotNull(entity.getName());
++		assertEquals(LONG_STRING_SIZE, entity.getName().length);
++		assertEquals(changed.toCharArray(), entity.getName());
++		assertNotNull(entity.getWhatEver());
++		assertEquals(LONG_STRING_SIZE, entity.getWhatEver().length);
++		assertEquals(changed.toCharArray(), unwrapNonPrimitive(entity.getWhatEver()));
++		entity.setLongString(null);
++		entity.setName(null);
++		entity.setWhatEver(null);
++		s.getTransaction().commit();
++		s.close();
++
++		s = openSession();
++		s.beginTransaction();
++		entity = (LongStringHolder) s.get(LongStringHolder.class, entity
++				.getId());
++		assertNull(entity.getLongString());
++		assertNull(entity.getName());
++		assertNull(entity.getWhatEver());
++		s.delete(entity);
++		s.getTransaction().commit();
++		s.close();
++	}
++
++	public static void assertEquals(char[] val1, char[] val2) {
++		if (!ArrayHelper.isEquals(val1, val2)) {
++			throw new AssertionFailedError("byte arrays did not match");
++		}
++	}
++
++	private String buildRecursively(int size, char baseChar) {
++		StringBuffer buff = new StringBuffer();
++		for (int i = 0; i < size; i++) {
++			buff.append(baseChar);
++		}
++		return buff.toString();
++	}
++
++	private Character[] wrapPrimitive(char[] bytes) {
++		int length = bytes.length;
++		Character[] result = new Character[length];
++		for (int index = 0; index < length; index++) {
++			result[index] = Character.valueOf(bytes[index]);
++		}
++		return result;
++	}
++
++	private char[] unwrapNonPrimitive(Character[] bytes) {
++		int length = bytes.length;
++		char[] result = new char[length];
++		for (int i = 0; i < length; i++) {
++			result[i] = bytes[i].charValue();
++		}
++		return result;
++	}
++
++	@Override
++	protected String[] getAnnotatedPackages() {
++		return new String[] { "org.hibernate.test.annotations.lob" };
++	}
++
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/package-info.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/package-info.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/package-info.java	(revision 0)
+@@ -0,0 +1,29 @@
++/**
++ * Test package for metatata facilities
++ * It contains an example of filter metadata
++ */
++@TypeDefs(
++		{
++		@TypeDef(
++				name = "wrapped_char_text",
++				typeClass = org.hibernate.test.annotations.lob.CharacterArrayTextType.class
++				),
++		@TypeDef(
++				name = "char_text",
++				typeClass = org.hibernate.test.annotations.lob.PrimitiveCharacterArrayTextType.class
++		),
++		@TypeDef(
++				name = "wrapped_image",
++				typeClass = org.hibernate.test.annotations.lob.WrappedImageType.class
++		),
++		@TypeDef(
++				name = "serializable_image",
++				typeClass = org.hibernate.test.annotations.lob.SerializableToImageType.class
++		)
++		}
++)
++package org.hibernate.test.annotations.lob;
++
++import org.hibernate.annotations.TypeDef;
++import org.hibernate.annotations.TypeDefs;
++
+Index: src/test/java/org/hibernate/test/annotations/lob/WrappedImageType.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/WrappedImageType.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/WrappedImageType.java	(revision 0)
+@@ -0,0 +1,66 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import org.hibernate.type.ImageType;
++
++/**
++ * A type that maps an SQL LONGVARBINARY to Java Byte[].
++ * 
++ * @author Strong Liu
++ */
++public class WrappedImageType extends ImageType{
++	public Class getReturnedClass() {
++		return Byte[].class;
++	}
++
++	protected Object toExternalFormat(byte[] bytes) {
++		if(bytes==null)return null;
++		return wrapPrimitive(bytes);
++	}
++
++	protected byte[] toInternalFormat(Object bytes) {
++		if(bytes==null)return null;
++		return unwrapNonPrimitive(( Byte[] ) bytes);
++	}
++	private Byte[] wrapPrimitive(byte[] bytes) {
++		int length = bytes.length;
++		Byte[] result = new Byte[length];
++		for ( int index = 0; index < length ; index++ ) {
++			result[index] = Byte.valueOf( bytes[index] );
++		}
++		return result;
++	}
++	
++	private byte[] unwrapNonPrimitive(Byte[] bytes) {
++		int length = bytes.length;
++		byte[] result = new byte[length];
++		for ( int i = 0; i < length ; i++ ) {
++			result[i] = bytes[i].byteValue();
++		}
++		return result;
++	}
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/Dog.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/Dog.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/Dog.java	(revision 0)
+@@ -0,0 +1,15 @@
++package org.hibernate.test.annotations.lob;
++
++import java.io.Serializable;
++
++public class Dog implements Serializable {
++	private String name;
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/PrimitiveCharacterArrayTextType.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/PrimitiveCharacterArrayTextType.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/PrimitiveCharacterArrayTextType.java	(revision 0)
+@@ -0,0 +1,68 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++
++import org.hibernate.HibernateException;
++import org.hibernate.type.TextType;
++
++/**
++ * A type that maps an SQL LONGVARCHAR to a Java char [].
++ * 
++ * @author Strong Liu
++ */
++public class PrimitiveCharacterArrayTextType extends TextType {
++	public Class getReturnedClass() {
++		return char[].class;
++	}
++
++	@Override
++	public Object get(ResultSet rs, String name) throws HibernateException,
++			SQLException {
++		String text = (String) super.get(rs, name);
++		if (text == null)
++			return null;
++		return text.toCharArray();
++	}
++
++	@Override
++	public void set(PreparedStatement st, Object value, int index)
++			throws HibernateException, SQLException {
++		char[] cs = (char[]) value;
++		String text = String.valueOf(cs);
++
++		super.set(st, text, index);
++	}
++
++	@Override
++	public String toString(Object val) {
++		return String.valueOf(val);
++	}
++
++}
+Index: src/test/java/org/hibernate/test/annotations/lob/LobTest.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/LobTest.java	(revision 17576)
++++ src/test/java/org/hibernate/test/annotations/lob/LobTest.java	(working copy)
+@@ -3,6 +3,7 @@
+ 
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
++import org.hibernate.dialect.Dialect;
+ import org.hibernate.test.annotations.TestCase;
+ 
+ /**
+@@ -116,6 +117,11 @@
+ 	public LobTest(String x) {
+ 		super( x );
+ 	}
++	
++	@Override
++	protected boolean appliesTo(Dialect dialect) {
++		return dialect.supportsExpectedLobUsagePattern();
++	}
+ 
+ 	protected Class[] getMappings() {
+ 		return new Class[]{
+Index: src/test/java/org/hibernate/test/annotations/lob/SerializableToImageType.java
+===================================================================
+--- src/test/java/org/hibernate/test/annotations/lob/SerializableToImageType.java	(revision 0)
++++ src/test/java/org/hibernate/test/annotations/lob/SerializableToImageType.java	(revision 0)
+@@ -0,0 +1,52 @@
++//$Id: $
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.test.annotations.lob;
++
++import java.io.Serializable;
++
++import org.hibernate.type.ImageType;
++import org.hibernate.util.SerializationHelper;
++
++/**
++ * A type that maps an SQL LONGVARBINARY to a serializable Java object.
++ * 
++ * @author Strong Liu
++ */
++public class SerializableToImageType extends ImageType {
++	public Class getReturnedClass() {
++		return Serializable.class;
++	}
++
++	protected Object toExternalFormat(byte[] bytes) {
++		if (bytes == null)
++			return null;
++		return SerializationHelper.deserialize(bytes);
++	}
++
++	protected byte[] toInternalFormat(Object bytes) {
++		return SerializationHelper.serialize((Serializable) bytes);
++	}
++}
+Index: src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(revision 17576)
++++ src/main/java/org/hibernate/cfg/annotations/SimpleValueBinder.java	(working copy)
+@@ -28,12 +28,14 @@
+ import java.util.Calendar;
+ import java.util.Date;
+ import java.util.Properties;
++
+ import javax.persistence.Enumerated;
+ import javax.persistence.Lob;
+ import javax.persistence.Temporal;
+ 
+ import org.hibernate.AnnotationException;
+ import org.hibernate.AssertionFailure;
++import org.hibernate.Hibernate;
+ import org.hibernate.annotations.Parameter;
+ import org.hibernate.annotations.Type;
+ import org.hibernate.annotations.common.reflection.XClass;
+@@ -44,13 +46,11 @@
+ import org.hibernate.cfg.NotYetImplementedException;
+ import org.hibernate.mapping.SimpleValue;
+ import org.hibernate.mapping.Table;
+-import org.hibernate.type.ByteArrayBlobType;
+ import org.hibernate.type.CharacterArrayClobType;
+ import org.hibernate.type.EnumType;
+-import org.hibernate.type.PrimitiveByteArrayBlobType;
+ import org.hibernate.type.PrimitiveCharacterArrayClobType;
+ import org.hibernate.type.SerializableToBlobType;
+-import org.hibernate.type.StringClobType;
++import org.hibernate.type.WrappedMaterializedBlobType;
+ import org.hibernate.util.StringHelper;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -147,7 +147,7 @@
+ 				type = "blob";
+ 			}
+ 			else if ( mappings.getReflectionManager().equals( returnedClassOrElement, String.class ) ) {
+-				type = StringClobType.class.getName();
++				type = Hibernate.MATERIALIZED_CLOB.getName();
+ 			}
+ 			else if ( mappings.getReflectionManager().equals( returnedClassOrElement, Character.class ) && isArray ) {
+ 				type = CharacterArrayClobType.class.getName();
+@@ -156,10 +156,10 @@
+ 				type = PrimitiveCharacterArrayClobType.class.getName();
+ 			}
+ 			else if ( mappings.getReflectionManager().equals( returnedClassOrElement, Byte.class ) && isArray ) {
+-				type = ByteArrayBlobType.class.getName();
++				type = WrappedMaterializedBlobType.class.getName();
+ 			}
+ 			else if ( mappings.getReflectionManager().equals( returnedClassOrElement, byte.class ) && isArray ) {
+-				type = PrimitiveByteArrayBlobType.class.getName();
++				type = Hibernate.MATERIALIZED_BLOB.getName();
+ 			}
+ 			else if ( mappings.getReflectionManager()
+ 					.toXClass( Serializable.class )
+Index: src/main/java/org/hibernate/type/ByteArrayBlobType.java
+===================================================================
+--- src/main/java/org/hibernate/type/ByteArrayBlobType.java	(revision 17576)
++++ src/main/java/org/hibernate/type/ByteArrayBlobType.java	(working copy)
+@@ -45,8 +45,11 @@
+  * Map a Byte[] into a Blob
+  * Experimental
+  *
++ * @deprecated replaced by Hibernate Core's {@link org.hibernate.type.WrappedMaterializedBlobType}
++ *
+  * @author Emmanuel Bernard
+  */
++@Deprecated
+ public class ByteArrayBlobType extends AbstractLobType {
+ 
+ 	public int[] sqlTypes(Mapping mapping) throws MappingException {
+Index: src/main/java/org/hibernate/type/StringClobType.java
+===================================================================
+--- src/main/java/org/hibernate/type/StringClobType.java	(revision 17576)
++++ src/main/java/org/hibernate/type/StringClobType.java	(working copy)
+@@ -37,9 +37,11 @@
+ 
+ /**
+  * Map a String to a Clob
+- *
++ * @deprecated replaced by Hibernate Core's {@link org.hibernate.type.MaterializedClobType}
++ * 
+  * @author Emmanuel Bernard
+  */
++@Deprecated
+ public class StringClobType implements UserType, Serializable {
+ 	public int[] sqlTypes() {
+ 		return new int[]{Types.CLOB};
+Index: src/main/java/org/hibernate/type/PrimitiveByteArrayBlobType.java
+===================================================================
+--- src/main/java/org/hibernate/type/PrimitiveByteArrayBlobType.java	(revision 17576)
++++ src/main/java/org/hibernate/type/PrimitiveByteArrayBlobType.java	(working copy)
+@@ -25,9 +25,11 @@
+ 
+ /**
+  * Map a byte[] to a Blob
+- *
++ * @deprecated replaced by Hibernate Core's {@link org.hibernate.type.MaterializedBlobType}
++ * 
+  * @author Emmanuel Bernard
+  */
++@Deprecated
+ public class PrimitiveByteArrayBlobType extends ByteArrayBlobType {
+ 	public Class getReturnedClass() {
+ 		return byte[].class;
+Index: src/main/java/org/hibernate/type/WrappedMaterializedBlobType.java
+===================================================================
+--- src/main/java/org/hibernate/type/WrappedMaterializedBlobType.java	(revision 0)
++++ src/main/java/org/hibernate/type/WrappedMaterializedBlobType.java	(revision 0)
+@@ -0,0 +1,42 @@
++package org.hibernate.type;
++
++/**
++ * <tt>materialized_blob</tt>: A type that maps an SQL BLOB to Java Byte[].
++ *
++ * @author Strong Liu
++ */
++public class WrappedMaterializedBlobType extends MaterializedBlobType {
++	public Class getReturnedClass() {
++		return Byte[].class;
++	}
++
++	protected Object toExternalFormat(byte[] bytes) {
++		if (bytes == null)
++			return null;
++		return wrapPrimitive(bytes);
++	}
++
++	protected byte[] toInternalFormat(Object bytes) {
++		if (bytes == null)
++			return null;
++		return unwrapNonPrimitive((Byte[]) bytes);
++	}
++
++	private Byte[] wrapPrimitive(byte[] bytes) {
++		int length = bytes.length;
++		Byte[] result = new Byte[length];
++		for (int index = 0; index < length; index++) {
++			result[index] = Byte.valueOf(bytes[index]);
++		}
++		return result;
++	}
++
++	private byte[] unwrapNonPrimitive(Byte[] bytes) {
++		int length = bytes.length;
++		byte[] result = new byte[length];
++		for (int i = 0; i < length; i++) {
++			result[i] = bytes[i].byteValue();
++		}
++		return result;
++	}
++}

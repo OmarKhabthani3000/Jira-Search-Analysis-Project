@@ -1,0 +1,345 @@
+Index: src/net/sf/hibernate/Query.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Query.java,v
+retrieving revision 1.17
+diff -u -r1.17 Query.java
+--- src/net/sf/hibernate/Query.java	10 Jun 2004 14:31:54 -0000	1.17
++++ src/net/sf/hibernate/Query.java	3 Sep 2004 04:32:50 -0000
+@@ -97,6 +97,17 @@
+ 	 */
+ 	public ScrollableResults scroll() throws HibernateException;
+ 	/**
++	 * Return the query results as <tt>ScrollableResults</tt>. The
++	 * scrollability of the returned results depends upon JDBC driver
++	 * support for scrollable <tt>ResultSet</tt>s.<br>
++	 *
++	 * @see ScrollableResults
++	 * @see ScrollMode
++	 * @return the result iterator
++	 * @throws HibernateException
++	 */
++	public ScrollableResults scroll(ScrollMode scrollMode) throws HibernateException;
++	/**
+ 	 * Return the query results as a <tt>List</tt>. If the query contains
+ 	 * multiple results pre row, the results are returned in an instance
+ 	 * of <tt>Object[]</tt>.
+Index: src/net/sf/hibernate/engine/Batcher.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Batcher.java,v
+retrieving revision 1.10
+diff -u -r1.10 Batcher.java
+--- src/net/sf/hibernate/engine/Batcher.java	4 Jun 2004 01:27:38 -0000	1.10
++++ src/net/sf/hibernate/engine/Batcher.java	3 Sep 2004 04:32:51 -0000
+@@ -5,6 +5,7 @@
+ import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
++import net.sf.hibernate.ScrollMode;
+ 
+ import net.sf.hibernate.HibernateException;
+ 
+@@ -24,7 +25,7 @@
+ 	 * released by <tt>closeQueryStatement()</tt>, it will be released when the
+ 	 * session is closed or disconnected.
+ 	 */
+-	public PreparedStatement prepareQueryStatement(String sql, boolean scrollable) throws SQLException, HibernateException;
++	public PreparedStatement prepareQueryStatement(String sql, boolean scrollable, ScrollMode scrollMode) throws SQLException, HibernateException;
+ 	/**
+ 	 * Close a prepared statement opened with <tt>prepareQueryStatement()</tt>
+ 	 */
+Index: src/net/sf/hibernate/engine/QueryParameters.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/QueryParameters.java,v
+retrieving revision 1.6
+diff -u -r1.6 QueryParameters.java
+--- src/net/sf/hibernate/engine/QueryParameters.java	10 Jun 2004 14:31:54 -0000	1.6
++++ src/net/sf/hibernate/engine/QueryParameters.java	3 Sep 2004 04:32:51 -0000
+@@ -10,6 +10,7 @@
+ import net.sf.hibernate.QueryException;
+ import net.sf.hibernate.impl.Printer;
+ import net.sf.hibernate.type.Type;
++import net.sf.hibernate.ScrollMode;
+ 
+ /**
+  * @author Gavin King
+@@ -26,7 +27,8 @@
+ 	private boolean cacheable;
+ 	private String cacheRegion;
+ 	private boolean forceCacheRefresh;
+-	
++	private ScrollMode scrollMode;
++
+ 	public QueryParameters(Type[] positionalParameterTypes, Object[] postionalParameterValues) {
+ 		this(positionalParameterTypes, postionalParameterValues, null, null);
+ 	}
+@@ -104,6 +106,14 @@
+ 		lockModes = map;
+ 	}
+ 	
++	public ScrollMode getScrollMode() {
++		return scrollMode;
++	}
++
++	public void setScrollMode(ScrollMode scrollMode) {
++		this.scrollMode = scrollMode;
++	}
++	
+ 	public void traceParameters(SessionFactoryImplementor factory) throws HibernateException {
+ 		Printer print = new Printer(factory);
+ 		if (positionalParameterValues.length!=0) log.trace( 
+Index: src/net/sf/hibernate/impl/BatcherImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/BatcherImpl.java,v
+retrieving revision 1.16
+diff -u -r1.16 BatcherImpl.java
+--- src/net/sf/hibernate/impl/BatcherImpl.java	7 Aug 2004 14:05:39 -0000	1.16
++++ src/net/sf/hibernate/impl/BatcherImpl.java	3 Sep 2004 04:32:53 -0000
+@@ -8,18 +8,19 @@
+ import java.util.HashSet;
+ import java.util.Iterator;
+ 
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-
+ import net.sf.hibernate.AssertionFailure;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.JDBCException;
++import net.sf.hibernate.ScrollMode;
+ import net.sf.hibernate.engine.Batcher;
+ import net.sf.hibernate.engine.SessionFactoryImplementor;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.util.GetGeneratedKeysHelper;
+ import net.sf.hibernate.util.JDBCExceptionReporter;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
+ /**
+  * Manages prepared statements and batching.
+  * 
+@@ -58,11 +59,11 @@
+ 	public PreparedStatement prepareStatement(String sql, boolean getGeneratedKeys) throws SQLException, HibernateException {
+ 		executeBatch();
+ 		logOpenPreparedStatement();
+-		return getPreparedStatement( session.connection(), sql, false, getGeneratedKeys );
++		return getPreparedStatement( session.connection(), sql, false, getGeneratedKeys , null);
+ 	}
+-	public PreparedStatement prepareQueryStatement(String sql, boolean scrollable) throws SQLException, HibernateException {
++	public PreparedStatement prepareQueryStatement(String sql, boolean scrollable, ScrollMode scrollMode) throws SQLException, HibernateException {
+ 		logOpenPreparedStatement();
+-		PreparedStatement ps = getPreparedStatement( session.connection(), sql, scrollable );
++		PreparedStatement ps = getPreparedStatement( session.connection(), sql, scrollable, scrollMode );
+ 		setStatementFetchSize(ps);
+ 		statementsToClose.add(ps);
+ 		lastQuery=ps;
+@@ -227,12 +228,12 @@
+ 		if ( factory.isShowSqlEnabled() ) System.out.println("Hibernate: " + sql);
+ 	}
+ 
+-	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable) 
++	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable, ScrollMode scrollMode) 
+ 	throws SQLException {
+-		return getPreparedStatement(conn, sql, scrollable, false);
++		return getPreparedStatement(conn, sql, scrollable, false, scrollMode);
+ 	}
+ 		
+-	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable, boolean useGetGeneratedKeys) 
++	private PreparedStatement getPreparedStatement(final Connection conn, final String sql, boolean scrollable, boolean useGetGeneratedKeys, ScrollMode scrollMode) 
+ 	throws SQLException {
+ 		
+ 		if ( scrollable && !factory.isScrollableResultSetsEnabled() ) {
+@@ -248,7 +249,9 @@
+ 		try {
+ 			log.trace("preparing statement");
+ 			if (scrollable) {
+-				return conn.prepareStatement(sql, ResultSet.TYPE_SCROLL_INSENSITIVE, ResultSet.CONCUR_READ_ONLY);
++			    if(scrollMode == null)
++			        scrollMode = ScrollMode.SCROLL_INSENSITIVE;
++				return conn.prepareStatement(sql, scrollMode.toResultSetType(), ResultSet.CONCUR_READ_ONLY);
+ 			}
+ 			else if (useGetGeneratedKeys) {
+ 				return GetGeneratedKeysHelper.prepareStatement(conn, sql);
+Index: src/net/sf/hibernate/impl/QueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/QueryImpl.java,v
+retrieving revision 1.23
+diff -u -r1.23 QueryImpl.java
+--- src/net/sf/hibernate/impl/QueryImpl.java	4 Jun 2004 01:27:41 -0000	1.23
++++ src/net/sf/hibernate/impl/QueryImpl.java	3 Sep 2004 04:32:53 -0000
+@@ -5,6 +5,10 @@
+ import java.util.List;
+ import java.util.Map;
+ 
++import net.sf.hibernate.FlushMode;
++import net.sf.hibernate.ScrollMode;
++import net.sf.hibernate.engine.QueryParameters;
++
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.ScrollableResults;
+ import net.sf.hibernate.engine.SessionImplementor;
+@@ -32,6 +36,14 @@
+ 		Map namedParams = getNamedParams();
+ 		return getSession().scroll( bindParameterLists(namedParams), getQueryParameters(namedParams) );
+ 	}
++
++	public ScrollableResults scroll(ScrollMode scrollMode) throws HibernateException {
++		verifyParameters();
++		Map namedParams = getNamedParams();
++		QueryParameters qp = getQueryParameters(namedParams);
++		qp.setScrollMode(scrollMode);
++		return getSession().scroll( bindParameterLists(namedParams), qp);
++	}
+ 	
+ 	public List list() throws HibernateException {
+ 		verifyParameters();
+Index: src/net/sf/hibernate/impl/SQLQueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SQLQueryImpl.java,v
+retrieving revision 1.5
+diff -u -r1.5 SQLQueryImpl.java
+--- src/net/sf/hibernate/impl/SQLQueryImpl.java	4 Jun 2004 01:27:41 -0000	1.5
++++ src/net/sf/hibernate/impl/SQLQueryImpl.java	3 Sep 2004 04:32:53 -0000
+@@ -11,7 +11,7 @@
+ import net.sf.hibernate.ScrollableResults;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+-
++import net.sf.hibernate.ScrollMode;
+ /**
+  * Implements SQL query passthrough.
+  *
+@@ -59,6 +59,9 @@
+ 	public ScrollableResults scroll() throws HibernateException {
+ 		throw new UnsupportedOperationException("SQL queries do not currently support iteration");
+ 	}
++	public ScrollableResults scroll(ScrollMode scrollMode) throws HibernateException{
++		throw new UnsupportedOperationException("SQL queries do not currently support iteration");	    
++	}
+ 
+ 	public Type[] getReturnTypes() throws HibernateException {
+ 		Type[] types = new Type[returnClasses.length];
+Index: src/net/sf/hibernate/loader/Loader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/Loader.java,v
+retrieving revision 1.44
+diff -u -r1.44 Loader.java
+--- src/net/sf/hibernate/loader/Loader.java	8 Aug 2004 10:12:23 -0000	1.44
++++ src/net/sf/hibernate/loader/Loader.java	3 Sep 2004 04:32:56 -0000
+@@ -35,6 +35,7 @@
+ import net.sf.hibernate.util.StringHelper;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
++import net.sf.hibernate.ScrollMode;
+ 
+ /**
+  * Abstract superclass of object loading (and querying) strategies. This class implements 
+@@ -773,10 +774,11 @@
+ 			scroll || //ie. a query called using scroll()
+ 			( hasFirstRow && !useOffset ) //we want to skip some rows at the start
+ 		);
++		ScrollMode scrollMode = scroll ? queryParameters.getScrollMode() : ScrollMode.SCROLL_INSENSITIVE;
+ 
+ 		if (useLimit) sql = dialect.getLimitString( sql.trim(), useOffset, getMaxOrLimit(selection, dialect) );
+ 
+-		PreparedStatement st = session.getBatcher().prepareQueryStatement(sql, scrollable);
++		PreparedStatement st = session.getBatcher().prepareQueryStatement(sql, scrollable, scrollMode);
+ 
+ 		try {
+ 
+Index: src/net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.43
+diff -u -r1.43 AbstractEntityPersister.java
+--- src/net/sf/hibernate/persister/AbstractEntityPersister.java	16 Aug 2004 21:57:53 -0000	1.43
++++ src/net/sf/hibernate/persister/AbstractEntityPersister.java	3 Sep 2004 04:32:59 -0000
+@@ -1254,7 +1254,7 @@
+ 		Object[] values = new Object[ types.length ];
+ 		boolean[] includeProperty = getPropertyUpdateability();
+ 		try {
+-			PreparedStatement ps = session.getBatcher().prepareQueryStatement( getConcreteSelectString(), false );
++			PreparedStatement ps = session.getBatcher().prepareQueryStatement( getConcreteSelectString(), false, null );
+ 			ResultSet rs = null;
+ 			try {
+ 				getIdentifierType().nullSafeSet(ps, id, 1, session);
+Index: src/net/sf/hibernate/ScrollMode.java
+===================================================================
+RCS file: src/net/sf/hibernate/ScrollMode.java
+diff -N src/net/sf/hibernate/ScrollMode.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/net/sf/hibernate/ScrollMode.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,74 @@
++//$Id: ScrollMode.java,v 1.1 2004/08/18 00:28:35 oneovthafew Exp $
++package net.sf.hibernate;
++
++import java.io.Serializable;
++import java.sql.ResultSet;
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * Specifies the type of JDBC scrollable result set to use
++ * underneath a <tt>ScrollableResults</tt>
++ *
++ * @see Query#scroll(ScrollMode)
++ * @see ScrollableResults
++ * @author Gavin King
++ */
++public final class ScrollMode implements Serializable {
++	private final int resultSetType;
++	private final String name;
++	private static final Map INSTANCES = new HashMap();
++
++	private ScrollMode(int level, String name) {
++		this.resultSetType=level;
++		this.name=name;
++	}
++	
++	public String toString() {
++		return name;
++	}
++	
++	/**
++	 * @return the JDBC result set type code
++	 */
++	public int toResultSetType() {
++		return resultSetType;
++	}
++	
++	/**
++	 * @see java.sql.ResultSet.TYPE_FORWARD_ONLY
++	 */
++	public static final ScrollMode FORWARD_ONLY = new ScrollMode(ResultSet.TYPE_FORWARD_ONLY, "FORWARD_ONLY");
++	/**
++	 * @see java.sql.ResultSet.TYPE_SCROLL_SENSITIVE
++	 */
++	public static final ScrollMode SCROLL_SENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_SENSITIVE, "SCROLL_SENSITIVE");
++	/**
++	 * Note that since the Hibernate session acts as a cache, you
++	 * might need to expicitly evict objects, if you need to see
++	 * changes made by other transactions. 
++	 * @see java.sql.ResultSet.TYPE_SCROLL_INSENSITIVE
++	 */
++	public static final ScrollMode SCROLL_INSENSITIVE = new ScrollMode(ResultSet.TYPE_SCROLL_INSENSITIVE, "SCROLL_INSENSITIVE");
++	
++	public boolean lessThan(ScrollMode other) {
++		return this.resultSetType<other.resultSetType;
++	}
++
++	static {
++		INSTANCES.put( FORWARD_ONLY.name, FORWARD_ONLY );
++		INSTANCES.put( SCROLL_INSENSITIVE.name, SCROLL_INSENSITIVE );
++		INSTANCES.put( SCROLL_SENSITIVE.name, SCROLL_SENSITIVE );
++	}
++
++	private Object readResolve() {
++		return INSTANCES.get(name);
++	}
++
++}
++
++
++
++
++
++

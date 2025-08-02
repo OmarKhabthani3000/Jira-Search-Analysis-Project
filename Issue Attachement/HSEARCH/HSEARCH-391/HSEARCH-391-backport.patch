@@ -1,0 +1,130 @@
+Index: src/main/java/org/hibernate/search/engine/DocumentBuilderContainedEntity.java
+===================================================================
+--- src/main/java/org/hibernate/search/engine/DocumentBuilderContainedEntity.java	(revision 17549)
++++ src/main/java/org/hibernate/search/engine/DocumentBuilderContainedEntity.java	(working copy)
+@@ -574,62 +574,79 @@
+ 			}
+ 
+ 			if ( member.isArray() ) {
+-				for ( Object arrayValue : ( Object[] ) value ) {
+-					//highly inneficient but safe wrt the actual targeted class
+-					Class<?> valueClass = Hibernate.getClass( arrayValue );
+-					DocumentBuilderIndexedEntity<?> builderIndexedEntity = searchFactoryImplementor.getDocumentBuilderIndexedEntity(
+-							valueClass
+-					);
+-					if ( builderIndexedEntity == null ) {
+-						continue;
+-					}
+-					processContainedInValue(
+-							arrayValue, queue, valueClass,
+-							builderIndexedEntity, searchFactoryImplementor
+-					);
++				@SuppressWarnings("unchecked")
++				T[] array = ( T[] ) value;
++				for ( T arrayValue : array ) {
++					processSingleContainedInInstance( queue, searchFactoryImplementor, arrayValue );
+ 				}
+ 			}
+ 			else if ( member.isCollection() ) {
+-				Collection collection;
+-				if ( Map.class.equals( member.getCollectionClass() ) ) {
+-					//hum
+-					collection = ( ( Map ) value ).values();
+-				}
+-				else {
+-					collection = ( Collection ) value;
+-				}
+-				for ( Object collectionValue : collection ) {
+-					//highly inneficient but safe wrt the actual targeted class
+-					Class<?> valueClass = Hibernate.getClass( collectionValue );
+-					DocumentBuilderIndexedEntity<?> builderIndexedEntity = searchFactoryImplementor.getDocumentBuilderIndexedEntity(
+-							valueClass
+-					);
+-					if ( builderIndexedEntity == null ) {
+-						continue;
+-					}
+-					processContainedInValue(
+-							collectionValue, queue, valueClass,
+-							builderIndexedEntity, searchFactoryImplementor
+-					);
++				Collection<T> collection = getActualCollection( member, value );
++				for ( T collectionValue : collection ) {
++					processSingleContainedInInstance( queue, searchFactoryImplementor, collectionValue );
+ 				}
+ 			}
+ 			else {
+-				Class<?> valueClass = Hibernate.getClass( value );
+-				DocumentBuilderIndexedEntity<?> builderIndexedEntity = searchFactoryImplementor.getDocumentBuilderIndexedEntity(
+-						valueClass
+-				);
+-				if ( builderIndexedEntity == null ) {
+-					continue;
+-				}
+-				processContainedInValue( value, queue, valueClass, builderIndexedEntity, searchFactoryImplementor );
++				processSingleContainedInInstance( queue, searchFactoryImplementor, value );
++			}
++		}
++	}
++
++	/**
++	 * A {@code XMember } instance treats a map as a collection as well in which case the map values are returned as
++	 * collection.
++	 *
++	 * @param member The member instance
++	 * @param value The value
++	 *
++	 * @return The {@code value} casted to collection or in case of {@code value} being a map the map values as collection.
++	 */
++	private <T> Collection<T> getActualCollection(XMember member, Object value) {
++		Collection<T> collection;
++		if ( Map.class.equals( member.getCollectionClass() ) ) {
++			//hum
++			@SuppressWarnings("unchecked")
++			Collection<T> tmpCollection = ( ( Map<?, T> ) value ).values();
++			collection = tmpCollection;
++		}
++		else {
++			@SuppressWarnings("unchecked")
++			Collection<T> tmpCollection = ( Collection<T> ) value;
++			collection = tmpCollection;
++		}
++		return collection;
++	}
++
++	private <T> void processSingleContainedInInstance(List<LuceneWork> queue, SearchFactoryImplementor searchFactoryImplementor, T value) {
++		@SuppressWarnings("unchecked")
++		Class<T> valueClass = Hibernate.getClass( value );
++		DocumentBuilderIndexedEntity<T> builderIndexedEntity =
++				searchFactoryImplementor.getDocumentBuilderIndexedEntity( valueClass );
++
++		// it could be we have a nested @IndexedEmbedded chain in which case we have to find the top level @Indexed entities
++		if ( builderIndexedEntity == null ) {
++			DocumentBuilderContainedEntity<T> builderContainedEntity =
++					searchFactoryImplementor.getDocumentBuilderContainedEntity( valueClass );
++			if ( builderContainedEntity != null ) {
++				processContainedIn( value, queue, builderContainedEntity.metadata, searchFactoryImplementor );
+ 			}
+ 		}
+-		//an embedded cannot have a useful @ContainedIn (no shared reference)
+-		//do not walk through them
++		else {
++			addWorkForEmbeddedValue( value, queue, valueClass, builderIndexedEntity, searchFactoryImplementor );
++		}
+ 	}
+ 
+-	private void processContainedInValue(Object value, List<LuceneWork> queue, Class<?> valueClass,
+-										 DocumentBuilderIndexedEntity builderIndexedEntity, SearchFactoryImplementor searchFactoryImplementor) {
++	/**
++	 * Create a {@code LuceneWork} instance of the entity which needs updating due to the embedded instance change.
++	 *
++	 * @param value The value to index
++	 * @param queue The current (Lucene) work queue
++	 * @param valueClass The class of the value
++	 * @param builderIndexedEntity the document builder for the entity which needs updating due to a update event of the embedded instance
++	 * @param searchFactoryImplementor the search factory.
++	 */
++	private <T> void addWorkForEmbeddedValue(T value, List<LuceneWork> queue, Class<T> valueClass,
++											 DocumentBuilderIndexedEntity<T> builderIndexedEntity, SearchFactoryImplementor searchFactoryImplementor) {
+ 		Serializable id = ( Serializable ) ReflectionHelper.getMemberValue( value, builderIndexedEntity.idGetter );
+ 		builderIndexedEntity.addWorkToQueue( valueClass, value, id, WorkType.UPDATE, queue, searchFactoryImplementor );
+ 	}

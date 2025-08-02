@@ -1,0 +1,47 @@
+The first change I made was around allowing a shared AnnotationConfiguration instance to be supplied to the 
+Ejb3Configuration class thus reducing the overhead of all the mapping info and such on that class.  The changes
+for that were as follows:
+
+hibernate-entitymanager 3.4.0
+	Class: Ejb3Configuration
+	1) Added a new constructor to allow an instance of AnnotationConfiguration to be passed in.  Doing so
+	   would set the value of a newly added variable called 'sharingConfig' to true which would be used later on.
+
+hibernate-annotations 3.4.0
+	New Class: SharedAnnotationConfiguration
+	1) After testing with the first change from above, I got errors because it was trying to call the 
+	   buildMappings() and secondPassCompile() operations many times on the same shared instance of
+	   AnnotationConfiguration.  So I created this subclass and prevented those ops from being called
+	   more then once on the shared instance.
+
+
+After making these two changes, I was able to cut the memory footprint of each EntityManagerFactory beyond
+the first one in half.  From here, the plan was then to focus on reducing the footprint down more by looking
+at the SessionFactoryImpl.  The changes around that were:
+
+hibernate-core 3.3.1
+	Class: SessionFactoryImpl
+	1) Added a new constructor that took another instance of SessionFactoryImpl (the initially 
+	   instantiated instance) that this instance would share some properties from.
+	2) In this new constructor, if the initialSessionFact var was not null (indicating sharing), then
+	   the following properties would be shared from that intialSessionFact: entityPersisters, 
+	   collectionPersisters, allCacheRegions, classMetadata, collectionPersisters, collectionMetadata
+	   collectionRolesByEntityParticipant, namedQueries, namedSqlQueries, sqlResultSetMappings, imports.
+	
+	Class: Configuration
+	1) Added a new static property called initialSessionFact of type SessionFactoryImpl (and a mutex for
+	   it).  This will be the SessionFactoryImpl that subsequent ones share the shared info from.
+	2) Added a new buildSessionFactory(boolean) operation.  In here, if sharing, the initialSessionFact
+	   var will be supplied to the new construtor on SessionFactoryImpl (after being instantiated once).
+
+hibernate-annotations 3.4.0
+	Class: AnnotationConfiguration
+	1) Added a new buildSessionFactoryImpl(boolean) operation that will do what was being done before but then
+	   call the super.buildSessionFactory(boolean) operation as oppose to the no-args one.
+
+hibernate-entitymanager 3.4.0
+	Class: Ejb3Configuration
+	1) Changed the buildSessionFactory() operation to call cfg.buildSessionFactory(boolean) passing in the 
+	   previously added sharingConfig var.
+	2) Inside of buildEntityManagerFactory(), made sure that the SessionFactory was created by calling the
+	   cfg.buildSessionFactory(boolean) operation, supplying the sharingConfig var. 

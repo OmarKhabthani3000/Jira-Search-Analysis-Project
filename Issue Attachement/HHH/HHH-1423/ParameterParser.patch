@@ -1,0 +1,53 @@
+--- ParameterParser.java.org	2006-03-14 10:03:19.264318306 +0100
++++ ParameterParser.java	2006-03-14 10:26:03.800805434 +0100
+@@ -1,5 +1,8 @@
+ package org.hibernate.engine.query;
+ 
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
+ import org.hibernate.QueryException;
+ import org.hibernate.hql.classic.ParserHelper;
+ import org.hibernate.util.StringHelper;
+@@ -14,6 +17,8 @@
+  */
+ public class ParameterParser {
+ 
++	private static Pattern callPattern = Pattern.compile("\\? *= *call ");
++
+ 	public static interface Recognizer {
+ 		public void outParameter(int position);
+ 		public void ordinalParameter(int position);
+@@ -39,7 +44,7 @@
+ 	 * @throws QueryException
+ 	 */
+ 	public static void parse(String sqlString, Recognizer recognizer) throws QueryException {
+-		boolean hasMainOutputParameter = sqlString.indexOf( "call" ) > 0 &&
++		boolean couldHaveMainOutputParameter = sqlString.indexOf( "call " ) > 0 &&
+ 		                                 sqlString.indexOf( "?" ) < sqlString.indexOf( "call" ) &&
+ 		                                 sqlString.indexOf( "=" ) < sqlString.indexOf( "call" );
+ 		boolean foundMainOutputParam = false;
+@@ -85,13 +90,17 @@
+ 						indx = chopLocation - 1;
+ 					}
+ 					else {
+-						if ( hasMainOutputParameter && !foundMainOutputParam ) {
+-							foundMainOutputParam = true;
+-							recognizer.outParameter( indx );
+-						}
+-						else {
+-							recognizer.ordinalParameter( indx );
++						if ( couldHaveMainOutputParameter && !foundMainOutputParam ) {
++							int nextQuote = sqlString.indexOf('\'', indx);
++							String nextPart = sqlString.substring(indx, nextQuote == -1 ? stringLength : nextQuote);
++							Matcher callMatcher = callPattern.matcher(nextPart);
++							if (callMatcher.find()) {
++								foundMainOutputParam = true;
++								recognizer.outParameter( indx );
++								continue;
++							}
+ 						}
++						recognizer.ordinalParameter( indx );
+ 					}
+ 				}
+ 				else {

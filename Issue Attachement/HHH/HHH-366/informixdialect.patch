@@ -1,0 +1,84 @@
+--- hibernate-3.0.3/src/org/hibernate/dialect/InformixDialect.java	Sun May  8 17:10:29 2005
++++ hibernate-3.0.3-patch/src/org/hibernate/dialect/InformixDialect.java	Thu May 19 14:30:07 2005
+@@ -1,9 +1,15 @@
+ //$Id: InformixDialect.java,v 1.14 2005/04/04 14:49:03 oneovthafew Exp $
+ package org.hibernate.dialect;
+ 
++import java.sql.SQLException;
+ import java.sql.Types;
+ 
+ import org.hibernate.MappingException;
++import org.hibernate.exception.ErrorCodeConverter;
++import org.hibernate.exception.JDBCExceptionHelper;
++import org.hibernate.exception.SQLExceptionConverter;
++import org.hibernate.exception.TemplatedViolatedConstraintNameExtracter;
++import org.hibernate.exception.ViolatedConstraintNameExtracter;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -138,4 +144,64 @@
+ 		return false;
+ 	}
+ 
++	public SQLExceptionConverter buildSQLExceptionConverter() {
++		return new ExceptionConverter( getViolatedConstraintNameExtracter() );
++	}
++
++	public ViolatedConstraintNameExtracter getViolatedConstraintNameExtracter() {
++        return EXTRACTER;
++	}
++
++	private static class ExceptionConverter extends ErrorCodeConverter {
++		private int[] sqlGrammarCodes = new int[]{};
++		private int[] integrityViolationCodes = new int[]{-239, -268, -691, -692};
++
++		public ExceptionConverter(ViolatedConstraintNameExtracter anExtracter) {
++			super( anExtracter );
++		}
++
++		protected int[] getSQLGrammarErrorCodes() {
++			return this.sqlGrammarCodes;
++		}
++
++		protected int[] getIntegrityViolationErrorCodes() {
++			return this.integrityViolationCodes;
++		}
++	}
++
++	private static ViolatedConstraintNameExtracter EXTRACTER = new TemplatedViolatedConstraintNameExtracter() {
++
++		/**
++		 * Extract the name of the violated constraint from the given SQLException.
++		 *
++		 * @param sqle The exception that was the result of the constraint violation.
++		 * @return The extracted constraint name.
++		 */
++		public String extractConstraintName(SQLException sqle) {
++			String constraintName = null;
++			
++			int errorCode = JDBCExceptionHelper.extractErrorCode(sqle);
++			if ( errorCode == -268 ) {
++				constraintName = extractUsingTemplate( "Unique constraint (", ") violated.", sqle.getMessage() );
++			}
++			else if ( errorCode == -691 ) {
++				constraintName = extractUsingTemplate( "Missing key in referenced table for referential constraint (", ").", sqle.getMessage() );
++			}
++			else if ( errorCode == -692 ) {
++				constraintName = extractUsingTemplate( "Key value for constraint (", ") is still being referenced.", sqle.getMessage() );
++			}
++			
++			if (constraintName != null) {
++				// strip table-owner because Informix always returns constraint names as "<table-owner>.<constraint-name>"
++				int i = constraintName.indexOf('.');
++				if (i != -1) {
++					constraintName = constraintName.substring(i + 1);
++				}
++			}
++
++			return constraintName;
++		}
++
++	};
++
+ }
+\ No newline at end of file

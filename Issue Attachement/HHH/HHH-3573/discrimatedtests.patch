@@ -1,0 +1,262 @@
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonEntity.java	(revision 0)
+@@ -0,0 +1,31 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import org.hibernate.envers.Audited;
++
++import javax.persistence.*;
++
++@Entity
++@Audited
++@DiscriminatorColumn(name = "type", discriminatorType = DiscriminatorType.INTEGER)
++public class PersonEntity {
++
++    public PersonEntity(Integer id, String name) {
++        this.id = id;
++        this.name = name;
++    }
++
++    public PersonEntity() {
++    }
++
++    @Id
++    protected Integer id;
++
++    @Basic
++    protected String name;
++
++
++    @ManyToOne(fetch = FetchType.LAZY, targetEntity = PersonTypeEntity.class)
++    @JoinColumn(name = "type", referencedColumnName = "typeid", nullable = false, insertable = false, updatable = false)
++    protected PersonTypeEntity personType;
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/DiscriminatedStorage.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/DiscriminatedStorage.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/DiscriminatedStorage.java	(revision 0)
+@@ -0,0 +1,90 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import java.util.Arrays;
++import java.util.List;
++import javax.persistence.EntityManager;
++
++import org.hibernate.envers.test.AbstractEntityTest;
++import org.hibernate.ejb.Ejb3Configuration;
++import org.testng.annotations.BeforeClass;
++import org.testng.annotations.Test;
++
++
++public class DiscriminatedStorage extends AbstractEntityTest {
++
++    private Integer masterId;
++    private Integer slaveId1;
++    private Integer slaveId2;
++
++    public void configure(Ejb3Configuration cfg) {
++        cfg.addAnnotatedClass(MasterEntity.class);
++        cfg.addAnnotatedClass(SlaveEntity.class);
++        cfg.addAnnotatedClass(PersonTypeEntity.class);
++        cfg.addAnnotatedClass(PersonEntity.class);
++        cfg.addAnnotatedClass(ChildPersonEntity.class);
++    }
++
++    @BeforeClass(dependsOnMethods = "init")
++    public void initData() {
++        EntityManager em = getEntityManager();
++
++        masterId = 1;
++        slaveId1 = 2;
++        slaveId2 = 3;
++        // Rev 1
++        em.getTransaction().begin();
++
++        MasterEntity master = new MasterEntity(masterId, "the master");
++        em.persist(master);
++
++        SlaveEntity slave = new SlaveEntity(slaveId1, "slave", 5);
++        em.persist(slave);
++
++        SlaveEntity slave2 = new SlaveEntity(slaveId2, "another slave", 5);
++        em.persist(slave2);
++
++
++        PersonTypeEntity type = new PersonTypeEntity(1000, "Test type");
++        em.persist(type);
++
++        PersonEntity person = new PersonEntity(1, "Test User");
++        em.persist(person);
++
++        ChildPersonEntity child = new ChildPersonEntity(2, "Child user");
++        em.persist(child);
++
++        em.getTransaction().commit();
++    }
++
++    @Test
++    public void testEntities() {
++
++        List entities = getEntityManager().createQuery("SELECT e FROM MasterEntity e").getResultList();
++
++        assert entities.size() == 3;
++        assert entities.get(0) instanceof MasterEntity;
++        assert entities.get(1) instanceof SlaveEntity;
++        assert entities.get(2) instanceof SlaveEntity;
++
++    }
++
++    @Test
++    public void testPeopple() {
++
++        List entities = getEntityManager().createQuery("SELECT p FROM PersonEntity p").getResultList();
++
++        assert entities.size() == 2;
++        assert entities.get(0) instanceof PersonEntity;
++        assert entities.get(1) instanceof ChildPersonEntity;
++
++    }
++
++    @Test
++    public void testRevisionCounts() {
++
++        assert Arrays.asList(1).equals(getAuditReader().getRevisions(MasterEntity.class, masterId));
++        assert Arrays.asList(1).equals(getAuditReader().getRevisions(SlaveEntity.class, slaveId1));
++    }
++
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonTypeEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonTypeEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/PersonTypeEntity.java	(revision 0)
+@@ -0,0 +1,27 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import org.hibernate.envers.Audited;
++
++import javax.persistence.*;
++
++@Entity
++@Audited
++@DiscriminatorColumn(name = "type", discriminatorType = DiscriminatorType.INTEGER)
++public class PersonTypeEntity {
++
++    public PersonTypeEntity(Integer id, String type) {
++        this.typeId = id;
++        this.type = type;
++    }
++
++    public PersonTypeEntity() {
++    }
++
++    @Id
++    protected Integer typeId;
++
++    @Basic
++    protected String type;
++
++
++}
+\ No newline at end of file
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/ChildPersonEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/ChildPersonEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/ChildPersonEntity.java	(revision 0)
+@@ -0,0 +1,16 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import javax.persistence.Entity;
++import javax.persistence.DiscriminatorValue;
++
++@DiscriminatorValue("1000")
++@Entity
++public class ChildPersonEntity extends PersonEntity {
++
++    public ChildPersonEntity(Integer id, String name) {
++        super(id, name);
++    }
++
++    public ChildPersonEntity() {
++    }
++}
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/SlaveEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/SlaveEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/SlaveEntity.java	(revision 0)
+@@ -0,0 +1,27 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import org.hibernate.envers.Audited;
++
++import javax.persistence.Entity;
++import javax.persistence.DiscriminatorValue;
++import javax.persistence.Basic;
++
++@Entity
++@Audited
++@DiscriminatorValue("18001")
++public class SlaveEntity extends MasterEntity {
++
++    public SlaveEntity() {
++    }
++
++    public SlaveEntity(Integer id, String name, Integer lashings) {
++        this.id = id;
++        this.name = name;
++        this.lashings = lashings;
++    }
++
++    @Basic
++    private Integer lashings;
++
++
++}
+Index: src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/MasterEntity.java
+===================================================================
+--- src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/MasterEntity.java	(revision 0)
++++ src/test/java/org/hibernate/envers/test/integration/inheritance/tableperclass/discriminated/MasterEntity.java	(revision 0)
+@@ -0,0 +1,27 @@
++package org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated;
++
++import org.hibernate.envers.Audited;
++
++import javax.persistence.*;
++
++@Entity
++@Audited
++@DiscriminatorColumn(name = "type", discriminatorType = DiscriminatorType.INTEGER)
++public class MasterEntity {
++
++    public MasterEntity(Integer id, String name) {
++        this.id = id;
++        this.name = name;
++    }
++
++    public MasterEntity() {
++    }
++
++    @Id
++    protected Integer id;
++
++    @Basic
++    protected String name;
++
++
++}
+Index: src/test/resources/testng.xml
+===================================================================
+--- src/test/resources/testng.xml	(revision 15722)
++++ src/test/resources/testng.xml	(working copy)
+@@ -26,6 +26,7 @@
+             <package name="org.hibernate.envers.test.integration.inheritance.tableperclass.childrelation" />
+             <package name="org.hibernate.envers.test.integration.inheritance.tableperclass.notownedrelation" />
+             <package name="org.hibernate.envers.test.integration.inheritance.tableperclass.relation" />
++            <package name="org.hibernate.envers.test.integration.inheritance.tableperclass.discriminated" />
+             <package name="org.hibernate.envers.test.integration.manytomany" />
+             <package name="org.hibernate.envers.test.integration.manytomany.ternary" />
+             <package name="org.hibernate.envers.test.integration.manytomany.unidirectional" />

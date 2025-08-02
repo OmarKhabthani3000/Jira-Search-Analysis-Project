@@ -1,0 +1,93 @@
+Index: src/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.78
+diff -u -r1.78 SessionFactoryImpl.java
+--- src/org/hibernate/impl/SessionFactoryImpl.java      22 May 2005 18:20:22 -0000      1.78
++++ src/org/hibernate/impl/SessionFactoryImpl.java      15 Aug 2005 18:05:39 -0000
+@@ -398,38 +398,55 @@
+                return errors;
+        }
+
+-       public QueryTranslator[] getQuery(String queryString, boolean shallow, Map enabledFilters)
+-       throws QueryException, MappingException {
+-
+-               // if there are no enabled filters, consider cached query compilations,
+-               // otherwise generate/compile a new set of query translators
+-               Object cacheKey = null;
+-               QueryTranslator[] queries = null;
+-
+-               if ( enabledFilters == null || enabledFilters.isEmpty() ) {
+-                       cacheKey = QUERY_KEY_FACTORY.newInstance(queryString, shallow);
+-                       queries = (QueryTranslator[]) get(cacheKey);
+-               }
++   public QueryTranslator[] getQuery(String queryString, boolean shallow, Map enabledFilters)
++   throws QueryException, MappingException {
+
+-               // have to be careful to ensure that if the JVM does out-of-order execution
+-               // then another thread can't get an uncompiled QueryTranslator from the cache
+-               // we also have to be very careful to ensure that other threads can perform
+-               // compiled queries while another query is being compiled
+-
+-               if ( queries==null ) {
+-                       // a query that names an interface or unmapped class in the from clause
+-                       // is actually executed as multiple queries
+-                       String[] concreteQueryStrings = QuerySplitter.concreteQueries(queryString, this);
+-                       queries = createQueryTranslators(concreteQueryStrings, cacheKey, enabledFilters);
+-               }
+-               for ( int i=0; i<queries.length; i++) {
++      // if there are no enabled filters, consider cached query compilations,
++      // otherwise generate/compile a new set of query translators
++      Object cacheKey = null;
++      QueryTranslator[] queries = null;
++
++      if ( enabledFilters == null || enabledFilters.isEmpty() ) {
++         cacheKey = QUERY_KEY_FACTORY.newInstance(queryString, shallow);
++         queries = (QueryTranslator[]) get(cacheKey);
++      } else {
++         // Include the filters in the cacheKey, this allows for different versions of the queries
++         // to be cached if the filters are enabled or not, and also is based on the specific filters
++         // that are enabled.
++         String filtersKey = "";
++         Iterator iter = enabledFilters.keySet().iterator();
++         while (iter.hasNext()) {
++            filtersKey += ((String)iter.next());
++         }
++         // Create the cache key with the filter names enabled.
++         cacheKey = QUERY_KEY_FACTORY.newInstance(queryString+"|"+filtersKey, shallow);
++         queries = (QueryTranslator[]) get(cacheKey);
++         if (queries != null) {
++            for (int i=0; i<queries.length; i++ ) {
++               // Replace the filters to ensure that the current values are used.
++               queries[i].getEnabledFilters().putAll(enabledFilters);
++            }
++         }
++      }
++
++      // have to be careful to ensure that if the JVM does out-of-order execution
++      // then another threacd can't get an uncompiled QueryTranslator from the cache
++      // we also have to be very careful to ensure that other threads can perform
++      // compiled queries while another query is being compiled
++
++      if ( queries==null ) {
++         // a query that names an interface or unmapped class in the from clause
++         // is actually executed as multiple queries
++         String[] concreteQueryStrings = QuerySplitter.concreteQueries(queryString, this);
++         queries = createQueryTranslators(concreteQueryStrings, cacheKey, enabledFilters);
++      }
++      for ( int i=0; i<queries.length; i++) {
+ //                     queries[i].compile(this, settings.getQuerySubstitutions(), shallow, enabledFilters);
+-                       queries[i].compile( settings.getQuerySubstitutions(), shallow );
+-               }
+-               // see comment above. note that QueryTranslator.compile() is synchronized
+-               return queries;
+-
+-       }
++         queries[i].compile( settings.getQuerySubstitutions(), shallow );
++      }
++      // see comment above. note that QueryTranslator.compile() is synchronized
++      return queries;
++   }
+
+        public FilterTranslator getFilter(
+                String filterString,

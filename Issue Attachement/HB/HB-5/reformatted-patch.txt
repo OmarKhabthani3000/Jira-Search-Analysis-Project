@@ -1,0 +1,1650 @@
+Index: hibernate-2.0/src/net/sf/hibernate/collection/CollectionPersister.java
+diff -c hibernate-2.0/src/net/sf/hibernate/collection/CollectionPersister.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/collection/CollectionPersister.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/collection/CollectionPersister.java:1.1.1.2	Tue Apr 22 14:28:24 2003
+--- hibernate-2.0/src/net/sf/hibernate/collection/CollectionPersister.java	Fri May  2 13:00:26 2003
+***************
+*** 1,4 ****
+! //$Id: CollectionPersister.java,v 1.1.1.2 2003/04/22 19:28:24 paulsenj Exp $
+  package net.sf.hibernate.collection;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: CollectionPersister.java,v 1.6 2003/05/02 18:00:26 paulsenj Exp $
+  package net.sf.hibernate.collection;
+  
+  import java.io.Serializable;
+***************
+*** 37,42 ****
+--- 37,43 ----
+  import net.sf.hibernate.util.ArrayHelper;
+  import net.sf.hibernate.util.JDBCExceptionReporter;
+  import net.sf.hibernate.util.StringHelper;
++ import net.sf.hibernate.util.TypeHelper;
+  
+  import org.apache.commons.logging.Log;
+  import org.apache.commons.logging.LogFactory;
+***************
+*** 64,74 ****
+--- 65,79 ----
+  	private final Type indexType;
+  	private final Type elementType;
+  	private final String[] keyColumnNames;
++ 	private final Type[] keyColumnTypes;
+  	private final String[] indexColumnNames;
++ 	private final Type[] indexColumnTypes;
+  	private final String[] elementColumnNames;
++ 	private final Type[] elementColumnTypes;
+  	private final String[] unquotedIndexColumnNames;
+  	private final String[] unquotedElementColumnNames;
+  	private final String[] rowSelectColumnNames;
++ 	private final Type[] rowSelectColumnTypes;
+  	private final String[] indexColumnAliases;
+  	private final String[] elementColumnAliases;
+  	private final Type rowSelectType;
+***************
+*** 111,120 ****
+--- 116,128 ----
+  		Iterator iter = collection.getKey().getColumnIterator();
+  		int span = collection.getKey().getColumnSpan();
+  		keyColumnNames = new String[span];
++ 		// construct array of key column types
++ 		keyColumnTypes = new Type[span];
+  		int k=0;
+  		while ( iter.hasNext() ) {
+  			Column col = ( (Column) iter.next() );
+  			keyColumnNames[k] = col.getName();
++ 			keyColumnTypes[k] = col.getType();
+  			k++;
+  		}
+  		
+***************
+*** 145,154 ****
+--- 153,165 ----
+  		qualifiedTableName = table.getQualifiedName( factory.getDefaultSchema() );
+  		String[] aliases = new String[span];
+  		elementColumnNames = new String[span];
++ 		// construct array of element column types
++ 		elementColumnTypes = new Type[span];
+  		int j=0;
+  		while ( iter.hasNext() ) {
+  			Column col = (Column) iter.next();
+  			elementColumnNames[j] = col.getName();
++ 			elementColumnTypes[j] = col.getType();
+  			aliases[j] = col.getAlias();
+  			j++;
+  		}
+***************
+*** 164,175 ****
+  			int indexSpan = indexedMap.getIndex().getColumnSpan();
+  			iter = indexedMap.getIndex().getColumnIterator();
+  			indexColumnNames = new String[indexSpan];
+  			int i=0;
+  			while ( iter.hasNext() ) {
+  				Column indexCol = (Column) iter.next();
+! 				indexColumnNames[i++] = indexCol.getName();
+  			}
+  			rowSelectColumnNames = indexColumnNames;
+  			rowSelectType = indexType;
+  			indexColumnAliases = alias.toAliasStrings(indexColumnNames);
+  			unquotedIndexColumnNames = StringHelper.unQuote(indexColumnAliases);
+--- 175,190 ----
+  			int indexSpan = indexedMap.getIndex().getColumnSpan();
+  			iter = indexedMap.getIndex().getColumnIterator();
+  			indexColumnNames = new String[indexSpan];
++ 			// construct array of index column types
++ 			indexColumnTypes = new Type[indexSpan];
+  			int i=0;
+  			while ( iter.hasNext() ) {
+  				Column indexCol = (Column) iter.next();
+! 				indexColumnNames[i] = indexCol.getName();
+! 				indexColumnTypes[i++] = indexCol.getType();
+  			}
+  			rowSelectColumnNames = indexColumnNames;
++ 			rowSelectColumnTypes = indexColumnTypes;
+  			rowSelectType = indexType;
+  			indexColumnAliases = alias.toAliasStrings(indexColumnNames);
+  			unquotedIndexColumnNames = StringHelper.unQuote(indexColumnAliases);
+***************
+*** 177,185 ****
+--- 192,202 ----
+  		else {
+  			indexType = null;
+  			indexColumnNames = null;
++ 			indexColumnTypes = null;
+  			indexColumnAliases = null;
+  			unquotedIndexColumnNames = null;
+  			rowSelectColumnNames = elementColumnNames;
++ 			rowSelectColumnTypes = elementColumnTypes;
+  			rowSelectType = elementType;
+  		}
+  		
+***************
+*** 389,396 ****
+  			.setTableName(qualifiedTableName)
+  			.addColumns(elementColumnNames);
+  		if (hasIndex) select.addColumns(indexColumnNames);
+! 		select.addCondition( keyColumnNames, "=?" );
+! 		if (hasWhere) select.addWhereToken( " and " + sqlWhereString );
+  		if (hasOrder) select.setOrderBy(sqlOrderByString);
+  		return select.toStatementString();
+  	}*/
+--- 406,413 ----
+  			.setTableName(qualifiedTableName)
+  			.addColumns(elementColumnNames);
+  		if (hasIndex) select.addColumns(indexColumnNames);
+! 		// use type placeholders when constructing sql
+! 		select.addCondition( keyColumnNames, "=", TypeHelper.getPlaceHolders(keyColumnTypes) );
+  		if (hasOrder) select.setOrderBy(sqlOrderByString);
+  		return select.toStatementString();
+  	}*/
+***************
+*** 402,414 ****
+  				.addColumns(keyColumnNames, "null")
+  				.setPrimaryKeyColumnNames(keyColumnNames);
+  			if (hasIndex) update.addColumns(indexColumnNames, "null");
+  			if (hasWhere) update.setWhere(sqlWhereString);
+  			return update.toStatementString();
+  		}
+  		else {
+  			Delete delete = new Delete()
+  				.setTableName(qualifiedTableName)
+! 				.setPrimaryKeyColumnNames(keyColumnNames);
+  			if (hasWhere) delete.setWhere(sqlWhereString);
+  			return delete.toStatementString();
+  		}
+--- 419,436 ----
+  				.addColumns(keyColumnNames, "null")
+  				.setPrimaryKeyColumnNames(keyColumnNames);
+  			if (hasIndex) update.addColumns(indexColumnNames, "null");
++ 			// use type placeholders when constructing sql
++ 			update.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(keyColumnTypes))
++ 				.toStatementString();
+  			if (hasWhere) update.setWhere(sqlWhereString);
+  			return update.toStatementString();
+  		}
+  		else {
++ 			// use type placeholders when constructing sql
+  			Delete delete = new Delete()
+  				.setTableName(qualifiedTableName)
+! 				.setPrimaryKeyColumnNames(keyColumnNames)
+! 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(keyColumnTypes));
+  			if (hasWhere) delete.setWhere(sqlWhereString);
+  			return delete.toStatementString();
+  		}
+***************
+*** 418,434 ****
+  		if (isOneToMany) {
+  			Update update = new Update()
+  				.setTableName(qualifiedTableName)
+! 				.addColumns(keyColumnNames);
+! 			if (hasIndex) update.addColumns(indexColumnNames);
+  			return update.setPrimaryKeyColumnNames(elementColumnNames)
+  				.toStatementString();
+  		}
+  		else {
+  			Insert insert = new Insert(null)
+  				.setTableName(qualifiedTableName)
+! 				.addColumns(keyColumnNames);
+! 			if (hasIndex) insert.addColumns(indexColumnNames);
+! 			return insert.addColumns(elementColumnNames)
+  				.toStatementString();
+  		}
+  	}
+--- 440,458 ----
+  		if (isOneToMany) {
+  			Update update = new Update()
+  				.setTableName(qualifiedTableName)
+! 				// use type placeholders when constructing sql
+! 				.addColumns(keyColumnNames, TypeHelper.getPlaceHolders(keyColumnTypes));
+! 			if (hasIndex) update.addColumns(indexColumnNames, TypeHelper.getPlaceHolders(indexColumnTypes));
+  			return update.setPrimaryKeyColumnNames(elementColumnNames)
++ 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(elementColumnTypes))
+  				.toStatementString();
+  		}
+  		else {
+  			Insert insert = new Insert(null)
+  				.setTableName(qualifiedTableName)
+! 				.addColumns(keyColumnNames, TypeHelper.getPlaceHolders(keyColumnTypes));
+! 			if (hasIndex) insert.addColumns(indexColumnNames, TypeHelper.getPlaceHolders(indexColumnTypes));
+! 			return insert.addColumns(elementColumnNames, TypeHelper.getPlaceHolders(elementColumnTypes))
+  				.toStatementString();
+  		}
+  	}
+***************
+*** 438,465 ****
+  			return null;
+  		}
+  		else {
+  			return new Update()
+  				.setTableName(qualifiedTableName)
+! 				.addColumns(elementColumnNames)
+  				.setPrimaryKeyColumnNames( ArrayHelper.join(keyColumnNames, rowSelectColumnNames) )
+  				.toStatementString();
+  		}
+  	}
+  	
+  	private String generateDeleteRowString() {
+  		String[] pkColumns = ArrayHelper.join(keyColumnNames, rowSelectColumnNames);
+  		if (isOneToMany) {
+  			Update update = new Update()
+  				.setTableName(qualifiedTableName)
+  				.addColumns(keyColumnNames, "null");
+  			if (hasIndex) update.addColumns(indexColumnNames, "null");
+  			return update.setPrimaryKeyColumnNames(pkColumns)
+  				.toStatementString();
+  		}
+  		else {
+  			return new Delete()
+  				.setTableName(qualifiedTableName)
+  				.setPrimaryKeyColumnNames(pkColumns)
+  				.toStatementString();
+  		}
+  	}
+--- 462,495 ----
+  			return null;
+  		}
+  		else {
++ 			// use type placeholders when constructing sql
+  			return new Update()
+  				.setTableName(qualifiedTableName)
+! 				.addColumns(elementColumnNames, TypeHelper.getPlaceHolders(elementColumnTypes))
+  				.setPrimaryKeyColumnNames( ArrayHelper.join(keyColumnNames, rowSelectColumnNames) )
++ 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(TypeHelper.join(keyColumnTypes, rowSelectColumnTypes)))
+  				.toStatementString();
+  		}
+  	}
+  	
+  	private String generateDeleteRowString() {
++ 		// use type placeholders when constructing sql
+  		String[] pkColumns = ArrayHelper.join(keyColumnNames, rowSelectColumnNames);
++ 		Type[] pkColumnTypes = TypeHelper.join(keyColumnTypes, rowSelectColumnTypes);
+  		if (isOneToMany) {
+  			Update update = new Update()
+  				.setTableName(qualifiedTableName)
+  				.addColumns(keyColumnNames, "null");
+  			if (hasIndex) update.addColumns(indexColumnNames, "null");
+  			return update.setPrimaryKeyColumnNames(pkColumns)
++ 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(pkColumnTypes) )
+  				.toStatementString();
+  		}
+  		else {
+  			return new Delete()
+  				.setTableName(qualifiedTableName)
+  				.setPrimaryKeyColumnNames(pkColumns)
++ 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(pkColumnTypes) )
+  				.toStatementString();
+  		}
+  	}
+***************
+*** 475,480 ****
+--- 505,514 ----
+  	
+  	public String[] getKeyColumnNames() {
+  		return keyColumnNames;
++ 	}
++ 	
++ 	public Type[] getKeyColumnTypes() {
++ 		return keyColumnTypes;
+  	}
+  	
+  	public boolean isOneToMany() {
+Index: hibernate-2.0/src/net/sf/hibernate/loader/CollectionLoader.java
+diff -c hibernate-2.0/src/net/sf/hibernate/loader/CollectionLoader.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/loader/CollectionLoader.java:1.4
+*** hibernate-2.0/src/net/sf/hibernate/loader/CollectionLoader.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/loader/CollectionLoader.java	Fri May  2 12:14:24 2003
+***************
+*** 1,4 ****
+! //$Id: CollectionLoader.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: CollectionLoader.java,v 1.4 2003/05/02 17:14:24 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+***************
+*** 17,22 ****
+--- 17,23 ----
+  import net.sf.hibernate.sql.Select;
+  import net.sf.hibernate.type.Type;
+  import net.sf.hibernate.util.StringHelper;
++ import net.sf.hibernate.util.TypeHelper;
+  
+  /**
+   * Loads a collection of values or a many-to-many association
+***************
+*** 52,58 ****
+  			.setFromClause( persister.getQualifiedTableName(), alias )
+  			.setWhereClause(
+  				new ConditionFragment().setTableAlias(alias)
+! 					.setCondition( persister.getKeyColumnNames(), "?" )
+  					.toFragmentString() +
+  				whereString
+  			)
+--- 53,60 ----
+  			.setFromClause( persister.getQualifiedTableName(), alias )
+  			.setWhereClause(
+  				new ConditionFragment().setTableAlias(alias)
+! 					// use type placeholders when constructing sql
+! 					.setCondition( persister.getKeyColumnNames(), TypeHelper.getPlaceHolders(persister.getKeyColumnTypes()) )
+  					.toFragmentString() +
+  				whereString
+  			)
+Index: hibernate-2.0/src/net/sf/hibernate/loader/EntityLoader.java
+diff -c hibernate-2.0/src/net/sf/hibernate/loader/EntityLoader.java:1.1.1.1 hibernate-2.0/src/net/sf/hibernate/loader/EntityLoader.java:1.4
+*** hibernate-2.0/src/net/sf/hibernate/loader/EntityLoader.java:1.1.1.1	Tue Apr 22 11:17:22 2003
+--- hibernate-2.0/src/net/sf/hibernate/loader/EntityLoader.java	Fri May  2 13:11:24 2003
+***************
+*** 1,4 ****
+! //$Id: EntityLoader.java,v 1.1.1.1 2003/04/22 16:17:22 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: EntityLoader.java,v 1.4 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+***************
+*** 7,12 ****
+--- 7,13 ----
+  
+  import net.sf.hibernate.HibernateException;
+  import net.sf.hibernate.MappingException;
++ import net.sf.hibernate.util.TypeHelper;
+  import net.sf.hibernate.engine.SessionFactoryImplementor;
+  import net.sf.hibernate.engine.SessionImplementor;
+  import net.sf.hibernate.persister.Loadable;
+***************
+*** 25,33 ****
+  		
+  		idType = new Type[] { persister.getIdentifierType() };
+  		
+  		String condition = new ConditionFragment()
+  			.setTableAlias(alias)
+! 			.setCondition( persister.getIdentifierColumnNames(), "?" )
+  			.toFragmentString();
+  		
+  		renderStatement(condition, factory);
+--- 26,35 ----
+  		
+  		idType = new Type[] { persister.getIdentifierType() };
+  		
++ 		// use type placeholders when constructing sql
+  		String condition = new ConditionFragment()
+  			.setTableAlias(alias)
+! 			.setCondition( persister.getIdentifierColumnNames(), TypeHelper.getPlaceHolders(persister.getIdentifierColumnTypes()) )
+  			.toFragmentString();
+  		
+  		renderStatement(condition, factory);
+Index: hibernate-2.0/src/net/sf/hibernate/loader/OneToManyLoader.java
+diff -c hibernate-2.0/src/net/sf/hibernate/loader/OneToManyLoader.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/loader/OneToManyLoader.java:1.4
+*** hibernate-2.0/src/net/sf/hibernate/loader/OneToManyLoader.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/loader/OneToManyLoader.java	Fri May  2 12:14:24 2003
+***************
+*** 1,4 ****
+! //$Id: OneToManyLoader.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: OneToManyLoader.java,v 1.4 2003/05/02 17:14:24 paulsenj Exp $
+  package net.sf.hibernate.loader;
+  
+  import java.io.Serializable;
+***************
+*** 18,23 ****
+--- 18,24 ----
+  import net.sf.hibernate.type.EntityType;
+  import net.sf.hibernate.type.Type;
+  import net.sf.hibernate.util.StringHelper;
++ import net.sf.hibernate.util.TypeHelper;
+  
+  /**
+   * Loads one-to-many associations
+***************
+*** 65,71 ****
+  			)
+  			.setWhereClause( 
+  				new ConditionFragment().setTableAlias(collAlias)
+! 					.setCondition( collPersister.getKeyColumnNames(), "?" )
+  					.toFragmentString()
+  				+ whereString
+  			)
+--- 66,73 ----
+  			)
+  			.setWhereClause( 
+  				new ConditionFragment().setTableAlias(collAlias)
+! 					// use type placeholders when constructing sql
+! 					.setCondition( collPersister.getKeyColumnNames(), TypeHelper.getPlaceHolders(collPersister.getKeyColumnTypes()) )
+  					.toFragmentString()
+  				+ whereString
+  			)
+Index: hibernate-2.0/src/net/sf/hibernate/persister/AbstractEntityPersister.java
+diff -c hibernate-2.0/src/net/sf/hibernate/persister/AbstractEntityPersister.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/persister/AbstractEntityPersister.java:1.5
+*** hibernate-2.0/src/net/sf/hibernate/persister/AbstractEntityPersister.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/persister/AbstractEntityPersister.java	Fri May  2 13:11:24 2003
+***************
+*** 1,4 ****
+! //$Id: AbstractEntityPersister.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: AbstractEntityPersister.java,v 1.5 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import java.io.Serializable;
+***************
+*** 87,92 ****
+--- 87,93 ----
+  	private transient final boolean hasEmbeddedIdentifier;
+  	
+  	private transient final String[] identifierColumnNames;
++ 	private transient final Type[] identifierColumnTypes;
+  	private transient final Cascades.IdentifierValue unsavedIdentifierValue;
+  	
+  	protected transient final HashMap columnNamesByPropertyPath = new HashMap();
+***************
+*** 295,300 ****
+--- 296,305 ----
+  		return identifierColumnNames;
+  	}
+  	
++ 	public Type[] getIdentifierColumnTypes() {
++ 		return identifierColumnTypes;
++ 	}
++ 	
+  	public boolean isPolymorphic() {
+  		return polymorphic;
+  	}
+***************
+*** 475,486 ****
+--- 480,494 ----
+  		
+  		int idColumnSpan = model.getIdentifier().getColumnSpan();
+  		identifierColumnNames = new String[idColumnSpan];
++ 		// construct array of column types
++ 		identifierColumnTypes = new Type[idColumnSpan];
+  		
+  		iter = idValue.getColumnIterator();
+  		int i=0;
+  		while ( iter.hasNext() ) {
+  			Column col = (Column) iter.next();
+  			identifierColumnNames[i] = col.getName();
++ 			identifierColumnTypes[i] = col.getType();
+  			i++;
+  		}
+  				
+Index: hibernate-2.0/src/net/sf/hibernate/persister/EntityPersister.java
+diff -c hibernate-2.0/src/net/sf/hibernate/persister/EntityPersister.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/persister/EntityPersister.java:1.5
+*** hibernate-2.0/src/net/sf/hibernate/persister/EntityPersister.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/persister/EntityPersister.java	Fri May  2 13:11:24 2003
+***************
+*** 1,8 ****
+! //$Id: EntityPersister.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.util.JDBCExceptionReporter;
+  import net.sf.hibernate.util.StringHelper;
+  import net.sf.hibernate.loader.EntityLoader;
+  import net.sf.hibernate.loader.SimpleEntityLoader;
+  import net.sf.hibernate.loader.UniqueEntityLoader;
+--- 1,9 ----
+! //$Id: EntityPersister.java,v 1.5 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.util.JDBCExceptionReporter;
+  import net.sf.hibernate.util.StringHelper;
++ import net.sf.hibernate.util.TypeHelper;
+  import net.sf.hibernate.loader.EntityLoader;
+  import net.sf.hibernate.loader.SimpleEntityLoader;
+  import net.sf.hibernate.loader.UniqueEntityLoader;
+***************
+*** 74,79 ****
+--- 75,81 ----
+  	private final int[] propertyColumnSpans;
+  	private final boolean[] propertyDefinedOnSubclass;
+  	private final String[][] propertyColumnNames;
++ 	private final Type[][] propertyColumnTypes;
+  	private final String[][] propertyColumnAliases;
+  	
+  	// the closure of all columns used by the entire hierarchy including
+***************
+*** 265,273 ****
+--- 267,277 ----
+  	 * Generate the SQL that deletes a row by id (and version)
+  	 */
+  	protected String generateDeleteString() {
++ 		// use type placeholders when constructing sql
+  		return new Delete()
+  			.setTableName( getTableName() )
+  			.setPrimaryKeyColumnNames( getIdentifierColumnNames() )
++ 			.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) )
+  			.setVersionColumnName( getVersionColumnName() )
+  			.toStatementString();
+  	}
+***************
+*** 276,289 ****
+  	 * Generate the SQL that inserts a row
+  	 */
+  	protected String generateInsertString(boolean identityInsert, boolean[] includeProperty) {
+  		Insert insert = new Insert(dialect)
+  			.setTableName( getTableName() );
+  		for (int i=0; i<hydrateSpan; i++) {
+! 			if ( includeProperty[i] ) insert.addColumns( propertyColumnNames[i] );
+  		}
+  		if ( isPolymorphic() ) insert.addColumn( getDiscriminatorColumnName(), discriminatorSQLString );
+  		if (!identityInsert) {
+! 			insert.addColumns( getIdentifierColumnNames() );
+  		}
+  		else {
+  			insert.addIdentityColumn( getIdentifierColumnNames()[0] );
+--- 280,295 ----
+  	 * Generate the SQL that inserts a row
+  	 */
+  	protected String generateInsertString(boolean identityInsert, boolean[] includeProperty) {
++ 		// use type placeholders when constructing sql
+  		Insert insert = new Insert(dialect)
+  			.setTableName( getTableName() );
+  		for (int i=0; i<hydrateSpan; i++) {
+! 			if ( includeProperty[i] )
+! 				insert.addColumns(propertyColumnNames[i], TypeHelper.getPlaceHolders(propertyColumnTypes[i]) );
+  		}
+  		if ( isPolymorphic() ) insert.addColumn( getDiscriminatorColumnName(), discriminatorSQLString );
+  		if (!identityInsert) {
+! 			insert.addColumns( getIdentifierColumnNames(), TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) );
+  		}
+  		else {
+  			insert.addIdentityColumn( getIdentifierColumnNames()[0] );
+***************
+*** 309,333 ****
+  	 * Generate the SQL that selects a row by id
+  	 */
+  	protected String generateSelectString() {
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumns( getIdentifierColumnNames() )
+  			.addColumns( subclassColumnClosure, subclassColumnAliasClosure );
+  		if ( hasSubclasses() ) select.addColumn( getDiscriminatorColumnName() );
+! 		return select.addCondition( getIdentifierColumnNames(), "=?" ).toStatementString();
+  	}
+  	
+  	/**
+  	 * Generate the SQL that updates a row by id (and version)
+  	 */
+  	protected String generateUpdateString(boolean[] includeProperty) {
+  		Update update = new Update()
+  			.setTableName( getTableName() )
+  			//.addColumns( getColumnNames() )
+  			.setPrimaryKeyColumnNames( getIdentifierColumnNames() )
+  			.setVersionColumnName( getVersionColumnName() );
+  		for ( int i=0; i<hydrateSpan; i++ ) {
+! 			if ( includeProperty[i] ) update.addColumns( propertyColumnNames[i] );
+  		}
+  		return update.toStatementString();
+  	}
+--- 315,342 ----
+  	 * Generate the SQL that selects a row by id
+  	 */
+  	protected String generateSelectString() {
++ 		// use type placeholders when constructing sql
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumns( getIdentifierColumnNames() )
+  			.addColumns( subclassColumnClosure, subclassColumnAliasClosure );
+  		if ( hasSubclasses() ) select.addColumn( getDiscriminatorColumnName() );
+! 		return select.addCondition( getIdentifierColumnNames(), "=", TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) ).toStatementString();
+  	}
+  	
+  	/**
+  	 * Generate the SQL that updates a row by id (and version)
+  	 */
+  	protected String generateUpdateString(boolean[] includeProperty) {
++ 		// use type placeholders when contructing sql
+  		Update update = new Update()
+  			.setTableName( getTableName() )
+  			//.addColumns( getColumnNames() )
+  			.setPrimaryKeyColumnNames( getIdentifierColumnNames() )
++ 			.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) )
+  			.setVersionColumnName( getVersionColumnName() );
+  		for ( int i=0; i<hydrateSpan; i++ ) {
+! 			if ( includeProperty[i] ) update.addColumns( propertyColumnNames[i], TypeHelper.getPlaceHolders(propertyColumnTypes[i]) );
+  		}
+  		return update.toStatementString();
+  	}
+***************
+*** 336,345 ****
+  	 * Generate the SQL that pessimistic locks a row by id (and version)
+  	 */
+  	protected String generateLockString() {
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumn( getIdentifierColumnNames()[0] )
+! 			.addCondition( getIdentifierColumnNames(), "=?" );
+  		if ( isVersioned() ) {
+  			select.addWhereToken("and")
+  				.addCondition( getVersionColumnName(), "=?" );
+--- 345,355 ----
+  	 * Generate the SQL that pessimistic locks a row by id (and version)
+  	 */
+  	protected String generateLockString() {
++ 		// use type placeholders when constructing sql
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumn( getIdentifierColumnNames()[0] )
+! 			.addCondition( getIdentifierColumnNames(), "=", TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) );
+  		if ( isVersioned() ) {
+  			select.addWhereToken("and")
+  				.addCondition( getVersionColumnName(), "=?" );
+***************
+*** 667,672 ****
+--- 677,683 ----
+  		// PROPERTIES
+  		
+  		propertyColumnNames = new String[hydrateSpan][];
++ 		propertyColumnTypes = new Type[hydrateSpan][];
+  		propertyColumnAliases = new String[hydrateSpan][];
+  		propertyColumnSpans = new int[hydrateSpan];
+  		HashSet thisClassProperties = new HashSet();
+***************
+*** 682,687 ****
+--- 693,699 ----
+  			thisClassProperties.add(prop);
+  			
+  			String[] colNames = new String[span];
++ 			Type[]   colTypes = new Type[span];
+  			String[] colAliases = new String[span];
+  			Iterator colIter = prop.getColumnIterator();
+  			int j=0;
+***************
+*** 689,698 ****
+--- 701,712 ----
+  				Column col = (Column) colIter.next();
+  				colAliases[j] = col.getAlias();
+  				colNames[j] = col.getName();
++ 				colTypes[j] = col.getType();
+  				j++;
+  				if ( prop.isUpdateable() ) foundColumn=true;
+  			}
+  			propertyColumnNames[i] = colNames;
++ 			propertyColumnTypes[i] = colTypes;
+  			propertyColumnAliases[i] = colAliases;
+  			
+  			//initPropertyPaths(prop, StringHelper.EMPTY_STRING, factory);
+Index: hibernate-2.0/src/net/sf/hibernate/persister/Loadable.java
+diff -c hibernate-2.0/src/net/sf/hibernate/persister/Loadable.java:1.1.1.1 hibernate-2.0/src/net/sf/hibernate/persister/Loadable.java:1.4
+*** hibernate-2.0/src/net/sf/hibernate/persister/Loadable.java:1.1.1.1	Tue Apr 22 11:17:23 2003
+--- hibernate-2.0/src/net/sf/hibernate/persister/Loadable.java	Fri May  2 13:11:24 2003
+***************
+*** 1,4 ****
+! //$Id: Loadable.java,v 1.1.1.1 2003/04/22 16:17:23 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.type.DiscriminatorType;
+--- 1,4 ----
+! //$Id: Loadable.java,v 1.4 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.type.DiscriminatorType;
+***************
+*** 17,22 ****
+--- 17,27 ----
+  	 * Get the names of columns used to persist the identifier
+  	 */
+  	public String[] getIdentifierColumnNames();
++ 	
++ 	/**
++ 	 * Get the types of columns used to persist the identifier
++ 	 */
++ 	public Type[] getIdentifierColumnTypes();
+  	
+  	/**
+  	 * Does this persistent class have subclasses?
+Index: hibernate-2.0/src/net/sf/hibernate/persister/NormalizedEntityPersister.java
+diff -c hibernate-2.0/src/net/sf/hibernate/persister/NormalizedEntityPersister.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/persister/NormalizedEntityPersister.java:1.5
+*** hibernate-2.0/src/net/sf/hibernate/persister/NormalizedEntityPersister.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/persister/NormalizedEntityPersister.java	Fri May  2 13:11:24 2003
+***************
+*** 1,9 ****
+! //$Id: NormalizedEntityPersister.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.util.ArrayHelper;
+  import net.sf.hibernate.util.JDBCExceptionReporter;
+  import net.sf.hibernate.util.StringHelper;
+  import net.sf.hibernate.loader.EntityLoader;
+  import net.sf.hibernate.loader.UniqueEntityLoader;
+  import net.sf.hibernate.mapping.Column;
+--- 1,10 ----
+! //$Id: NormalizedEntityPersister.java,v 1.5 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.persister;
+  
+  import net.sf.hibernate.util.ArrayHelper;
+  import net.sf.hibernate.util.JDBCExceptionReporter;
+  import net.sf.hibernate.util.StringHelper;
++ import net.sf.hibernate.util.TypeHelper;
+  import net.sf.hibernate.loader.EntityLoader;
+  import net.sf.hibernate.loader.UniqueEntityLoader;
+  import net.sf.hibernate.mapping.Column;
+***************
+*** 63,68 ****
+--- 64,70 ----
+  	private final String qualifiedTableName;
+  	private final String[] tableNames;
+  	private final String[][] tableKeyColumns;
++ 	private final Type[][] tableKeyColumnTypes;
+  	
+  	private final Class[] subclassClosure;
+  	private final String[] subclassTableNameClosure;
+***************
+*** 80,85 ****
+--- 82,88 ----
+  	private final int[] propertyTables;
+  	private final boolean[] propertyHasColumns;
+  	private final String[][] propertyColumnNames;
++ 	private final Type[][] propertyColumnTypes;
+  	private final String[][] propertyColumnNameAliases;
+  	
+  	// the closure of all properties in the entire hierarchy including
+***************
+*** 260,270 ****
+  	 * Generate the SQL that deletes rows by id (and version)
+  	 */
+  	protected String[] generateDeleteStrings() {
+  		String[] result = new String[ tableNames.length ];
+  		for ( int i=0; i<tableNames.length; i++ ) {
+  			Delete delete = new Delete()
+  				.setTableName( tableNames[i] )
+! 				.setPrimaryKeyColumnNames( tableKeyColumns[i] );
+  			if (i==0) delete.setVersionColumnName( getVersionColumnName() );
+  			result[i] = delete.toStatementString();
+  		}
+--- 263,275 ----
+  	 * Generate the SQL that deletes rows by id (and version)
+  	 */
+  	protected String[] generateDeleteStrings() {
++ 		// use type placeholders to construct sql
+  		String[] result = new String[ tableNames.length ];
+  		for ( int i=0; i<tableNames.length; i++ ) {
+  			Delete delete = new Delete()
+  				.setTableName( tableNames[i] )
+! 				.setPrimaryKeyColumnNames( tableKeyColumns[i] )
+! 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(tableKeyColumnTypes[i]) );
+  			if (i==0) delete.setVersionColumnName( getVersionColumnName() );
+  			result[i] = delete.toStatementString();
+  		}
+***************
+*** 276,281 ****
+--- 281,287 ----
+  	 */
+  	protected String[] generateInsertStrings(boolean identityInsert, boolean[] includeProperty) {
+  		
++ 		// use type placeholders to construct sql
+  		String[] result = new String[tableNames.length];
+  		for ( int j=0; j<tableNames.length; j++ ) {
+  			
+***************
+*** 284,290 ****
+  				
+  			for (int i=0; i<getPropertyTypes().length; i++) {
+  				if ( includeProperty[i] && propertyTables[i]==j ) {
+! 					insert.addColumns( propertyColumnNames[i] );
+  				}
+  			}
+  			
+--- 290,296 ----
+  				
+  			for (int i=0; i<getPropertyTypes().length; i++) {
+  				if ( includeProperty[i] && propertyTables[i]==j ) {
+! 					insert.addColumns( propertyColumnNames[i], TypeHelper.getPlaceHolders(propertyColumnTypes[i]) );
+  				}
+  			}
+  			
+***************
+*** 292,298 ****
+  				insert.addIdentityColumn( tableKeyColumns[j][0] );
+  			}
+  			else {
+! 				insert.addColumns( tableKeyColumns[j] );
+  			}
+  			
+  			result[j] = insert.toStatementString();
+--- 298,304 ----
+  				insert.addIdentityColumn( tableKeyColumns[j][0] );
+  			}
+  			else {
+! 				insert.addColumns( tableKeyColumns[j], TypeHelper.getPlaceHolders(tableKeyColumnTypes[j]) );
+  			}
+  			
+  			result[j] = insert.toStatementString();
+***************
+*** 305,322 ****
+  	 * Generate the SQL that updates rows by id (and version)
+  	 */
+  	protected String[] generateUpdateStrings(boolean[] includeProperty) {
+  		String[] result = new String[ tableNames.length ];
+  		for ( int j=0; j<tableNames.length; j++ ) {
+  			Update update = new Update()
+  				.setTableName( tableNames[j] )
+! 				.setPrimaryKeyColumnNames( tableKeyColumns[j] );
+! 				
+  			if (j==0) update.setVersionColumnName( getVersionColumnName() );
+  			
+  			boolean hasColumns = false;
+  			for (int i=0; i<propertyColumnNames.length; i++) {
+  				if ( includeProperty[i] && propertyTables[i]==j ) {
+! 					update.addColumns( propertyColumnNames[i] );
+  					hasColumns = hasColumns || propertyColumnNames[i].length > 0;
+  				}
+  			}
+--- 311,330 ----
+  	 * Generate the SQL that updates rows by id (and version)
+  	 */
+  	protected String[] generateUpdateStrings(boolean[] includeProperty) {
++ 		// use type placeholders when constructing sql
+  		String[] result = new String[ tableNames.length ];
+  		for ( int j=0; j<tableNames.length; j++ ) {
+  			Update update = new Update()
+  				.setTableName( tableNames[j] )
+! 				.setPrimaryKeyColumnNames( tableKeyColumns[j] )
+! 				.setPrimaryKeyColumnPlaceHolders( TypeHelper.getPlaceHolders(tableKeyColumnTypes[j]));
+! 			
+  			if (j==0) update.setVersionColumnName( getVersionColumnName() );
+  			
+  			boolean hasColumns = false;
+  			for (int i=0; i<propertyColumnNames.length; i++) {
+  				if ( includeProperty[i] && propertyTables[i]==j ) {
+! 					update.addColumns( propertyColumnNames[i], TypeHelper.getPlaceHolders(propertyColumnTypes[i]) );
+  					hasColumns = hasColumns || propertyColumnNames[i].length > 0;
+  				}
+  			}
+***************
+*** 330,339 ****
+  	 * Generate the SQL that pessimistic locks a row by id (and version)
+  	 */
+  	protected String generateLockString() {
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumn( getIdentifierColumnNames()[0] )
+! 			.addCondition( getIdentifierColumnNames(), "=?" );
+  		if ( isVersioned() ) {
+  			select.addWhereToken("and")
+  				.addCondition( getVersionColumnName(), "=?" );
+--- 338,348 ----
+  	 * Generate the SQL that pessimistic locks a row by id (and version)
+  	 */
+  	protected String generateLockString() {
++ 		// use type placeholders when constructing sql
+  		SimpleSelect select = new SimpleSelect()
+  			.setTableName( getTableName() )
+  			.addColumn( getIdentifierColumnNames()[0] )
+! 			.addCondition( getIdentifierColumnNames(), "=", TypeHelper.getPlaceHolders(getIdentifierColumnTypes()) );
+  		if ( isVersioned() ) {
+  			select.addWhereToken("and")
+  				.addCondition( getVersionColumnName(), "=?" );
+***************
+*** 696,703 ****
+--- 705,714 ----
+  		
+  		ArrayList tables = new ArrayList();
+  		ArrayList keyColumns = new ArrayList();
++ 		ArrayList keyColumnTypes = new ArrayList();
+  		tables.add(qualifiedTableName);
+  		keyColumns.add( getIdentifierColumnNames() );
++ 		keyColumnTypes.add(getIdentifierColumnTypes());
+  		
+  		int idColumnSpan = getIdentifierType().getColumnSpan(factory);
+  		Iterator titer = model.getTableClosureIterator();
+***************
+*** 707,719 ****
+  			if ( !tabname.equals(qualifiedTableName) ) {
+  				tables.add(tabname);
+  				String[] key = new String[idColumnSpan];
+  				Iterator kiter = tab.getPrimaryKey().getColumnIterator();
+! 				for ( int k=0; k<idColumnSpan; k++ ) key[k] = ( (Column) kiter.next() ).getName();
+  				keyColumns.add(key);
+  			}
+  		}
+  		tableNames = (String[]) tables.toArray( new String[0] );
+  		tableKeyColumns = (String[][]) keyColumns.toArray( new String[0][] );
+  		
+  		ArrayList subtables = new ArrayList();
+  		keyColumns = new ArrayList();
+--- 718,737 ----
+  			if ( !tabname.equals(qualifiedTableName) ) {
+  				tables.add(tabname);
+  				String[] key = new String[idColumnSpan];
++ 				Type[] keyType = new Type[idColumnSpan];
+  				Iterator kiter = tab.getPrimaryKey().getColumnIterator();
+! 				for ( int k=0; k<idColumnSpan; k++ ) {
+! 					Column col = (Column) kiter.next();
+! 					key[k] = col.getName();
+! 					keyType[k] = col.getType();
+! 				}
+  				keyColumns.add(key);
++ 				keyColumnTypes.add(keyType);
+  			}
+  		}
+  		tableNames = (String[]) tables.toArray( new String[0] );
+  		tableKeyColumns = (String[][]) keyColumns.toArray( new String[0][] );
++ 		tableKeyColumnTypes = (Type[][]) keyColumnTypes.toArray( new Type[0][] );
+  		
+  		ArrayList subtables = new ArrayList();
+  		keyColumns = new ArrayList();
+***************
+*** 742,747 ****
+--- 760,766 ----
+  		
+  		propertyTables = new int[hydrateSpan];
+  		propertyColumnNames = new String[hydrateSpan][];
++ 		propertyColumnTypes = new Type[hydrateSpan][];
+  		propertyColumnNameAliases = new String[hydrateSpan][];
+  		propertyColumnSpans = new int[hydrateSpan];
+  		
+***************
+*** 759,764 ****
+--- 778,784 ----
+  			propertyColumnSpans[i] = prop.getColumnSpan();
+  			
+  			String[] propCols = new String[ propertyColumnSpans[i] ];
++ 			Type[]   propTypes = new Type[propertyColumnSpans[i]];
+  			String[] propAliases = new String[ propertyColumnSpans[i] ];
+  			Iterator colIter = prop.getColumnIterator();
+  			int j=0;
+***************
+*** 766,775 ****
+--- 786,797 ----
+  				Column col = (Column) colIter.next();
+  				String colname = col.getName();
+  				propCols[j] = colname;
++ 				propTypes[j] = col.getType();
+  				propAliases[j] = col.getAlias() + tab.getUniqueInteger() + StringHelper.UNDERSCORE;
+  				j++;
+  			}
+  			propertyColumnNames[i] = propCols;
++ 			propertyColumnTypes[i] = propTypes;
+  			propertyColumnNameAliases[i] = propAliases;
+  			
+  			i++;
+Index: hibernate-2.0/src/net/sf/hibernate/sql/Delete.java
+diff -c hibernate-2.0/src/net/sf/hibernate/sql/Delete.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/sql/Delete.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/sql/Delete.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/sql/Delete.java	Fri May  2 13:11:24 2003
+***************
+*** 1,8 ****
+! //$Id: Delete.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+- import net.sf.hibernate.util.StringHelper;
+- 
+  /**
+   * An SQL <tt>INSERT</tt> statement
+   */
+--- 1,6 ----
+! //$Id: Delete.java,v 1.6 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+  /**
+   * An SQL <tt>INSERT</tt> statement
+   */
+***************
+*** 10,15 ****
+--- 8,14 ----
+  	
+  	private String tableName;
+  	private String[] primaryKeyColumnNames;
++ 	private String[] primaryKeyColumnPlaceHolders;
+  	private String versionColumnName;
+  	private String where;
+  	
+***************
+*** 19,30 ****
+  	}
+  	
+  	public String toStatementString() {
+  		StringBuffer buf = new StringBuffer( tableName.length() + 10 );
+  		buf.append("delete from ")
+  			.append(tableName)
+! 			.append(" where ")
+! 			.append( StringHelper.join("=? and ", primaryKeyColumnNames) )
+! 			.append("=?");
+  		if (where!=null) {
+  			buf.append(" and ")
+  				.append(where);
+--- 18,35 ----
+  	}
+  	
+  	public String toStatementString() {
++ 		// use type placeholders when constructing sql
+  		StringBuffer buf = new StringBuffer( tableName.length() + 10 );
+  		buf.append("delete from ")
+  			.append(tableName)
+! 			.append(" where ");
+! 		for (int i = 0; i < primaryKeyColumnPlaceHolders.length; i++) {
+! 			buf.append(primaryKeyColumnNames[i])
+! 			.append("=")
+! 			.append(primaryKeyColumnPlaceHolders[i]);
+! 			if (i < primaryKeyColumnNames.length - 1)
+! 				buf.append(" and ");
+! 		}
+  		if (where!=null) {
+  			buf.append(" and ")
+  				.append(where);
+***************
+*** 47,52 ****
+--- 52,62 ----
+  		return this;
+  	}
+  
++ 	public Delete setPrimaryKeyColumnPlaceHolders(String[] primaryKeyColumnPlaceHolders) {
++ 		this.primaryKeyColumnPlaceHolders = primaryKeyColumnPlaceHolders;
++ 		return this;
++ 	}
++ 	
+  	public Delete setVersionColumnName(String versionColumnName) {
+  		this.versionColumnName = versionColumnName;
+  		return this;
+Index: hibernate-2.0/src/net/sf/hibernate/sql/Insert.java
+diff -c hibernate-2.0/src/net/sf/hibernate/sql/Insert.java:1.1.1.1 hibernate-2.0/src/net/sf/hibernate/sql/Insert.java:1.4
+*** hibernate-2.0/src/net/sf/hibernate/sql/Insert.java:1.1.1.1	Tue Apr 22 11:17:23 2003
+--- hibernate-2.0/src/net/sf/hibernate/sql/Insert.java	Fri May  2 13:11:24 2003
+***************
+*** 1,4 ****
+! //$Id: Insert.java,v 1.1.1.1 2003/04/22 16:17:23 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+  import java.util.Iterator;
+--- 1,4 ----
+! //$Id: Insert.java,v 1.4 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+  import java.util.Iterator;
+***************
+*** 24,40 ****
+  	
+  	private Map columns = new SequencedHashMap();
+  	
+! 	public Insert addColumn(String columnName) {
+! 		return addColumn(columnName, "?");
+! 	}
+! 	
+! 	public Insert addColumns(String[] columnNames) {
+  		for ( int i=0; i<columnNames.length; i++ ) {
+! 			addColumn( columnNames[i] );
+  		}
+  		return this;
+  	}
+! 
+  	public Insert addColumn(String columnName, String value) {
+  		columns.put(columnName, value);
+  		return this;
+--- 24,37 ----
+  	
+  	private Map columns = new SequencedHashMap();
+  	
+! 	// use type placeholders when constructing sql
+! 	public Insert addColumns(String[] columnNames, String[] placeHolders) {
+  		for ( int i=0; i<columnNames.length; i++ ) {
+! 			addColumn( columnNames[i], placeHolders[i] );
+  		}
+  		return this;
+  	}
+! 	
+  	public Insert addColumn(String columnName, String value) {
+  		columns.put(columnName, value);
+  		return this;
+Index: hibernate-2.0/src/net/sf/hibernate/sql/Update.java
+diff -c hibernate-2.0/src/net/sf/hibernate/sql/Update.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/sql/Update.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/sql/Update.java:1.1.1.2	Tue Apr 22 14:28:25 2003
+--- hibernate-2.0/src/net/sf/hibernate/sql/Update.java	Fri May  2 13:11:24 2003
+***************
+*** 1,4 ****
+! //$Id: Update.java,v 1.1.1.2 2003/04/22 19:28:25 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+  import java.util.Iterator;
+--- 1,4 ----
+! //$Id: Update.java,v 1.6 2003/05/02 18:11:24 paulsenj Exp $
+  package net.sf.hibernate.sql;
+  
+  import java.util.Iterator;
+***************
+*** 16,29 ****
+  	
+  	private String tableName;
+  	private String primaryKeyColumnNames[];
+  	private String versionColumnName;
+  	private String where;
+  	
+  	private Map columns = new SequencedHashMap();
+  	
+! 	public Update addColumns(String[] columnNames) {
+  		for ( int i=0; i<columnNames.length; i++ ) {
+! 			addColumn( columnNames[i] );
+  		}
+  		return this;
+  	}
+--- 16,30 ----
+  	
+  	private String tableName;
+  	private String primaryKeyColumnNames[];
++ 	private String[] primaryKeyColumnPlaceHolders;
+  	private String versionColumnName;
+  	private String where;
+  	
+  	private Map columns = new SequencedHashMap();
+  	
+! 	public Update addColumns(String[] columnNames, String[] placeHolders) {
+  		for ( int i=0; i<columnNames.length; i++ ) {
+! 			addColumn( columnNames[i], placeHolders[i] );
+  		}
+  		return this;
+  	}
+***************
+*** 35,44 ****
+  		return this;
+  	}
+  
+- 	public Update addColumn(String columnName) {
+- 		return addColumn(columnName, "?");
+- 	}
+- 
+  	public Update addColumn(String columnName, String value) {
+  		columns.put(columnName, value);
+  		return this;
+--- 36,41 ----
+***************
+*** 59,64 ****
+--- 56,62 ----
+  	}
+  	
+  	public String toStatementString() {
++ 		// use type placeholders when constructing sql
+  		StringBuffer buf = new StringBuffer( columns.size()*15 + tableName.length() + 10 );
+  		buf.append("update ")
+  			.append(tableName)
+***************
+*** 71,79 ****
+  				.append( e.getValue() );
+  			if ( iter.hasNext() ) buf.append(StringHelper.COMMA_SPACE);
+  		}
+! 		buf.append(" where ")
+! 			.append( StringHelper.join("=? and ", primaryKeyColumnNames) )
+! 			.append("=?");
+  		if (where!=null) {
+  			buf.append(" and ")
+  				.append(where);
+--- 69,82 ----
+  				.append( e.getValue() );
+  			if ( iter.hasNext() ) buf.append(StringHelper.COMMA_SPACE);
+  		}
+! 		buf.append(" where ");
+! 		for (int i = 0; i < primaryKeyColumnNames.length; i++) {
+! 			buf.append( primaryKeyColumnNames[i] )
+! 			.append("=")
+! 			.append( primaryKeyColumnPlaceHolders[i]);
+! 			if (i < primaryKeyColumnNames.length - 1)
+! 				buf.append(" and ");
+! 		}
+  		if (where!=null) {
+  			buf.append(" and ")
+  				.append(where);
+***************
+*** 88,93 ****
+--- 91,101 ----
+  
+  	public Update setPrimaryKeyColumnNames(String[] primaryKeyColumnNames) {
+  		this.primaryKeyColumnNames = primaryKeyColumnNames;
++ 		return this;
++ 	}
++ 
++ 	public Update setPrimaryKeyColumnPlaceHolders(String[] primaryKeyColumnPlaceHolders) {
++ 		this.primaryKeyColumnPlaceHolders = primaryKeyColumnPlaceHolders;
+  		return this;
+  	}
+  
+Index: hibernate-2.0/src/net/sf/hibernate/test/UDT.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/test/UDT.java:1.2
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/test/UDT.java	Fri May  2 12:14:24 2003
+***************
+*** 0 ****
+--- 1,28 ----
++ package net.sf.hibernate.test;
++ 
++ import java.io.Serializable;
++ 
++ /**
++  * User Defined Type for testing explict casts on placeholders in
++  * Hibernate generated SQL
++  */
++ public class UDT implements Serializable {
++ 	private String v;
++ 
++ 	public UDT(String v) {
++ 		this.v = v;
++ 	}
++ 
++ 	public String toString() {
++ 		return v;
++ 	}
++ 
++ 	public int hashCode() {
++ 		return v.hashCode();
++ 	}
++ 
++ 	public boolean equals(Object obj) {
++ 		return obj.toString().equals(this.toString());
++ 	}
++ }
++ 
+Index: hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.hbm.xml
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.hbm.xml:1.3
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.hbm.xml	Fri May  2 13:11:24 2003
+***************
+*** 0 ****
+--- 1,13 ----
++ <?xml version="1.0"?>
++ <!DOCTYPE hibernate-mapping PUBLIC
++ 	"-//Hibernate/Hibernate Mapping DTD//EN"
++ 	"http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd">
++ <hibernate-mapping>
++ 	<class name="net.sf.hibernate.test.UDTFoo" table="UDTFOO">
++ 		<id name="id" column="id" type="net.sf.hibernate.test.UDTType">
++ 			<generator class="assigned"/>
++ 		</id>
++ 		<version name="version" column="version" type="integer"/>
++ 		<property name="text" column="text" type="string"/>
++ 	</class>
++ </hibernate-mapping>
+\ No newline at end of file
+Index: hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.java:1.2
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/test/UDTFoo.java	Fri May  2 12:14:24 2003
+***************
+*** 0 ****
+--- 1,34 ----
++ package net.sf.hibernate.test;
++ 
++ /**
++  * For testing UDT
++  */
++ public class UDTFoo {
++ 	private UDT id;
++ 	private Integer version;
++ 	private String text;
++ 
++ 	public UDT getId() {
++ 		return id;
++ 	}
++ 
++ 	public void setId(UDT id) {
++ 		this.id = id;
++ 	}
++ 
++ 	public Integer getVersion() {
++ 		return version;
++ 	}
++ 
++ 	public void setVersion(Integer version) {
++ 		this.version = version;
++ 	}
++ 
++ 	public String getText() {
++ 		return text;
++ 	}
++ 
++ 	public void setText(String text) {
++ 		this.text = text;
++ 	}
++ }
+Index: hibernate-2.0/src/net/sf/hibernate/test/UDTTest.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/test/UDTTest.java:1.2
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/test/UDTTest.java	Fri May  2 12:14:24 2003
+***************
+*** 0 ****
+--- 1,117 ----
++ package net.sf.hibernate.test;
++ 
++ import junit.framework.Test;
++ import junit.framework.TestSuite;
++ import net.sf.hibernate.Session;
++ import net.sf.hibernate.ObjectNotFoundException;
++ import net.sf.hibernate.cfg.Configuration;
++ import net.sf.hibernate.dialect.DB2Dialect;
++ import net.sf.hibernate.dialect.Dialect;
++ 
++ import java.sql.Connection;
++ import java.sql.Statement;
++ import java.sql.SQLException;
++ 
++ /**
++  * JUnit Test Case for testing customizable placeholder interface.
++  * This test case will only run on DB2Dialect.
++  */
++ public class UDTTest extends TestCase {
++ 
++ 	public UDTTest(String arg) {
++ 		super(arg);
++ 	}
++ 
++ 	public void testUDT() throws Exception {
++ 		if (dialect instanceof DB2Dialect) {
++ 			Session s = sessions.openSession();
++ 
++ 			UDT theID = new UDT("0000000001");
++ 			UDTFoo foo = new UDTFoo();
++ 			foo.setId(theID);
++ 			foo.setText("some text");
++ 			s.save(foo);
++ 			s.flush();
++ 			s.connection().commit();
++ 			s.close();
++ 
++ 			s = sessions.openSession();
++ 			foo = (UDTFoo) s.load(UDTFoo.class, theID);
++ 			assertTrue(foo.getText().equals("some text"));
++ 			foo.setText("some new text");
++ 			s.flush();
++ 			s.connection().commit();
++ 			s.close();
++ 
++ 			s = sessions.openSession();
++ 			foo = (UDTFoo) s.load(UDTFoo.class, theID);
++ 			assertTrue(foo.getText().equals("some new text"));
++ 			s.delete(foo);
++ 			s.flush();
++ 			s.connection().commit();
++ 			s.close();
++ 
++ 			s = sessions.openSession();
++ 			foo = null;
++ 			try {
++ 				foo = (UDTFoo) s.load(UDTFoo.class, theID);
++ 			}
++ 			catch (ObjectNotFoundException ignored) {
++ 			}
++ 			assertTrue(foo == null);
++ 			s.flush();
++ 			s.connection().commit();
++ 			s.close();
++ 		}
++ 	}
++ 
++ 	public static Test suite() throws Exception {
++ 		try {
++ 
++ 			Configuration cfg = new Configuration();
++ 			cfg.addClass(net.sf.hibernate.test.UDTFoo.class);
++ 
++ 			dialect = Dialect.getDialect();
++ 
++ 			sessions = cfg.buildSessionFactory();
++ 
++ 			if (dialect instanceof DB2Dialect) {
++ 				Session s = sessions.openSession();
++ 				Connection conn = s.connection();
++ 				Statement st = conn.createStatement();
++ 				try {
++ 					st.execute("drop table UDTFOO");
++ 				}
++ 				catch (SQLException ignored) {
++ 				}
++ 				conn.commit();
++ 				try {
++ 					st.execute("drop distinct type UDT restrict");
++ 				}
++ 				catch (SQLException ignored) {
++ 				}
++ 				conn.commit();
++ 				st.execute("create distinct type UDT as CHAR(10) with comparisons");
++ 				st.execute("create table UDTFOO (id UDT not null primary key, version INTEGER, text VARCHAR(100))");
++ 				st.execute("create unique index UDTFOO_PK on UDTFOO(id)");
++ 				st.close();
++ 				conn.commit();
++ 				conn.close();
++ 
++ 			}
++ 			return new TestSuite(UDTTest.class);
++ 		}
++ 		catch (Exception e) {
++ 			e.printStackTrace();
++ 			throw e;
++ 		}
++ 	}
++ 
++ }
++ 
++ 
++ 
++ 
++ 
++ 
++ 
+Index: hibernate-2.0/src/net/sf/hibernate/test/UDTType.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/test/UDTType.java:1.2
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/test/UDTType.java	Fri May  2 12:14:24 2003
+***************
+*** 0 ****
+--- 1,64 ----
++ package net.sf.hibernate.test;
++ 
++ import net.sf.hibernate.UserType;
++ import net.sf.hibernate.HibernateException;
++ import net.sf.hibernate.Hibernate;
++ import net.sf.hibernate.type.CustomizablePlaceHolderType;
++ 
++ import java.sql.Types;
++ import java.sql.ResultSet;
++ import java.sql.SQLException;
++ import java.sql.PreparedStatement;
++ 
++ /**
++  * User Defined Type for testing explict casts on placeholders in
++  * Hibernate generated SQL
++  */
++ public class UDTType implements UserType, CustomizablePlaceHolderType {
++ 
++ 	private static final int[] TYPES = {Types.DISTINCT};
++ 
++ 	public int[] sqlTypes() {
++ 		return TYPES;
++ 	}
++ 
++ 	public Class returnedClass() {
++ 		return UDT.class;
++ 	}
++ 
++ 	public boolean equals(Object x, Object y) {
++ 		if (x == y) return true;
++ 		if (x == null || y == null) return false;
++ 		return x.toString().equals(y.toString());
++ 	}
++ 
++ 	public Object deepCopy(Object x) {
++ 		if (x == null) return null;
++ 		UDT result = new UDT(x.toString());
++ 		return result;
++ 	}
++ 
++ 	public boolean isMutable() {
++ 		return false;
++ 	}
++ 
++ 	public Object nullSafeGet(ResultSet rs, String[] names, Object owner)
++ 			throws HibernateException, SQLException {
++ 
++ 		String value = (String) Hibernate.STRING.nullSafeGet(rs, names[0]);
++ 
++ 		return (value == null) ? null : new UDT(value);
++ 	}
++ 
++ 	public void nullSafeSet(PreparedStatement st, Object value, int index)
++ 			throws HibernateException, SQLException {
++ 
++ 		UDT udt = (value == null) ? null : (UDT) value;
++ 
++ 		Hibernate.STRING.nullSafeSet(st, udt.toString(), index);
++ 	}
++ 
++ 	public String getPlaceHolder() {
++ 		return "UDT(CAST (? AS CHAR(10)))";
++ 	}
++ }
+Index: hibernate-2.0/src/net/sf/hibernate/type/AbstractType.java
+diff -c hibernate-2.0/src/net/sf/hibernate/type/AbstractType.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/type/AbstractType.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/type/AbstractType.java:1.1.1.2	Tue Apr 22 14:28:26 2003
+--- hibernate-2.0/src/net/sf/hibernate/type/AbstractType.java	Fri May  2 13:11:25 2003
+***************
+*** 1,4 ****
+! //$Id: AbstractType.java,v 1.1.1.2 2003/04/22 19:28:26 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: AbstractType.java,v 1.6 2003/05/02 18:11:25 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+***************
+*** 72,77 ****
+--- 72,84 ----
+  
+  	public boolean isObjectType() {
+  		return false;
++ 	}
++ 
++ 	/**
++ 	 * Return "?" for place holder.
++ 	 */
++ 	public String getPlaceHolder() {
++ 		return "?";
+  	}
+  
+  }
+Index: hibernate-2.0/src/net/sf/hibernate/type/CustomType.java
+diff -c hibernate-2.0/src/net/sf/hibernate/type/CustomType.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/type/CustomType.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/type/CustomType.java:1.1.1.2	Tue Apr 22 14:28:26 2003
+--- hibernate-2.0/src/net/sf/hibernate/type/CustomType.java	Fri May  2 13:11:25 2003
+***************
+*** 1,4 ****
+! //$Id: CustomType.java,v 1.1.1.2 2003/04/22 19:28:26 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: CustomType.java,v 1.6 2003/05/02 18:11:25 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+***************
+*** 154,159 ****
+--- 154,169 ----
+  		return false;
+  	}
+  	
++ 	/**
++ 	 * Return customized placeholder for sql statements.
++ 	 */
++ 	public String getPlaceHolder() {
++ 		if (userType instanceof CustomizablePlaceHolderType)
++ 			return ((CustomizablePlaceHolderType) userType).getPlaceHolder();
++ 		else
++ 		return "?";
++ 	}
++ 
+  }
+  
+  
+Index: hibernate-2.0/src/net/sf/hibernate/type/CustomizablePlaceHolderType.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/type/CustomizablePlaceHolderType.java:1.3
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/type/CustomizablePlaceHolderType.java	Fri May  2 13:11:25 2003
+***************
+*** 0 ****
+--- 1,11 ----
++ package net.sf.hibernate.type;
++ 
++ /**
++  * This interface should be implemented by user-defined "types"
++  * that need to specify a custom place holder for sql statements.
++  */
++ public interface CustomizablePlaceHolderType {
++ 	
++ 	public String getPlaceHolder();
++ 	
++ }
+Index: hibernate-2.0/src/net/sf/hibernate/type/Type.java
+diff -c hibernate-2.0/src/net/sf/hibernate/type/Type.java:1.1.1.2 hibernate-2.0/src/net/sf/hibernate/type/Type.java:1.6
+*** hibernate-2.0/src/net/sf/hibernate/type/Type.java:1.1.1.2	Tue Apr 22 14:28:26 2003
+--- hibernate-2.0/src/net/sf/hibernate/type/Type.java	Fri May  2 13:11:25 2003
+***************
+*** 1,4 ****
+! //$Id: Type.java,v 1.1.1.2 2003/04/22 19:28:26 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+--- 1,4 ----
+! //$Id: Type.java,v 1.6 2003/05/02 18:11:25 paulsenj Exp $
+  package net.sf.hibernate.type;
+  
+  import java.io.Serializable;
+***************
+*** 238,243 ****
+--- 238,245 ----
+  	 * @throws SQLException
+  	 */
+  	public Object resolveIdentifier(Object value, SessionImplementor session, Object owner) throws HibernateException;
++ 	
++ 	public String getPlaceHolder();
+  }
+  
+  
+Index: hibernate-2.0/src/net/sf/hibernate/util/TypeHelper.java
+diff -c /dev/null hibernate-2.0/src/net/sf/hibernate/util/TypeHelper.java:1.3
+*** /dev/null	Fri May  2 14:08:34 2003
+--- hibernate-2.0/src/net/sf/hibernate/util/TypeHelper.java	Fri May  2 12:14:25 2003
+***************
+*** 0 ****
+--- 1,35 ----
++ package net.sf.hibernate.util;
++ 
++ import net.sf.hibernate.type.Type;
++ 
++ /**
++  * Helper methods for hibernate type objects.
++  */
++ public class TypeHelper {
++ 	/**
++ 	 * Return array of placeholder strings for array of types.
++ 	 * @param types
++ 	 * @return String[]
++ 	 */
++ 	public static String[] getPlaceHolders(Type[] types) {
++ 		if (types == null)
++ 			return null;
++ 		String[] placeHolders = new String[types.length];
++ 		for (int i = 0; i < types.length; i++)
++ 			placeHolders[i] = types[i].getPlaceHolder();
++ 		return placeHolders;
++ 	}
++ 	
++ 	/**
++ 	 * Append two type arrays into one array
++ 	 * @param x
++ 	 * @param y
++ 	 * @return Type[]
++ 	 */
++ 	public static Type[] join(Type[] x, Type[] y) {
++ 		Type[] result = new Type[ x.length + y.length ];
++ 		for ( int i=0; i<x.length; i++ ) result[i] = x[i];
++ 		for ( int i=0; i<y.length; i++ ) result[i+x.length] = y[i];
++ 		return result;
++ 	}
++ }

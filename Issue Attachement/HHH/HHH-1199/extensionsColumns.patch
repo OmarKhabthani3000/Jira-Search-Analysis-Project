@@ -1,0 +1,114 @@
+diff -Naur --binary hibernate-3.1/src/org/hibernate/cfg/HbmBinder.java hibernate-3.1-rc3mod/src/org/hibernate/cfg/HbmBinder.java
+--- hibernate-3.1/src/org/hibernate/cfg/HbmBinder.java	2005-11-17 21:43:55.000000000 +0100
++++ hibernate-3.1-rc3mod/src/org/hibernate/cfg/HbmBinder.java	2005-11-22 15:09:06.870644100 +0100
+@@ -32,6 +32,7 @@
+ import org.hibernate.type.DiscriminatorType;
+ import org.hibernate.type.ForeignKeyDirection;
+ import org.hibernate.type.Type;
++import org.hibernate.type.CustomType;
+ import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.CollectionHelper;
+@@ -1020,18 +1021,41 @@
+ 		}
+ 
+ 		if ( autoColumn && simpleValue.getColumnSpan() == 0 ) {
+-			Column column = new Column();
+-			column.setValue( simpleValue );
+-			bindColumn( node, column, isNullable );
+-			column.setName( mappings.getNamingStrategy().propertyToColumnName( propertyPath ) );
+-			/* TODO: joinKeyColumnName & foreignKeyColumnName should be called either here or at a
+-			 * slightly higer level in the stack (to get all the information we need)
+-			 * Right now HbmBinder does not support the
+-			 */
+-			simpleValue.getTable().addColumn( column );
+-			simpleValue.addColumn( column );
+-			bindIndex( node.attribute( "index" ), table, column, mappings );
+-			bindUniqueKey( node.attribute( "unique-key" ), table, column, mappings );
++
++      Type type = simpleValue.getType();
++      String[] columnExtensions = null;
++
++      if( type instanceof CustomType)
++      {
++        CustomType cType;
++        
++        cType = (CustomType) type;
++        columnExtensions = cType.getColumnExtensions();
++      }
++
++      if( columnExtensions == null)
++      {
++        columnExtensions = new String [] { "" };
++      }
++		  
++      for(int i=0;i<columnExtensions.length;i++)
++      {
++        Column column = new Column();
++
++	  		column.setValue( simpleValue );
++		  	bindColumn( node, column, isNullable );
++			  column.setName( 
++          mappings.getNamingStrategy().propertyToColumnName( 
++            propertyPath + columnExtensions[i] ) );
++			  /* TODO: joinKeyColumnName & foreignKeyColumnName should be called either here 
++         * or at a slightly higer level in the stack (to get all the information we need)
++			   * Right now HbmBinder does not support the
++			   */
++  			simpleValue.getTable().addColumn( column );
++	  		simpleValue.addColumn( column );
++		  	bindIndex( node.attribute( "index" ), table, column, mappings );
++			  bindUniqueKey( node.attribute( "unique-key" ), table, column, mappings );
++      }
+ 		}
+ 
+ 	}
+diff -Naur --binary hibernate-3.1/src/org/hibernate/type/CustomType.java hibernate-3.1-rc3mod/src/org/hibernate/type/CustomType.java
+--- hibernate-3.1/src/org/hibernate/type/CustomType.java	2005-11-17 21:44:01.000000000 +0100
++++ hibernate-3.1-rc3mod/src/org/hibernate/type/CustomType.java	2005-11-22 15:08:08.261269100 +0100
+@@ -18,6 +18,7 @@
+ import org.hibernate.engine.Mapping;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
++import org.hibernate.usertype.ColumnExtensionType;
+ import org.hibernate.usertype.EnhancedUserType;
+ import org.hibernate.usertype.UserType;
+ import org.hibernate.usertype.UserVersionType;
+@@ -190,6 +191,15 @@
+ 		return ( (EnhancedUserType) userType ).objectToSQLString(value);
+ 	}
+ 
++  public String[] getColumnExtensions()
++  {
++    if( userType instanceof ColumnExtensionType )
++    {
++      return ((ColumnExtensionType) userType).getColumnExtensions();
++    }
++    return null;
++  }
++
+ 	public Comparator getComparator() {
+ 		return (Comparator) userType;
+ 	}
+diff -Naur --binary hibernate-3.1/src/org/hibernate/usertype/ColumnExtensionType.java hibernate-3.1-rc3mod/src/org/hibernate/usertype/ColumnExtensionType.java
+--- hibernate-3.1/src/org/hibernate/usertype/ColumnExtensionType.java	1970-01-01 01:00:00.000000000 +0100
++++ hibernate-3.1-rc3mod/src/org/hibernate/usertype/ColumnExtensionType.java	2005-11-22 15:49:16.750260100 +0100
+@@ -0,0 +1,18 @@
++package org.hibernate.usertype;
++
++/**
++ * Support for automatic generated column names. A UserType may be
++ * automatically define columns for the ddl by implementing this interface. 
++ * If you don't specify columns for your usertype hibernate will 
++ * make columns by using the column extensions. 
++ * So the columns will be propertyName + columnExtension[n]
++ *
++ * @author Sjoerd Takken
++ */
++public interface ColumnExtensionType {
++
++	/**
++	 * Gets called by Hibernate to pass the columns for the ddl
++	 */
++	public String[] getColumnExtensions();
++}

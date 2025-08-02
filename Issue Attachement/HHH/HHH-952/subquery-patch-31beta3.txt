@@ -1,0 +1,198 @@
+Index: src/org/hibernate/criterion/SubqueryExpression.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/criterion/SubqueryExpression.java,v
+retrieving revision 1.8
+diff -r1.8 SubqueryExpression.java
+3a4,5
+> import java.util.HashMap;
+> 
+9d10
+< import org.hibernate.engine.SessionImplementor;
+11a13
+> import org.hibernate.loader.criteria.CriteriaJoinWalker;
+14d15
+< import org.hibernate.sql.Select;
+27c28,29
+< 	
+---
+> 	private CriteriaQueryTranslator innerQuery;
+> 
+43,44c45
+< 		final SessionImplementor session = ( (CriteriaImpl) criteria ).getSession(); //ugly!
+< 		final SessionFactoryImplementor factory = session.getFactory();
+---
+>         final SessionFactoryImplementor factory = extractSessionFactoryImplementor( criteria, criteriaQuery );
+47,57c48,49
+< 		CriteriaQueryTranslator innerQuery = new CriteriaQueryTranslator( 
+< 				factory, 
+< 				criteriaImpl, 
+< 				criteriaImpl.getEntityOrClassName(), //implicit polymorphism not supported (would need a union) 
+< 				criteriaQuery.generateSQLAlias(),
+< 				criteriaQuery
+< 			);
+< 		
+< 		params = innerQuery.getQueryParameters(); //TODO: bad lifecycle....
+< 		types = innerQuery.getProjectedTypes();
+< 		
+---
+> 		createAndSetInnerQuery( criteriaQuery, factory );
+> 
+59,69c51,81
+< 		
+< 		String sql = new Select( factory.getDialect() )
+< 			.setWhereClause( innerQuery.getWhereCondition() )
+< 			.setGroupByClause( innerQuery.getGroupBy() )
+< 			.setSelectClause( innerQuery.getSelect() )
+< 			.setFromClause(
+< 					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+< 					persister.fromJoinFragment( innerQuery.getRootSQLALias(), true, false )
+< 				)
+< 			.toStatementString();
+< 		
+---
+> 
+> //this old way didn't generate joins
+> //		String sql = new Select( factory.getDialect() )
+> //			.setWhereClause( innerQuery.getWhereCondition() )
+> //			.setGroupByClause( innerQuery.getGroupBy() )
+> //			.setSelectClause( innerQuery.getSelect() )
+> //			.setFromClause(
+> //					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+> //					persister.fromJoinFragment( innerQuery.getRootSQLALias(), true, false )
+> //				)
+> //			.toStatementString();
+> 		
+>         //patch to generate joins on subqueries
+>         //stolen from CriteriaLoader
+>         CriteriaJoinWalker walker = new CriteriaJoinWalker(
+>                 persister, 
+>                 innerQuery,
+>                 factory, 
+>                 criteriaImpl, 
+>                 criteriaImpl.getEntityOrClassName(), 
+>                 new HashMap()
+>         ) {
+>             //need to override default of "this_" to whatever the innerQuery is using
+>             protected String generateRootAlias(final String description) {
+>                 return innerQuery.getRootSQLALias();
+>             }
+>         };
+> 
+>         String sql = walker.getSQLString();
+>         //end join patch
+> 
+80,84c92,101
+< 		Type[] types = params.getPositionalParameterTypes();
+< 		Object[] values = params.getPositionalParameterValues();
+< 		TypedValue[] tv = new TypedValue[types.length];
+< 		for ( int i=0; i<types.length; i++ ) {
+< 			tv[i] = new TypedValue( types[i], values[i], EntityMode.POJO );
+---
+>         //the following two lines were added to ensure that this.params is not null, which
+>         //can happen with two-deep nested subqueries
+>         SessionFactoryImplementor factory = extractSessionFactoryImplementor( criteria, criteriaQuery );
+>         createAndSetInnerQuery(criteriaQuery, factory);
+> 
+> 		Type[] ppTypes = params.getPositionalParameterTypes();
+> 		Object[] ppValues = params.getPositionalParameterValues();
+> 		TypedValue[] tv = new TypedValue[ppTypes.length];
+> 		for ( int i=0; i<ppTypes.length; i++ ) {
+> 			tv[i] = new TypedValue( ppTypes[i], ppValues[i], EntityMode.POJO );
+88a106,174
+>     /**
+>      * Creates the inner query used to extract some useful information about 
+>      * types, since it is needed in both methods.
+>      * @param criteriaQuery
+>      * @param factory
+>      */
+>     private void createAndSetInnerQuery(CriteriaQuery criteriaQuery, final SessionFactoryImplementor factory) {
+>         if ( innerQuery == null ) {
+>             //with two-deep subqueries, the same alias would get generated for
+>             //both using the old method (criteriaQuery.generateSQLAlias()), so
+>             //that is now used as a fallback if the main criteria alias isn't set
+>             String alias;
+>             if ( this.criteriaImpl.getAlias() == null ) {
+>                 alias = criteriaQuery.generateSQLAlias();
+>             } else {
+>                 alias = this.criteriaImpl.getAlias() + "_";
+>             }
+> 
+>             innerQuery = new CriteriaQueryTranslator( 
+>                     factory, 
+>                     criteriaImpl, 
+>                     criteriaImpl.getEntityOrClassName(), //implicit polymorphism not supported (would need a union) 
+>                     alias,
+>                     criteriaQuery
+>                 );
+> 
+>             params = innerQuery.getQueryParameters();
+>             types = innerQuery.getProjectedTypes();
+>         }
+>     }
+> 
+>     /**
+>      * Determines the SessionFactoryImplementer based on the common parameters
+>      * of both primary methods.  Currently assumes that the factory will be the
+>      * same for all calls within a chain.  The previous code tried to get the
+>      * factory by casting the supplier Criteria to a CriteriaImpl, getting
+>      * the SessionImplementor from that, and then getting the factory.  However,
+>      * since the SessionImplementor is never used except to get the factory,
+>      * this seemed like an easier alternative.  Also, for subqueries nested two-deep,
+>      * the methods were being called with Criteria with null sessions (because
+>      * they were created from DetachedCriteria).  
+>      * @param criteria
+>      * @param criteriaQuery
+>      * @return
+>      */
+>     private SessionFactoryImplementor extractSessionFactoryImplementor(Criteria criteria, CriteriaQuery criteriaQuery) {
+>         return criteriaQuery.getFactory();
+>         
+> //the following code was originally used to get around one problem with two-deep
+> //subqueries where the Criteria passed in was a CriteriaImpl.Subcriteria (causing
+> //a ClassCastException), but after getting passed that it was determined that
+> //not all Criteria passed in would have session set, thus the line above
+> //NOTE: callers may get NullPointerException, but that was the case before this change
+> //due to a null this.params
+> //        SessionImplementor session = null;
+> //        SessionFactoryImplementor factory = null;
+> //        if ( criteria instanceof CriteriaImpl ) {
+> //            session = ( (CriteriaImpl) criteria ).getSession(); //ugly!
+> //        } else if ( criteria instanceof CriteriaImpl.Subcriteria ) {
+> //            CriteriaImpl temp = (CriteriaImpl) ((CriteriaImpl.Subcriteria) criteria).getParent();
+> //            session = temp.getSession();
+> //        }
+> //
+> //        if ( session != null ) {
+> //            factory = session.getFactory();
+> //        }
+> //        return factory;
+>     }
+> 
+Index: test/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/criteria/CriteriaQueryTest.java,v
+retrieving revision 1.27
+diff -r1.27 CriteriaQueryTest.java
+118,119c118,119
+< 		//TODO: join in subselect
+< 		/*DetachedCriteria dc3 = DetachedCriteria.forClass(Student.class, "st")
+---
+> 		//patch: join in subselect
+> 		DetachedCriteria dc3 = DetachedCriteria.forClass(Student.class, "st")
+127c127
+< 			.list();*/
+---
+> 			.list();
+cvs diff build.xml (in directory D:\DEV\sourceforge\Hibernate3\)
+Index: build.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/build.xml,v
+retrieving revision 1.56
+diff -r1.56 build.xml
+511c511
+< 					<exclude name="org/hibernate/test/*PerformanceTest.class"/>
+---
+> 					<exclude name="org/hibernate/test/**/*PerformanceTest.class"/>
+
+*****CVS exited normally with code 1*****
+

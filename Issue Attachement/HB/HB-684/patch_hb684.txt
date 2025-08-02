@@ -1,0 +1,254 @@
+Index: src/net/sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.27.2.29
+diff -u -r1.27.2.29 Configuration.java
+--- src/net/sf/hibernate/cfg/Configuration.java	20 Jan 2004 20:29:10 -0000	1.27.2.29
++++ src/net/sf/hibernate/cfg/Configuration.java	3 Feb 2004 17:48:47 -0000
+@@ -114,6 +114,9 @@
+ 		public Type getPropertyType(Class persistentClass, String propertyName) throws MappingException {
+ 			return ( (PersistentClass) classes.get(persistentClass) ).getProperty(propertyName).getType();
+ 		}
++		public PersistentClass getClassMapping(Class persistentClass) {
++			return Configuration.this.getClassMapping(persistentClass);
++		}
+ 	};
+ 	
+ 
+Index: src/net/sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.20.2.23
+diff -u -r1.20.2.23 Dialect.java
+--- src/net/sf/hibernate/dialect/Dialect.java	17 Jan 2004 23:52:54 -0000	1.20.2.23
++++ src/net/sf/hibernate/dialect/Dialect.java	3 Feb 2004 17:48:47 -0000
+@@ -10,6 +10,7 @@
+ import org.apache.commons.logging.LogFactory;
+ 
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.mapping.Column;
+ import net.sf.hibernate.sql.ANSICaseFragment;
+ import net.sf.hibernate.sql.ANSIJoinFragment;
+ import net.sf.hibernate.sql.CaseFragment;
+@@ -532,6 +533,10 @@
+ 	 */
+ 	public boolean hasDataTypeInIdentityColumn() {
+ 		return true;
++	}
++	
++	public String getDataTypeInIdentityColumn(Column col,  Mapping p) throws HibernateException {
++		return col.getSqlType(this, p);
+ 	}
+ }
+ 
+Index: src/net/sf/hibernate/dialect/SybaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/SybaseDialect.java,v
+retrieving revision 1.7.2.4
+diff -u -r1.7.2.4 SybaseDialect.java
+--- src/net/sf/hibernate/dialect/SybaseDialect.java	10 Jan 2004 12:02:02 -0000	1.7.2.4
++++ src/net/sf/hibernate/dialect/SybaseDialect.java	3 Feb 2004 17:48:47 -0000
+@@ -3,7 +3,12 @@
+ 
+ import java.sql.Types;
+ 
++import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.engine.Mapping;
++import net.sf.hibernate.mapping.Column;
++import net.sf.hibernate.type.IntegerType;
++import net.sf.hibernate.type.Type;
+ 
+ /**
+  * An SQL dialect compatible with Sybase and MS SQL Server.
+@@ -72,6 +77,23 @@
+ 
+ 	public String appendIdentitySelectToInsert(String insertSQL) {
+ 		return insertSQL + "\nselect @@identity";
++	}
++
++	
++	/* (non-Javadoc)
++	 * @see net.sf.hibernate.dialect.Dialect#getDataTypeInIdentityColumn(net.sf.hibernate.mapping.Column, net.sf.hibernate.engine.Mapping)
++	 */
++	public String getDataTypeInIdentityColumn(Column col, Mapping p) throws HibernateException
++	{
++		String sqlType = null;
++		Type type = col.getType();
++		if (type instanceof IntegerType) {
++			sqlType = "NUMERIC(10,0)";
++		}
++		else {
++			sqlType = super.getDataTypeInIdentityColumn(col, p);
++		}
++		return sqlType;
+ 	}
+ 
+ }
+Index: src/net/sf/hibernate/engine/Mapping.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Mapping.java,v
+retrieving revision 1.5.2.2
+diff -u -r1.5.2.2 Mapping.java
+--- src/net/sf/hibernate/engine/Mapping.java	2 Sep 2003 11:31:32 -0000	1.5.2.2
++++ src/net/sf/hibernate/engine/Mapping.java	3 Feb 2004 17:48:48 -0000
+@@ -2,6 +2,7 @@
+ package net.sf.hibernate.engine;
+ 
+ import net.sf.hibernate.MappingException;
++import net.sf.hibernate.mapping.PersistentClass;
+ import net.sf.hibernate.type.Type;
+ 
+ /**
+@@ -18,6 +19,7 @@
+ 	public Type getIdentifierType(Class persistentClass) throws MappingException;
+ 	public String getIdentifierPropertyName(Class persistentClass) throws MappingException;
+ 	public Type getPropertyType(Class persistentClass, String propertyName) throws MappingException;
++	public PersistentClass getClassMapping(Class persistentClass);
+ }
+ 
+ 
+Index: src/net/sf/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.26.2.35
+diff -u -r1.26.2.35 SessionFactoryImpl.java
+--- src/net/sf/hibernate/impl/SessionFactoryImpl.java	20 Jan 2004 18:30:28 -0000	1.26.2.35
++++ src/net/sf/hibernate/impl/SessionFactoryImpl.java	3 Feb 2004 17:48:48 -0000
+@@ -109,6 +109,7 @@
+ 	private final transient QueryCache queryCache;
+ 	private final transient UpdateTimestampsCache updateTimestampsCache;
+ 	private final transient Map queryCaches;
++	private final transient Map classMappings;
+ 	
+ 	private static final IdentifierGenerator UUID_GENERATOR = new UUIDHexGenerator();
+ 	
+@@ -132,12 +133,15 @@
+ 		classPersistersByName = new HashMap();
+ 		Map classMeta = new HashMap();
+ 		Iterator classes = cfg.getClassMappings();
++		classMappings = new HashMap(); 
+ 		while ( classes.hasNext() ) {
+ 			PersistentClass model = (PersistentClass) classes.next();
+ 			ClassPersister cp = PersisterFactory.createClassPersister(model, this);
+ 			classPersisters.put( model.getMappedClass(), cp );
+ 			classPersistersByName.put( model.getName(), cp );
+-			classMeta.put( model.getMappedClass(), cp.getClassMetadata() );
++			Class mappedClass = model.getMappedClass();
++			classMeta.put( mappedClass, cp.getClassMetadata() );
++			classMappings.put(mappedClass, model);
+ 		}
+ 		classMetadata = Collections.unmodifiableMap(classMeta);
+ 		
+@@ -660,6 +664,10 @@
+ 		}
+ 	}	
+ 
++	public PersistentClass getClassMapping(Class persistentClass) {
++		return (PersistentClass) classMappings.get(persistentClass);	
++	}
++	
+ 	//TODO: a better way to normalize the NamedSQLQuery aspect
+ 	static class InternalNamedSQLQuery {
+ 	
+Index: src/net/sf/hibernate/mapping/Table.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/mapping/Table.java,v
+retrieving revision 1.13.2.15
+diff -u -r1.13.2.15 Table.java
+--- src/net/sf/hibernate/mapping/Table.java	20 Jan 2004 14:26:19 -0000	1.13.2.15
++++ src/net/sf/hibernate/mapping/Table.java	3 Feb 2004 17:48:49 -0000
+@@ -12,8 +12,11 @@
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.dialect.HSQLDialect;
+ import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.tool.hbm2ddl.ColumnMetadata;
+ import net.sf.hibernate.tool.hbm2ddl.TableMetadata;
++import net.sf.hibernate.type.EntityType;
++import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.util.StringHelper;
+ 
+ import org.apache.commons.collections.SequencedHashMap;
+@@ -162,12 +165,24 @@
+ 			if ( identityColumn && col.getQuotedName(dialect).equals(pkname) ) {
+ 				// to support dialects that have their own identity data type
+ 				if ( dialect.hasDataTypeInIdentityColumn() ) {
+-					buf.append( col.getSqlType(dialect, p) );
++					String sqlType = dialect.getDataTypeInIdentityColumn(col, p);
++					buf.append( sqlType );
+ 				}
+ 				buf.append(' ').append( dialect.getIdentityColumnString() );
+ 			}
+ 			else {
+-				buf.append( col.getSqlType(dialect, p) );
++				// Column could be an association type to table that has identity base primary key id
++				String sqlType = getAssociationSqlType(col, dialect, p);				
++				// or it could be a foreign key referencing an identity based primary key id
++				if (null == sqlType) {
++					sqlType = getForeignKeySqlType(col.getName(), dialect, p); 
++				}
++				if (null == sqlType) {
++					// use the default mapping
++					sqlType = col.getSqlType(dialect, p);
++				}
++				
++				buf.append( sqlType );
+ 				if ( col.isNullable() ) {
+ 					buf.append( dialect.getNullColumnString() );
+ 				}
+@@ -338,7 +353,53 @@
+ 	public void addCheckConstraint(String constraint) {
+ 		checkConstraints.add(constraint);
+ 	}
+-
++	
++	public boolean hasIdentityColumn(Dialect dialect) throws MappingException {
++		boolean identityColumn = idValue!=null && idValue.createIdentifierGenerator(dialect) instanceof IdentityGenerator;
++		return identityColumn;
++	}
++	
++	private String getForeignKeySqlType(String columnName,Dialect dialect, Mapping mapping) throws HibernateException {
++		String sqlType = null;
++		Iterator iterator = getForeignKeyIterator();
++		FK_ITERATOR: while(iterator.hasNext()) {
++			ForeignKey fk = (ForeignKey) iterator.next();
++			Iterator colIterator = fk.columnIterator();
++			while(colIterator.hasNext()) {
++				Column fkCol = (Column) colIterator.next();
++				String fkName = fkCol.getName();
++				if (fkName.equals(columnName)) {
++					Table otherTable = fk.getReferencedTable();
++					Column pkColumn =
++						(Column) otherTable.getPrimaryKey().getColumnIterator().next();
++					if (otherTable.hasIdentityColumn(dialect)) {
++						sqlType = dialect.getDataTypeInIdentityColumn(pkColumn, mapping);
++						break FK_ITERATOR;
++					}
++				}
++			}
++		}
++		return sqlType;		
++	}
++	
++	private String getAssociationSqlType(Column col, Dialect dialect, Mapping p) throws HibernateException {
++		String sqlType = null;
++		Type type = col.getType();
++		if (type.isAssociationType()) {
++			if (type instanceof EntityType) {
++				EntityType entityType = (EntityType) type;
++				Class associatedClass = entityType.getAssociatedClass();
++				PersistentClass persistentClass = p.getClassMapping(associatedClass);
++				Table otherTable = persistentClass.getTable();
++				if (otherTable.hasIdentityColumn(dialect)) {
++					Column pkColumn =
++						(Column) otherTable.getPrimaryKey().getColumnIterator().next();
++					sqlType = dialect.getDataTypeInIdentityColumn(pkColumn, p);
++				}
++			}					
++		}				
++		return sqlType;		
++	}
+ }
+ 
+ 

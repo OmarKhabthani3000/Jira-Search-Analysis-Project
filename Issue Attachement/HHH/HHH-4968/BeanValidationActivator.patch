@@ -1,0 +1,106 @@
+Index: annotations/src/main/java/org/hibernate/cfg/beanvalidation/BeanValidationActivator.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/beanvalidation/BeanValidationActivator.java	(revision 19116)
++++ annotations/src/main/java/org/hibernate/cfg/beanvalidation/BeanValidationActivator.java	(working copy)
+@@ -50,7 +50,7 @@
+ 			properties.setProperty( Environment.CHECK_NULLABILITY, "false" );
+ 		}
+ 
+-		if ( modes.contains( ValidationMode.NONE ) ) return;
++		if ( ! ( modes.contains( ValidationMode.CALLBACK ) || modes.contains( ValidationMode.AUTO ) ) ) return;
+ 
+ 		try {
+ 			Class<?> activator = ReflectHelper.classForName( TYPE_SAFE_ACTIVATOR_CLASS, BeanValidationActivator.class );
+Index: annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/BeanValidationDisabledTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/BeanValidationDisabledTest.java	(revision 19116)
++++ annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/BeanValidationDisabledTest.java	(working copy)
+@@ -3,8 +3,10 @@
+ import java.math.BigDecimal;
+ import javax.validation.ConstraintViolationException;
+ 
++import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
++import org.hibernate.mapping.Column;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.test.annotations.TestCase;
+ 
+@@ -27,6 +29,12 @@
+ 		tx.rollback();
+ 		s.close();
+ 	}
++	
++	public void testDDLDisabled() {
++		PersistentClass classMapping = getCfg().getClassMapping( Address.class.getName() ); 		
++		Column countryColumn = (Column) classMapping.getProperty( "country" ).getColumnIterator().next(); 	
++		assertTrue("DDL constraints are applied", countryColumn.isNullable() ); 	
++	}
+ 
+ 	@Override
+ 	protected void configure(Configuration cfg) {
+@@ -36,6 +44,7 @@
+ 
+ 	protected Class<?>[] getAnnotatedClasses() {
+ 		return new Class<?>[] {
++				Address.class,
+ 				CupHolder.class
+ 		};
+ 	}
+Index: annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/DDLWithoutCallbackTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/DDLWithoutCallbackTest.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/annotations/beanvalidation/DDLWithoutCallbackTest.java	(revision 0)
+@@ -0,0 +1,51 @@
++package org.hibernate.test.annotations.beanvalidation;
++
++import java.math.BigDecimal;
++import javax.validation.ConstraintViolationException;
++
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.mapping.Column;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.test.annotations.TestCase;
++
++/**
++ * @author Vladimir Klyushnikov
++ */
++public class DDLWithoutCallbackTest extends TestCase {
++	public void testListeners() {
++		CupHolder ch = new CupHolder();
++		ch.setRadius( new BigDecimal( "12" ) );
++		Session s = openSession(  );
++		Transaction tx = s.beginTransaction();
++		try {
++			s.persist( ch );
++			s.flush();
++		}
++		catch ( ConstraintViolationException e ) {
++			fail("invalid object should not be validated");
++		}
++		tx.rollback();
++		s.close();
++	}
++	
++	public void testDDLEnabled() {
++		PersistentClass classMapping = getCfg().getClassMapping( Address.class.getName() ); 		
++		Column countryColumn = (Column) classMapping.getProperty( "country" ).getColumnIterator().next(); 	
++		assertFalse("DDL constraints are not applied", countryColumn.isNullable() ); 	
++	}
++
++	@Override
++	protected void configure(Configuration cfg) {
++		super.configure( cfg );
++		cfg.setProperty( "javax.persistence.validation.mode", "ddl" );
++	}
++
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] {
++				Address.class,
++				CupHolder.class
++		};
++	}
++}
+\ No newline at end of file

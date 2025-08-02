@@ -1,0 +1,72 @@
+Index: annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java	Tue Feb 02 16:01:45 CET 2010
++++ annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java	Tue Feb 02 16:01:45 CET 2010
+@@ -112,6 +112,12 @@
+ 		binder.setValue( value );
+ 		binder.setCascade( cascadeStrategy );
+ 		binder.setAccessType( inferredData.getDefaultAccess() );
++
++        if ((joinColumns != null) && (joinColumns.length == 1)) {
++            binder.setInsertable(joinColumns[0].isInsertable());
++            binder.setUpdatable(joinColumns[0].isUpdatable());
++        }
++
+ 		Property prop = binder.make();
+ 		if ( BinderHelper.isDefault( mappedBy ) ) {
+ 			/*
+Index: annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java	Tue Feb 02 16:01:45 CET 2010
++++ annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java	Tue Feb 02 16:01:45 CET 2010
+@@ -95,30 +95,24 @@
+ 		return false;
+ 	}
+ 
+-	public void doSecondPass(java.util.Map persistentClasses) throws MappingException {
++    public void doSecondPass(java.util.Map persistentClasses) throws MappingException {
+-		if ( value instanceof ManyToOne ) {
+-			ManyToOne manyToOne = (ManyToOne) value;
+-			PersistentClass ref = (PersistentClass) persistentClasses.get( manyToOne.getReferencedEntityName() );
++        if (value instanceof ToOne) {
++            ToOne toOne = (ToOne) value;
++            PersistentClass ref = (PersistentClass) persistentClasses.get(toOne.getReferencedEntityName());
+-			if ( ref == null ) {
++            if (ref == null) {
+-				throw new AnnotationException(
++                throw new AnnotationException(
+-						"@OneToOne or @ManyToOne on "
+-								+ StringHelper.qualify( entityClassName, path )
+-								+ " references an unknown entity: "
+-								+ manyToOne.getReferencedEntityName()
+-				);
++                    "@OneToOne or @ManyToOne on " +
++                    StringHelper.qualify(entityClassName, path) +
++                    " references an unknown entity: " +
++                    toOne.getReferencedEntityName());
+-			}
++            }
+-			BinderHelper.createSyntheticPropertyReference( columns, ref, null, manyToOne, false, mappings );
+-			TableBinder.bindFk( ref, null, columns, manyToOne, unique, mappings );
+-			/*
+-			 * HbmBinder does this only when property-ref != null, but IMO, it makes sense event if it is null
+-			 */
+-			if ( !manyToOne.isIgnoreNotFound() ) manyToOne.createPropertyRefConstraints( persistentClasses );
++            BinderHelper.createSyntheticPropertyReference(columns, ref, null, toOne, false, mappings);
++            TableBinder.bindFk(ref, null, columns, toOne, unique, mappings);
++            if (!(toOne instanceof ManyToOne) || !((ManyToOne) toOne).isIgnoreNotFound()) {
++                toOne.createPropertyRefConstraints(persistentClasses);
+-		}
++            }
+-		else if ( value instanceof OneToOne ) {
+-			( (OneToOne) value ).createForeignKey();
+-		}
+-		else {
++        } else {
+-			throw new AssertionFailure( "FkSecondPass for a wrong value type: " + value.getClass().getName() );
++            throw new AssertionFailure("FkSecondPass for a wrong value type: " + value.getClass().getName());
+-		}
+-	}
++        }
++    }
+ }

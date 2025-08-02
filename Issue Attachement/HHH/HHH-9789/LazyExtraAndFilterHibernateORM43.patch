@@ -1,0 +1,295 @@
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/AnEntity.java b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/AnEntity.java
+new file mode 100644
+index 0000000..fa83b0a
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/AnEntity.java
+@@ -0,0 +1,54 @@
++package org.hibernate.test.annotations.filter.lazyextra;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.OneToMany;
++
++import org.hibernate.annotations.Filter;
++import org.hibernate.annotations.Filters;
++import org.hibernate.annotations.LazyCollection;
++import org.hibernate.annotations.LazyCollectionOption;
++
++@Entity
++public class AnEntity {
++
++  @Id
++  @GeneratedValue(strategy = GenerationType.AUTO)
++  private long id;
++
++  @OneToMany(cascade = CascadeType.ALL)
++  @JoinColumn(name = "AN_ENTITY_ID")
++  @LazyCollection(LazyCollectionOption.EXTRA)
++  @Filters(value = {
++      @Filter(name = "cantOver100"), @Filter(name = "cantOver1000")
++  })
++  private List<ChildEntity> children = new ArrayList<ChildEntity>();
++
++  public AnEntity() {
++
++  }
++
++  public long getId() {
++    return id;
++  }
++
++  public void setId(long id) {
++    this.id = id;
++  }
++
++  public List<ChildEntity> getChildren2() {
++    return children;
++  }
++
++  public void setChildren2(List<ChildEntity> children2) {
++    this.children = children2;
++  }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/ChildEntity.java b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/ChildEntity.java
+new file mode 100644
+index 0000000..7933ae0
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/ChildEntity.java
+@@ -0,0 +1,50 @@
++package org.hibernate.test.annotations.filter.lazyextra;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.Table;
++
++import org.hibernate.annotations.FilterDef;
++import org.hibernate.annotations.FilterDefs;
++
++@FilterDefs(value = {
++    @FilterDef(name = "cantOver100", defaultCondition = "cant > 100"),
++    @FilterDef(name = "cantOver1000", defaultCondition = "cant > 1000")
++})
++@Entity
++@Table(name = "CHILD2")
++public class ChildEntity {
++
++  @Id
++  @GeneratedValue(strategy = GenerationType.AUTO)
++  private long id;
++
++  private int cant;
++
++  public ChildEntity() {
++
++  }
++
++  public ChildEntity(int cant) {
++    this.cant = cant;
++  }
++
++  public long getId() {
++    return id;
++  }
++
++  public void setId(long id) {
++    this.id = id;
++  }
++
++  public int getCant() {
++    return cant;
++  }
++
++  public void setCant(int cant) {
++    this.cant = cant;
++  }
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/LazyExtraAndFilterTest.java b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/LazyExtraAndFilterTest.java
+new file mode 100644
+index 0000000..c859156
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/annotations/filter/lazyextra/LazyExtraAndFilterTest.java
+@@ -0,0 +1,173 @@
++package org.hibernate.test.annotations.filter.lazyextra;
++
++import javax.persistence.EntityManagerFactory;
++
++import org.hibernate.testing.junit4.BaseCoreFunctionalTestCase;
++import org.junit.Assert;
++import org.junit.Test;
++
++public class LazyExtraAndFilterTest extends BaseCoreFunctionalTestCase {
++
++  private static long id;
++
++  @Override
++  protected Class<?>[] getAnnotatedClasses() {
++    return new Class[] {
++        AnEntity.class, ChildEntity.class
++    };
++  }
++
++  @Override
++  protected void prepareTest() throws Exception {
++    id = createEntity();
++  }
++
++  private long createEntity() {
++
++    openSession();
++    session.beginTransaction();
++
++    AnEntity ent = new AnEntity();
++    ent.getChildren2().add(new ChildEntity(50));
++    ent.getChildren2().add(new ChildEntity(500));
++    ent.getChildren2().add(new ChildEntity(50));
++    ent.getChildren2().add(new ChildEntity(500));
++
++    session.persist(ent);
++    id = ent.getId();
++
++    session.getTransaction().commit();
++    session.close();
++
++    return id;
++  }
++
++  @Test
++  public void getCollectionSizeWihNotInitialatedProxy() {
++    session = openSession();
++    session.beginTransaction();
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    int size = ent.getChildren2().size();
++
++    System.out.println("Collection size without previous proxy initialization: " + size + " -> must be 4");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(size, 4);
++  }
++
++  @Test
++  public void getCollectionSizeWihNotInitialatedProxyEnablingFilter() {
++    session = openSession();
++    session.beginTransaction();
++    session.enableFilter("cantOver100");
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    int size = ent.getChildren2().size();
++
++    System.out.println("Collection size without previous proxy initialization enabling filter: " + size
++        + " -> must be 2");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(size, 2);
++  }
++
++  @Test
++  public void getCollectionSizeWihInitialatedProxy() {
++    session = openSession();
++    session.beginTransaction();
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    // forcing collection initialization
++    ent.getChildren2().get(0);
++
++    int size = ent.getChildren2().size();
++
++    System.out.println("Collection size with previous proxy initialization: " + size + " -> must be 4");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(size, 4);
++  }
++
++  @Test
++  public void getCollectionSizeWihInitialatedProxyEnablingFilter() {
++    session = openSession();
++    session.beginTransaction();
++    session.enableFilter("cantOver100");
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    // forcing collection initialization
++    ent.getChildren2().get(0);
++
++    int size = ent.getChildren2().size();
++
++    System.out.println("Collection size with previous proxy initialization enabling filter: " + size
++        + " -> must be 2");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(size, 2);
++  }
++
++  @Test
++  public void getCollectionIsEmptyWihInitialatedProxy() {
++    session = openSession();
++    session.beginTransaction();
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    // forcing collection initialization
++    ent.getChildren2().get(0);
++
++    boolean empty = ent.getChildren2().isEmpty();
++
++    System.out.println("Collection isEmpty with previous proxy initialization: " + empty
++        + " -> must be false");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(empty, false);
++  }
++
++  @Test
++  public void getCollectionIsEmptyWihNotInitialatedProxy() {
++    session = openSession();
++    session.beginTransaction();
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    boolean empty = ent.getChildren2().isEmpty();
++
++    System.out.println("Collection isEmpty with previous proxy initialization: " + empty
++        + " -> must be false");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(empty, false);
++  }
++
++  @Test
++  public void getCollectionIsEmptyWihNotInitialatedProxyEnablingFilter() {
++    session = openSession();
++    session.beginTransaction();
++    session.enableFilter("cantOver1000");
++
++    AnEntity ent = (AnEntity) session.get(AnEntity.class, id);
++
++    boolean empty = ent.getChildren2().isEmpty();
++
++    System.out.println("Collection isEmpty with previous proxy initialization enabling filter: " + empty
++        + " -> must be true");
++
++    session.getTransaction().commit();
++    session.close();
++    Assert.assertEquals(empty, true);
++  }
++}

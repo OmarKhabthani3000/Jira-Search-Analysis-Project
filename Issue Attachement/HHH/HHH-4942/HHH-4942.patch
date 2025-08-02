@@ -1,0 +1,2088 @@
+Index: entitymanager/src/test/bundles/externaljar/META-INF/MANIFEST.MF
+===================================================================
+--- entitymanager/src/test/bundles/externaljar/META-INF/MANIFEST.MF	(revision 18837)
++++ entitymanager/src/test/bundles/externaljar/META-INF/MANIFEST.MF	(working copy)
+@@ -1,4 +0,0 @@
+-Manifest-Version: 1.0
+-Ant-Version: Apache Ant 1.6.3
+-Created-By: 1.5.0_03-b07 (Sun Microsystems Inc.)
+-
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/package-info.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/package-info.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/package-info.java	(working copy)
+@@ -1,4 +0,0 @@
+-@NamedQuery(name = "countItems", query = "select count(i) from Item i") package org.hibernate.ejb.test;
+-
+-import org.hibernate.annotations.NamedQuery;
+-
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/PackagedEntityManagerTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/PackagedEntityManagerTest.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/PackagedEntityManagerTest.java	(working copy)
+@@ -1,455 +0,0 @@
+-/*
+- * Hibernate, Relational Persistence for Idiomatic Java
+- *
+- * Copyright (c) 2010, Red Hat Inc. or third-party contributors as
+- * indicated by the @author tags or express copyright attribution
+- * statements applied by the authors.  All third-party contributions are
+- * distributed under license by Red Hat Inc.
+- *
+- * This copyrighted material is made available to anyone wishing to use, modify,
+- * copy, or redistribute it subject to the terms and conditions of the GNU
+- * Lesser General Public License, as published by the Free Software Foundation.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
+- * for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * along with this distribution; if not, write to:
+- * Free Software Foundation, Inc.
+- * 51 Franklin Street, Fifth Floor
+- * Boston, MA  02110-1301  USA
+- */
+-package org.hibernate.ejb.test;
+-
+-import java.io.File;
+-import java.net.MalformedURLException;
+-import java.net.URL;
+-import java.net.URLClassLoader;
+-import java.util.ArrayList;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Properties;
+-import javax.persistence.EntityManager;
+-import javax.persistence.EntityManagerFactory;
+-import javax.persistence.Persistence;
+-import javax.persistence.PersistenceException;
+-
+-import org.hibernate.ejb.AvailableSettings;
+-import org.hibernate.ejb.HibernateEntityManagerFactory;
+-import org.hibernate.ejb.test.pack.cfgxmlpar.Morito;
+-import org.hibernate.ejb.test.pack.defaultpar.ApplicationServer;
+-import org.hibernate.ejb.test.pack.defaultpar.IncrementListener;
+-import org.hibernate.ejb.test.pack.defaultpar.Lighter;
+-import org.hibernate.ejb.test.pack.defaultpar.Money;
+-import org.hibernate.ejb.test.pack.defaultpar.Mouse;
+-import org.hibernate.ejb.test.pack.defaultpar.OtherIncrementListener;
+-import org.hibernate.ejb.test.pack.defaultpar.Version;
+-import org.hibernate.ejb.test.pack.defaultpar_1_0.ApplicationServer1;
+-import org.hibernate.ejb.test.pack.defaultpar_1_0.Lighter1;
+-import org.hibernate.ejb.test.pack.defaultpar_1_0.Mouse1;
+-import org.hibernate.ejb.test.pack.defaultpar_1_0.Version1;
+-import org.hibernate.ejb.test.pack.excludehbmpar.Caipirinha;
+-import org.hibernate.ejb.test.pack.explodedpar.Carpet;
+-import org.hibernate.ejb.test.pack.explodedpar.Elephant;
+-import org.hibernate.ejb.test.pack.externaljar.Scooter;
+-import org.hibernate.ejb.test.pack.spacepar.Bug;
+-import org.hibernate.ejb.test.pack.various.Airplane;
+-import org.hibernate.ejb.test.pack.various.Seat;
+-import org.hibernate.engine.SessionImplementor;
+-import org.hibernate.event.EventListeners;
+-import org.hibernate.stat.Statistics;
+-import org.hibernate.util.ConfigHelper;
+-
+-/**
+- * @author Gavin King
+- */
+-@SuppressWarnings("unchecked")
+-public class PackagedEntityManagerTest extends junit.framework.TestCase {
+-	private static ClassLoader originalClassLoader;
+-
+-	@Override
+-	protected void setUp() throws Exception {
+-		originalClassLoader = Thread.currentThread().getContextClassLoader();
+-		Thread.currentThread().setContextClassLoader( buildCustomTCCL( originalClassLoader ) );
+-		super.setUp();
+-	}
+-
+-	private ClassLoader buildCustomTCCL(ClassLoader parentClassLoader) throws MalformedURLException {
+-		// get a URL reference to something we now is part of the classpath (us)
+-		URL myUrl = parentClassLoader.getResource(
+-				PackagedEntityManagerTest.class.getName().replace( '.', '/' ) + ".class"
+-		);
+-		File myPath = new File( myUrl.getFile() );
+-		// navigate back to '/target'
+-		File targetDir = myPath
+-				.getParentFile()  // target/classes/org/hibernate/ejb/test
+-				.getParentFile()  // target/classes/org/hibernate/ejb
+-				.getParentFile()  // target/classes/org/hibernate
+-				.getParentFile()  // target/classes/org
+-				.getParentFile()  // target/classes/
+-				.getParentFile(); // target
+-		File testPackagesDir = new File( targetDir, "test-packages" );
+-		ArrayList<URL> urls = new ArrayList<URL>();
+-		for ( File testPackage : testPackagesDir.listFiles() ) {
+-			urls.add( testPackage.toURL() );
+-		}
+-		return new URLClassLoader( urls.toArray( new URL[urls.size()] ), parentClassLoader );
+-	}
+-
+-	@Override
+-	public void tearDown() throws Exception {
+-		super.tearDown();
+-		Thread.currentThread().setContextClassLoader( originalClassLoader );
+-	}
+-
+-	public void testDefaultPar() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		ApplicationServer as = new ApplicationServer();
+-		as.setName( "JBoss AS" );
+-		Version v = new Version();
+-		v.setMajor( 4 );
+-		v.setMinor( 0 );
+-		v.setMicro( 3 );
+-		as.setVersion( v );
+-		Mouse mouse = new Mouse();
+-		mouse.setName( "mickey" );
+-		em.getTransaction().begin();
+-		em.persist( as );
+-		em.persist( mouse );
+-		assertEquals( 1, em.createNamedQuery( "allMouse" ).getResultList().size() );
+-		Lighter lighter = new Lighter();
+-		lighter.name = "main";
+-		lighter.power = " 250 W";
+-		em.persist( lighter );
+-		em.flush();
+-		em.remove( lighter );
+-		em.remove( mouse );
+-		assertNotNull( as.getId() );
+-		em.remove( as );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testDefaultParForPersistence_1_0() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar_1_0", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		ApplicationServer1 as = new ApplicationServer1();
+-		as.setName( "JBoss AS" );
+-		Version1 v = new Version1();
+-		v.setMajor( 4 );
+-		v.setMinor( 0 );
+-		v.setMicro( 3 );
+-		as.setVersion( v );
+-		Mouse1 mouse = new Mouse1();
+-		mouse.setName( "mickey" );
+-		em.getTransaction().begin();
+-		em.persist( as );
+-		em.persist( mouse );
+-		assertEquals( 1, em.createNamedQuery( "allMouse_1_0" ).getResultList().size() );
+-		Lighter1 lighter = new Lighter1();
+-		lighter.name = "main";
+-		lighter.power = " 250 W";
+-		em.persist( lighter );
+-		em.flush();
+-		em.remove( lighter );
+-		em.remove( mouse );
+-		assertNotNull( as.getId() );
+-		em.remove( as );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testListenersDefaultPar() throws Exception {
+-		IncrementListener.reset();
+-		OtherIncrementListener.reset();
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		em.getTransaction().begin();
+-		ApplicationServer as = new ApplicationServer();
+-		as.setName( "JBoss AS" );
+-		Version v = new Version();
+-		v.setMajor( 4 );
+-		v.setMinor( 0 );
+-		v.setMicro( 3 );
+-		as.setVersion( v );
+-		em.persist( as );
+-		em.flush();
+-		assertEquals( "Failure in default listeners", 1, IncrementListener.getIncrement() );
+-		assertEquals( "Failuer in XML overriden listeners", 1, OtherIncrementListener.getIncrement() );
+-
+-		Mouse mouse = new Mouse();
+-		mouse.setName( "mickey" );
+-		em.persist( mouse );
+-		em.flush();
+-		assertEquals( "Failure in @ExcludeDefaultListeners", 1, IncrementListener.getIncrement() );
+-		assertEquals( 1, OtherIncrementListener.getIncrement() );
+-
+-		Money money = new Money();
+-		em.persist( money );
+-		em.flush();
+-		assertEquals( "Failure in @ExcludeDefaultListeners", 2, IncrementListener.getIncrement() );
+-		assertEquals( 1, OtherIncrementListener.getIncrement() );
+-
+-		em.getTransaction().rollback();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testExplodedPar() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "explodedpar", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		org.hibernate.ejb.test.pack.explodedpar.Carpet carpet = new Carpet();
+-		Elephant el = new Elephant();
+-		el.setName( "Dumbo" );
+-		carpet.setCountry( "Turkey" );
+-		em.getTransaction().begin();
+-		em.persist( carpet );
+-		em.persist( el );
+-		assertEquals( 1, em.createNamedQuery( "allCarpet" ).getResultList().size() );
+-		assertNotNull( carpet.getId() );
+-		em.remove( carpet );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testExcludeHbmPar() throws Exception {
+-		EntityManagerFactory emf = null;
+-		try {
+-			emf = Persistence.createEntityManagerFactory( "excludehbmpar", new HashMap() );
+-		}
+-		catch ( PersistenceException e ) {
+-			Throwable nested = e.getCause();
+-			if ( nested == null ) {
+-				throw e;
+-			}
+-			nested = nested.getCause();
+-			if ( nested == null ) {
+-				throw e;
+-			}
+-			if ( !( nested instanceof ClassNotFoundException ) ) {
+-				throw e;
+-			}
+-			fail( "Try to process hbm file: " + e.getMessage() );
+-		}
+-		EntityManager em = emf.createEntityManager();
+-		Caipirinha s = new Caipirinha( "Strong" );
+-		em.getTransaction().begin();
+-		em.persist( s );
+-		em.getTransaction().commit();
+-
+-		em.getTransaction().begin();
+-		s = em.find( Caipirinha.class, s.getId() );
+-		em.remove( s );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testCfgXmlPar() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "cfgxmlpar", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		Item i = new Item();
+-		i.setDescr( "Blah" );
+-		i.setName( "factory" );
+-		Morito m = new Morito();
+-		m.setPower( "SuperStrong" );
+-		em.getTransaction().begin();
+-		em.persist( i );
+-		em.persist( m );
+-		em.getTransaction().commit();
+-
+-		em.getTransaction().begin();
+-		i = em.find( Item.class, i.getName() );
+-		em.remove( i );
+-		em.remove( em.find( Morito.class, m.getId() ) );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testSpacePar() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "space par", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		Bug bug = new Bug();
+-		bug.setSubject( "Spaces in directory name don't play well on Windows" );
+-		em.getTransaction().begin();
+-		em.persist( bug );
+-		em.flush();
+-		em.remove( bug );
+-		assertNotNull( bug.getId() );
+-		em.getTransaction().rollback();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testOverridenPar() throws Exception {
+-		HashMap properties = new HashMap();
+-		properties.put( AvailableSettings.JTA_DATASOURCE, null );
+-		Properties p = new Properties();
+-		p.load( ConfigHelper.getResourceAsStream( "/overridenpar.properties" ) );
+-		properties.putAll( p );
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "overridenpar", properties );
+-		EntityManager em = emf.createEntityManager();
+-		org.hibernate.ejb.test.pack.overridenpar.Bug bug = new org.hibernate.ejb.test.pack.overridenpar.Bug();
+-		bug.setSubject( "Allow DS overriding" );
+-		em.getTransaction().begin();
+-		em.persist( bug );
+-		em.flush();
+-		em.remove( bug );
+-		assertNotNull( bug.getId() );
+-		em.getTransaction().rollback();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testListeners() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		EventListeners eventListeners = em.unwrap( SessionImplementor.class ).getListeners();
+-		assertEquals(
+-				"Explicit pre-insert event through hibernate.ejb.event.pre-insert does not work",
+-				eventListeners.getPreInsertEventListeners().length,
+-				eventListeners.getPreUpdateEventListeners().length + 1
+-		);
+-
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testExtendedEntityManager() {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		Item item = new Item( "Mouse", "Micro$oft mouse" );
+-		em.getTransaction().begin();
+-		em.persist( item );
+-		assertTrue( em.contains( item ) );
+-		em.getTransaction().commit();
+-
+-		assertTrue( em.contains( item ) );
+-
+-		em.getTransaction().begin();
+-		Item item1 = ( Item ) em.createQuery( "select i from Item i where descr like 'M%'" ).getSingleResult();
+-		assertNotNull( item1 );
+-		assertSame( item, item1 );
+-		item.setDescr( "Micro$oft wireless mouse" );
+-		assertTrue( em.contains( item ) );
+-		em.getTransaction().commit();
+-
+-		assertTrue( em.contains( item ) );
+-
+-		em.getTransaction().begin();
+-		item1 = em.find( Item.class, "Mouse" );
+-		assertSame( item, item1 );
+-		em.getTransaction().commit();
+-		assertTrue( em.contains( item ) );
+-
+-		item1 = em.find( Item.class, "Mouse" );
+-		assertSame( item, item1 );
+-		assertTrue( em.contains( item ) );
+-
+-		item1 = ( Item ) em.createQuery( "select i from Item i where descr like 'M%'" ).getSingleResult();
+-		assertNotNull( item1 );
+-		assertSame( item, item1 );
+-		assertTrue( em.contains( item ) );
+-
+-		em.getTransaction().begin();
+-		assertTrue( em.contains( item ) );
+-		em.remove( item );
+-		em.remove( item ); //second remove should be a no-op
+-		em.getTransaction().commit();
+-
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testConfiguration() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+-		Item item = new Item( "Mouse", "Micro$oft mouse" );
+-		Distributor res = new Distributor();
+-		res.setName( "Bruce" );
+-		item.setDistributors( new HashSet<Distributor>() );
+-		item.getDistributors().add( res );
+-		Statistics stats = ( ( HibernateEntityManagerFactory ) emf ).getSessionFactory().getStatistics();
+-		stats.clear();
+-		stats.setStatisticsEnabled( true );
+-
+-		EntityManager em = emf.createEntityManager();
+-		em.getTransaction().begin();
+-
+-		em.persist( res );
+-		em.persist( item );
+-		assertTrue( em.contains( item ) );
+-
+-		em.getTransaction().commit();
+-		em.close();
+-
+-		assertEquals( 1, stats.getSecondLevelCachePutCount() );
+-		assertEquals( 0, stats.getSecondLevelCacheHitCount() );
+-
+-		em = emf.createEntityManager();
+-		em.getTransaction().begin();
+-		Item second = em.find( Item.class, item.getName() );
+-		assertEquals( 1, second.getDistributors().size() );
+-		assertEquals( 1, stats.getSecondLevelCacheHitCount() );
+-		em.getTransaction().commit();
+-		em.close();
+-
+-		em = emf.createEntityManager();
+-		em.getTransaction().begin();
+-		second = em.find( Item.class, item.getName() );
+-		assertEquals( 1, second.getDistributors().size() );
+-		assertEquals( 3, stats.getSecondLevelCacheHitCount() );
+-		for ( Distributor distro : second.getDistributors() ) {
+-			em.remove( distro );
+-		}
+-		em.remove( second );
+-		em.getTransaction().commit();
+-		em.close();
+-
+-		stats.clear();
+-		stats.setStatisticsEnabled( false );
+-		emf.close();
+-	}
+-
+-	public void testExternalJar() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		Scooter s = new Scooter();
+-		s.setModel( "Abadah" );
+-		s.setSpeed( 85l );
+-		em.getTransaction().begin();
+-		em.persist( s );
+-		em.getTransaction().commit();
+-		em.close();
+-		em = emf.createEntityManager();
+-		em.getTransaction().begin();
+-		s = em.find( Scooter.class, s.getModel() );
+-		assertEquals( new Long( 85 ), s.getSpeed() );
+-		em.remove( s );
+-		em.getTransaction().commit();
+-		em.close();
+-		emf.close();
+-	}
+-
+-	public void testORMFileOnMainAndExplicitJars() throws Exception {
+-		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+-		EntityManager em = emf.createEntityManager();
+-		Seat seat = new Seat();
+-		seat.setNumber( "3B" );
+-		Airplane plane = new Airplane();
+-		plane.setSerialNumber( "75924418409052355" );
+-		em.getTransaction().begin();
+-		em.persist( seat );
+-		em.persist( plane );
+-		em.flush();
+-		em.getTransaction().rollback();
+-		em.close();
+-		emf.close();
+-	}
+-}
+\ No newline at end of file
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagingTestCase.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagingTestCase.java	(revision 0)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagingTestCase.java	(revision 0)
+@@ -0,0 +1,359 @@
++// $Id:$
++/*
++* JBoss, Home of Professional Open Source
++* Copyright 2009, Red Hat, Inc. and/or its affiliates, and individual contributors
++* by the @authors tag. See the copyright.txt in the distribution for a
++* full listing of individual contributors.
++*
++* Licensed under the Apache License, Version 2.0 (the "License");
++* you may not use this file except in compliance with the License.
++* You may obtain a copy of the License at
++* http://www.apache.org/licenses/LICENSE-2.0
++* Unless required by applicable law or agreed to in writing, software
++* distributed under the License is distributed on an "AS IS" BASIS,
++* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++* See the License for the specific language governing permissions and
++* limitations under the License.
++*/
++package org.hibernate.ejb.test.packaging;
++
++import java.io.File;
++import java.net.MalformedURLException;
++import java.net.URL;
++import java.net.URLClassLoader;
++import java.util.ArrayList;
++import java.util.List;
++
++import junit.framework.TestCase;
++import org.jboss.shrinkwrap.api.ArchivePath;
++import org.jboss.shrinkwrap.api.ArchivePaths;
++import org.jboss.shrinkwrap.api.Archives;
++import org.jboss.shrinkwrap.api.exporter.ExplodedExporter;
++import org.jboss.shrinkwrap.api.exporter.ZipExporter;
++import org.jboss.shrinkwrap.api.spec.JavaArchive;
++import org.jboss.shrinkwrap.api.spec.WebArchive;
++
++import org.hibernate.ejb.test.Cat;
++import org.hibernate.ejb.test.Distributor;
++import org.hibernate.ejb.test.Item;
++import org.hibernate.ejb.test.Kitten;
++import org.hibernate.ejb.test.pack.cfgxmlpar.Morito;
++import org.hibernate.ejb.test.pack.defaultpar.ApplicationServer;
++import org.hibernate.ejb.test.pack.defaultpar.IncrementListener;
++import org.hibernate.ejb.test.pack.defaultpar.Lighter;
++import org.hibernate.ejb.test.pack.defaultpar.Money;
++import org.hibernate.ejb.test.pack.defaultpar.Mouse;
++import org.hibernate.ejb.test.pack.defaultpar.OtherIncrementListener;
++import org.hibernate.ejb.test.pack.defaultpar.Version;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.ApplicationServer1;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.IncrementListener1;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.Lighter1;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.Money1;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.Mouse1;
++import org.hibernate.ejb.test.pack.defaultpar_1_0.Version1;
++import org.hibernate.ejb.test.pack.excludehbmpar.Caipirinha;
++import org.hibernate.ejb.test.pack.explodedpar.Carpet;
++import org.hibernate.ejb.test.pack.explodedpar.Elephant;
++import org.hibernate.ejb.test.pack.externaljar.Scooter;
++import org.hibernate.ejb.test.pack.spacepar.Bug;
++import org.hibernate.ejb.test.pack.various.Airplane;
++import org.hibernate.ejb.test.pack.various.Seat;
++
++/**
++ * @author Hardy Ferentschik
++ */
++public abstract class PackagingTestCase extends TestCase {
++	protected static ClassLoader originalClassLoader = Thread.currentThread().getContextClassLoader();
++	protected static ClassLoader bundleClassLoader;
++	protected static File targetDir;
++
++	static {
++		// get a URL reference to something we now is part of the classpath (us)
++		URL myUrl = originalClassLoader.getResource(
++				PackagingTestCase.class.getName().replace( '.', '/' ) + ".class"
++		);
++		File myPath = new File( myUrl.getFile() );
++		// navigate back to '/target'
++		targetDir = myPath
++				.getParentFile()  // target/classes/org/hibernate/ejb/test/packaging
++				.getParentFile()  // target/classes/org/hibernate/ejb/test
++				.getParentFile()  // target/classes/org/hibernate/ejb
++				.getParentFile()  // target/classes/org/hibernate
++				.getParentFile()  // target/classes/org
++				.getParentFile()  // target/classes/
++				.getParentFile(); // target
++		File testPackagesDir = new File( targetDir, "bundles" );
++		try {
++			bundleClassLoader = new URLClassLoader( new URL[] { testPackagesDir.toURL() }, originalClassLoader );
++		}
++		catch ( MalformedURLException e ) {
++			fail( "Unable to build custom class loader" );
++		}
++	}
++
++	@Override
++	protected void setUp() throws Exception {
++		// add the bundle class loader in order for ShrinkWrap to build the test package
++		Thread.currentThread().setContextClassLoader( bundleClassLoader );
++		super.setUp();
++	}
++
++	@Override
++	public void tearDown() throws Exception {
++		super.tearDown();
++		// reset the classloader
++		Thread.currentThread().setContextClassLoader( originalClassLoader );
++	}
++
++	protected void addPackageToClasspath(File... testPackages) throws MalformedURLException {
++		List<URL> urlList = new ArrayList<URL>();
++		for ( File file : testPackages ) {
++			urlList.add( file.toURL() );
++		}
++		URLClassLoader classLoader = new URLClassLoader(
++				urlList.toArray( new URL[urlList.size()] ), originalClassLoader
++		);
++		Thread.currentThread().setContextClassLoader( classLoader );
++	}
++
++	protected File buildDefaultPar() {
++		String fileName = "defaultpar.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				ApplicationServer.class,
++				Lighter.class,
++				Money.class,
++				Mouse.class,
++				OtherIncrementListener.class,
++				IncrementListener.class,
++				Version.class
++		);
++		ArchivePath path = ArchivePaths.create( "META-INF/orm.xml" );
++		archive.addResource( "defaultpar/META-INF/orm.xml", path );
++
++		path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "defaultpar/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/defaultpar/Mouse.hbm.xml" );
++		archive.addResource( "defaultpar/org/hibernate/ejb/test/pack/defaultpar/Mouse.hbm.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/defaultpar/package-info.class" );
++		archive.addResource( "org/hibernate/ejb/test/pack/defaultpar/package-info.class", path );
++
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildDefaultPar_1_0() {
++		String fileName = "defaultpar_1_0.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				ApplicationServer1.class,
++				Lighter1.class,
++				Money1.class,
++				Mouse1.class,
++				IncrementListener1.class,
++				Version1.class
++		);
++		ArchivePath path = ArchivePaths.create( "META-INF/orm.xml" );
++		archive.addResource( "defaultpar_1_0/META-INF/orm.xml", path );
++
++		path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "defaultpar_1_0/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/defaultpar_1_0/Mouse.hbm.xml" );
++		archive.addResource( "defaultpar_1_0/org/hibernate/ejb/test/pack/defaultpar_1_0/Mouse1.hbm.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/defaultpar_1_0/package-info.class" );
++		archive.addResource( "org/hibernate/ejb/test/pack/defaultpar_1_0/package-info.class", path );
++
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildExplicitPar() {
++		String fileName = "explicitpar.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Airplane.class,
++				Seat.class,
++				Cat.class,
++				Kitten.class,
++				Distributor.class,
++				Item.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/orm.xml" );
++		archive.addResource( "explicitpar/META-INF/orm.xml", path );
++
++		path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "explicitpar/META-INF/persistence.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildExplodedPar() {
++		String fileName = "explodedpar";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Elephant.class,
++				Carpet.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "explodedpar/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/explodedpar/Elephant.hbm.xml" );
++		archive.addResource( "explodedpar/org/hibernate/ejb/test/pack/explodedpar/Elephant.hbm.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/explodedpar/package-info.class" );
++		archive.addResource( "org/hibernate/ejb/test/pack/explodedpar/package-info.class", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ExplodedExporter.class ).exportExploded( targetDir );
++		return testPackage;
++	}
++
++	protected File buildExcludeHbmPar() {
++		String fileName = "excludehbmpar.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Caipirinha.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/orm2.xml" );
++		archive.addResource( "excludehbmpar/META-INF/orm2.xml", path );
++
++		path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "excludehbmpar/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/excludehbmpar/Mouse.hbm.xml" );
++		archive.addResource( "excludehbmpar/org/hibernate/ejb/test/pack/excludehbmpar/Mouse.hbm.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildCfgXmlPar() {
++		String fileName = "cfgxmlpar.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Morito.class,
++				Item.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "cfgxmlpar/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "org/hibernate/ejb/test/pack/cfgxmlpar/hibernate.cfg.xml" );
++		archive.addResource( "cfgxmlpar/org/hibernate/ejb/test/pack/cfgxmlpar/hibernate.cfg.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildSpacePar() {
++		String fileName = "space par.par";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Bug.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "space par/META-INF/persistence.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildOverridenPar() {
++		String fileName = "overridenpar.jar";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				org.hibernate.ejb.test.pack.overridenpar.Bug.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/persistence.xml" );
++		archive.addResource( "overridenpar/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "overridenpar.properties" );
++		archive.addResource( "overridenpar/overridenpar.properties", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildExternalJar() {
++		String fileName = "externaljar.jar";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addClasses(
++				Scooter.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "META-INF/orm.xml" );
++		archive.addResource( "externaljar/META-INF/orm.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildWar() {
++		String fileName = "war.war";
++		WebArchive archive = Archives.create( fileName, WebArchive.class );
++		archive.addClasses(
++				org.hibernate.ejb.test.pack.war.ApplicationServer.class,
++				org.hibernate.ejb.test.pack.war.IncrementListener.class,
++				org.hibernate.ejb.test.pack.war.Lighter.class,
++				org.hibernate.ejb.test.pack.war.Money.class,
++				org.hibernate.ejb.test.pack.war.Mouse.class,
++				org.hibernate.ejb.test.pack.war.OtherIncrementListener.class,
++				org.hibernate.ejb.test.pack.war.Version.class
++		);
++
++		ArchivePath path = ArchivePaths.create( "WEB-INF/classes/META-INF/orm.xml" );
++		archive.addResource( "war/WEB-INF/classes/META-INF/orm.xml", path );
++
++		path = ArchivePaths.create( "WEB-INF/classes/META-INF/persistence.xml" );
++		archive.addResource( "war/WEB-INF/classes/META-INF/persistence.xml", path );
++
++		path = ArchivePaths.create( "WEB-INF/classes/org/hibernate/ejb/test/pack/war/Mouse.hbm.xml" );
++		archive.addResource( "war/WEB-INF/classes/org/hibernate/ejb/test/pack/war/Mouse.hbm.xml", path );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildNestedEar(File includeFile) {
++		String fileName = "nestedjar.ear";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addResource( includeFile );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ZipExporter.class ).exportZip( testPackage, true );
++		return testPackage;
++	}
++
++	protected File buildNestedEarDir(File includeFile) {
++		String fileName = "nesteddir.ear";
++		JavaArchive archive = Archives.create( fileName, JavaArchive.class );
++		archive.addResource( includeFile );
++
++		File testPackage = new File( targetDir, fileName );
++		archive.as( ExplodedExporter.class ).exportExploded( targetDir );
++		return testPackage;
++	}
++}
++
++
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagedEntityManagerTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagedEntityManagerTest.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagedEntityManagerTest.java	(working copy)
+@@ -21,13 +21,9 @@
+  * 51 Franklin Street, Fifth Floor
+  * Boston, MA  02110-1301  USA
+  */
+-package org.hibernate.ejb.test;
++package org.hibernate.ejb.test.packaging;
+ 
+ import java.io.File;
+-import java.net.MalformedURLException;
+-import java.net.URL;
+-import java.net.URLClassLoader;
+-import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Properties;
+@@ -38,6 +34,8 @@
+ 
+ import org.hibernate.ejb.AvailableSettings;
+ import org.hibernate.ejb.HibernateEntityManagerFactory;
++import org.hibernate.ejb.test.Distributor;
++import org.hibernate.ejb.test.Item;
+ import org.hibernate.ejb.test.pack.cfgxmlpar.Morito;
+ import org.hibernate.ejb.test.pack.defaultpar.ApplicationServer;
+ import org.hibernate.ejb.test.pack.defaultpar.IncrementListener;
+@@ -63,48 +61,22 @@
+ import org.hibernate.util.ConfigHelper;
+ 
+ /**
++ * In this test we verify that  it is possible to bootstrap Hibernate/JPA from
++ * various bundles (war, par, ...) using {@code Persistence.createEntityManagerFactory()}
++ * <p/>
++ * Each test will before its run build the required bundle and place them into the classpath.
++ *
+  * @author Gavin King
++ * @author Hardy Ferentschik
+  */
+ @SuppressWarnings("unchecked")
+-public class PackagedEntityManagerTest extends junit.framework.TestCase {
+-	private static ClassLoader originalClassLoader;
+-
+-	@Override
+-	protected void setUp() throws Exception {
+-		originalClassLoader = Thread.currentThread().getContextClassLoader();
+-		Thread.currentThread().setContextClassLoader( buildCustomTCCL( originalClassLoader ) );
+-		super.setUp();
+-	}
+-
+-	private ClassLoader buildCustomTCCL(ClassLoader parentClassLoader) throws MalformedURLException {
+-		// get a URL reference to something we now is part of the classpath (us)
+-		URL myUrl = parentClassLoader.getResource(
+-				PackagedEntityManagerTest.class.getName().replace( '.', '/' ) + ".class"
+-		);
+-		File myPath = new File( myUrl.getFile() );
+-		// navigate back to '/target'
+-		File targetDir = myPath
+-				.getParentFile()  // target/classes/org/hibernate/ejb/test
+-				.getParentFile()  // target/classes/org/hibernate/ejb
+-				.getParentFile()  // target/classes/org/hibernate
+-				.getParentFile()  // target/classes/org
+-				.getParentFile()  // target/classes/
+-				.getParentFile(); // target
+-		File testPackagesDir = new File( targetDir, "test-packages" );
+-		ArrayList<URL> urls = new ArrayList<URL>();
+-		for ( File testPackage : testPackagesDir.listFiles() ) {
+-			urls.add( testPackage.toURL() );
+-		}
+-		return new URLClassLoader( urls.toArray( new URL[urls.size()] ), parentClassLoader );
+-	}
+-
+-	@Override
+-	public void tearDown() throws Exception {
+-		super.tearDown();
+-		Thread.currentThread().setContextClassLoader( originalClassLoader );
+-	}
++public class PackagedEntityManagerTest extends PackagingTestCase {
+ 
+ 	public void testDefaultPar() throws Exception {
++		File testPackage = buildDefaultPar();
++		addPackageToClasspath( testPackage );
++
++		// run the test
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		ApplicationServer as = new ApplicationServer();
+@@ -135,6 +107,9 @@
+ 	}
+ 
+ 	public void testDefaultParForPersistence_1_0() throws Exception {
++		File testPackage = buildDefaultPar_1_0();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar_1_0", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		ApplicationServer1 as = new ApplicationServer1();
+@@ -165,6 +140,9 @@
+ 	}
+ 
+ 	public void testListenersDefaultPar() throws Exception {
++		File testPackage = buildDefaultPar();
++		addPackageToClasspath( testPackage );
++
+ 		IncrementListener.reset();
+ 		OtherIncrementListener.reset();
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "defaultpar", new HashMap() );
+@@ -180,7 +158,7 @@
+ 		em.persist( as );
+ 		em.flush();
+ 		assertEquals( "Failure in default listeners", 1, IncrementListener.getIncrement() );
+-		assertEquals( "Failuer in XML overriden listeners", 1, OtherIncrementListener.getIncrement() );
++		assertEquals( "Failure in XML overriden listeners", 1, OtherIncrementListener.getIncrement() );
+ 
+ 		Mouse mouse = new Mouse();
+ 		mouse.setName( "mickey" );
+@@ -201,6 +179,9 @@
+ 	}
+ 
+ 	public void testExplodedPar() throws Exception {
++		File testPackage = buildExplodedPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "explodedpar", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		org.hibernate.ejb.test.pack.explodedpar.Carpet carpet = new Carpet();
+@@ -219,6 +200,9 @@
+ 	}
+ 
+ 	public void testExcludeHbmPar() throws Exception {
++		File testPackage = buildExcludeHbmPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = null;
+ 		try {
+ 			emf = Persistence.createEntityManagerFactory( "excludehbmpar", new HashMap() );
+@@ -252,6 +236,9 @@
+ 	}
+ 
+ 	public void testCfgXmlPar() throws Exception {
++		File testPackage = buildCfgXmlPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "cfgxmlpar", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		Item i = new Item();
+@@ -274,6 +261,9 @@
+ 	}
+ 
+ 	public void testSpacePar() throws Exception {
++		File testPackage = buildSpacePar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "space par", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		Bug bug = new Bug();
+@@ -289,6 +279,9 @@
+ 	}
+ 
+ 	public void testOverridenPar() throws Exception {
++		File testPackage = buildOverridenPar();
++		addPackageToClasspath( testPackage );
++
+ 		HashMap properties = new HashMap();
+ 		properties.put( AvailableSettings.JTA_DATASOURCE, null );
+ 		Properties p = new Properties();
+@@ -309,6 +302,9 @@
+ 	}
+ 
+ 	public void testListeners() throws Exception {
++		File testPackage = buildExplicitPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		EventListeners eventListeners = em.unwrap( SessionImplementor.class ).getListeners();
+@@ -322,7 +318,10 @@
+ 		emf.close();
+ 	}
+ 
+-	public void testExtendedEntityManager() {
++	public void testExtendedEntityManager() throws Exception {
++		File testPackage = buildExplicitPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		Item item = new Item( "Mouse", "Micro$oft mouse" );
+@@ -369,6 +368,9 @@
+ 	}
+ 
+ 	public void testConfiguration() throws Exception {
++		File testPackage = buildExplicitPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+ 		Item item = new Item( "Mouse", "Micro$oft mouse" );
+ 		Distributor res = new Distributor();
+@@ -418,6 +420,10 @@
+ 	}
+ 
+ 	public void testExternalJar() throws Exception {
++		File externalJar = buildExternalJar();
++		File testPackage = buildExplicitPar();
++		addPackageToClasspath( testPackage, externalJar );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		Scooter s = new Scooter();
+@@ -438,6 +444,9 @@
+ 	}
+ 
+ 	public void testORMFileOnMainAndExplicitJars() throws Exception {
++		File testPackage = buildExplicitPar();
++		addPackageToClasspath( testPackage );
++
+ 		EntityManagerFactory emf = Persistence.createEntityManagerFactory( "manager1", new HashMap() );
+ 		EntityManager em = emf.createEntityManager();
+ 		Seat seat = new Seat();
+
+Property changes on: entitymanager/src/test/java/org/hibernate/ejb/test/packaging/PackagedEntityManagerTest.java
+___________________________________________________________________
+Added: svn:eol-style
+   + native
+Added: svn:keywords
+   + Id
+
+Index: annotations/src/main/java/org/hibernate/cfg/annotations/reflection/XMLContext.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/annotations/reflection/XMLContext.java	(revision 18837)
++++ annotations/src/main/java/org/hibernate/cfg/annotations/reflection/XMLContext.java	(working copy)
+@@ -183,7 +183,7 @@
+ 				classOverriding.put( listenerClassName, listener );
+ 			}
+ 		}
+-		log.debug( "Adding XML overriding information for listener: {}", listeners );
++		log.debug( "Adding XML overriding information for listener: {}", localAddedClasses );
+ 		addedClasses.addAll( localAddedClasses );
+ 		return localAddedClasses;
+ 	}
+Index: entitymanager/build.xml
+===================================================================
+--- entitymanager/build.xml	(revision 18837)
++++ entitymanager/build.xml	(working copy)
+@@ -26,97 +26,4 @@
+         </uptodate>
+     </target>
+ 
+-    <target name="packjar">
+-        <property name="extension" value="jar"/>
+-        <property name="packagename" value="${jarname}"/>
+-        <property name="headerdirectory" value="."/>
+-        <mkdir dir="${package.dir}"/>
+-        <mkdir dir="${package.tmp.dir}/${headerdirectory}"/>
+-        <copy todir="${package.tmp.dir}/${headerdirectory}">
+-            <fileset dir="${classes.dir}">
+-                <include name="**/test/pack/${packagename}/**.*"/>
+-            </fileset>
+-        </copy>
+-        <jar destfile="${package.dir}/${jarname}.${extension}">
+-            <fileset dir="${package.tmp.dir}">
+-                <include name="**/*.*"/>
+-            </fileset>
+-            <fileset dir="${testresources.dir}/${jarname}">
+-                <include name="**/*.*"/>
+-            </fileset>
+-        </jar>
+-        <delete dir="${package.tmp.dir}"/>
+-    </target>
+-
+-    <target name="packexploded">
+-        <property name="extension" value="jar"/>
+-        <mkdir dir="${package.dir}/${jarname}.${extension}"/>
+-        <copy todir="${package.dir}/${jarname}.${extension}">
+-            <fileset dir="${classes.dir}">
+-                <include name="**/test/pack/${jarname}/**.*"/>
+-            </fileset>
+-            <fileset dir="${testresources.dir}/${jarname}">
+-                <include name="**/*.*"/>
+-            </fileset>
+-        </copy>
+-    </target>
+-
+-    <target name="package" description="Prepare all needed jars and pars">
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="defaultpar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="defaultpar_1_0"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="space par"/>
+-            <param name="packagename" value="spacepar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="explicitpar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="excludehbmpar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="jar"/>
+-            <param name="jarname" value="externaljar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="cfgxmlpar"/>
+-        </antcall>
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="jar"/>
+-            <param name="jarname" value="overridenpar"/>
+-        </antcall>
+-
+-        <!-- nested jar -->
+-        <jar destfile="${package.dir}/nestedjar.ear">
+-            <fileset dir="${package.dir}">
+-                <include name="defaultpar.par"/>
+-            </fileset>
+-        </jar>
+-        <copy todir="${package.dir}/nesteddir.ear">
+-            <fileset dir="${package.dir}">
+-                <include name="defaultpar.par"/>
+-            </fileset>
+-        </copy>
+-
+-        <antcall target="packjar" inheritall="true">
+-            <param name="extension" value="war"/>
+-            <param name="jarname" value="war"/>
+-            <param name="headerdirectory" value="WEB-INF/classes"/>
+-        </antcall>
+-
+-        <antcall target="packexploded" inheritall="true">
+-            <param name="extension" value="par"/>
+-            <param name="jarname" value="explodedpar"/>
+-        </antcall>
+-    </target>
+ </project>
+Index: entitymanager/pom.xml
+===================================================================
+--- entitymanager/pom.xml	(revision 18837)
++++ entitymanager/pom.xml	(working copy)
+@@ -1,5 +1,7 @@
+ <?xml version="1.0"?>
+-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
++<project xmlns="http://maven.apache.org/POM/4.0.0"
++         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+ 
+     <modelVersion>4.0.0</modelVersion>
+ 
+@@ -57,6 +59,18 @@
+             <scope>test</scope>
+         </dependency>
+         <dependency>
++            <groupId>org.jboss.shrinkwrap</groupId>
++            <artifactId>shrinkwrap-api</artifactId>
++            <version>1.0.0-SNAPSHOT</version>
++            <scope>test</scope>
++        </dependency>
++        <dependency>
++            <groupId>org.jboss.shrinkwrap</groupId>
++            <artifactId>shrinkwrap-impl-base</artifactId>
++            <version>1.0.0-SNAPSHOT</version>
++            <scope>test</scope>
++        </dependency>
++        <dependency>
+             <!--
+                 Only really needed for the antrun plugin defined below (which in turn is only really needed
+                 to work around a missing feature on the compile plugin; lovely no?).  However I have not
+@@ -134,24 +148,6 @@
+                             <goal>run</goal>
+                         </goals>
+                     </execution>
+-                    <execution>
+-                        <id>package-tests</id>
+-                        <phase>process-test-classes</phase>
+-                        <configuration>
+-                            <tasks>
+-                                <property name="package.dir" value="${basedir}/target/test-packages"/>
+-                                <property name="package.tmp.dir" value="${basedir}/target/tmp"/>
+-                                <property name="classes.dir" value="${project.build.directory}/test-classes"/>
+-                                <property name="testresources.dir" value="${basedir}/target/bundles"/>
+-                                <ant antfile="${basedir}/build.xml">
+-                                    <target name="package"/>
+-                                </ant>
+-                            </tasks>
+-                        </configuration>
+-                        <goals>
+-                            <goal>run</goal>
+-                        </goals>
+-                    </execution>
+                 </executions>
+             </plugin>
+             <plugin>
+@@ -163,39 +159,12 @@
+                 </configuration>
+             </plugin>
+             <plugin>
+-                <groupId>org.jboss.maven.plugins</groupId>
+-                <artifactId>maven-test-ext-plugin</artifactId>
+-            </plugin>
+-            <plugin>
+                 <groupId>org.apache.maven.plugins</groupId>
+                 <artifactId>maven-surefire-plugin</artifactId>
+                 <configuration>
+-                    <forkMode>pertest</forkMode>
+-                    <additionalClasspathElements>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/cfgxmlpar.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/defaultpar.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/defaultpar_1_0.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/excludehbmpar.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/explicitpar.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/explodedpar.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/externaljar.jar
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/nesteddir.ear
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/nestedjar.ear
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/overridenpar.jar
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/space par.par
+-                        </additionalClasspathElement>
+-                        <additionalClasspathElement>${basedir}/target/test-packages/war.war</additionalClasspathElement>
+-                    </additionalClasspathElements>
++                    <excludes>
++                        <exclude>**/*TestCase.java</exclude>
++                    </excludes>
+                 </configuration>
+             </plugin>
+         </plugins>
+Index: entitymanager/src/test/bundles/explicitpar/META-INF/persistence.xml
+===================================================================
+--- entitymanager/src/test/bundles/explicitpar/META-INF/persistence.xml	(revision 18837)
++++ entitymanager/src/test/bundles/explicitpar/META-INF/persistence.xml	(working copy)
+@@ -4,12 +4,11 @@
+              xsi:schemaLocation="http://java.sun.com/xml/ns/persistence http://java.sun.com/xml/ns/persistence/persistence_2_0.xsd"
+              version="2.0">
+     <persistence-unit name="manager1" transaction-type="RESOURCE_LOCAL">
+-        <jar-file>./target/test-packages/externaljar.jar</jar-file>
++        <jar-file>${basedir}/target/externaljar.jar</jar-file>
+         <class>org.hibernate.ejb.test.Cat</class>
+ 		<class>org.hibernate.ejb.test.Kitten</class>
+         <class>org.hibernate.ejb.test.Distributor</class>
+         <class>org.hibernate.ejb.test.Item</class>
+-        <class>org.hibernate.ejb.test</class>
+         <exclude-unlisted-classes>true</exclude-unlisted-classes>
+         <properties>
+             <property name="hibernate.dialect" value="${db.dialect}"/>
+Index: entitymanager/src/test/bundles/explodedpar/META-INF/persistence.xml
+===================================================================
+--- entitymanager/src/test/bundles/explodedpar/META-INF/persistence.xml	(revision 18837)
++++ entitymanager/src/test/bundles/explodedpar/META-INF/persistence.xml	(working copy)
+@@ -5,7 +5,6 @@
+              xsi:schemaLocation="http://java.sun.com/xml/ns/persistence http://java.sun.com/xml/ns/persistence/persistence_2_0.xsd"
+              version="2.0">
+     <persistence-unit name="explodedpar" transaction-type="RESOURCE_LOCAL">
+-
+         <properties>
+             <property name="hibernate.dialect" value="${db.dialect}"/>
+             <property name="hibernate.connection.driver_class" value="${jdbc.driver}"/>
+Index: entitymanager/src/test/bundles/explodedpar/org/hibernate/ejb/test/pack/explodedpar/Elephant.hbm.xml
+===================================================================
+--- entitymanager/src/test/bundles/explodedpar/org/hibernate/ejb/test/pack/explodedpar/Elephant.hbm.xml	(revision 18837)
++++ entitymanager/src/test/bundles/explodedpar/org/hibernate/ejb/test/pack/explodedpar/Elephant.hbm.xml	(working copy)
+@@ -3,18 +3,11 @@
+         "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
+         "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
+ 
+-<hibernate-mapping
+-        package="org.hibernate.ejb.test.pack.explodedpar"
+-        >
+-
+-
++<hibernate-mapping package="org.hibernate.ejb.test.pack.explodedpar">
+     <class name="Elephant">
+-
+         <id name="id">
+             <generator class="native"/>
+         </id>
+         <property name="name"/>
+-
+     </class>
+-
+ </hibernate-mapping>
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/TestCase.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/TestCase.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/TestCase.java	(working copy)
+@@ -81,11 +81,16 @@
+ 			cfg.setProperty( Environment.HBM2DDL_AUTO, "create-drop" );
+ 		}
+ 		cfg.setProperty( AnnotationConfiguration.USE_NEW_ID_GENERATOR_MAPPINGS, "true" );
++
++		for ( String mappingFile : getMappings() ) {
++			cfg.addResource( mappingFile );
++		}
++
+ 		factory = ejbconfig.createEntityManagerFactory( getConfig() );
+ 	}
+ 
+-	private void cleanUnclosed(EntityManager em){
+-		if(em == null) {
++	private void cleanUnclosed(EntityManager em) {
++		if ( em == null ) {
+ 			return;
+ 		}
+ 		if ( em.getTransaction().isActive() ) {
+@@ -99,10 +104,11 @@
+ 			log.warn( "The EntityManager is not closed. Closing it." );
+ 		}
+ 	}
+-	protected void handleUnclosedResources(){
++
++	protected void handleUnclosedResources() {
+ 		cleanUnclosed( this.em );
+-		for ( Iterator iter = isolatedEms.iterator(); iter.hasNext();) {
+-			cleanUnclosed( (EntityManager)iter.next() );
++		for ( Iterator iter = isolatedEms.iterator(); iter.hasNext(); ) {
++			cleanUnclosed( ( EntityManager ) iter.next() );
+ 		}
+ 
+ 		cfg = null;
+@@ -122,7 +128,7 @@
+ 	}
+ 
+ 	protected EntityManager createIsolatedEntityManager() {
+-		EntityManager isolatedEm = factory.createEntityManager( );
++		EntityManager isolatedEm = factory.createEntityManager();
+ 		isolatedEms.add( isolatedEm );
+ 		return isolatedEm;
+ 	}
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/ejb3configuration/TestCase.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/ejb3configuration/TestCase.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/ejb3configuration/TestCase.java	(working copy)
+@@ -61,8 +61,6 @@
+ 		return true;
+ 	}
+ 
+-	;
+-
+ 	private void buildConfiguration() {
+ 		configuration = new Ejb3Configuration();
+ 		configuration.addProperties( loadProperties() );
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/ops/PersistTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/ops/PersistTest.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/ops/PersistTest.java	(working copy)
+@@ -3,221 +3,209 @@
+ 
+ import java.util.ArrayList;
+ import java.util.Collection;
++import java.util.Map;
++import javax.persistence.EntityManager;
++import javax.persistence.PersistenceException;
++import javax.persistence.RollbackException;
+ 
+-import junit.framework.Test;
+-import junit.framework.TestSuite;
+-import org.hibernate.PersistentObjectException;
+-import org.hibernate.Session;
+-import org.hibernate.Transaction;
+-import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+-import org.hibernate.ejb.test.EJB3TestCase;
+-import org.hibernate.exception.ConstraintViolationException;
++import org.hibernate.ejb.EntityManagerFactoryImpl;
++import org.hibernate.ejb.test.TestCase;
+ 
+ /**
+  * @author Gavin King
+  */
+-public class PersistTest extends EJB3TestCase {
+-
+-	public PersistTest(String str) {
+-		super( str );
+-	}
++public class PersistTest extends TestCase {
+ 
+ 	public void testCreateTree() {
+ 
+ 		clearCounts();
+-
+-		Session s = openSession();
+-		Transaction tx = s.beginTransaction();
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		Node root = new Node( "root" );
+ 		Node child = new Node( "child" );
+ 		root.addChild( child );
+-		s.persist( root );
+-		tx.commit();
+-		s.close();
++		em.persist( root );
++		em.getTransaction().commit();
++		em.close();
+ 
+ 		assertInsertCount( 2 );
+ 		assertUpdateCount( 0 );
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
+-		root = (Node) s.get( Node.class, "root" );
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		root = ( Node ) em.find( Node.class, "root" );
+ 		Node child2 = new Node( "child2" );
+ 		root.addChild( child2 );
+-		tx.commit();
+-		s.close();
++		em.getTransaction().commit();
++		em.close();
+ 
+ 		assertInsertCount( 3 );
+ 		assertUpdateCount( 0 );
+ 	}
+ 
+ 	public void testCreateTreeWithGeneratedId() {
+-
+ 		clearCounts();
+ 
+-		Session s = openSession();
+-		Transaction tx = s.beginTransaction();
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		NumberedNode root = new NumberedNode( "root" );
+ 		NumberedNode child = new NumberedNode( "child" );
+ 		root.addChild( child );
+-		s.persist( root );
+-		tx.commit();
+-		s.close();
++		em.persist( root );
++		em.getTransaction().commit();
++		em.close();
+ 
+ 		assertInsertCount( 2 );
+ 		assertUpdateCount( 0 );
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
+-		root = (NumberedNode) s.get( NumberedNode.class, new Long( root.getId() ) );
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		root = ( NumberedNode ) em.find( NumberedNode.class, root.getId() );
+ 		NumberedNode child2 = new NumberedNode( "child2" );
+ 		root.addChild( child2 );
+-		tx.commit();
+-		s.close();
++		em.getTransaction().commit();
++		em.close();
+ 
+ 		assertInsertCount( 3 );
+ 		assertUpdateCount( 0 );
+ 	}
+ 
+ 	public void testCreateException() {
+-		Session s = openSession();
+-		Transaction tx = s.beginTransaction();
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		Node dupe = new Node( "dupe" );
+-		s.persist( dupe );
+-		s.persist( dupe );
+-		tx.commit();
+-		s.close();
++		em.persist( dupe );
++		em.persist( dupe );
++		em.getTransaction().commit();
++		em.close();
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
+-		s.persist( dupe );
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		em.persist( dupe );
+ 		try {
+-			tx.commit();
++			em.getTransaction().commit();
+ 			fail( "Cannot persist() twice the same entity" );
+ 		}
+-		catch (ConstraintViolationException cve) {
++		catch ( Exception cve ) {
+ 			//verify that an exception is thrown!
+ 		}
+-		tx.rollback();
+-		s.close();
++		em.close();
+ 
+ 		Node nondupe = new Node( "nondupe" );
+ 		nondupe.addChild( dupe );
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
+-		s.persist( nondupe );
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		em.persist( nondupe );
+ 		try {
+-			tx.commit();
++			em.getTransaction().commit();
+ 			assertFalse( true );
+ 		}
+-		catch (ConstraintViolationException cve) {
++		catch ( RollbackException e ) {
+ 			//verify that an exception is thrown!
+ 		}
+-		tx.rollback();
+-		s.close();
++		em.close();
+ 	}
+ 
+ 	public void testCreateExceptionWithGeneratedId() {
+-		Session s = openSession();
+-		Transaction tx = s.beginTransaction();
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		NumberedNode dupe = new NumberedNode( "dupe" );
+-		s.persist( dupe );
+-		s.persist( dupe );
+-		tx.commit();
+-		s.close();
++		em.persist( dupe );
++		em.persist( dupe );
++		em.getTransaction().commit();
++		em.close();
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		try {
+-			s.persist( dupe );
++			em.persist( dupe );
+ 			fail();
+ 		}
+-		catch (PersistentObjectException poe) {
++		catch ( PersistenceException poe ) {
+ 			//verify that an exception is thrown!
+ 		}
+-		tx.rollback();
+-		s.close();
++		em.getTransaction().rollback();
++		em.close();
+ 
+ 		NumberedNode nondupe = new NumberedNode( "nondupe" );
+ 		nondupe.addChild( dupe );
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		try {
+-			s.persist( nondupe );
++			em.persist( nondupe );
+ 			fail();
+ 		}
+-		catch (PersistentObjectException poe) {
++		catch ( PersistenceException poe ) {
+ 			//verify that an exception is thrown!
+ 		}
+-		tx.rollback();
+-		s.close();
++		em.getTransaction().rollback();
++		em.close();
+ 	}
+ 
+ 	public void testBasic() throws Exception {
+-		Session s;
+-		Transaction tx;
+-		s = openSession();
+-		tx = s.beginTransaction();
++
++		EntityManager em = getOrCreateEntityManager();
++		em.getTransaction().begin();
+ 		Employer er = new Employer();
+ 		Employee ee = new Employee();
+-		s.persist( ee );
+-		Collection erColl = new ArrayList();
+-		Collection eeColl = new ArrayList();
++		em.persist( ee );
++		Collection<Employee> erColl = new ArrayList<Employee>();
++		Collection<Employer> eeColl = new ArrayList<Employer>();
+ 		erColl.add( ee );
+ 		eeColl.add( er );
+ 		er.setEmployees( erColl );
+ 		ee.setEmployers( eeColl );
+-		tx.commit();
+-		s.close();
++		em.getTransaction().commit();
++		em.close();
+ 
+-		s = openSession();
+-		tx = s.beginTransaction();
+-		er = (Employer) s.load( Employer.class, er.getId() );
++		em = getOrCreateEntityManager();
++		em.getTransaction().begin();
++		er = ( Employer ) em.find( Employer.class, er.getId() );
+ 		assertNotNull( er );
+ 		assertNotNull( er.getEmployees() );
+ 		assertEquals( 1, er.getEmployees().size() );
+-		Employee eeFromDb = (Employee) er.getEmployees().iterator().next();
++		Employee eeFromDb = ( Employee ) er.getEmployees().iterator().next();
+ 		assertEquals( ee.getId(), eeFromDb.getId() );
+-		tx.commit();
+-		s.close();
++		em.getTransaction().commit();
++		em.close();
+ 	}
+ 
+ 	private void clearCounts() {
+-		getSessions().getStatistics().clear();
++		( ( EntityManagerFactoryImpl ) factory ).getSessionFactory().getStatistics().clear();
+ 	}
+ 
+ 	private void assertInsertCount(int count) {
+-		int inserts = (int) getSessions().getStatistics().getEntityInsertCount();
++		int inserts = ( int ) ( ( EntityManagerFactoryImpl ) factory ).getSessionFactory()
++				.getStatistics()
++				.getEntityInsertCount();
+ 		assertEquals( count, inserts );
+ 	}
+ 
+ 	private void assertUpdateCount(int count) {
+-		int updates = (int) getSessions().getStatistics().getEntityUpdateCount();
++		int updates = ( int ) ( ( EntityManagerFactoryImpl ) factory ).getSessionFactory()
++				.getStatistics()
++				.getEntityUpdateCount();
+ 		assertEquals( count, updates );
+ 	}
+ 
+-	protected void configure(Configuration cfg) {
+-		super.configure( cfg );
+-		cfg.setProperty( Environment.GENERATE_STATISTICS, "true" );
+-		cfg.setProperty( Environment.STATEMENT_BATCH_SIZE, "0" );
+-	}
+-
+-	protected String[] getMappings() {
+-		return new String[]{
+-				"ops/Node.hbm.xml",
+-				"ops/Employer.hbm.xml"
+-		};
++	protected void addConfigOptions(Map options) {
++		options.put( Environment.GENERATE_STATISTICS, "true" );
++		options.put( Environment.STATEMENT_BATCH_SIZE, "0" );
+ 	}
+ 
+-	public static Test suite() {
+-		return new TestSuite( PersistTest.class );
++	@Override
++	protected Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] { Node.class };
+ 	}
+ 
+-	public String getCacheConcurrencyStrategy() {
+-		return null;
++	protected String[] getMappings() {
++		return new String[] {
++				"org/hibernate/ejb/test/ops/Node.hbm.xml",
++				"org/hibernate/ejb/test/ops/Employer.hbm.xml"
++		};
+ 	}
+-
+ }
+ 
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/packaging/JarVisitorTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/packaging/JarVisitorTest.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/packaging/JarVisitorTest.java	(working copy)
+@@ -28,13 +28,10 @@
+ import java.net.URL;
+ import java.net.URLConnection;
+ import java.util.Set;
+-
+ import javax.persistence.Embeddable;
+ import javax.persistence.Entity;
+ import javax.persistence.MappedSuperclass;
+ 
+-import junit.framework.TestCase;
+-
+ import org.hibernate.ejb.packaging.ClassFilter;
+ import org.hibernate.ejb.packaging.Entry;
+ import org.hibernate.ejb.packaging.ExplodedJarVisitor;
+@@ -48,38 +45,13 @@
+ import org.hibernate.ejb.packaging.PackageFilter;
+ import org.hibernate.ejb.test.pack.defaultpar.ApplicationServer;
+ import org.hibernate.ejb.test.pack.explodedpar.Carpet;
+-import org.hibernate.junit.FailureExpected;
+-
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+ 
+ /**
+  * @author Emmanuel Bernard
++ * @author Hardy Ferentschik
+  */
+ @SuppressWarnings("unchecked")
+-public class JarVisitorTest extends TestCase {
+-	
+-	private static final Logger log = LoggerFactory.getLogger(JarVisitorTest.class);
+-
+-	private static String jarFileBase;
+-
+-	@Override
+-	protected void setUp() throws Exception {
+-		URL myUrl = JarVisitorTest.class.getClassLoader().getResource( JarVisitorTest.class.getName().replace( '.', '/' ) + ".class" );
+-		File myPath = new File( myUrl.getFile() );
+-		// navigate back to '/target'
+-		File targetDir = myPath
+-				.getParentFile()  // target/classes/org/hibernate/ejb/test/packaging
+-				.getParentFile()  // target/classes/org/hibernate/ejb/test
+-				.getParentFile()  // target/classes/org/hibernate/ejb
+-				.getParentFile()  // target/classes/org/hibernate
+-				.getParentFile()  // target/classes/org
+-				.getParentFile()  // target/classes
+-				.getParentFile(); // target
+-		jarFileBase = new File( targetDir, "test-packages" ).toURL().toExternalForm();
+-		super.setUp();
+-	}
+-
++public class JarVisitorTest extends PackagingTestCase {
+ 
+ 	public void testHttp() throws Exception {
+ 		URL url = JarVisitorFactory.getJarURLFromURLEntry(
+@@ -92,7 +64,7 @@
+ 			URLConnection urlConnection = url.openConnection();
+ 			urlConnection.connect();
+ 		}
+-		catch (IOException ie) {
++		catch ( IOException ie ) {
+ 			//fail silently
+ 			return;
+ 		}
+@@ -102,11 +74,12 @@
+ 		assertEquals( 0, visitor.getMatchingEntries()[2].size() );
+ 	}
+ 
+-	@FailureExpected( jiraKey = "")
+ 	public void testInputStreamZippedJar() throws Exception {
+-		String jarFileName = jarFileBase + "defaultpar.par";
++		File defaultPar = buildDefaultPar();
++		addPackageToClasspath( defaultPar );
++
+ 		Filter[] filters = getFilters();
+-		JarVisitor jarVisitor = new InputStreamZippedJarVisitor( new URL( jarFileName ), filters, "" );
++		JarVisitor jarVisitor = new InputStreamZippedJarVisitor( defaultPar.toURL(), filters, "" );
+ 		assertEquals( "defaultpar", jarVisitor.getUnqualifiedJarName() );
+ 		Set entries = jarVisitor.getMatchingEntries()[1];
+ 		assertEquals( 3, entries.size() );
+@@ -114,16 +87,21 @@
+ 		assertTrue( entries.contains( entry ) );
+ 		entry = new Entry( org.hibernate.ejb.test.pack.defaultpar.Version.class.getName(), null );
+ 		assertTrue( entries.contains( entry ) );
+-		assertNull( ( (Entry) entries.iterator().next() ).getInputStream() );
++		assertNull( ( ( Entry ) entries.iterator().next() ).getInputStream() );
+ 		assertEquals( 2, jarVisitor.getMatchingEntries()[2].size() );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+ 	}
+ 
+ 	public void testNestedJarProtocol() throws Exception {
+-		String jarFileName = jarFileBase + "/nestedjar.ear!/defaultpar.par";
++		File defaultPar = buildDefaultPar();
++		File nestedEar = buildNestedEar( defaultPar );
++		File nestedEarDir = buildNestedEarDir( defaultPar );
++		addPackageToClasspath( nestedEar );
++
++		String jarFileName = nestedEar.toURL().toExternalForm() + "!/defaultpar.par";
+ 		Filter[] filters = getFilters();
+ 		JarVisitor jarVisitor = new JarProtocolVisitor( new URL( jarFileName ), filters, "" );
+ 		//TODO should we fix the name here to reach defaultpar rather than nestedjar ??
+@@ -134,14 +112,14 @@
+ 		assertTrue( entries.contains( entry ) );
+ 		entry = new Entry( org.hibernate.ejb.test.pack.defaultpar.Version.class.getName(), null );
+ 		assertTrue( entries.contains( entry ) );
+-		assertNull( ( (Entry) entries.iterator().next() ).getInputStream() );
++		assertNull( ( ( Entry ) entries.iterator().next() ).getInputStream() );
+ 		assertEquals( 2, jarVisitor.getMatchingEntries()[2].size() );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+ 
+-		jarFileName = jarFileBase + "/nesteddir.ear!/defaultpar.par";
++		jarFileName = nestedEarDir.toURL().toExternalForm() + "!/defaultpar.par";
+ 		//JarVisitor jarVisitor = new ZippedJarVisitor( jarFileName, true, true );
+ 		filters = getFilters();
+ 		jarVisitor = new JarProtocolVisitor( new URL( jarFileName ), filters, "" );
+@@ -153,16 +131,19 @@
+ 		assertTrue( entries.contains( entry ) );
+ 		entry = new Entry( org.hibernate.ejb.test.pack.defaultpar.Version.class.getName(), null );
+ 		assertTrue( entries.contains( entry ) );
+-		assertNull( ( (Entry) entries.iterator().next() ).getInputStream() );
++		assertNull( ( ( Entry ) entries.iterator().next() ).getInputStream() );
+ 		assertEquals( 2, jarVisitor.getMatchingEntries()[2].size() );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+ 	}
+ 
+ 	public void testJarProtocol() throws Exception {
+-		String jarFileName = jarFileBase + "/war.war!/WEB-INF/classes";
++		File war = buildWar();
++		addPackageToClasspath( war );
++
++		String jarFileName = war.toURL().toExternalForm() + "!/WEB-INF/classes";
+ 		Filter[] filters = getFilters();
+ 		JarVisitor jarVisitor = new JarProtocolVisitor( new URL( jarFileName ), filters, "" );
+ 		assertEquals( "war", jarVisitor.getUnqualifiedJarName() );
+@@ -172,18 +153,20 @@
+ 		assertTrue( entries.contains( entry ) );
+ 		entry = new Entry( org.hibernate.ejb.test.pack.war.Version.class.getName(), null );
+ 		assertTrue( entries.contains( entry ) );
+-		assertNull( ( (Entry) entries.iterator().next() ).getInputStream() );
++		assertNull( ( ( Entry ) entries.iterator().next() ).getInputStream() );
+ 		assertEquals( 2, jarVisitor.getMatchingEntries()[2].size() );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+ 	}
+ 
+ 	public void testZippedJar() throws Exception {
+-		String jarFileName = jarFileBase + "/defaultpar.par";
++		File defaultPar = buildDefaultPar();
++		addPackageToClasspath( defaultPar );
++
+ 		Filter[] filters = getFilters();
+-		JarVisitor jarVisitor = new FileZippedJarVisitor( new URL( jarFileName ), filters, "" );
++		JarVisitor jarVisitor = new FileZippedJarVisitor( defaultPar.toURL(), filters, "" );
+ 		assertEquals( "defaultpar", jarVisitor.getUnqualifiedJarName() );
+ 		Set entries = jarVisitor.getMatchingEntries()[1];
+ 		assertEquals( 3, entries.size() );
+@@ -191,19 +174,25 @@
+ 		assertTrue( entries.contains( entry ) );
+ 		entry = new Entry( org.hibernate.ejb.test.pack.defaultpar.Version.class.getName(), null );
+ 		assertTrue( entries.contains( entry ) );
+-		assertNull( ( (Entry) entries.iterator().next() ).getInputStream() );
++		assertNull( ( ( Entry ) entries.iterator().next() ).getInputStream() );
+ 		assertEquals( 2, jarVisitor.getMatchingEntries()[2].size() );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+ 	}
+ 
+-
+ 	public void testExplodedJar() throws Exception {
+-		String jarFileName = jarFileBase + "/explodedpar.par";
++		File explodedPar = buildExplodedPar();
++		addPackageToClasspath( explodedPar );
++
+ 		Filter[] filters = getFilters();
+-		JarVisitor jarVisitor = new ExplodedJarVisitor( jarFileName, filters );
++		String dirPath = explodedPar.toURL().toExternalForm();
++		// TODO - shouldn't  ExplodedJarVisitor take care of a trailing slash?
++		if ( dirPath.endsWith( "/" ) ) {
++			dirPath = dirPath.substring( 0, dirPath.length() - 1 );
++		}
++		JarVisitor jarVisitor = new ExplodedJarVisitor( dirPath, filters );
+ 		assertEquals( "explodedpar", jarVisitor.getUnqualifiedJarName() );
+ 		Set[] entries = jarVisitor.getMatchingEntries();
+ 		assertEquals( 1, entries[1].size() );
+@@ -212,7 +201,7 @@
+ 
+ 		Entry entry = new Entry( Carpet.class.getName(), null );
+ 		assertTrue( entries[1].contains( entry ) );
+-		for (Entry localEntry : (Set<Entry>) jarVisitor.getMatchingEntries()[2] ) {
++		for ( Entry localEntry : ( Set<Entry> ) jarVisitor.getMatchingEntries()[2] ) {
+ 			assertNotNull( localEntry.getInputStream() );
+ 			localEntry.getInputStream().close();
+ 		}
+@@ -222,10 +211,9 @@
+ 	 * EJB-230
+ 	 */
+ 	public void testDuplicateFilterExplodedJarExpected() throws Exception {
+-		
+-		log.warn("Skipping test! See jira issue EJB-230.");
+-
+-//		String jarFileName = "./build/testresources/explodedpar.par";
++//		File explodedPar = buildExplodedPar();
++//		addPackageToClasspath( explodedPar );
++//
+ //		Filter[] filters = getFilters();
+ //		Filter[] dupeFilters = new Filter[filters.length * 2];
+ //		int index = 0;
+@@ -236,20 +224,25 @@
+ //		for ( Filter filter : filters ) {
+ //			dupeFilters[index++] = filter;
+ //		}
+-//		JarVisitor jarVisitor = new ExplodedJarVisitor( jarFileName, dupeFilters );
++//		String dirPath = explodedPar.toURL().toExternalForm();
++//		// TODO - shouldn't  ExplodedJarVisitor take care of a trailing slash?
++//		if ( dirPath.endsWith( "/" ) ) {
++//			dirPath = dirPath.substring( 0, dirPath.length() - 1 );
++//		}
++//		JarVisitor jarVisitor = new ExplodedJarVisitor( dirPath, dupeFilters );
+ //		assertEquals( "explodedpar", jarVisitor.getUnqualifiedJarName() );
+ //		Set[] entries = jarVisitor.getMatchingEntries();
+ //		assertEquals( 1, entries[1].size() );
+ //		assertEquals( 1, entries[0].size() );
+ //		assertEquals( 1, entries[2].size() );
+-//		for ( Entry entry : (Set<Entry>) entries[2] ) {
++//		for ( Entry entry : ( Set<Entry> ) entries[2] ) {
+ //			InputStream is = entry.getInputStream();
+ //			if ( is != null ) {
+ //				assertTrue( 0 < is.available() );
+ //				is.close();
+ //			}
+ //		}
+-//		for ( Entry entry : (Set<Entry>) entries[5] ) {
++//		for ( Entry entry : ( Set<Entry> ) entries[5] ) {
+ //			InputStream is = entry.getInputStream();
+ //			if ( is != null ) {
+ //				assertTrue( 0 < is.available() );
+@@ -262,17 +255,18 @@
+ 	}
+ 
+ 	private Filter[] getFilters() {
+-		return new Filter[]{
++		return new Filter[] {
+ 				new PackageFilter( false, null ) {
+ 					public boolean accept(String javaElementName) {
+ 						return true;
+ 					}
+ 				},
+ 				new ClassFilter(
+-						false, new Class[]{
+-						Entity.class,
+-						MappedSuperclass.class,
+-						Embeddable.class}
++						false, new Class[] {
++								Entity.class,
++								MappedSuperclass.class,
++								Embeddable.class
++						}
+ 				) {
+ 					public boolean accept(String javaElementName) {
+ 						return true;
+Index: entitymanager/src/test/java/org/hibernate/ejb/test/packaging/NativeScannerTest.java
+===================================================================
+--- entitymanager/src/test/java/org/hibernate/ejb/test/packaging/NativeScannerTest.java	(revision 18837)
++++ entitymanager/src/test/java/org/hibernate/ejb/test/packaging/NativeScannerTest.java	(working copy)
+@@ -1,15 +1,13 @@
+ package org.hibernate.ejb.test.packaging;
+ 
++import java.io.File;
+ import java.lang.annotation.Annotation;
+-import java.net.URL;
+ import java.util.HashSet;
+ import java.util.Set;
+ import javax.persistence.Embeddable;
+ import javax.persistence.Entity;
+ import javax.persistence.MappedSuperclass;
+ 
+-import junit.framework.TestCase;
+-
+ import org.hibernate.ejb.packaging.NamedInputStream;
+ import org.hibernate.ejb.packaging.NativeScanner;
+ import org.hibernate.ejb.packaging.Scanner;
+@@ -18,34 +16,33 @@
+ 
+ /**
+  * @author Emmanuel Bernard
++ * @author Hardy Ferentschik
+  */
+-public class NativeScannerTest extends TestCase {
+-	private static final String jarFileBase = "file:./target/test-packages";
+-
++public class NativeScannerTest extends PackagingTestCase {
+ 	public void testNativeScanner() throws Exception {
+-		String jarFileName = jarFileBase + "/defaultpar.par";
+-		Scanner scanner = new NativeScanner();
++		File defaultPar = buildDefaultPar();
++		addPackageToClasspath( defaultPar );
+ 
+-		final URL jarUrl = new URL( jarFileName );
+-		assertEquals( "defaultpar", scanner.getUnqualifiedJarName( jarUrl ) );
++		Scanner scanner = new NativeScanner();
++		assertEquals( "defaultpar", scanner.getUnqualifiedJarName( defaultPar.toURL() ) );
+ 
+-		Set<Class<? extends Annotation>> annotationsToLookFor = new HashSet<Class<? extends Annotation>>(3);
++		Set<Class<? extends Annotation>> annotationsToLookFor = new HashSet<Class<? extends Annotation>>( 3 );
+ 		annotationsToLookFor.add( Entity.class );
+ 		annotationsToLookFor.add( MappedSuperclass.class );
+ 		annotationsToLookFor.add( Embeddable.class );
+-		final Set<Class<?>> classes = scanner.getClassesInJar( jarUrl, annotationsToLookFor );
+-			
++		final Set<Class<?>> classes = scanner.getClassesInJar( defaultPar.toURL(), annotationsToLookFor );
++
+ 		assertEquals( 3, classes.size() );
+ 		assertTrue( classes.contains( ApplicationServer.class ) );
+ 		assertTrue( classes.contains( org.hibernate.ejb.test.pack.defaultpar.Version.class ) );
+ 
+-		Set<String> filePatterns = new HashSet<String>(2);
+-		filePatterns.add("**/*.hbm.xml");
+-		filePatterns.add("META-INF/orm.xml");
+-		final Set<NamedInputStream> files = scanner.getFilesInJar( jarUrl, filePatterns );
++		Set<String> filePatterns = new HashSet<String>( 2 );
++		filePatterns.add( "**/*.hbm.xml" );
++		filePatterns.add( "META-INF/orm.xml" );
++		final Set<NamedInputStream> files = scanner.getFilesInJar( defaultPar.toURL(), filePatterns );
+ 
+ 		assertEquals( 2, files.size() );
+-		for (NamedInputStream file : files ) {
++		for ( NamedInputStream file : files ) {
+ 			assertNotNull( file.getStream() );
+ 			file.getStream().close();
+ 		}
+Index: testing/src/main/java/org/hibernate/test/annotations/HibernateTestCase.java
+===================================================================
+--- testing/src/main/java/org/hibernate/test/annotations/HibernateTestCase.java	(revision 18837)
++++ testing/src/main/java/org/hibernate/test/annotations/HibernateTestCase.java	(working copy)
+@@ -287,6 +287,10 @@
+ 
+ 	protected abstract Class<?>[] getAnnotatedClasses();
+ 
++	protected String[] getMappings() {
++		return new String[]{};
++	}
++
+ 	protected abstract void handleUnclosedResources();
+ 
+ 	protected abstract void closeResources();

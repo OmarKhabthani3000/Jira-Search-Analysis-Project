@@ -1,0 +1,205 @@
+{\rtf1\ansi\ansicpg1252\deff0\deflang1033{\fonttbl{\f0\fswiss\fcharset0 Arial;}}
+{\*\generator Msftedit 5.41.15.1507;}\viewkind4\uc1\pard\f0\fs20 Index: C:/tools/tools/src/test/org/hibernate/tool/test/jdbc2cfg/VersioningTest.java\par
+===================================================================\par
+--- C:/tools/tools/src/test/org/hibernate/tool/test/jdbc2cfg/VersioningTest.java\tab (revision 11551)\par
++++ C:/tools/tools/src/test/org/hibernate/tool/test/jdbc2cfg/VersioningTest.java\tab (working copy)\par
+@@ -17,13 +17,15 @@\par
+ import org.hibernate.tool.hbm2x.HibernateMappingExporter;\par
+ import org.hibernate.type.IntegerType;\par
+ import org.hibernate.type.TimestampType;\par
++;\par
+ \par
+ /**\par
++ * To be extended by VersioningForJDK50Test for the JPA generation part\par
+  * @author max\par
+  *\par
+  */\par
+ public class VersioningTest extends JDBCMetaDataBinderTestCase \{\par
+-\par
++\tab\par
+ \tab protected String[] getCreateSQL() \{\par
+ \tab\tab\par
+ \tab\tab return new String[] \{\par
+@@ -59,10 +61,8 @@\par
+ \tab\}\par
+ \tab\par
+ \tab public void testGenerateMappings() \{\par
+-\tab\tab\par
+         cfg.buildMappings();\par
+-        \par
+-\tab\tab Exporter exporter = new HibernateMappingExporter(cfg, getOutputDir());\par
++        Exporter exporter = new HibernateMappingExporter(cfg, getOutputDir());\par
+ \tab\tab\par
+ \tab\tab exporter.start();\par
+ \tab\tab\par
+@@ -73,33 +73,37 @@\par
+ \tab\tab derived.addFile(new File(getOutputDir(), "WithRealTimestamp.hbm.xml") );\par
+ \tab\tab derived.addFile(new File(getOutputDir(), "WithFakeTimestamp.hbm.xml") );\par
+ \tab\tab\par
++\tab\tab testVersioningInDerivedCfg(derived,"");\par
++\tab\}\par
++    \par
++\tab protected void testVersioningInDerivedCfg(Configuration derived, String defaultPackage)\{\par
+ \tab\tab derived.buildMappings();\par
+ \tab\tab\par
+-\tab\tab PersistentClass cl = derived.getClassMapping("Withversion");\tab\tab\par
++\tab\tab PersistentClass cl = derived.getClassMapping( defaultPackage + "Withversion" );\tab\tab\par
+ \tab\tab\par
+ \tab\tab Property version = cl.getVersion();\par
+ \tab\tab assertNotNull(version);\par
+ \tab\tab assertEquals("version", version.getName());\par
+ \tab\tab\par
+-\tab\tab cl = derived.getClassMapping("Noversion");\par
++\tab\tab cl = derived.getClassMapping( defaultPackage + "Noversion" );\par
+ \tab\tab assertNotNull(cl);\par
+ \tab\tab version = cl.getVersion();\par
+ \tab\tab assertNull(version);\par
+ \par
+-\tab\tab cl = derived.getClassMapping("Withrealtimestamp");\par
++\tab\tab cl = derived.getClassMapping( defaultPackage + "Withrealtimestamp" );\par
+ \tab\tab assertNotNull(cl);\par
+ \tab\tab version = cl.getVersion();\par
+ \tab\tab assertNotNull(version);\par
+ \tab\tab assertTrue(version.getType() instanceof TimestampType);\par
+ \tab\tab\par
+-\tab\tab cl = derived.getClassMapping("Withfaketimestamp");\par
++\tab\tab cl = derived.getClassMapping( defaultPackage + "Withfaketimestamp" );\par
+ \tab\tab assertNotNull(cl);\par
+ \tab\tab version = cl.getVersion();\par
+ \tab\tab assertNotNull(version);\par
+ \tab\tab assertTrue(version.getType() instanceof IntegerType);\par
+-\tab\tab\par
+ \tab\}\par
+ \tab\par
++\tab\par
+ \tab public static Test suite() \{\par
+ \tab\tab return new TestSuite(VersioningTest.class);\par
+ \tab\}\par
+Index: C:/tools/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java\par
+===================================================================\par
+--- C:/tools/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java\tab (revision 11551)\par
++++ C:/tools/tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java\tab (working copy)\par
+@@ -307,6 +307,9 @@\par
+ \tab public String generateBasicAnnotation(Property property) \{\par
+ \tab\tab StringBuffer annotations = new StringBuffer( "    " );\par
+ \tab\tab if(property.getValue() instanceof SimpleValue) \{\par
++\tab\tab\tab if (hasVersionProperty())\par
++\tab\tab\tab\tab if (property.equals(getVersionProperty()))\par
++\tab\tab\tab\tab\tab\tab buildVersionAnnotation(annotations);\par
+ \tab\tab\tab String typeName = ((SimpleValue)property.getValue()).getTypeName();\par
+ \tab\tab\tab if("date".equals(typeName) || "java.sql.Date".equals(typeName)) \{\par
+ \tab\tab\tab\tab buildTemporalAnnotation( annotations, "DATE" );\par
+@@ -315,6 +318,8 @@\par
+ \tab\tab\tab\} else if ("time".equals(typeName) || "java.sql.Time".equals(typeName)) \{\par
+ \tab\tab\tab\tab buildTemporalAnnotation(annotations, "TIME");\par
+ \tab\tab\tab\} //TODO: calendar etc. ?\par
++\par
++\tab\tab\tab\tab\tab\tab\par
+ \tab\tab\}\par
+ \tab\tab\tab\par
+ \tab\tab return annotations.toString();\par
+@@ -327,6 +332,12 @@\par
+ \tab\tab return annotations.append( "@" + temporal +"(" + temporalType + "." + temporalTypeValue + ")");\par
+ \tab\}\par
+ \tab\par
++\tab private StringBuffer buildVersionAnnotation(StringBuffer annotations) \{\par
++\tab\tab String version = importType("javax.persistence.Version");\par
++\tab\tab\par
++\tab\tab return annotations.append( "@" + version );\par
++\tab\}\par
++\tab\par
+ \tab public String generateAnnColumnAnnotation(Property property) \{\par
+ \tab\tab StringBuffer annotations = new StringBuffer( "    " );\par
+ \tab\tab boolean insertable = property.isInsertable();\par
+Index: C:/tools/tools/src/test5.0/org/hibernate/tool/test/jdbc2cfg/VersioningForJDK50Test.java\par
+===================================================================\par
+--- C:/tools/tools/src/test5.0/org/hibernate/tool/test/jdbc2cfg/VersioningForJDK50Test.java\tab (revision 0)\par
++++ C:/tools/tools/src/test5.0/org/hibernate/tool/test/jdbc2cfg/VersioningForJDK50Test.java\tab (revision 0)\par
+@@ -0,0 +1,85 @@\par
++/*\par
++ * Created on 2004-11-24\par
++ *\par
++ */\par
++package org.hibernate.tool.test.jdbc2cfg;\par
++\par
++import java.io.File;\par
++import java.net.URL;\par
++import java.net.URLClassLoader;\par
++import java.util.ArrayList;\par
++import java.util.List;\par
++\par
++import junit.framework.Test;\par
++import junit.framework.TestSuite;\par
++\par
++import org.hibernate.cfg.AnnotationConfiguration;\par
++import org.hibernate.cfg.JDBCMetaDataConfiguration;\par
++import org.hibernate.cfg.reveng.DefaultReverseEngineeringStrategy;\par
++import org.hibernate.cfg.reveng.ReverseEngineeringSettings;\par
++import org.hibernate.tool.hbm2x.POJOExporter;\par
++import org.hibernate.tool.test.TestHelper;\par
++;\par
++\par
++/**\par
++ * based on VersioningTest\par
++ * requires a default package to be easily added to classloader\par
++ * steps:\par
++ * 1- build mappings from jdbc (see table used in VersioningTest, some has version, some timestamp,...\par
++ * 2- use *annotated* pojo exporter\par
++ * 3- check if generated classes compile, add them to classloader\par
++ * 4- make a derived configuration from annotated classes\par
++ * 5- test the derived configuration\par
++ * \par
++ * @author anthony\par
++ */\par
++public class VersioningForJDK50Test extends VersioningTest \{\par
++    protected void configure(JDBCMetaDataConfiguration cfgToConfigure) \{        \par
++        DefaultReverseEngineeringStrategy c = new DefaultReverseEngineeringStrategy();\par
++        c.setSettings(new ReverseEngineeringSettings(c).setDefaultPackageName("myPackage"));\par
++        cfgToConfigure.setReverseEngineeringStrategy(c);\par
++    \}\par
++\tab\par
++\tab public void testGenerateJPA() throws Exception\{\par
++        \par
++        cfg.buildMappings();  \par
++        \par
++\tab\tab POJOExporter exporter = new POJOExporter(cfg, getOutputDir() );\par
++\tab\tab exporter.setTemplatePath(new String[0]);\par
++\tab\tab exporter.getProperties().setProperty("ejb3", "true");\par
++\tab\tab exporter.getProperties().setProperty("jdk5", "true");\par
++\tab\tab exporter.start();\par
++\tab\tab\par
++\tab\tab File file = new File( "ejb3compilable" );\par
++\tab\tab file.mkdir();\par
++\tab\tab\par
++\tab\tab ArrayList list = new ArrayList();\par
++\tab\tab List jars = new ArrayList();\par
++\tab\tab jars.add("ejb3-persistence.jar");\par
++\tab\tab jars.add("hibernate-annotations.jar");\par
++\tab\tab TestHelper.compile(getOutputDir(), file, TestHelper.visitAllFiles(getOutputDir(), list), "1.5", TestHelper.buildClasspath(jars));\par
++\tab\tab\par
++\tab\tab URL[] urls = new URL[]\{file.toURL()\};\par
++\tab\tab Thread currentThread = Thread.currentThread();\par
++\tab\tab URLClassLoader ucl = new URLClassLoader( urls, currentThread.getContextClassLoader() );\par
++\tab\tab currentThread.setContextClassLoader( ucl );\par
++\par
++\tab\tab\par
++\tab\tab Class withversionClazz = ucl.loadClass("myPackage.Withversion");\par
++\tab\tab Class withrealtimestampClazz = ucl.loadClass("myPackage.Withrealtimestamp");\par
++\tab\tab Class noversionClazz = ucl.loadClass("myPackage.Noversion");\par
++\tab\tab Class withfaketimestampClazz = ucl.loadClass("myPackage.Withfaketimestamp");\par
++\tab\tab AnnotationConfiguration derived = new AnnotationConfiguration();\par
++\tab\tab derived.addAnnotatedClass( withversionClazz );\par
++\tab\tab derived.addAnnotatedClass( withrealtimestampClazz );\par
++\tab\tab derived.addAnnotatedClass( noversionClazz );\par
++\tab\tab derived.addAnnotatedClass( withfaketimestampClazz );\par
++\tab\tab\par
++\tab\tab testVersioningInDerivedCfg(  derived , "myPackage." );\par
++\tab\tab\par
++\tab\}\par
++\tab\par
++\tab public static Test suite() \{\par
++\tab\tab return new TestSuite(VersioningForJDK50Test.class);\par
++\tab\}\par
++\}\par
+}
+ 

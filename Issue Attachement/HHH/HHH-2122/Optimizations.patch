@@ -1,0 +1,943 @@
+Index: test/org/hibernate/test/sql/GeneralTest.java
+===================================================================
+--- test/org/hibernate/test/sql/GeneralTest.java	(revision 10538)
++++ test/org/hibernate/test/sql/GeneralTest.java	(working copy)
+@@ -561,7 +561,7 @@
+ 			return ( ( BigDecimal ) value ).doubleValue();
+ 		}
+ 		else {
+-			return Double.valueOf( value.toString() ).doubleValue();
++			return Double.parseDouble( value.toString() );
+ 		}
+ 	}
+ 
+Index: test/org/hibernate/test/legacy/ParentChildTest.java
+===================================================================
+--- test/org/hibernate/test/legacy/ParentChildTest.java	(revision 10538)
++++ test/org/hibernate/test/legacy/ParentChildTest.java	(working copy)
+@@ -987,7 +987,7 @@
+ 		s.close();
+ 		s = openSession();
+ 		g = (Parent) s.load( Parent.class, new Long( g.getId() ) );
+-		assertTrue( g.getAny()!=null && g.getAny() instanceof FooProxy );
++		assertTrue( g.getAny() instanceof FooProxy );
+ 		s.delete( g.getAny() );
+ 		s.delete(g);
+ 		s.flush();
+Index: test/org/hibernate/test/legacy/FooBarTest.java
+===================================================================
+--- test/org/hibernate/test/legacy/FooBarTest.java	(revision 10538)
++++ test/org/hibernate/test/legacy/FooBarTest.java	(working copy)
+@@ -4347,7 +4347,7 @@
+ 		s.close();
+ 		s = openSession();
+ 		g = (GlarchProxy) s.load(Glarch.class, gid);
+-		assertTrue( g.getAny()!=null && g.getAny() instanceof FooProxy );
++		assertTrue( g.getAny() instanceof FooProxy );
+ 		s.delete( g.getAny() );
+ 		s.delete(g);
+ 		//s.delete( g.getAny() );
+@@ -4382,7 +4382,7 @@
+ 		s.close();
+ 		s = openSession();
+ 		foo = (BarProxy) s.load(Foo.class, fid);
+-		assertTrue( foo.getObject()!=null && foo.getObject() instanceof One && s.getIdentifier( foo.getObject() ).equals(oid) );
++		assertTrue( foo.getObject() instanceof One && s.getIdentifier( foo.getObject() ).equals(oid) );
+ 		//s.delete( foo.getObject() );
+ 		s.delete(foo);
+ 		s.flush();
+Index: test/org/hibernate/test/legacy/Baz.java
+===================================================================
+--- test/org/hibernate/test/legacy/Baz.java	(revision 10538)
++++ test/org/hibernate/test/legacy/Baz.java	(working copy)
+@@ -114,7 +114,7 @@
+ 		setStringList(list);
+ 		setIntArray( new int[] { 1,3,3,7 } );
+ 		setFooArray( new Foo[0] );
+-		setStringArray( (String[]) list.toArray( new String[0] ) );
++		setStringArray( (String[]) list.toArray( new String[list.size()] ) );
+ 		customs = new ArrayList();
+ 		customs.add( new String[] { "foo", "bar" } );
+ 		customs.add( new String[] { "A", "B" } );
+Index: test/org/hibernate/test/legacy/FumTest.java
+===================================================================
+--- test/org/hibernate/test/legacy/FumTest.java	(revision 10538)
++++ test/org/hibernate/test/legacy/FumTest.java	(working copy)
+@@ -290,7 +290,7 @@
+ 		else {
+ 			id.setDate( new Date() );
+ 		}
+-		id.setString( new String(str) );
++		id.setString( str );
+ 
+ 		if (aCompositeQueryTest) {
+ 			id.setShort( fumKeyShort++ );
+Index: src/org/hibernate/secure/JACCPermissions.java
+===================================================================
+--- src/org/hibernate/secure/JACCPermissions.java	(revision 10538)
++++ src/org/hibernate/secure/JACCPermissions.java	(working copy)
+@@ -44,7 +44,7 @@
+ 			}
+ 
+ 			ProtectionDomain pd = new ProtectionDomain( ejbCS, null, null, principals );
+-			if ( policy.implies( pd, methodPerm ) == false ) {
++			if ( !policy.implies( pd, methodPerm ) ) {
+ 				String msg = "Denied: " + methodPerm + ", caller=" + caller;
+ 				SecurityException e = new SecurityException( msg );
+ 				throw e;
+Index: src/org/hibernate/pretty/Formatter.java
+===================================================================
+--- src/org/hibernate/pretty/Formatter.java	(revision 10538)
++++ src/org/hibernate/pretty/Formatter.java	(working copy)
+@@ -231,7 +231,7 @@
+ 
+ 	private void white() {
+ 		if ( !beginLine ) {
+-			result.append(" ");
++			result.append(' ');
+ 		}
+ 	}
+ 	
+@@ -354,7 +354,7 @@
+ 	}
+ 	
+ 	private void newline() {
+-		result.append("\n");
++		result.append('\n');
+ 		for ( int i=0; i<indent; i++ ) {
+ 			result.append(indentString);
+ 		}
+Index: src/org/hibernate/tuple/entity/AbstractEntityTuplizer.java
+===================================================================
+--- src/org/hibernate/tuple/entity/AbstractEntityTuplizer.java	(revision 10538)
++++ src/org/hibernate/tuple/entity/AbstractEntityTuplizer.java	(working copy)
+@@ -190,7 +190,7 @@
+ 		catch ( ClassCastException cce ) {
+ 			StringBuffer msg = new StringBuffer( "Identifier classes must be serializable. " );
+ 			if ( id != null ) {
+-				msg.append( id.getClass().getName() + " is not serializable. " );
++				msg.append( id.getClass().getName() ).append( " is not serializable. " );
+ 			}
+ 			if ( cce.getMessage() != null ) {
+ 				msg.append( cce.getMessage() );
+Index: src/org/hibernate/dialect/PostgreSQLDialect.java
+===================================================================
+--- src/org/hibernate/dialect/PostgreSQLDialect.java	(revision 10538)
++++ src/org/hibernate/dialect/PostgreSQLDialect.java	(working copy)
+@@ -272,7 +272,7 @@
+ 	private static ViolatedConstraintNameExtracter EXTRACTER = new TemplatedViolatedConstraintNameExtracter() {
+ 		public String extractConstraintName(SQLException sqle) {
+ 			try {
+-				int sqlState = Integer.valueOf( JDBCExceptionHelper.extractSqlState(sqle)).intValue();
++				int sqlState = Integer.parseInt( JDBCExceptionHelper.extractSqlState(sqle));
+ 				switch (sqlState) {
+ 					// CHECK VIOLATION
+ 					case 23514: return extractUsingTemplate("violates check constraint \"","\"", sqle.getMessage());
+Index: src/org/hibernate/criterion/SimpleExpression.java
+===================================================================
+--- src/org/hibernate/criterion/SimpleExpression.java	(revision 10538)
++++ src/org/hibernate/criterion/SimpleExpression.java	(working copy)
+@@ -57,7 +57,7 @@
+ 			}
+ 			fragment.append( columns[i] );
+ 			if (lower) fragment.append(')');
+-			fragment.append( getOp() ).append("?");
++			fragment.append( getOp() ).append('?');
+ 			if ( i<columns.length-1 ) fragment.append(" and ");
+ 		}
+ 		if (columns.length>1) fragment.append(')');
+Index: src/org/hibernate/criterion/Junction.java
+===================================================================
+--- src/org/hibernate/criterion/Junction.java	(revision 10538)
++++ src/org/hibernate/criterion/Junction.java	(working copy)
+@@ -1,6 +1,7 @@
+ package org.hibernate.criterion;
+ 
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.Iterator;
+ import java.util.List;
+ 
+@@ -39,9 +40,7 @@
+ 		Iterator iter = criteria.iterator();
+ 		while ( iter.hasNext() ) {
+ 			TypedValue[] subvalues = ( (Criterion) iter.next() ).getTypedValues(crit, criteriaQuery);
+-			for ( int i=0; i<subvalues.length; i++ ) {
+-				typedValues.add( subvalues[i] );
+-			}
++			typedValues.addAll( Arrays.asList( subvalues ) );
+ 		}
+ 		return (TypedValue[]) typedValues.toArray( new TypedValue[ typedValues.size() ] );
+ 	}
+Index: src/org/hibernate/cfg/Configuration.java
+===================================================================
+--- src/org/hibernate/cfg/Configuration.java	(revision 10538)
++++ src/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -12,6 +12,7 @@
+ import java.io.StringReader;
+ import java.lang.reflect.Array;
+ import java.net.URL;
++import java.util.Arrays;
+ import java.util.ArrayList;
+ import java.util.Enumeration;
+ import java.util.HashMap;
+@@ -752,9 +753,7 @@
+ 		iter = iterateGenerators( dialect );
+ 		while ( iter.hasNext() ) {
+ 			String[] lines = ( (PersistentIdentifierGenerator) iter.next() ).sqlDropStrings( dialect );
+-			for ( int i = 0; i < lines.length ; i++ ) {
+-				script.add( lines[i] );
+-			}
++			script.addAll( Arrays.asList( lines ) );
+ 		}
+ 
+ 		return ArrayHelper.toStringArray( script );
+@@ -840,9 +839,7 @@
+ 		iter = iterateGenerators( dialect );
+ 		while ( iter.hasNext() ) {
+ 			String[] lines = ( (PersistentIdentifierGenerator) iter.next() ).sqlCreateStrings( dialect );
+-			for ( int i = 0; i < lines.length ; i++ ) {
+-				script.add( lines[i] );
+-			}
++			script.addAll( Arrays.asList( lines ) );
+ 		}
+ 
+ 		Iterator itr = auxiliaryDatabaseObjects.iterator();
+@@ -976,9 +973,7 @@
+ 			Object key = generator.generatorKey();
+ 			if ( !databaseMetadata.isSequence( key ) && !databaseMetadata.isTable( key ) ) {
+ 				String[] lines = generator.sqlCreateStrings( dialect );
+-				for ( int i = 0; i < lines.length ; i++ ) {
+-					script.add( lines[i] );
+-				}
++				script.addAll( Arrays.asList( lines ) );
+ 			}
+ 		}
+ 
+@@ -1118,10 +1113,10 @@
+ 				final ExtendsQueueEntry entry = ( ExtendsQueueEntry ) iterator.next();
+ 				buf.append( entry.getExplicitName() );
+ 				if ( entry.getMappingPackage() != null ) {
+-					buf.append( "[" ).append( entry.getMappingPackage() ).append( "]" );
++					buf.append( '[' ).append( entry.getMappingPackage() ).append( ']' );
+ 				}
+ 				if ( iterator.hasNext() ) {
+-					buf.append( "," );
++					buf.append( ',' );
+ 				}
+ 			}
+ 			throw new MappingException( buf.toString() );
+Index: src/org/hibernate/cfg/Mappings.java
+===================================================================
+--- src/org/hibernate/cfg/Mappings.java	(revision 10538)
++++ src/org/hibernate/cfg/Mappings.java	(working copy)
+@@ -335,9 +335,9 @@
+ 	private String buildTableNameKey(String schema, String catalog, String finalName) {
+ 		StringBuffer keyBuilder = new StringBuffer();
+ 		if (schema != null) keyBuilder.append( schema );
+-		keyBuilder.append( ".");
++		keyBuilder.append( '.');
+ 		if (catalog != null) keyBuilder.append( catalog );
+-		keyBuilder.append( ".");
++		keyBuilder.append( '.');
+ 		keyBuilder.append( finalName );
+ 		return keyBuilder.toString();
+ 	}
+Index: src/org/hibernate/sql/InsertSelect.java
+===================================================================
+--- src/org/hibernate/sql/InsertSelect.java	(revision 10538)
++++ src/org/hibernate/sql/InsertSelect.java	(working copy)
+@@ -70,7 +70,7 @@
+ 					buf.append( ", " );
+ 				}
+ 			}
+-			buf.append( ")" );
++			buf.append( ')' );
+ 		}
+ 		buf.append( ' ' ).append( select.toStatementString() );
+ 		return buf.toString();
+Index: src/org/hibernate/sql/QuerySelect.java
+===================================================================
+--- src/org/hibernate/sql/QuerySelect.java	(revision 10538)
++++ src/org/hibernate/sql/QuerySelect.java	(working copy)
+@@ -142,7 +142,7 @@
+ 				}
+ 				buf.append(whereConditions);
+ 				if (hasOuterJoinsAfterWhere) {
+-					buf.append(")");
++					buf.append(')');
+ 				}
+ 			}
+ 		}
+Index: src/org/hibernate/sql/DisjunctionFragment.java
+===================================================================
+--- src/org/hibernate/sql/DisjunctionFragment.java	(revision 10538)
++++ src/org/hibernate/sql/DisjunctionFragment.java	(working copy)
+@@ -11,9 +11,9 @@
+ 
+ 	public DisjunctionFragment addCondition(ConditionFragment fragment) {
+ 		if ( buffer.length()>0 ) buffer.append(" or ");
+-		buffer.append("(")
++		buffer.append('(')
+ 			.append( fragment.toFragmentString() )
+-			.append(")");
++			.append(')');
+ 		return this;
+ 	}
+ 
+Index: src/org/hibernate/sql/MckoiCaseFragment.java
+===================================================================
+--- src/org/hibernate/sql/MckoiCaseFragment.java	(revision 10538)
++++ src/org/hibernate/sql/MckoiCaseFragment.java	(working copy)
+@@ -26,7 +26,7 @@
+ 				.append(", ")
+ 				.append( me.getValue() )
+ 				.append(", ");
+-			buf2.append(")");
++			buf2.append(')');
+ 		}
+ 
+ 		buf.append("null");
+Index: src/org/hibernate/sql/HSQLCaseFragment.java
+===================================================================
+--- src/org/hibernate/sql/HSQLCaseFragment.java	(revision 10538)
++++ src/org/hibernate/sql/HSQLCaseFragment.java	(working copy)
+@@ -26,7 +26,7 @@
+ 				.append(", ")
+ 				.append( me.getValue() )
+ 				.append(", ");
+-			buf2.append(")");
++			buf2.append(')');
+ 		}
+ 
+ 		buf.append("-1"); //null caused some problems
+Index: src/org/hibernate/sql/InFragment.java
+===================================================================
+--- src/org/hibernate/sql/InFragment.java	(revision 10538)
++++ src/org/hibernate/sql/InFragment.java	(working copy)
+@@ -86,7 +86,7 @@
+ 				buf.append(" is not null");
+ 			}
+ 			else {
+-				buf.append("=").append(value);
++				buf.append('=').append(value);
+ 			}
+ 		}
+ 		return buf.toString();
+Index: src/org/hibernate/sql/Sybase11JoinFragment.java
+===================================================================
+--- src/org/hibernate/sql/Sybase11JoinFragment.java	(revision 10538)
++++ src/org/hibernate/sql/Sybase11JoinFragment.java	(working copy)
+@@ -23,13 +23,13 @@
+ 
+ 			afterWhere.append(" and ")
+ 				.append( fkColumns[j] )
+-				.append( " " );
++				.append( ' ' );
+ 
+-			if (joinType==LEFT_OUTER_JOIN ) afterWhere.append("*");
++			if (joinType==LEFT_OUTER_JOIN ) afterWhere.append('*');
+ 			afterWhere.append('=');
+-			if (joinType==RIGHT_OUTER_JOIN ) afterWhere.append("*");
++			if (joinType==RIGHT_OUTER_JOIN ) afterWhere.append('*');
+ 
+-			afterWhere.append (" ")
++			afterWhere.append (' ')
+ 				.append(alias)
+ 				.append('.')
+ 				.append( pkColumns[j] );
+Index: src/org/hibernate/engine/ResultSetMappingDefinition.java
+===================================================================
+--- src/org/hibernate/engine/ResultSetMappingDefinition.java	(revision 10538)
++++ src/org/hibernate/engine/ResultSetMappingDefinition.java	(working copy)
+@@ -40,7 +40,7 @@
+ //	}
+ 
+ 	public NativeSQLQueryReturn[] getQueryReturns() {
+-		return ( NativeSQLQueryReturn[] ) queryReturns.toArray( new NativeSQLQueryReturn[0] );
++		return ( NativeSQLQueryReturn[] ) queryReturns.toArray( new NativeSQLQueryReturn[queryReturns.size()] );
+ 	}
+ 
+ }
+Index: src/org/hibernate/engine/query/ParameterParser.java
+===================================================================
+--- src/org/hibernate/engine/query/ParameterParser.java	(revision 10538)
++++ src/org/hibernate/engine/query/ParameterParser.java	(working copy)
+@@ -40,8 +40,8 @@
+ 	 */
+ 	public static void parse(String sqlString, Recognizer recognizer) throws QueryException {
+ 		boolean hasMainOutputParameter = sqlString.indexOf( "call" ) > 0 &&
+-		                                 sqlString.indexOf( "?" ) < sqlString.indexOf( "call" ) &&
+-		                                 sqlString.indexOf( "=" ) < sqlString.indexOf( "call" );
++		                                 sqlString.indexOf( '?' ) < sqlString.indexOf( "call" ) &&
++		                                 sqlString.indexOf( '=' ) < sqlString.indexOf( "call" );
+ 		boolean foundMainOutputParam = false;
+ 
+ 		int stringLength = sqlString.length();
+Index: src/org/hibernate/engine/QueryParameters.java
+===================================================================
+--- src/org/hibernate/engine/QueryParameters.java	(revision 10538)
++++ src/org/hibernate/engine/QueryParameters.java	(working copy)
+@@ -425,7 +425,7 @@
+ 			parameters.addAll( Arrays.asList( getPositionalParameterValues() ) );
+ 			parameterTypes.addAll( Arrays.asList( getPositionalParameterTypes() ) );
+ 			processedPositionalParameterValues = parameters.toArray();
+-			processedPositionalParameterTypes = ( Type[] ) parameterTypes.toArray( new Type[0] );
++			processedPositionalParameterTypes = ( Type[] ) parameterTypes.toArray( new Type[parameterTypes.size()] );
+ 			processedSQL = result.toString();
+ 			
+ 		}
+Index: src/org/hibernate/util/StringHelper.java
+===================================================================
+--- src/org/hibernate/util/StringHelper.java	(revision 10538)
++++ src/org/hibernate/util/StringHelper.java	(working copy)
+@@ -70,7 +70,7 @@
+ 	public static String[] replace(String templates[], String placeholder, String replacement) {
+ 		String[] result = new String[templates.length];
+ 		for ( int i =0; i<templates.length; i++ ) {
+-			result[i] = replace( templates[i], placeholder, replacement );;
++			result[i] = replace( templates[i], placeholder, replacement );
+ 		}
+ 		return result;
+ 	}
+@@ -124,12 +124,12 @@
+ 	}
+ 
+ 	public static String unqualify(String qualifiedName) {
+-		int loc = qualifiedName.lastIndexOf(".");
+-		return ( loc < 0 ) ? qualifiedName : qualifiedName.substring( qualifiedName.lastIndexOf(".") + 1 );
++		int loc = qualifiedName.lastIndexOf('.');
++		return ( loc < 0 ) ? qualifiedName : qualifiedName.substring( qualifiedName.lastIndexOf('.') + 1 );
+ 	}
+ 
+ 	public static String qualifier(String qualifiedName) {
+-		int loc = qualifiedName.lastIndexOf(".");
++		int loc = qualifiedName.lastIndexOf('.');
+ 		return ( loc < 0 ) ? "" : qualifiedName.substring( 0, loc );
+ 	}
+ 
+@@ -147,12 +147,12 @@
+ 	}
+ 
+ 	public static String root(String qualifiedName) {
+-		int loc = qualifiedName.indexOf( "." );
++		int loc = qualifiedName.indexOf( '.' );
+ 		return ( loc < 0 ) ? qualifiedName : qualifiedName.substring( 0, loc );
+ 	}
+ 
+ 	public static String unroot(String qualifiedName) {
+-		int loc = qualifiedName.indexOf( "." );
++		int loc = qualifiedName.indexOf( '.' );
+ 		return ( loc < 0 ) ? qualifiedName : qualifiedName.substring( loc+1, qualifiedName.length() );
+ 	}
+ 
+Index: src/org/hibernate/util/ArrayHelper.java
+===================================================================
+--- src/org/hibernate/util/ArrayHelper.java	(revision 10538)
++++ src/org/hibernate/util/ArrayHelper.java	(working copy)
+@@ -165,12 +165,12 @@
+ 
+ 	public static String toString( Object[] array ) {
+ 		StringBuffer sb = new StringBuffer();
+-		sb.append("[");
++		sb.append('[');
+ 		for (int i = 0; i < array.length; i++) {
+ 			sb.append( array[i] );
+-			if( i<array.length-1 ) sb.append(",");
++			if( i<array.length-1 ) sb.append(',');
+ 		}
+-		sb.append("]");
++		sb.append(']');
+ 		return sb.toString();
+ 	}
+ 
+Index: src/org/hibernate/collection/PersistentArrayHolder.java
+===================================================================
+--- src/org/hibernate/collection/PersistentArrayHolder.java	(revision 10538)
++++ src/org/hibernate/collection/PersistentArrayHolder.java	(working copy)
+@@ -5,9 +5,11 @@
+ import java.lang.reflect.Array;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
++import java.util.Arrays;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Iterator;
++import java.util.List;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -32,7 +34,7 @@
+ 
+ 	//just to help out during the load (ugly, i know)
+ 	private transient Class elementClass;
+-	private transient java.util.List tempList;
++	private transient List tempList;
+ 
+ 	public PersistentArrayHolder(SessionImplementor session, Object array) {
+ 		super(session);
+@@ -64,8 +66,7 @@
+ 	public Collection getOrphans(Serializable snapshot, String entityName) throws HibernateException {
+ 		Object[] sn = (Object[]) snapshot;
+ 		Object[] arr = (Object[]) array;
+-		ArrayList result = new ArrayList();
+-		for (int i=0; i<sn.length; i++) result.add( sn[i] );
++		List result = Arrays.asList( sn );
+ 		for (int i=0; i<sn.length; i++) identityRemove( result, arr[i], entityName, getSession() );
+ 		return result;
+ 	}
+@@ -97,7 +98,7 @@
+ 	public Iterator elements() {
+ 		//if (array==null) return tempList.iterator();
+ 		int length = Array.getLength(array);
+-		java.util.List list = new ArrayList(length);
++		List list = new ArrayList(length);
+ 		for (int i=0; i<length; i++) {
+ 			list.add( Array.get(array, i) );
+ 		}
+@@ -178,7 +179,7 @@
+ 	}
+ 
+ 	public Iterator getDeletes(CollectionPersister persister, boolean indexIsFormula) throws HibernateException {
+-		java.util.List deletes = new ArrayList();
++		List deletes = new ArrayList();
+ 		Serializable sn = getSnapshot();
+ 		int snSize = Array.getLength(sn);
+ 		int arraySize = Array.getLength(array);
+Index: src/org/hibernate/mapping/Table.java
+===================================================================
+--- src/org/hibernate/mapping/Table.java	(revision 10538)
++++ src/org/hibernate/mapping/Table.java	(working copy)
+@@ -304,7 +304,7 @@
+ 				if ( column.hasCheckConstraint() && dialect.supportsColumnCheck() ) {
+ 					alter.append( " check(" )
+ 							.append( column.getCheckConstraint() )
+-							.append( ")" );
++							.append( ')' );
+ 				}
+ 
+ 				String columnComment = column.getComment();
+@@ -411,7 +411,7 @@
+ 			if ( col.hasCheckConstraint() && dialect.supportsColumnCheck() ) {
+ 				buf.append( " check (" )
+ 						.append( col.getCheckConstraint() )
+-						.append( ")" );
++						.append( ')' );
+ 			}
+ 			
+ 			String columnComment = col.getComment();
+@@ -660,10 +660,10 @@
+ 		StringBuffer buf = new StringBuffer().append( getClass().getName() )
+ 			.append('(');
+ 		if ( getCatalog() != null ) {
+-			buf.append( getCatalog() + "." );
++			buf.append( getCatalog() ).append('.');
+ 		}
+ 		if ( getSchema() != null ) {
+-			buf.append( getSchema() + "." );
++			buf.append( getSchema() ).append('.');
+ 		}
+ 		buf.append( getName() ).append(')');
+ 		return buf.toString();
+Index: src/org/hibernate/mapping/ForeignKey.java
+===================================================================
+--- src/org/hibernate/mapping/ForeignKey.java	(revision 10538)
++++ src/org/hibernate/mapping/ForeignKey.java	(working copy)
+@@ -53,7 +53,7 @@
+ 		while( columns.hasNext() ) {
+ 			Column column = (Column) columns.next();
+ 			buf.append( column.getName() );
+-			if ( columns.hasNext() ) buf.append(",");
++			if ( columns.hasNext() ) buf.append(',');
+ 		}
+ 	}
+ 
+@@ -77,7 +77,7 @@
+ 		if ( referencedTable.getPrimaryKey().getColumnSpan()!=getColumnSpan() ) {
+ 			StringBuffer sb = new StringBuffer();
+ 			sb.append("Foreign key (")
+-                .append( getName() + ":")
++                .append( getName() ).append(':')
+ 				.append( getTable().getName() )
+ 				.append(" [");
+ 			appendColumns( sb, getColumnIterator() );
+@@ -150,9 +150,10 @@
+ 	
+ 	public String toString() {
+ 		if(!isReferenceToPrimaryKey() ) {
+-			StringBuffer result = new StringBuffer(getClass().getName() + '(' + getTable().getName() + getColumns() );
+-			result.append( " ref-columns:" + '(' + getReferencedColumns() );
+-			result.append( ") as " + getName() );
++			StringBuffer result = new StringBuffer(getClass().getName());
++			result.append( '(' ).append( getTable().getName() ).append( getColumns() );
++			result.append( " ref-columns:" ).append( '(' ).append( getReferencedColumns() );
++			result.append( ") as " ).append( getName() );
+ 			return result.toString();
+ 		} 
+ 		else {
+Index: src/org/hibernate/mapping/Index.java
+===================================================================
+--- src/org/hibernate/mapping/Index.java	(revision 10538)
++++ src/org/hibernate/mapping/Index.java	(working copy)
+@@ -68,7 +68,7 @@
+             buf.append( ( (Column) iter.next() ).getQuotedName(dialect) );
+             if ( iter.hasNext() ) buf.append(", ");
+         }
+-        buf.append(")");
++        buf.append(')');
+         return buf.toString();
+     }
+ 	
+Index: src/org/hibernate/mapping/Column.java
+===================================================================
+--- src/org/hibernate/mapping/Column.java	(revision 10538)
++++ src/org/hibernate/mapping/Column.java	(working copy)
+@@ -103,7 +103,7 @@
+ 		}
+ 		boolean useRawName = name.equals(alias) && 
+ 			!quoted && 
+-			!name.toLowerCase().equals("rowid");
++			!name.equalsIgnoreCase("rowid");
+ 		if ( useRawName ) {
+ 			return alias;
+ 		}
+Index: src/org/hibernate/exception/ExceptionUtils.java
+===================================================================
+--- src/org/hibernate/exception/ExceptionUtils.java	(revision 10538)
++++ src/org/hibernate/exception/ExceptionUtils.java	(working copy)
+@@ -602,7 +602,7 @@
+ 				frames.add( trace.get( j ) );
+ 			}
+ 		}
+-		return ( String[] ) frames.toArray( new String[0] );
++		return ( String[] ) frames.toArray( new String[frames.size()] );
+ 	}
+ 
+ 	/**
+Index: src/org/hibernate/impl/SessionImpl.java
+===================================================================
+--- src/org/hibernate/impl/SessionImpl.java	(revision 10538)
++++ src/org/hibernate/impl/SessionImpl.java	(working copy)
+@@ -1794,7 +1794,7 @@
+ 			.append( "SessionImpl(" );
+ 		if ( !isClosed() ) {
+ 			buf.append(persistenceContext)
+-				.append(";")
++				.append(';')
+ 				.append(actionQueue);
+ 		}
+ 		else {
+Index: src/org/hibernate/impl/AbstractQueryImpl.java
+===================================================================
+--- src/org/hibernate/impl/AbstractQueryImpl.java	(revision 10538)
++++ src/org/hibernate/impl/AbstractQueryImpl.java	(working copy)
+@@ -433,7 +433,7 @@
+ 	private Type guessType(Class clazz) throws HibernateException {
+ 		String typename = clazz.getName();
+ 		Type type = TypeFactory.heuristicType(typename);
+-		boolean serializable = type!=null && type instanceof SerializableType;
++		boolean serializable = type instanceof SerializableType;
+ 		if (type==null || serializable) {
+ 			try {
+ 				session.getFactory().getEntityPersister( clazz.getName() );
+Index: src/org/hibernate/tool/hbm2ddl/ForeignKeyMetadata.java
+===================================================================
+--- src/org/hibernate/tool/hbm2ddl/ForeignKeyMetadata.java	(revision 10538)
++++ src/org/hibernate/tool/hbm2ddl/ForeignKeyMetadata.java	(working copy)
+@@ -27,7 +27,7 @@
+ 	}
+ 
+ 	public ColumnMetadata[] getColumns() {
+-		return (ColumnMetadata[]) columns.toArray(new ColumnMetadata[0]);
++		return (ColumnMetadata[]) columns.toArray(new ColumnMetadata[columns.size()]);
+ 	}
+ 
+ 	public String toString() {
+Index: src/org/hibernate/tool/hbm2ddl/IndexMetadata.java
+===================================================================
+--- src/org/hibernate/tool/hbm2ddl/IndexMetadata.java	(revision 10538)
++++ src/org/hibernate/tool/hbm2ddl/IndexMetadata.java	(working copy)
+@@ -27,7 +27,7 @@
+ 	}
+ 
+ 	public ColumnMetadata[] getColumns() {
+-		return (ColumnMetadata[]) columns.toArray(new ColumnMetadata[0]);
++		return (ColumnMetadata[]) columns.toArray(new ColumnMetadata[columns.size()]);
+ 	}
+ 
+ 	public String toString() {
+Index: src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 10538)
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -301,9 +301,7 @@
+ 		}
+ 		String[] result = new String[getTableSpan()];
+ 		result[0] = sqlUpdateByRowIdString;
+-		for ( int i = 1; i < getTableSpan(); i++ ) {
+-			result[i] = sqlUpdateStrings[i];
+-		}
++		System.arraycopy(sqlUpdateStrings, 1, result, 1, getTableSpan() -1 );
+ 		return result;
+ 	}
+ 
+@@ -313,9 +311,7 @@
+ 		}
+ 		String[] result = new String[getTableSpan()];
+ 		result[0] = sqlLazyUpdateByRowIdString;
+-		for ( int i = 1; i < getTableSpan(); i++ ) {
+-			result[i] = sqlLazyUpdateStrings[i];
+-		}
++		System.arraycopy(sqlLazyUpdateStrings, 1, result, 1, getTableSpan() - 1);
+ 		return result;
+ 	}
+ 
+Index: src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(revision 10538)
++++ src/org/hibernate/persister/entity/JoinedSubclassEntityPersister.java	(working copy)
+@@ -421,9 +421,7 @@
+ 		for (int i=0; i<len; i++) {
+ 			temp[i] = objects[len-i-1];
+ 		}
+-		for (int i=0; i<len; i++) {
+-			objects[i] = temp[i];
+-		}
++		System.arraycopy(temp, 0, objects, 0, len);
+ 	}
+ 
+ 	private static final String[] reverse(String[] objects) {
+Index: src/org/hibernate/event/def/DefaultFlushEntityEventListener.java
+===================================================================
+--- src/org/hibernate/event/def/DefaultFlushEntityEventListener.java	(revision 10538)
++++ src/org/hibernate/event/def/DefaultFlushEntityEventListener.java	(working copy)
+@@ -42,7 +42,7 @@
+ 	public void checkId(Object object, EntityPersister persister, Serializable id, EntityMode entityMode)
+ 	throws HibernateException {
+ 
+-		if ( id != null && id instanceof DelayedPostInsertIdentifier ) {
++		if ( id instanceof DelayedPostInsertIdentifier ) {
+ 			// this is a situation where the entity id is assigned by a post-insert generator
+ 			// and was saved outside the transaction forcing it to be delayed
+ 			return;
+Index: src/org/hibernate/hql/ast/QueryTranslatorImpl.java
+===================================================================
+--- src/org/hibernate/hql/ast/QueryTranslatorImpl.java	(revision 10538)
++++ src/org/hibernate/hql/ast/QueryTranslatorImpl.java	(working copy)
+@@ -40,6 +40,7 @@
+ import org.hibernate.util.StringHelper;
+ import org.hibernate.util.ReflectHelper;
+ 
++import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.List;
+@@ -407,9 +408,7 @@
+ 		ArrayList list = new ArrayList();
+ 		if ( isManipulationStatement() ) {
+ 			String[] sqlStatements = statementExecutor.getSqlStatements();
+-			for ( int i = 0; i < sqlStatements.length; i++ ) {
+-				list.add( sqlStatements[i] );
+-			}
++			list.addAll( Arrays.asList( sqlStatements ) );
+ 		}
+ 		else {
+ 			list.add( sql );
+Index: src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java
+===================================================================
+--- src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(revision 10538)
++++ src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(working copy)
+@@ -83,7 +83,7 @@
+ 			}
+ 			if ( affected ) {
+ 				updates[tableIndex] = update.toStatementString();
+-				hqlParameters[tableIndex] = ( ParameterSpecification[] ) parameterList.toArray( new ParameterSpecification[0] );
++				hqlParameters[tableIndex] = ( ParameterSpecification[] ) parameterList.toArray( new ParameterSpecification[parameterList.size()] );
+ 			}
+ 		}
+ 	}
+Index: src/org/hibernate/hql/ast/tree/IdentNode.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/IdentNode.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/IdentNode.java	(working copy)
+@@ -296,10 +296,10 @@
+ 				buf.append(", className=").append(getFromElement().getClassName());
+ 				buf.append(", tableAlias=").append(getFromElement().getTableAlias());
+ 			}
+-			buf.append("}");
++			buf.append('}');
+ 		}
+ 		else {
+-			buf.append("{originalText=" + getOriginalText()).append("}");
++			buf.append("{originalText=").append(getOriginalText()).append('}');
+ 		}
+ 		return buf.toString();
+ 	}
+Index: src/org/hibernate/hql/ast/tree/ParameterNode.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/ParameterNode.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/ParameterNode.java	(working copy)
+@@ -42,7 +42,7 @@
+ 			for ( int i = 1; i < count; i++ ) {
+ 				buffer.append( ", ?" );
+ 			}
+-			buffer.append( ")" );
++			buffer.append( ')' );
+ 			return buffer.toString();
+ 		}
+ 		else {
+Index: src/org/hibernate/hql/ast/tree/AbstractStatement.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/AbstractStatement.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/AbstractStatement.java	(working copy)
+@@ -22,10 +22,10 @@
+ 			for ( Iterator iterator = getWalker().getQuerySpaces().iterator(); iterator.hasNext(); ) {
+ 				buf.append( iterator.next() );
+ 				if ( iterator.hasNext() ) {
+-					buf.append( "," );
++					buf.append( ',' );
+ 				}
+ 			}
+-			buf.append( ")" );
++			buf.append( ')' );
+ 		}
+ 		return buf.toString();
+ 	}
+Index: src/org/hibernate/hql/ast/tree/IntoClause.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/IntoClause.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/IntoClause.java	(working copy)
+@@ -114,8 +114,8 @@
+ 		buf.append( "IntoClause{" );
+ 		buf.append( "entityName=" ).append( getEntityName() );
+ 		buf.append( ",tableName=" ).append( getTableName() );
+-		buf.append( ",columns={" ).append( columnSpec ).append( "}" );
+-		buf.append( "}" );
++		buf.append( ",columns={" ).append( columnSpec ).append( '}' );
++		buf.append( '}' );
+ 		return buf.toString();
+ 	}
+ 
+Index: src/org/hibernate/hql/ast/tree/FromElement.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/FromElement.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/FromElement.java	(working copy)
+@@ -210,7 +210,7 @@
+ 		StringBuffer buf = new StringBuffer();
+ 		buf.append( "FromElement{" );
+ 		appendDisplayText( buf );
+-		buf.append( "}" );
++		buf.append( '}' );
+ 		return buf.toString();
+ 	}
+ 
+@@ -218,9 +218,9 @@
+ 		buf.append( isImplied() ? (
+ 				isImpliedInFromClause() ? "implied in FROM clause" : "implied" )
+ 				: "explicit" );
+-		buf.append( "," ).append( isCollectionJoin() ? "collection join" : "not a collection join" );
+-		buf.append( "," ).append( fetch ? "fetch join" : "not a fetch join" );
+-		buf.append( "," ).append( isAllPropertyFetch ? "fetch all properties" : "fetch non-lazy properties" );
++		buf.append( ',' ).append( isCollectionJoin() ? "collection join" : "not a collection join" );
++		buf.append( ',' ).append( fetch ? "fetch join" : "not a fetch join" );
++		buf.append( ',' ).append( isAllPropertyFetch ? "fetch all properties" : "fetch non-lazy properties" );
+ 		buf.append( ",classAlias=" ).append( getClassAlias() );
+ 		buf.append( ",role=" ).append( role );
+ 		buf.append( ",tableName=" ).append( getTableName() );
+@@ -232,12 +232,12 @@
+ 			for ( int i = 0; i < columns.length; i++ ) {
+ 				buf.append( columns[i] );
+ 				if ( i < columns.length ) {
+-					buf.append( " " );
++					buf.append( ' ' );
+ 				}
+ 			}
+ 		}
+ 		buf.append( ",className=" ).append( className );
+-		buf.append( "}" );
++		buf.append( '}' );
+ 	}
+ 
+ 	public int hashCode() {
+Index: src/org/hibernate/hql/ast/tree/ImpliedFromElement.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/ImpliedFromElement.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/ImpliedFromElement.java	(working copy)
+@@ -51,7 +51,7 @@
+ 		StringBuffer buf = new StringBuffer();
+ 		buf.append( "ImpliedFromElement{" );
+ 		appendDisplayText( buf );
+-		buf.append( "}" );
++		buf.append( '}' );
+ 		return buf.toString();
+ 	}
+ }
+Index: src/org/hibernate/hql/ast/tree/FromReferenceNode.java
+===================================================================
+--- src/org/hibernate/hql/ast/tree/FromReferenceNode.java	(revision 10538)
++++ src/org/hibernate/hql/ast/tree/FromReferenceNode.java	(working copy)
+@@ -54,8 +54,8 @@
+ 
+ 	public String getDisplayText() {
+ 		StringBuffer buf = new StringBuffer();
+-		buf.append( "{" ).append( ( fromElement == null ) ? "no fromElement" : fromElement.getDisplayText() );
+-		buf.append( "}" );
++		buf.append( '{' ).append( ( fromElement == null ) ? "no fromElement" : fromElement.getDisplayText() );
++		buf.append( '}' );
+ 		return buf.toString();
+ 	}
+ 
+Index: src/org/hibernate/hql/ast/ErrorCounter.java
+===================================================================
+--- src/org/hibernate/hql/ast/ErrorCounter.java	(revision 10538)
++++ src/org/hibernate/hql/ast/ErrorCounter.java	(working copy)
+@@ -47,7 +47,7 @@
+ 		StringBuffer buf = new StringBuffer();
+ 		for ( Iterator iterator = errorList.iterator(); iterator.hasNext(); ) {
+ 			buf.append( ( String ) iterator.next() );
+-			if ( iterator.hasNext() ) buf.append( "\n" );
++			if ( iterator.hasNext() ) buf.append( '\n' );
+ 
+ 		}
+ 		return buf.toString();
+Index: src/org/hibernate/hql/ast/util/ASTPrinter.java
+===================================================================
+--- src/org/hibernate/hql/ast/util/ASTPrinter.java	(revision 10538)
++++ src/org/hibernate/hql/ast/util/ASTPrinter.java	(working copy)
+@@ -222,19 +222,19 @@
+ 			return "{null}";
+ 		}
+ 		StringBuffer buf = new StringBuffer();
+-		buf.append( "[" ).append( getTokenTypeName( ast.getType() ) ).append( "] " );
++		buf.append( '[' ).append( getTokenTypeName( ast.getType() ) ).append( "] " );
+ 		if ( showClassName ) {
+ 			buf.append( StringHelper.unqualify( ast.getClass().getName() ) ).append( ": " );
+ 		}
+ 
+-        buf.append( "'" );
++        buf.append( '\'' );
+         String text = ast.getText();
+         appendEscapedMultibyteChars(text, buf);
+-        buf.append( "'" );
++        buf.append( '\'' );
+ 		if ( ast instanceof DisplayableNode ) {
+ 			DisplayableNode displayableNode = ( DisplayableNode ) ast;
+ 			// Add a space before the display text.
+-			buf.append( " " ).append( displayableNode.getDisplayText() );
++			buf.append( ' ' ).append( displayableNode.getDisplayText() );
+ 		}
+ 		String s = buf.toString();
+ 		return s;
+Index: src/org/hibernate/hql/ast/util/SessionFactoryHelper.java
+===================================================================
+--- src/org/hibernate/hql/ast/util/SessionFactoryHelper.java	(revision 10538)
++++ src/org/hibernate/hql/ast/util/SessionFactoryHelper.java	(working copy)
+@@ -369,7 +369,7 @@
+ 		if ( "cast".equals(functionName) ) {
+ 			argumentType = TypeFactory.heuristicType( first.getNextSibling().getText() );
+ 		}
+-		else if ( first != null && first instanceof SqlNode ) {
++		else if ( first instanceof SqlNode ) {
+ 			argumentType = ( (SqlNode) first ).getDataType();
+ 		}
+ 		// This implementation is a bit strange, but then that's why this helper exists.

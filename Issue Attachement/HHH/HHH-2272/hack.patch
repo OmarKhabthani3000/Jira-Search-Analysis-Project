@@ -1,0 +1,5294 @@
+Index: D:/Projekte/hibernate320/src/org/hibernate/type/ListType.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/type/ListType.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/type/ListType.java	(working copy)
+@@ -3,6 +3,7 @@
+ 
+ import java.io.Serializable;
+ import java.util.ArrayList;
++import java.util.Iterator;
+ import java.util.List;
+ 
+ import org.dom4j.Element;
+@@ -15,45 +16,45 @@
+ 
+ public class ListType extends CollectionType {
+ 
+-	public ListType(String role, String propertyRef, boolean isEmbeddedInXML) {
+-		super(role, propertyRef, isEmbeddedInXML);
+-	}
++  public ListType(String role, String propertyRef, boolean isEmbeddedInXML) {
++    super(role, propertyRef, isEmbeddedInXML);
++  }
+ 
+-	public PersistentCollection instantiate(SessionImplementor session, CollectionPersister persister, Serializable key) {
+-		if ( session.getEntityMode()==EntityMode.DOM4J ) {
+-			return new PersistentListElementHolder(session, persister, key);
+-		}
+-		else {
+-			return new PersistentList(session);
+-		}
+-	}
++  public PersistentCollection instantiate(SessionImplementor session, CollectionPersister persister, Serializable key) {
++    if ( session.getEntityMode()==EntityMode.DOM4J ) {
++      return new PersistentListElementHolder(session, persister, key);
++    }
++    else {
++      return new PersistentList(session);
++    }
++  }
+ 
+-	public Class getReturnedClass() {
+-		return List.class;
+-	}
++  public Class getReturnedClass() {
++    return List.class;
++  }
+ 
+-	public PersistentCollection wrap(SessionImplementor session, Object collection) {
+-		if ( session.getEntityMode()==EntityMode.DOM4J ) {
+-			return new PersistentListElementHolder( session, (Element) collection );
+-		}
+-		else {
+-			return new PersistentList( session, (List) collection );
+-		}
+-	}
++  public PersistentCollection wrap(SessionImplementor session, Object collection) {
++    if ( session.getEntityMode()==EntityMode.DOM4J ) {
++      return new PersistentListElementHolder( session, (Element) collection );
++    }
++    else {
++      return new PersistentList( session, (List) collection );
++    }
++  }
+ 
+-	public Object instantiate(int anticipatedSize) {
+-		return anticipatedSize <= 0 ? new ArrayList() : new ArrayList( anticipatedSize + 1 );
+-	}
+-	
+-	public Object indexOf(Object collection, Object element) {
+-		List list = (List) collection;
+-		for ( int i=0; i<list.size(); i++ ) {
+-			//TODO: proxies!
+-			if ( list.get(i)==element ) return new Integer(i);
+-		}
+-		return null;
+-	}
+-	
++  public Object instantiate(int anticipatedSize) {
++    return anticipatedSize <= 0 ? new ArrayList() : new ArrayList( anticipatedSize + 1 );
++  }
++  
++  public Object indexOf(Object collection, Object element) {
++    int i = 0;
++    for (Iterator iter = ((List) collection).iterator(); iter.hasNext(); i++)
++    {
++      if (element == iter.next()) return new Integer(i);
++    }
++    return null;
++  }
++  
+ }
+ 
+ 
+Index: D:/Projekte/hibernate320/src/org/hibernate/engine/CascadingAction.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/engine/CascadingAction.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/engine/CascadingAction.java	(working copy)
+@@ -26,413 +26,415 @@
+  */
+ public abstract class CascadingAction {
+ 
+-	private static final Log log = LogFactory.getLog( CascadingAction.class );
++  private static final Log log = LogFactory.getLog( CascadingAction.class );
+ 
+ 
+-	// the CascadingAction contract ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++  // the CascadingAction contract ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-	/**
+-	 * protected constructor
+-	 */
+-	CascadingAction() {
+-	}
++  /**
++   * protected constructor
++   */
++  CascadingAction() {
++  }
+ 
+-	/**
+-	 * Cascade the action to the child object.
+-	 *
+-	 * @param session The session within which the cascade is occuring.
+-	 * @param child The child to which cascading should be performed.
+-	 * @param entityName The child's entity name
+-	 * @param anything Anything ;)  Typically some form of cascade-local cache
+-	 * which is specific to each CascadingAction type
+-	 * @param isCascadeDeleteEnabled Are cascading deletes enabled.
+-	 * @throws HibernateException
+-	 */
+-	public abstract void cascade(
+-			EventSource session,
+-			Object child,
+-			String entityName,
+-			Object anything,
+-			boolean isCascadeDeleteEnabled) throws HibernateException;
++  /**
++   * Cascade the action to the child object.
++   *
++   * @param session The session within which the cascade is occuring.
++   * @param child The child to which cascading should be performed.
++   * @param entityName The child's entity name
++   * @param anything Anything ;)  Typically some form of cascade-local cache
++   * which is specific to each CascadingAction type
++   * @param isCascadeDeleteEnabled Are cascading deletes enabled.
++   * @throws HibernateException
++   */
++  public abstract void cascade(
++      EventSource session,
++      Object parent,
++      Object child,
++      String entityName,
++      Object anything,
++      boolean isCascadeDeleteEnabled) throws HibernateException;
+ 
+-	/**
+-	 * Given a collection, get an iterator of the children upon which the
+-	 * current cascading action should be visited.
+-	 *
+-	 * @param session The session within which the cascade is occuring.
+-	 * @param collectionType The mapping type of the collection.
+-	 * @param collection The collection instance.
+-	 * @return The children iterator.
+-	 */
+-	public abstract Iterator getCascadableChildrenIterator(
+-			EventSource session,
+-			CollectionType collectionType,
+-			Object collection);
++  /**
++   * Given a collection, get an iterator of the children upon which the
++   * current cascading action should be visited.
++   *
++   * @param session The session within which the cascade is occuring.
++   * @param collectionType The mapping type of the collection.
++   * @param collection The collection instance.
++   * @return The children iterator.
++   */
++  public abstract Iterator getCascadableChildrenIterator(
++      EventSource session,
++      CollectionType collectionType,
++      Object collection);
+ 
+-	/**
+-	 * Does this action potentially extrapolate to orphan deletes?
+-	 *
+-	 * @return True if this action can lead to deletions of orphans.
+-	 */
+-	public abstract boolean deleteOrphans();
++  /**
++   * Does this action potentially extrapolate to orphan deletes?
++   *
++   * @return True if this action can lead to deletions of orphans.
++   */
++  public abstract boolean deleteOrphans();
+ 
+ 
+-	/**
+-	 * Does the specified cascading action require verification of no cascade validity?
+-	 *
+-	 * @return True if this action requires no-cascade verification; false otherwise.
+-	 */
+-	public boolean requiresNoCascadeChecking() {
+-		return false;
+-	}
++  /**
++   * Does the specified cascading action require verification of no cascade validity?
++   *
++   * @return True if this action requires no-cascade verification; false otherwise.
++   */
++  public boolean requiresNoCascadeChecking() {
++    return false;
++  }
+ 
+-	/**
+-	 * Called (in the case of {@link #requiresNoCascadeChecking} returning true) to validate
+-	 * that no cascade on the given property is considered a valid semantic.
+-	 *
+-	 * @param session The session witin which the cascade is occurring.
+-	 * @param child The property value
+-	 * @param parent The property value owner
+-	 * @param persister The entity persister for the owner
+-	 * @param propertyIndex The index of the property within the owner.
+-	 */
+-	public void noCascade(EventSource session, Object child, Object parent, EntityPersister persister, int propertyIndex) {
+-	}
++  /**
++   * Called (in the case of {@link #requiresNoCascadeChecking} returning true) to validate
++   * that no cascade on the given property is considered a valid semantic.
++   *
++   * @param session The session witin which the cascade is occurring.
++   * @param child The property value
++   * @param parent The property value owner
++   * @param persister The entity persister for the owner
++   * @param propertyIndex The index of the property within the owner.
++   */
++  public void noCascade(EventSource session, Object child, Object parent, EntityPersister persister, int propertyIndex) {
++  }
+ 
+-	/**
+-	 * Should this action be performed (or noCascade consulted) in the case of lazy properties.
+-	 */
+-	public boolean performOnLazyProperty() {
+-		return true;
+-	}
++  /**
++   * Should this action be performed (or noCascade consulted) in the case of lazy properties.
++   */
++  public boolean performOnLazyProperty() {
++    return true;
++  }
+ 
+ 
+-	// the CascadingAction implementations ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++  // the CascadingAction implementations ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-	/**
+-	 * @see org.hibernate.Session#delete(Object)
+-	 */
+-	public static final CascadingAction DELETE = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace("cascading to delete: " + entityName);
+-			}
+-			session.delete( entityName, child, isCascadeDeleteEnabled, ( Set ) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// delete does cascade to uninitialized collections
+-			return CascadingAction.getAllElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			// orphans should be deleted during delete
+-			return true;
+-		}
+-		public String toString() {
+-			return "ACTION_DELETE";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#delete(Object)
++   */
++  public static final CascadingAction DELETE = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace("cascading to delete: " + entityName);
++      }
++      session.delete( entityName, child, isCascadeDeleteEnabled, ( Set ) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // delete does cascade to uninitialized collections
++      return CascadingAction.getAllElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      // orphans should be deleted during delete
++      return true;
++    }
++    public String toString() {
++      return "ACTION_DELETE";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#lock(Object, LockMode)
+-	 */
+-	public static final CascadingAction LOCK = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to lock: " + entityName );
+-			}
+-			session.lock( entityName, child, LockMode.NONE/*(LockMode) anything*/ );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// lock doesn't cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			//TODO: should orphans really be deleted during lock???
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_LOCK";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#lock(Object, LockMode)
++   */
++  public static final CascadingAction LOCK = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to lock: " + entityName );
++      }
++      session.lock( entityName, child, LockMode.NONE/*(LockMode) anything*/ );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // lock doesn't cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      //TODO: should orphans really be deleted during lock???
++      return false;
++    }
++    public String toString() {
++      return "ACTION_LOCK";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#refresh(Object)
+-	 */
+-	public static final CascadingAction REFRESH = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to refresh: " + entityName );
+-			}
+-			session.refresh( child, (Map) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// refresh doesn't cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_REFRESH";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#refresh(Object)
++   */
++  public static final CascadingAction REFRESH = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to refresh: " + entityName );
++      }
++      session.refresh( child, (Map) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // refresh doesn't cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      return false;
++    }
++    public String toString() {
++      return "ACTION_REFRESH";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#evict(Object)
+-	 */
+-	public static final CascadingAction EVICT = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to evict: " + entityName );
+-			}
+-			session.evict(child);
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// evicts don't cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			return false;
+-		}
+-		public boolean performOnLazyProperty() {
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_EVICT";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#evict(Object)
++   */
++  public static final CascadingAction EVICT = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to evict: " + entityName );
++      }
++      session.evict(child);
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // evicts don't cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      return false;
++    }
++    public boolean performOnLazyProperty() {
++      return false;
++    }
++    public String toString() {
++      return "ACTION_EVICT";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#saveOrUpdate(Object)
+-	 */
+-	public static final CascadingAction SAVE_UPDATE = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to saveOrUpdate: " + entityName );
+-			}
+-			session.saveOrUpdate(entityName, child);
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// saves / updates don't cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			// orphans should be deleted during save/update
+-			return true;
+-		}
+-		public boolean performOnLazyProperty() {
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_SAVE_UPDATE";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#saveOrUpdate(Object)
++   */
++  public static final CascadingAction SAVE_UPDATE = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to saveOrUpdate: " + entityName );
++      }
++      session.getPersistenceContext().addParent(parent, child);
++      session.saveOrUpdate(entityName, child);
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // saves / updates don't cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      // orphans should be deleted during save/update
++      return true;
++    }
++    public boolean performOnLazyProperty() {
++      return false;
++    }
++    public String toString() {
++      return "ACTION_SAVE_UPDATE";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#merge(Object)
+-	 */
+-	public static final CascadingAction MERGE = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to merge: " + entityName );
+-			}
+-			session.merge( entityName, child, (Map) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// merges don't cascade to uninitialized collections
+-//			//TODO: perhaps this does need to cascade after all....
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			// orphans should not be deleted during merge??
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_MERGE";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#merge(Object)
++   */
++  public static final CascadingAction MERGE = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to merge: " + entityName );
++      }
++      session.merge( entityName, child, (Map) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // merges don't cascade to uninitialized collections
++//      //TODO: perhaps this does need to cascade after all....
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      // orphans should not be deleted during merge??
++      return false;
++    }
++    public String toString() {
++      return "ACTION_MERGE";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.classic.Session#saveOrUpdateCopy(Object)
+-	 */
+-	public static final CascadingAction SAVE_UPDATE_COPY = new CascadingAction() {
+-		// for deprecated saveOrUpdateCopy()
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to saveOrUpdateCopy: " + entityName );
+-			}
+-			session.saveOrUpdateCopy( entityName, child, (Map) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// saves / updates don't cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			// orphans should not be deleted during copy??
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_SAVE_UPDATE_COPY";
+-		}
+-	};
++  /**
++   * @see org.hibernate.classic.Session#saveOrUpdateCopy(Object)
++   */
++  public static final CascadingAction SAVE_UPDATE_COPY = new CascadingAction() {
++    // for deprecated saveOrUpdateCopy()
++    public void cascade(EventSource session, Object parent, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to saveOrUpdateCopy: " + entityName );
++      }
++      session.saveOrUpdateCopy( entityName, child, (Map) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // saves / updates don't cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      // orphans should not be deleted during copy??
++      return false;
++    }
++    public String toString() {
++      return "ACTION_SAVE_UPDATE_COPY";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#persist(Object)
+-	 */
+-	public static final CascadingAction PERSIST = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to persist: " + entityName );
+-			}
+-			session.persist( entityName, child, (Map) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// persists don't cascade to uninitialized collections
+-			return CascadingAction.getAllElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			return false;
+-		}
+-		public boolean performOnLazyProperty() {
+-			return false;
+-		}
+-		public String toString() {
+-			return "ACTION_PERSIST";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#persist(Object)
++   */
++  public static final CascadingAction PERSIST = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to persist: " + entityName );
++      }
++      session.persist( entityName, child, (Map) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // persists don't cascade to uninitialized collections
++      return CascadingAction.getAllElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      return false;
++    }
++    public boolean performOnLazyProperty() {
++      return false;
++    }
++    public String toString() {
++      return "ACTION_PERSIST";
++    }
++  };
+ 
+-	/**
+-	 * Execute persist during flush time
+-	 *
+-	 * @see org.hibernate.Session#persist(Object)
+-	 */
+-	public static final CascadingAction PERSIST_ON_FLUSH = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to persistOnFlush: " + entityName );
+-			}
+-			session.persistOnFlush( entityName, child, (Map) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// persists don't cascade to uninitialized collections
+-			return CascadingAction.getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			return true;
+-		}
+-		public boolean requiresNoCascadeChecking() {
+-			return true;
+-		}
+-		public void noCascade(
+-				EventSource session,
+-				Object child,
+-				Object parent,
+-				EntityPersister persister,
+-				int propertyIndex) {
+-			if ( child == null ) {
+-				return;
+-			}
+-			Type type = persister.getPropertyTypes()[propertyIndex];
+-			if ( type.isEntityType() ) {
+-				String childEntityName = ( ( EntityType ) type ).getAssociatedEntityName( session.getFactory() );
++  /**
++   * Execute persist during flush time
++   *
++   * @see org.hibernate.Session#persist(Object)
++   */
++  public static final CascadingAction PERSIST_ON_FLUSH = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to persistOnFlush: " + entityName );
++      }
++      session.persistOnFlush( entityName, child, (Map) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // persists don't cascade to uninitialized collections
++      return CascadingAction.getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      return true;
++    }
++    public boolean requiresNoCascadeChecking() {
++      return true;
++    }
++    public void noCascade(
++        EventSource session,
++        Object child,
++        Object parent,
++        EntityPersister persister,
++        int propertyIndex) {
++      if ( child == null ) {
++        return;
++      }
++      Type type = persister.getPropertyTypes()[propertyIndex];
++      if ( type.isEntityType() ) {
++        String childEntityName = ( ( EntityType ) type ).getAssociatedEntityName( session.getFactory() );
+ 
+-				if ( ! isInManagedState( child, session )
+-						&& ! ( child instanceof HibernateProxy ) //a proxy cannot be transient and it breaks ForeignKeys.isTransient
+-						&& ForeignKeys.isTransient( childEntityName, child, null, session ) ) {
+-					String parentEntiytName = persister.getEntityName();
+-					String propertyName = persister.getPropertyNames()[propertyIndex];
+-					throw new TransientObjectException(
+-							"object references an unsaved transient instance - " +
+-							"save the transient instance before flushing: " +
+-							parentEntiytName + "." + propertyName + " -> " + childEntityName
+-					);
++        if ( ! isInManagedState( child, session )
++            && ! ( child instanceof HibernateProxy ) //a proxy cannot be transient and it breaks ForeignKeys.isTransient
++            && ForeignKeys.isTransient( childEntityName, child, null, session ) ) {
++          String parentEntiytName = persister.getEntityName();
++          String propertyName = persister.getPropertyNames()[propertyIndex];
++          throw new TransientObjectException(
++              "object references an unsaved transient instance - " +
++              "save the transient instance before flushing: " +
++              parentEntiytName + "." + propertyName + " -> " + childEntityName
++          );
+ 
+-				}
+-			}
+-		}
+-		public boolean performOnLazyProperty() {
+-			return false;
+-		}
++        }
++      }
++    }
++    public boolean performOnLazyProperty() {
++      return false;
++    }
+ 
+-		private boolean isInManagedState(Object child, EventSource session) {
+-			EntityEntry entry = session.getPersistenceContext().getEntry( child );
+-			return entry != null && (entry.getStatus() == Status.MANAGED || entry.getStatus() == Status.READ_ONLY);
+-		}
++    private boolean isInManagedState(Object child, EventSource session) {
++      EntityEntry entry = session.getPersistenceContext().getEntry( child );
++      return entry != null && (entry.getStatus() == Status.MANAGED || entry.getStatus() == Status.READ_ONLY);
++    }
+ 
+-		public String toString() {
+-			return "ACTION_PERSIST_ON_FLUSH";
+-		}
+-	};
++    public String toString() {
++      return "ACTION_PERSIST_ON_FLUSH";
++    }
++  };
+ 
+-	/**
+-	 * @see org.hibernate.Session#replicate(Object, org.hibernate.ReplicationMode)
+-	 */
+-	public static final CascadingAction REPLICATE = new CascadingAction() {
+-		public void cascade(EventSource session, Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
+-		throws HibernateException {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascading to replicate: " + entityName );
+-			}
+-			session.replicate( entityName, child, (ReplicationMode) anything );
+-		}
+-		public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
+-			// replicate does cascade to uninitialized collections
+-			return getLoadedElementsIterator(session, collectionType, collection);
+-		}
+-		public boolean deleteOrphans() {
+-			return false; //I suppose?
+-		}
+-		public String toString() {
+-			return "ACTION_REPLICATE";
+-		}
+-	};
++  /**
++   * @see org.hibernate.Session#replicate(Object, org.hibernate.ReplicationMode)
++   */
++  public static final CascadingAction REPLICATE = new CascadingAction() {
++    public void cascade(EventSource session, Object parent,Object child, String entityName, Object anything, boolean isCascadeDeleteEnabled)
++    throws HibernateException {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascading to replicate: " + entityName );
++      }
++      session.replicate( entityName, child, (ReplicationMode) anything );
++    }
++    public Iterator getCascadableChildrenIterator(EventSource session, CollectionType collectionType, Object collection) {
++      // replicate does cascade to uninitialized collections
++      return getLoadedElementsIterator(session, collectionType, collection);
++    }
++    public boolean deleteOrphans() {
++      return false; //I suppose?
++    }
++    public String toString() {
++      return "ACTION_REPLICATE";
++    }
++  };
+ 
+ 
+-	// static helper methods ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++  // static helper methods ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
+-	/**
+-	 * Given a collection, get an iterator of all its children, loading them
+-	 * from the database if necessary.
+-	 *
+-	 * @param session The session within which the cascade is occuring.
+-	 * @param collectionType The mapping type of the collection.
+-	 * @param collection The collection instance.
+-	 * @return The children iterator.
+-	 */
+-	private static Iterator getAllElementsIterator(
+-			EventSource session,
+-			CollectionType collectionType,
+-			Object collection) {
+-		return collectionType.getElementsIterator( collection, session );
+-	}
++  /**
++   * Given a collection, get an iterator of all its children, loading them
++   * from the database if necessary.
++   *
++   * @param session The session within which the cascade is occuring.
++   * @param collectionType The mapping type of the collection.
++   * @param collection The collection instance.
++   * @return The children iterator.
++   */
++  private static Iterator getAllElementsIterator(
++      EventSource session,
++      CollectionType collectionType,
++      Object collection) {
++    return collectionType.getElementsIterator( collection, session );
++  }
+ 
+-	/**
+-	 * Iterate just the elements of the collection that are already there. Don't load
+-	 * any new elements from the database.
+-	 */
+-	public static Iterator getLoadedElementsIterator(SessionImplementor session, CollectionType collectionType, Object collection) {
+-		if ( collectionIsInitialized(collection) ) {
+-			// handles arrays and newly instantiated collections
+-			return collectionType.getElementsIterator(collection, session);
+-		}
+-		else {
+-			// does not handle arrays (thats ok, cos they can't be lazy)
+-			// or newly instantiated collections, so we can do the cast
+-			return ( (PersistentCollection) collection ).queuedAdditionIterator();
+-		}
+-	}
++  /**
++   * Iterate just the elements of the collection that are already there. Don't load
++   * any new elements from the database.
++   */
++  public static Iterator getLoadedElementsIterator(SessionImplementor session, CollectionType collectionType, Object collection) {
++    if ( collectionIsInitialized(collection) ) {
++      // handles arrays and newly instantiated collections
++      return collectionType.getElementsIterator(collection, session);
++    }
++    else {
++      // does not handle arrays (thats ok, cos they can't be lazy)
++      // or newly instantiated collections, so we can do the cast
++      return ( (PersistentCollection) collection ).queuedAdditionIterator();
++    }
++  }
+ 
+-	private static boolean collectionIsInitialized(Object collection) {
+-		return !(collection instanceof PersistentCollection) || ( (PersistentCollection) collection ).wasInitialized();
+-	}
++  private static boolean collectionIsInitialized(Object collection) {
++    return !(collection instanceof PersistentCollection) || ( (PersistentCollection) collection ).wasInitialized();
++  }
+ 
+ }
+\ No newline at end of file
+Index: D:/Projekte/hibernate320/src/org/hibernate/engine/PersistenceContext.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/engine/PersistenceContext.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/engine/PersistenceContext.java	(working copy)
+@@ -19,417 +19,422 @@
+  * @author Gavin King
+  */
+ public interface PersistenceContext {
+-	
+-	public boolean isStateless();
+-	
+-	/**
+-	 * Get the session
+-	 */
+-	public SessionImplementor getSession();
+-	
+-	/**
+-	 * Get the context for collection loading
+-	 */
+-	public CollectionLoadContext getCollectionLoadContext();
++  
++  public boolean isStateless();
++  
++  /**
++   * Get the session
++   */
++  public SessionImplementor getSession();
++  
++  /**
++   * Get the context for collection loading
++   */
++  public CollectionLoadContext getCollectionLoadContext();
+ 
+-	/**
+-	 * Add a collection which has no owner loaded
+-	 */
+-	public void addUnownedCollection(CollectionKey key, PersistentCollection collection);
++  /**
++   * Add a collection which has no owner loaded
++   */
++  public void addUnownedCollection(CollectionKey key, PersistentCollection collection);
+ 
+-	/**
+-	 * Get and remove a collection whose owner is not yet loaded,
+-	 * when its owner is being loaded
+-	 */
+-	public PersistentCollection useUnownedCollection(CollectionKey key);
++  /**
++   * Get and remove a collection whose owner is not yet loaded,
++   * when its owner is being loaded
++   */
++  public PersistentCollection useUnownedCollection(CollectionKey key);
+ 
+-	/**
+-	 * Get the <tt>BatchFetchQueue</tt>, instantiating one if
+-	 * necessary.
+-	 */
+-	public BatchFetchQueue getBatchFetchQueue();
+-	
+-	/**
+-	 * Clear the state of the persistence context
+-	 */
+-	public void clear();
++  /**
++   * Get the <tt>BatchFetchQueue</tt>, instantiating one if
++   * necessary.
++   */
++  public BatchFetchQueue getBatchFetchQueue();
++  
++  /**
++   * Clear the state of the persistence context
++   */
++  public void clear();
+ 
+-	/**
+-	 * @return false if we know for certain that all the entities are read-only
+-	 */
+-	public boolean hasNonReadOnlyEntities();
++  /**
++   * @return false if we know for certain that all the entities are read-only
++   */
++  public boolean hasNonReadOnlyEntities();
+ 
+-	/**
+-	 * Set the status of an entry
+-	 */
+-	public void setEntryStatus(EntityEntry entry, Status status);
++  /**
++   * Set the status of an entry
++   */
++  public void setEntryStatus(EntityEntry entry, Status status);
+ 
+-	/**
+-	 * Called after transactions end
+-	 */
+-	public void afterTransactionCompletion();
++  /**
++   * Called after transactions end
++   */
++  public void afterTransactionCompletion();
+ 
+-	/**
+-	 * Get the current state of the entity as known to the underlying
+-	 * database, or null if there is no corresponding row 
+-	 */
+-	public Object[] getDatabaseSnapshot(Serializable id, EntityPersister persister)
+-			throws HibernateException;
++  /**
++   * Get the current state of the entity as known to the underlying
++   * database, or null if there is no corresponding row 
++   */
++  public Object[] getDatabaseSnapshot(Serializable id, EntityPersister persister)
++      throws HibernateException;
+ 
+-	public Object[] getCachedDatabaseSnapshot(EntityKey key);
++  public Object[] getCachedDatabaseSnapshot(EntityKey key);
+ 
+-	public Object[] getNaturalIdSnapshot(Serializable id, EntityPersister persister)
+-	throws HibernateException;
++  public Object[] getNaturalIdSnapshot(Serializable id, EntityPersister persister)
++  throws HibernateException;
+ 
+-	/**
+-	 * Add a canonical mapping from entity key to entity instance
+-	 */
+-	public void addEntity(EntityKey key, Object entity);
++  /**
++   * Add a canonical mapping from entity key to entity instance
++   */
++  public void addEntity(EntityKey key, Object entity);
+ 
+-	/**
+-	 * Get the entity instance associated with the given 
+-	 * <tt>EntityKey</tt>
+-	 */
+-	public Object getEntity(EntityKey key);
++  /**
++   * Get the entity instance associated with the given 
++   * <tt>EntityKey</tt>
++   */
++  public Object getEntity(EntityKey key);
+ 
+-	/**
+-	 * Is there an entity with the given key in the persistence context
+-	 */
+-	public boolean containsEntity(EntityKey key);
++  /**
++   * Is there an entity with the given key in the persistence context
++   */
++  public boolean containsEntity(EntityKey key);
+ 
+-	/**
+-	 * Remove an entity from the session cache, also clear
+-	 * up other state associated with the entity, all except
+-	 * for the <tt>EntityEntry</tt>
+-	 */
+-	public Object removeEntity(EntityKey key);
++  /**
++   * Remove an entity from the session cache, also clear
++   * up other state associated with the entity, all except
++   * for the <tt>EntityEntry</tt>
++   */
++  public Object removeEntity(EntityKey key);
+ 
+-	/**
+-	 * Get an entity cached by unique key
+-	 */
+-	public Object getEntity(EntityUniqueKey euk);
++  /**
++   * Get an entity cached by unique key
++   */
++  public Object getEntity(EntityUniqueKey euk);
+ 
+-	/**
+-	 * Add an entity to the cache by unique key
+-	 */
+-	public void addEntity(EntityUniqueKey euk, Object entity);
++  /**
++   * Add an entity to the cache by unique key
++   */
++  public void addEntity(EntityUniqueKey euk, Object entity);
+ 
+-	/**
+-	 * Retreive the EntityEntry representation of the given entity.
+-	 *
+-	 * @param entity The entity for which to locate the EntityEntry.
+-	 * @return The EntityEntry for the given entity.
+-	 */
+-	public EntityEntry getEntry(Object entity);
++  /**
++   * Retreive the EntityEntry representation of the given entity.
++   *
++   * @param entity The entity for which to locate the EntityEntry.
++   * @return The EntityEntry for the given entity.
++   */
++  public EntityEntry getEntry(Object entity);
+ 
+-	/**
+-	 * Remove an entity entry from the session cache
+-	 */
+-	public EntityEntry removeEntry(Object entity);
++  /**
++   * Remove an entity entry from the session cache
++   */
++  public EntityEntry removeEntry(Object entity);
+ 
+-	/**
+-	 * Is there an EntityEntry for this instance?
+-	 */
+-	public boolean isEntryFor(Object entity);
++  /**
++   * Is there an EntityEntry for this instance?
++   */
++  public boolean isEntryFor(Object entity);
+ 
+-	/**
+-	 * Get the collection entry for a persistent collection
+-	 */
+-	public CollectionEntry getCollectionEntry(PersistentCollection coll);
++  /**
++   * Get the collection entry for a persistent collection
++   */
++  public CollectionEntry getCollectionEntry(PersistentCollection coll);
+ 
+-	/**
+-	 * Adds an entity to the internal caches.
+-	 */
+-	public EntityEntry addEntity(final Object entity, final Status status,
+-			final Object[] loadedState, final EntityKey entityKey, final Object version,
+-			final LockMode lockMode, final boolean existsInDatabase,
+-			final EntityPersister persister, final boolean disableVersionIncrement, boolean lazyPropertiesAreUnfetched);
++  /**
++   * Adds an entity to the internal caches.
++   */
++  public EntityEntry addEntity(final Object entity, final Status status,
++      final Object[] loadedState, final EntityKey entityKey, final Object version,
++      final LockMode lockMode, final boolean existsInDatabase,
++      final EntityPersister persister, final boolean disableVersionIncrement, boolean lazyPropertiesAreUnfetched);
+ 
+-	/**
+-	 * Generates an appropriate EntityEntry instance and adds it 
+-	 * to the event source's internal caches.
+-	 */
+-	public EntityEntry addEntry(final Object entity, final Status status,
+-			final Object[] loadedState, final Object rowId, final Serializable id,
+-			final Object version, final LockMode lockMode, final boolean existsInDatabase,
+-			final EntityPersister persister, final boolean disableVersionIncrement, boolean lazyPropertiesAreUnfetched);
++  /**
++   * Generates an appropriate EntityEntry instance and adds it 
++   * to the event source's internal caches.
++   */
++  public EntityEntry addEntry(final Object entity, final Status status,
++      final Object[] loadedState, final Object rowId, final Serializable id,
++      final Object version, final LockMode lockMode, final boolean existsInDatabase,
++      final EntityPersister persister, final boolean disableVersionIncrement, boolean lazyPropertiesAreUnfetched);
+ 
+-	/**
+-	 * Is the given collection associated with this persistence context?
+-	 */
+-	public boolean containsCollection(PersistentCollection collection);
+-	
+-	/**
+-	 * Is the given proxy associated with this persistence context?
+-	 */
+-	public boolean containsProxy(Object proxy);
++  /**
++   * Is the given collection associated with this persistence context?
++   */
++  public boolean containsCollection(PersistentCollection collection);
++  
++  /**
++   * Is the given proxy associated with this persistence context?
++   */
++  public boolean containsProxy(Object proxy);
+ 
+-	/**
+-	 * Takes the given object and, if it represents a proxy, reassociates it with this event source.
+-	 *
+-	 * @param value The possible proxy to be reassociated.
+-	 * @return Whether the passed value represented an actual proxy which got initialized.
+-	 * @throws MappingException
+-	 */
+-	public boolean reassociateIfUninitializedProxy(Object value) throws MappingException;
++  /**
++   * Takes the given object and, if it represents a proxy, reassociates it with this event source.
++   *
++   * @param value The possible proxy to be reassociated.
++   * @return Whether the passed value represented an actual proxy which got initialized.
++   * @throws MappingException
++   */
++  public boolean reassociateIfUninitializedProxy(Object value) throws MappingException;
+ 
+-	/**
+-	 * If a deleted entity instance is re-saved, and it has a proxy, we need to
+-	 * reset the identifier of the proxy 
+-	 */
+-	public void reassociateProxy(Object value, Serializable id) throws MappingException;
++  /**
++   * If a deleted entity instance is re-saved, and it has a proxy, we need to
++   * reset the identifier of the proxy 
++   */
++  public void reassociateProxy(Object value, Serializable id) throws MappingException;
+ 
+-	/**
+-	 * Get the entity instance underlying the given proxy, throwing
+-	 * an exception if the proxy is uninitialized. If the given object
+-	 * is not a proxy, simply return the argument.
+-	 */
+-	public Object unproxy(Object maybeProxy) throws HibernateException;
++  /**
++   * Get the entity instance underlying the given proxy, throwing
++   * an exception if the proxy is uninitialized. If the given object
++   * is not a proxy, simply return the argument.
++   */
++  public Object unproxy(Object maybeProxy) throws HibernateException;
+ 
+-	/**
+-	 * Possibly unproxy the given reference and reassociate it with the current session.
+-	 *
+-	 * @param maybeProxy The reference to be unproxied if it currently represents a proxy.
+-	 * @return The unproxied instance.
+-	 * @throws HibernateException
+-	 */
+-	public Object unproxyAndReassociate(Object maybeProxy) throws HibernateException;
++  /**
++   * Possibly unproxy the given reference and reassociate it with the current session.
++   *
++   * @param maybeProxy The reference to be unproxied if it currently represents a proxy.
++   * @return The unproxied instance.
++   * @throws HibernateException
++   */
++  public Object unproxyAndReassociate(Object maybeProxy) throws HibernateException;
+ 
+-	/**
+-	 * Attempts to check whether the given key represents an entity already loaded within the
+-	 * current session.
+-	 * @param object The entity reference against which to perform the uniqueness check.
+-	 * @throws HibernateException
+-	 */
+-	public void checkUniqueness(EntityKey key, Object object) throws HibernateException;
++  /**
++   * Attempts to check whether the given key represents an entity already loaded within the
++   * current session.
++   * @param object The entity reference against which to perform the uniqueness check.
++   * @throws HibernateException
++   */
++  public void checkUniqueness(EntityKey key, Object object) throws HibernateException;
+ 
+-	/**
+-	 * If the existing proxy is insufficiently "narrow" (derived), instantiate a new proxy
+-	 * and overwrite the registration of the old one. This breaks == and occurs only for
+-	 * "class" proxies rather than "interface" proxies. Also init the proxy to point to
+-	 * the given target implementation if necessary.
+-	 *
+-	 * @param proxy The proxy instance to be narrowed.
+-	 * @param persister The persister for the proxied entity.
+-	 * @param key The internal cache key for the proxied entity.
+-	 * @param object (optional) the actual proxied entity instance.
+-	 * @return An appropriately narrowed instance.
+-	 * @throws HibernateException
+-	 */
+-	public Object narrowProxy(Object proxy, EntityPersister persister, EntityKey key, Object object)
+-			throws HibernateException;
++  /**
++   * If the existing proxy is insufficiently "narrow" (derived), instantiate a new proxy
++   * and overwrite the registration of the old one. This breaks == and occurs only for
++   * "class" proxies rather than "interface" proxies. Also init the proxy to point to
++   * the given target implementation if necessary.
++   *
++   * @param proxy The proxy instance to be narrowed.
++   * @param persister The persister for the proxied entity.
++   * @param key The internal cache key for the proxied entity.
++   * @param object (optional) the actual proxied entity instance.
++   * @return An appropriately narrowed instance.
++   * @throws HibernateException
++   */
++  public Object narrowProxy(Object proxy, EntityPersister persister, EntityKey key, Object object)
++      throws HibernateException;
+ 
+-	/**
+-	 * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
+-	 * third argument (the entity associated with the key) if no proxy exists. Init
+-	 * the proxy to the target implementation, if necessary.
+-	 */
+-	public Object proxyFor(EntityPersister persister, EntityKey key, Object impl)
+-			throws HibernateException;
++  /**
++   * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
++   * third argument (the entity associated with the key) if no proxy exists. Init
++   * the proxy to the target implementation, if necessary.
++   */
++  public Object proxyFor(EntityPersister persister, EntityKey key, Object impl)
++      throws HibernateException;
+ 
+-	/**
+-	 * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
+-	 * argument (the entity associated with the key) if no proxy exists.
+-	 * (slower than the form above)
+-	 */
+-	public Object proxyFor(Object impl) throws HibernateException;
++  /**
++   * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
++   * argument (the entity associated with the key) if no proxy exists.
++   * (slower than the form above)
++   */
++  public Object proxyFor(Object impl) throws HibernateException;
+ 
+-	/**
+-	 * Get the entity that owns this persistent collection
+-	 */
+-	public Object getCollectionOwner(Serializable key, CollectionPersister collectionPersister)
+-			throws MappingException;
++  /**
++   * Get the entity that owns this persistent collection
++   */
++  public Object getCollectionOwner(Serializable key, CollectionPersister collectionPersister)
++      throws MappingException;
+ 
+-	/**
+-	 * add a collection we just loaded up (still needs initializing)
+-	 */
+-	public void addUninitializedCollection(CollectionPersister persister,
+-			PersistentCollection collection, Serializable id);
++  /**
++   * add a collection we just loaded up (still needs initializing)
++   */
++  public void addUninitializedCollection(CollectionPersister persister,
++      PersistentCollection collection, Serializable id);
+ 
+-	/**
+-	 * add a detached uninitialized collection
+-	 */
+-	public void addUninitializedDetachedCollection(CollectionPersister persister,
+-			PersistentCollection collection);
++  /**
++   * add a detached uninitialized collection
++   */
++  public void addUninitializedDetachedCollection(CollectionPersister persister,
++      PersistentCollection collection);
+ 
+-	/**
+-	 * Add a new collection (ie. a newly created one, just instantiated by the
+-	 * application, with no database state or snapshot)
+-	 * @param collection The collection to be associated with the persistence context
+-	 */
+-	public void addNewCollection(CollectionPersister persister, PersistentCollection collection)
+-			throws HibernateException;
++  /**
++   * Add a new collection (ie. a newly created one, just instantiated by the
++   * application, with no database state or snapshot)
++   * @param collection The collection to be associated with the persistence context
++   */
++  public void addNewCollection(CollectionPersister persister, PersistentCollection collection)
++      throws HibernateException;
+ 
+-	/**
+-	 * add an (initialized) collection that was created by another session and passed
+-	 * into update() (ie. one with a snapshot and existing state on the database)
+-	 */
+-	public void addInitializedDetachedCollection(CollectionPersister collectionPersister,
+-			PersistentCollection collection) throws HibernateException;
++  /**
++   * add an (initialized) collection that was created by another session and passed
++   * into update() (ie. one with a snapshot and existing state on the database)
++   */
++  public void addInitializedDetachedCollection(CollectionPersister collectionPersister,
++      PersistentCollection collection) throws HibernateException;
+ 
+-	/**
+-	 * add a collection we just pulled out of the cache (does not need initializing)
+-	 */
+-	public CollectionEntry addInitializedCollection(CollectionPersister persister,
+-			PersistentCollection collection, Serializable id) throws HibernateException;
++  /**
++   * add a collection we just pulled out of the cache (does not need initializing)
++   */
++  public CollectionEntry addInitializedCollection(CollectionPersister persister,
++      PersistentCollection collection, Serializable id) throws HibernateException;
+ 
+-	/**
+-	 * Get the collection instance associated with the <tt>CollectionKey</tt>
+-	 */
+-	public PersistentCollection getCollection(CollectionKey collectionKey);
++  /**
++   * Get the collection instance associated with the <tt>CollectionKey</tt>
++   */
++  public PersistentCollection getCollection(CollectionKey collectionKey);
+ 
+-	/**
+-	 * Register a collection for non-lazy loading at the end of the
+-	 * two-phase load
+-	 */
+-	public void addNonLazyCollection(PersistentCollection collection);
++  /**
++   * Register a collection for non-lazy loading at the end of the
++   * two-phase load
++   */
++  public void addNonLazyCollection(PersistentCollection collection);
+ 
+-	/**
+-	 * Force initialization of all non-lazy collections encountered during
+-	 * the current two-phase load (actually, this is a no-op, unless this
+-	 * is the "outermost" load)
+-	 */
+-	public void initializeNonLazyCollections() throws HibernateException;
++  /**
++   * Force initialization of all non-lazy collections encountered during
++   * the current two-phase load (actually, this is a no-op, unless this
++   * is the "outermost" load)
++   */
++  public void initializeNonLazyCollections() throws HibernateException;
+ 
+-	/**
+-	 * Get the <tt>PersistentCollection</tt> object for an array
+-	 */
+-	public PersistentCollection getCollectionHolder(Object array);
++  /**
++   * Get the <tt>PersistentCollection</tt> object for an array
++   */
++  public PersistentCollection getCollectionHolder(Object array);
+ 
+-	/**
+-	 * Register a <tt>PersistentCollection</tt> object for an array.
+-	 * Associates a holder with an array - MUST be called after loading 
+-	 * array, since the array instance is not created until endLoad().
+-	 */
+-	public void addCollectionHolder(PersistentCollection holder);
+-	
+-	/**
+-	 * Remove the mapping of collection to holder during eviction
+-	 * of the owning entity
+-	 */
+-	public PersistentCollection removeCollectionHolder(Object array);
++  /**
++   * Register a <tt>PersistentCollection</tt> object for an array.
++   * Associates a holder with an array - MUST be called after loading 
++   * array, since the array instance is not created until endLoad().
++   */
++  public void addCollectionHolder(PersistentCollection holder);
++  
++  /**
++   * Remove the mapping of collection to holder during eviction
++   * of the owning entity
++   */
++  public PersistentCollection removeCollectionHolder(Object array);
+ 
+-	/**
+-	 * Get the snapshot of the pre-flush collection state
+-	 */
+-	public Serializable getSnapshot(PersistentCollection coll);
++  /**
++   * Get the snapshot of the pre-flush collection state
++   */
++  public Serializable getSnapshot(PersistentCollection coll);
+ 
+-	/**
+-	 * Get the collection entry for a collection passed to filter,
+-	 * which might be a collection wrapper, an array, or an unwrapped
+-	 * collection. Return null if there is no entry.
+-	 */
+-	public CollectionEntry getCollectionEntryOrNull(Object collection);
++  /**
++   * Get the collection entry for a collection passed to filter,
++   * which might be a collection wrapper, an array, or an unwrapped
++   * collection. Return null if there is no entry.
++   */
++  public CollectionEntry getCollectionEntryOrNull(Object collection);
+ 
+-	/**
+-	 * Get an existing proxy by key
+-	 */
+-	public Object getProxy(EntityKey key);
++  /**
++   * Get an existing proxy by key
++   */
++  public Object getProxy(EntityKey key);
+ 
+-	/**
+-	 * Add a proxy to the session cache
+-	 */
+-	public void addProxy(EntityKey key, Object proxy);
++  /**
++   * Add a proxy to the session cache
++   */
++  public void addProxy(EntityKey key, Object proxy);
+ 
+-	/**
+-	 * Remove a proxy from the session cache
+-	 */
+-	public Object removeProxy(EntityKey key);
++  /**
++   * Remove a proxy from the session cache
++   */
++  public Object removeProxy(EntityKey key);
+ 
+-	/** 
+-	 * Retrieve the set of EntityKeys representing nullifiable references
+-	 */
+-	public HashSet getNullifiableEntityKeys();
++  /** 
++   * Retrieve the set of EntityKeys representing nullifiable references
++   */
++  public HashSet getNullifiableEntityKeys();
+ 
+-	/**
+-	 * Get the mapping from key value to entity instance
+-	 */
+-	public Map getEntitiesByKey();
+-	
+-	/**
+-	 * Get the mapping from entity instance to entity entry
+-	 */
+-	public Map getEntityEntries();
++  /**
++   * Get the mapping from key value to entity instance
++   */
++  public Map getEntitiesByKey();
++  
++  /**
++   * Get the mapping from entity instance to entity entry
++   */
++  public Map getEntityEntries();
+ 
+-	/**
+-	 * Get the mapping from collection instance to collection entry
+-	 */
+-	public Map getCollectionEntries();
++  /**
++   * Get the mapping from collection instance to collection entry
++   */
++  public Map getCollectionEntries();
+ 
+-	/**
+-	 * Get the mapping from collection key to collection instance
+-	 */
+-	public Map getCollectionsByKey();
++  /**
++   * Get the mapping from collection key to collection instance
++   */
++  public Map getCollectionsByKey();
+ 
+-	/**
+-	 * How deep are we cascaded?
+-	 */
+-	public int getCascadeLevel();
+-	
+-	/**
+-	 * Called before cascading
+-	 */
+-	public int incrementCascadeLevel();
++  /**
++   * How deep are we cascaded?
++   */
++  public int getCascadeLevel();
++  
++  /**
++   * Called before cascading
++   */
++  public int incrementCascadeLevel();
+ 
+-	/**
+-	 * Called after cascading
+-	 */
+-	public int decrementCascadeLevel();
++  /**
++   * Called after cascading
++   */
++  public int decrementCascadeLevel();
+ 
+-	/**
+-	 * Is a flush cycle currently in process?
+-	 */
+-	public boolean isFlushing();
+-	
+-	/**
+-	 * Called before and after the flushcycle
+-	 */
+-	public void setFlushing(boolean flushing);
++  /**
++   * Is a flush cycle currently in process?
++   */
++  public boolean isFlushing();
++  
++  /**
++   * Called before and after the flushcycle
++   */
++  public void setFlushing(boolean flushing);
+ 
+-	/**
+-	 * Call this before begining a two-phase load
+-	 */
+-	public void beforeLoad();
++  /**
++   * Call this before begining a two-phase load
++   */
++  public void beforeLoad();
+ 
+-	/**
+-	 * Call this after finishing a two-phase load
+-	 */
+-	public void afterLoad();
++  /**
++   * Call this after finishing a two-phase load
++   */
++  public void afterLoad();
+ 
+-	/**
+-	 * Returns a string representation of the object.
+-	 *
+-	 * @return a string representation of the object.
+-	 */
+-	public String toString();
++  /**
++   * Returns a string representation of the object.
++   *
++   * @return a string representation of the object.
++   */
++  public String toString();
+ 
+-	/**
+-	 * Search the persistence context for an owner for the child object,
+-	 * given a collection role
+-	 */
+-	public Serializable getOwnerId(String entity, String property, Object childObject, Map mergeMap);
++  /**
++   * Search the persistence context for an owner for the child object,
++   * given a collection role
++   */
++  public Serializable getOwnerId(String entity, String property, Object childObject, Map mergeMap);
+ 
+-	/**
+-	 * Search the persistence context for an index of the child object,
+-	 * given a collection role
+-	 */
+-	public Object getIndexInOwner(String entity, String property, Object childObject, Map mergeMap);
++  /**
++   * Search the persistence context for an index of the child object,
++   * given a collection role
++   */
++  public Object getIndexInOwner(String entity, String property, Object childObject, Map mergeMap);
+ 
+-	/**
+-	 * Record the fact that the association belonging to the keyed
+-	 * entity is null.
+-	 */
+-	public void addNullProperty(EntityKey ownerKey, String propertyName);
++  /**
++   * Record the fact that the association belonging to the keyed
++   * entity is null.
++   */
++  public void addNullProperty(EntityKey ownerKey, String propertyName);
+ 
+-	/**
+-	 * Is the association property belonging to the keyed entity null?
+-	 */
+-	public boolean isPropertyNull(EntityKey ownerKey, String propertyName);
+-	
+-	/**
+-	 * Set the object to read only and discard it's snapshot
+-	 */
+-	public void setReadOnly(Object entity, boolean readOnly);
++  /**
++   * Is the association property belonging to the keyed entity null?
++   */
++  public boolean isPropertyNull(EntityKey ownerKey, String propertyName);
++  
++  /**
++   * Set the object to read only and discard it's snapshot
++   */
++  public void setReadOnly(Object entity, boolean readOnly);
+ 
+-	void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId);
++  void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId);
++  
++  /**
++   * Add parent of a child to persistence context.
++   */
++  public void addParent (Object parent, Object child);
+ }
+\ No newline at end of file
+Index: D:/Projekte/hibernate320/src/org/hibernate/engine/StatefulPersistenceContext.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/engine/StatefulPersistenceContext.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/engine/StatefulPersistenceContext.java	(working copy)
+@@ -47,1268 +47,1336 @@
+  */
+ public class StatefulPersistenceContext implements PersistenceContext {
+ 
+-	public static final Object NO_ROW = new MarkerObject( "NO_ROW" );
++  public static final Object NO_ROW = new MarkerObject( "NO_ROW" );
+ 
+-	private static final Log log = LogFactory.getLog( StatefulPersistenceContext.class );
+-	private static final Log PROXY_WARN_LOG = LogFactory.getLog( StatefulPersistenceContext.class.getName() + ".ProxyWarnLog" );
+-	private static final int INIT_COLL_SIZE = 8;
++  private static final Log log = LogFactory.getLog( StatefulPersistenceContext.class );
++  private static final Log PROXY_WARN_LOG = LogFactory.getLog( StatefulPersistenceContext.class.getName() + ".ProxyWarnLog" );
++  private static final int INIT_COLL_SIZE = 8;
+ 
+-	private SessionImplementor session;
+-	
+-	// Loaded entity instances, by EntityKey
+-	private Map entitiesByKey;
++  private SessionImplementor session;
++  
++  // Loaded entity instances, by EntityKey
++  private Map entitiesByKey;
+ 
+-	// Loaded entity instances, by EntityUniqueKey
+-	private Map entitiesByUniqueKey;
+-	
+-	// Identity map of EntityEntry instances, by the entity instance
+-	private Map entityEntries;
+-	
+-	// Entity proxies, by EntityKey
+-	private Map proxiesByKey;
+-	
+-	// Snapshots of current database state for entities
+-	// that have *not* been loaded
+-	private Map entitySnapshotsByKey;
+-	
+-	// Identity map of array holder ArrayHolder instances, by the array instance
+-	private Map arrayHolders;
+-	
+-	// Identity map of CollectionEntry instances, by the collection wrapper
+-	private Map collectionEntries;
+-	
+-	// Collection wrappers, by the CollectionKey
+-	private Map collectionsByKey; //key=CollectionKey, value=PersistentCollection
+-	
+-	// Set of EntityKeys of deleted objects
+-	private HashSet nullifiableEntityKeys;
+-	
+-	// properties that we have tried to load, and not found in the database
+-	private HashSet nullAssociations;
+-	
+-	// A list of collection wrappers that were instantiating during result set
+-	// processing, that we will need to initialize at the end of the query
+-	private List nonlazyCollections;
+-	
+-	// A container for collections we load up when the owning entity is not
+-	// yet loaded ... for now, this is purely transient!
+-	private Map unownedCollections;
+-	
+-	private int cascading = 0;
+-	private int loadCounter = 0;
+-	private boolean flushing = false;
+-	
+-	private boolean hasNonReadOnlyEntities = false;
+-	
+-	private CollectionLoadContext collectionLoadContext;
+-	private BatchFetchQueue batchFetchQueue;
++  // Loaded entity instances, by EntityUniqueKey
++  private Map entitiesByUniqueKey;
++  
++  // Parent entities by their childs
++  private IdentityMap parentsByChild;
++  
++  // Identity map of EntityEntry instances, by the entity instance
++  private IdentityMap entityEntries;
++  
++  // Entity proxies, by EntityKey
++  private Map proxiesByKey;
++  
++  // Snapshots of current database state for entities
++  // that have *not* been loaded
++  private Map entitySnapshotsByKey;
++  
++  // Identity map of array holder ArrayHolder instances, by the array instance
++  private Map arrayHolders;
++  
++  // Identity map of CollectionEntry instances, by the collection wrapper
++  private IdentityMap collectionEntries;
++  
++  // Collection wrappers, by the CollectionKey
++  private Map collectionsByKey; //key=CollectionKey, value=PersistentCollection
++  
++  // Set of EntityKeys of deleted objects
++  private HashSet nullifiableEntityKeys;
++  
++  // properties that we have tried to load, and not found in the database
++  private HashSet nullAssociations;
++  
++  // A list of collection wrappers that were instantiating during result set
++  // processing, that we will need to initialize at the end of the query
++  private List nonlazyCollections;
++  
++  // A container for collections we load up when the owning entity is not
++  // yet loaded ... for now, this is purely transient!
++  private Map unownedCollections;
++  
++  private int cascading = 0;
++  private int loadCounter = 0;
++  private boolean flushing = false;
++  
++  private boolean hasNonReadOnlyEntities = false;
++  
++  private CollectionLoadContext collectionLoadContext;
++  private BatchFetchQueue batchFetchQueue;
+ 
+ 
+ 
+-	/**
+-	 * Constructs a PersistentContext, bound to the given session.
+-	 *
+-	 * @param session The session "owning" this context.
+-	 */
+-	public StatefulPersistenceContext(SessionImplementor session) {
+-		this.session = session;
++  /**
++   * Constructs a PersistentContext, bound to the given session.
++   *
++   * @param session The session "owning" this context.
++   */
++  public StatefulPersistenceContext(SessionImplementor session) {
++    this.session = session;
+ 
+-		entitiesByKey = new HashMap( INIT_COLL_SIZE );
+-		entitiesByUniqueKey = new HashMap( INIT_COLL_SIZE );
+-		proxiesByKey = new ReferenceMap( ReferenceMap.HARD, ReferenceMap.WEAK );
+-		entitySnapshotsByKey = new HashMap( INIT_COLL_SIZE );
++    entitiesByKey = new HashMap( INIT_COLL_SIZE );
++    entitiesByUniqueKey = new HashMap( INIT_COLL_SIZE );
++    proxiesByKey = new ReferenceMap( ReferenceMap.HARD, ReferenceMap.WEAK );
++    entitySnapshotsByKey = new HashMap( INIT_COLL_SIZE );
+ 
+-		entityEntries = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
+-		collectionEntries = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
+-		collectionsByKey = new HashMap( INIT_COLL_SIZE );
+-		arrayHolders = IdentityMap.instantiate( INIT_COLL_SIZE );
++    parentsByChild = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
++    entityEntries = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
++    collectionEntries = IdentityMap.instantiateSequenced( INIT_COLL_SIZE );
++    collectionsByKey = new HashMap( INIT_COLL_SIZE );
++    arrayHolders = IdentityMap.instantiate( INIT_COLL_SIZE );
+ 
+-		nullifiableEntityKeys = new HashSet();
++    nullifiableEntityKeys = new HashSet();
+ 
+-		initTransientState();
+-	}
++    initTransientState();
++  }
+ 
+-	private void initTransientState() {
+-		nullAssociations = new HashSet( INIT_COLL_SIZE );
+-		nonlazyCollections = new ArrayList( INIT_COLL_SIZE );
+-	}
++  private void initTransientState() {
++    nullAssociations = new HashSet( INIT_COLL_SIZE );
++    nonlazyCollections = new ArrayList( INIT_COLL_SIZE );
++  }
+ 
+-	public boolean isStateless() {
+-		return false;
+-	}
+-	
+-	public SessionImplementor getSession() {
+-		return session;
+-	}
+-	
+-	public CollectionLoadContext getCollectionLoadContext() {
+-		if (collectionLoadContext==null) {
+-			collectionLoadContext = new CollectionLoadContext(this);
+-		}
+-		return collectionLoadContext;
+-	}
+-	
+-	public void addUnownedCollection(CollectionKey key, PersistentCollection collection) {
+-		if (unownedCollections==null) {
+-			unownedCollections = new HashMap(8);
+-		}
+-		unownedCollections.put(key, collection);
+-	}
+-	
+-	public PersistentCollection useUnownedCollection(CollectionKey key) {
+-		if (unownedCollections==null) {
+-			return null;
+-		}
+-		else {
+-			return (PersistentCollection) unownedCollections.remove(key);
+-		}
+-	}
+-	
+-	/**
+-	 * Get the <tt>BatchFetchQueue</tt>, instantiating one if
+-	 * necessary.
+-	 */
+-	public BatchFetchQueue getBatchFetchQueue() {
+-		if (batchFetchQueue==null) {
+-			batchFetchQueue = new BatchFetchQueue(this);
+-		}
+-		return batchFetchQueue;
+-	}
++  public boolean isStateless() {
++    return false;
++  }
++  
++  public SessionImplementor getSession() {
++    return session;
++  }
++  
++  public CollectionLoadContext getCollectionLoadContext() {
++    if (collectionLoadContext==null) {
++      collectionLoadContext = new CollectionLoadContext(this);
++    }
++    return collectionLoadContext;
++  }
++  
++  public void addUnownedCollection(CollectionKey key, PersistentCollection collection) {
++    if (unownedCollections==null) {
++      unownedCollections = new HashMap(8);
++    }
++    unownedCollections.put(key, collection);
++  }
++  
++  public PersistentCollection useUnownedCollection(CollectionKey key) {
++    if (unownedCollections==null) {
++      return null;
++    }
++    else {
++      return (PersistentCollection) unownedCollections.remove(key);
++    }
++  }
++  
++  /**
++   * Get the <tt>BatchFetchQueue</tt>, instantiating one if
++   * necessary.
++   */
++  public BatchFetchQueue getBatchFetchQueue() {
++    if (batchFetchQueue==null) {
++      batchFetchQueue = new BatchFetchQueue(this);
++    }
++    return batchFetchQueue;
++  }
+ 
+-	public void clear() {
+-		arrayHolders.clear();
+-		entitiesByKey.clear();
+-		entitiesByUniqueKey.clear();
+-		entityEntries.clear();
+-		entitySnapshotsByKey.clear();
+-		collectionsByKey.clear();
+-		collectionEntries.clear();
+-		if ( unownedCollections != null ) {
+-			unownedCollections.clear();
+-		}
+-		proxiesByKey.clear();
+-		nullifiableEntityKeys.clear();
+-		if ( batchFetchQueue != null ) {
+-			batchFetchQueue.clear();
+-		}
+-		hasNonReadOnlyEntities = false;
+-	}
+-	
+-	public boolean hasNonReadOnlyEntities() {
+-		return hasNonReadOnlyEntities;
+-	}
+-	
+-	public void setEntryStatus(EntityEntry entry, Status status) {
+-		entry.setStatus(status);
+-		setHasNonReadOnlyEnties(status);
+-	}
+-	
+-	private void setHasNonReadOnlyEnties(Status status) {
+-		if ( status==Status.DELETED || status==Status.MANAGED || status==Status.SAVING ) {
+-			hasNonReadOnlyEntities = true;
+-		}
+-	}
++  public void clear() {
++    arrayHolders.clear();
++    entitiesByKey.clear();
++    entitiesByUniqueKey.clear();
++    parentsByChild.clear();
++    entityEntries.clear();
++    entitySnapshotsByKey.clear();
++    collectionsByKey.clear();
++    collectionEntries.clear();
++    if ( unownedCollections != null ) {
++      unownedCollections.clear();
++    }
++    proxiesByKey.clear();
++    nullifiableEntityKeys.clear();
++    if ( batchFetchQueue != null ) {
++      batchFetchQueue.clear();
++    }
++    hasNonReadOnlyEntities = false;
++  }
++  
++  public boolean hasNonReadOnlyEntities() {
++    return hasNonReadOnlyEntities;
++  }
++  
++  public void setEntryStatus(EntityEntry entry, Status status) {
++    entry.setStatus(status);
++    setHasNonReadOnlyEnties(status);
++  }
++  
++  private void setHasNonReadOnlyEnties(Status status) {
++    if ( status==Status.DELETED || status==Status.MANAGED || status==Status.SAVING ) {
++      hasNonReadOnlyEntities = true;
++    }
++  }
+ 
+-	public void afterTransactionCompletion() {
+-		// Downgrade locks
+-		Iterator iter = entityEntries.values().iterator();
+-		while ( iter.hasNext() ) {
+-			( (EntityEntry) iter.next() ).setLockMode(LockMode.NONE);
+-		}
+-	}
++  public void afterTransactionCompletion() {
++    // Downgrade locks
++    Iterator iter = entityEntries.values().iterator();
++    while ( iter.hasNext() ) {
++      ( (EntityEntry) iter.next() ).setLockMode(LockMode.NONE);
++    }
++  }
+ 
+-	/**
+-	 * Get the current state of the entity as known to the underlying
+-	 * database, or null if there is no corresponding row 
+-	 */
+-	public Object[] getDatabaseSnapshot(Serializable id, EntityPersister persister)
+-	throws HibernateException {
+-		EntityKey key = new EntityKey( id, persister, session.getEntityMode() );
+-		Object cached = entitySnapshotsByKey.get(key);
+-		if (cached!=null) {
+-			return cached==NO_ROW ? null : (Object[]) cached;
+-		}
+-		else {
+-			Object[] snapshot = persister.getDatabaseSnapshot( id, session );
+-			entitySnapshotsByKey.put( key, snapshot==null ? NO_ROW : snapshot );
+-			return snapshot;
+-		}
+-	}
++  /**
++   * Get the current state of the entity as known to the underlying
++   * database, or null if there is no corresponding row 
++   */
++  public Object[] getDatabaseSnapshot(Serializable id, EntityPersister persister)
++  throws HibernateException {
++    EntityKey key = new EntityKey( id, persister, session.getEntityMode() );
++    Object cached = entitySnapshotsByKey.get(key);
++    if (cached!=null) {
++      return cached==NO_ROW ? null : (Object[]) cached;
++    }
++    else {
++      Object[] snapshot = persister.getDatabaseSnapshot( id, session );
++      entitySnapshotsByKey.put( key, snapshot==null ? NO_ROW : snapshot );
++      return snapshot;
++    }
++  }
+ 
+-	public Object[] getNaturalIdSnapshot(Serializable id, EntityPersister persister)
+-	throws HibernateException {
+-		if ( !persister.hasNaturalIdentifier() ) {
+-			return null;
+-		}
++  public Object[] getNaturalIdSnapshot(Serializable id, EntityPersister persister)
++  throws HibernateException {
++    if ( !persister.hasNaturalIdentifier() ) {
++      return null;
++    }
+ 
+-		// if the natural-id is marked as non-mutable, it is not retrieved during a
+-		// normal database-snapshot operation...
+-		int[] props = persister.getNaturalIdentifierProperties();
+-		boolean[] updateable = persister.getPropertyUpdateability();
+-		boolean allNatualIdPropsAreUpdateable = true;
+-		for ( int i = 0; i < props.length; i++ ) {
+-			if ( !updateable[ props[i] ] ) {
+-				allNatualIdPropsAreUpdateable = false;
+-				break;
+-			}
+-		}
++    // if the natural-id is marked as non-mutable, it is not retrieved during a
++    // normal database-snapshot operation...
++    int[] props = persister.getNaturalIdentifierProperties();
++    boolean[] updateable = persister.getPropertyUpdateability();
++    boolean allNatualIdPropsAreUpdateable = true;
++    for ( int i = 0; i < props.length; i++ ) {
++      if ( !updateable[ props[i] ] ) {
++        allNatualIdPropsAreUpdateable = false;
++        break;
++      }
++    }
+ 
+-		if ( allNatualIdPropsAreUpdateable ) {
+-			// do this when all the properties are updateable since there is
+-			// a certain likelihood that the information will already be
+-			// snapshot-cached.
+-			Object[] entitySnapshot = getDatabaseSnapshot( id, persister );
+-			if ( entitySnapshot == NO_ROW ) {
+-				return null;
+-			}
+-			Object[] naturalIdSnapshot = new Object[ props.length ];
+-			for ( int i = 0; i < props.length; i++ ) {
+-				naturalIdSnapshot[i] = entitySnapshot[ props[i] ];
+-			}
+-			return naturalIdSnapshot;
+-		}
+-		else {
+-			return persister.getNaturalIdentifierSnapshot( id, session );
+-		}
+-	}
++    if ( allNatualIdPropsAreUpdateable ) {
++      // do this when all the properties are updateable since there is
++      // a certain likelihood that the information will already be
++      // snapshot-cached.
++      Object[] entitySnapshot = getDatabaseSnapshot( id, persister );
++      if ( entitySnapshot == NO_ROW ) {
++        return null;
++      }
++      Object[] naturalIdSnapshot = new Object[ props.length ];
++      for ( int i = 0; i < props.length; i++ ) {
++        naturalIdSnapshot[i] = entitySnapshot[ props[i] ];
++      }
++      return naturalIdSnapshot;
++    }
++    else {
++      return persister.getNaturalIdentifierSnapshot( id, session );
++    }
++  }
+ 
+-	public Object[] getCachedDatabaseSnapshot(EntityKey key) {
+-		//TODO: assertion failure if NO_ROW
+-		return (Object[]) entitySnapshotsByKey.get(key);
+-	}
++  public Object[] getCachedDatabaseSnapshot(EntityKey key) {
++    //TODO: assertion failure if NO_ROW
++    return (Object[]) entitySnapshotsByKey.get(key);
++  }
+ 
+-	/*public void removeDatabaseSnapshot(EntityKey key) {
+-		entitySnapshotsByKey.remove(key);
+-	}*/
++  /*public void removeDatabaseSnapshot(EntityKey key) {
++    entitySnapshotsByKey.remove(key);
++  }*/
+ 
+-	public void addEntity(EntityKey key, Object entity) {
+-		entitiesByKey.put(key, entity);
+-		getBatchFetchQueue().removeBatchLoadableEntityKey(key);
+-	}
++  public void addEntity(EntityKey key, Object entity) {
++    entitiesByKey.put(key, entity);
++    getBatchFetchQueue().removeBatchLoadableEntityKey(key);
++  }
+ 
+-	/**
+-	 * Get the entity instance associated with the given 
+-	 * <tt>EntityKey</tt>
+-	 */
+-	public Object getEntity(EntityKey key) {
+-		return entitiesByKey.get(key);
+-	}
++  /**
++   * Get the entity instance associated with the given 
++   * <tt>EntityKey</tt>
++   */
++  public Object getEntity(EntityKey key) {
++    return entitiesByKey.get(key);
++  }
+ 
+-	public boolean containsEntity(EntityKey key) {
+-		return entitiesByKey.containsKey(key);
+-	}
++  public boolean containsEntity(EntityKey key) {
++    return entitiesByKey.containsKey(key);
++  }
+ 
+-	/**
+-	 * Remove an entity from the session cache, also clear
+-	 * up other state associated with the entity, all except
+-	 * for the <tt>EntityEntry</tt>
+-	 */
+-	public Object removeEntity(EntityKey key) {
+-		Object entity = entitiesByKey.remove(key);
+-		Iterator iter = entitiesByUniqueKey.values().iterator();
+-		while ( iter.hasNext() ) {
+-			if ( iter.next()==entity ) iter.remove();
+-		}
+-		entitySnapshotsByKey.remove(key);
+-		nullifiableEntityKeys.remove(key);
+-		getBatchFetchQueue().removeBatchLoadableEntityKey(key);
+-		getBatchFetchQueue().removeSubselect(key);
+-		return entity;
+-	}
++  /**
++   * Remove an entity from the session cache, also clear
++   * up other state associated with the entity, all except
++   * for the <tt>EntityEntry</tt>
++   */
++  public Object removeEntity(EntityKey key) {
++    Object entity = entitiesByKey.remove(key);
++    for (Iterator iter = parentsByChild.values().iterator(); iter.hasNext();)
++    {
++      if (entity == iter.next())
++      {
++        iter.remove();
++      }
++    }
++    Iterator iter = entitiesByUniqueKey.values().iterator();
++    while ( iter.hasNext() ) {
++      if ( iter.next()==entity ) iter.remove();
++    }
++    entitySnapshotsByKey.remove(key);
++    nullifiableEntityKeys.remove(key);
++    getBatchFetchQueue().removeBatchLoadableEntityKey(key);
++    getBatchFetchQueue().removeSubselect(key);
++    return entity;
++  }
+ 
+-	/**
+-	 * Get an entity cached by unique key
+-	 */
+-	public Object getEntity(EntityUniqueKey euk) {
+-		return entitiesByUniqueKey.get(euk);
+-	}
++  /**
++   * Get an entity cached by unique key
++   */
++  public Object getEntity(EntityUniqueKey euk) {
++    return entitiesByUniqueKey.get(euk);
++  }
+ 
+-	/**
+-	 * Add an entity to the cache by unique key
+-	 */
+-	public void addEntity(EntityUniqueKey euk, Object entity) {
+-		entitiesByUniqueKey.put(euk, entity);
+-	}
++  /**
++   * Add an entity to the cache by unique key
++   */
++  public void addEntity(EntityUniqueKey euk, Object entity) {
++    entitiesByUniqueKey.put(euk, entity);
++  }
+ 
+-	/**
+-	 * Retreive the EntityEntry representation of the given entity.
+-	 *
+-	 * @param entity The entity for which to locate the EntityEntry.
+-	 * @return The EntityEntry for the given entity.
+-	 */
+-	public EntityEntry getEntry(Object entity) {
+-		return (EntityEntry) entityEntries.get(entity);
+-	}
++  /**
++   * Retreive the EntityEntry representation of the given entity.
++   *
++   * @param entity The entity for which to locate the EntityEntry.
++   * @return The EntityEntry for the given entity.
++   */
++  public EntityEntry getEntry(Object entity) {
++    return (EntityEntry) entityEntries.get(entity);
++  }
+ 
+-	/**
+-	 * Remove an entity entry from the session cache
+-	 */
+-	public EntityEntry removeEntry(Object entity) {
+-		return (EntityEntry) entityEntries.remove(entity);
+-	}
++  /**
++   * Remove an entity entry from the session cache
++   */
++  public EntityEntry removeEntry(Object entity) {
++    return (EntityEntry) entityEntries.remove(entity);
++  }
+ 
+-	/**
+-	 * Is there an EntityEntry for this instance?
+-	 */
+-	public boolean isEntryFor(Object entity) {
+-		return entityEntries.containsKey(entity);
+-	}
++  /**
++   * Is there an EntityEntry for this instance?
++   */
++  public boolean isEntryFor(Object entity) {
++    return entityEntries.containsKey(entity);
++  }
+ 
+-	/**
+-	 * Get the collection entry for a persistent collection
+-	 */
+-	public CollectionEntry getCollectionEntry(PersistentCollection coll) {
+-		return (CollectionEntry) collectionEntries.get(coll);
+-	}
++  /**
++   * Get the collection entry for a persistent collection
++   */
++  public CollectionEntry getCollectionEntry(PersistentCollection coll) {
++    return (CollectionEntry) collectionEntries.get(coll);
++  }
+ 
+-	/**
+-	 * Adds an entity to the internal caches.
+-	 */
+-	public EntityEntry addEntity(
+-			final Object entity,
+-			final Status status,
+-			final Object[] loadedState,
+-			final EntityKey entityKey,
+-			final Object version,
+-			final LockMode lockMode,
+-			final boolean existsInDatabase,
+-			final EntityPersister persister,
+-			final boolean disableVersionIncrement, 
+-			boolean lazyPropertiesAreUnfetched
+-	) {
+-		
+-		addEntity( entityKey, entity );
+-		
+-		return addEntry(
+-				entity,
+-				status,
+-				loadedState,
+-				null,
+-				entityKey.getIdentifier(),
+-				version,
+-				lockMode,
+-				existsInDatabase,
+-				persister,
+-				disableVersionIncrement, 
+-				lazyPropertiesAreUnfetched
+-			);
+-	}
++  /**
++   * Adds an entity to the internal caches.
++   */
++  public EntityEntry addEntity(
++      final Object entity,
++      final Status status,
++      final Object[] loadedState,
++      final EntityKey entityKey,
++      final Object version,
++      final LockMode lockMode,
++      final boolean existsInDatabase,
++      final EntityPersister persister,
++      final boolean disableVersionIncrement, 
++      boolean lazyPropertiesAreUnfetched
++  ) {
++    
++    addEntity( entityKey, entity );
++    
++    return addEntry(
++        entity,
++        status,
++        loadedState,
++        null,
++        entityKey.getIdentifier(),
++        version,
++        lockMode,
++        existsInDatabase,
++        persister,
++        disableVersionIncrement, 
++        lazyPropertiesAreUnfetched
++      );
++  }
+ 
+ 
+-	/**
+-	 * Generates an appropriate EntityEntry instance and adds it 
+-	 * to the event source's internal caches.
+-	 */
+-	public EntityEntry addEntry(
+-			final Object entity,
+-			final Status status,
+-			final Object[] loadedState,
+-			final Object rowId,
+-			final Serializable id,
+-			final Object version,
+-			final LockMode lockMode,
+-			final boolean existsInDatabase,
+-			final EntityPersister persister,
+-			final boolean disableVersionIncrement, 
+-			boolean lazyPropertiesAreUnfetched) {
+-		
+-		EntityEntry e = new EntityEntry(
+-				status,
+-				loadedState,
+-				rowId,
+-				id,
+-				version,
+-				lockMode,
+-				existsInDatabase,
+-				persister,
+-				session.getEntityMode(),
+-				disableVersionIncrement,
+-				lazyPropertiesAreUnfetched
+-			);
+-		entityEntries.put(entity, e);
+-		
+-		setHasNonReadOnlyEnties(status);
+-		return e;
+-	}
++  /**
++   * Generates an appropriate EntityEntry instance and adds it 
++   * to the event source's internal caches.
++   */
++  public EntityEntry addEntry(
++      final Object entity,
++      final Status status,
++      final Object[] loadedState,
++      final Object rowId,
++      final Serializable id,
++      final Object version,
++      final LockMode lockMode,
++      final boolean existsInDatabase,
++      final EntityPersister persister,
++      final boolean disableVersionIncrement, 
++      boolean lazyPropertiesAreUnfetched) {
++    
++    EntityEntry e = new EntityEntry(
++        status,
++        loadedState,
++        rowId,
++        id,
++        version,
++        lockMode,
++        existsInDatabase,
++        persister,
++        session.getEntityMode(),
++        disableVersionIncrement,
++        lazyPropertiesAreUnfetched
++      );
++    entityEntries.put(entity, e);
++    
++    setHasNonReadOnlyEnties(status);
++    return e;
++  }
+ 
+-	public boolean containsCollection(PersistentCollection collection) {
+-		return collectionEntries.containsKey(collection);
+-	}
++  public boolean containsCollection(PersistentCollection collection) {
++    return collectionEntries.containsKey(collection);
++  }
+ 
+-	public boolean containsProxy(Object entity) {
+-		return proxiesByKey.containsValue( entity );
+-	}
+-	
+-	/**
+-	 * Takes the given object and, if it represents a proxy, reassociates it with this event source.
+-	 *
+-	 * @param value The possible proxy to be reassociated.
+-	 * @return Whether the passed value represented an actual proxy which got initialized.
+-	 * @throws MappingException
+-	 */
+-	public boolean reassociateIfUninitializedProxy(Object value) throws MappingException {
+-		if ( value instanceof ElementWrapper ) {
+-			value = ( (ElementWrapper) value ).getElement();
+-		}
+-		
+-		if ( !Hibernate.isInitialized(value) ) {
+-			HibernateProxy proxy = (HibernateProxy) value;
+-			LazyInitializer li = proxy.getHibernateLazyInitializer();
+-			reassociateProxy(li, proxy);
+-			return true;
+-		}
+-		else {
+-			return false;
+-		}
+-	}
++  public boolean containsProxy(Object entity) {
++    return proxiesByKey.containsValue( entity );
++  }
++  
++  /**
++   * Takes the given object and, if it represents a proxy, reassociates it with this event source.
++   *
++   * @param value The possible proxy to be reassociated.
++   * @return Whether the passed value represented an actual proxy which got initialized.
++   * @throws MappingException
++   */
++  public boolean reassociateIfUninitializedProxy(Object value) throws MappingException {
++    if ( value instanceof ElementWrapper ) {
++      value = ( (ElementWrapper) value ).getElement();
++    }
++    
++    if ( !Hibernate.isInitialized(value) ) {
++      HibernateProxy proxy = (HibernateProxy) value;
++      LazyInitializer li = proxy.getHibernateLazyInitializer();
++      reassociateProxy(li, proxy);
++      return true;
++    }
++    else {
++      return false;
++    }
++  }
+ 
+-	/**
+-	 * If a deleted entity instance is re-saved, and it has a proxy, we need to
+-	 * reset the identifier of the proxy 
+-	 */
+-	public void reassociateProxy(Object value, Serializable id) throws MappingException {
+-		if ( value instanceof ElementWrapper ) {
+-			value = ( (ElementWrapper) value ).getElement();
+-		}
+-		
+-		if ( value instanceof HibernateProxy ) {
+-			if ( log.isDebugEnabled() ) log.debug("setting proxy identifier: " + id);
+-			HibernateProxy proxy = (HibernateProxy) value;
+-			LazyInitializer li = proxy.getHibernateLazyInitializer();
+-			li.setIdentifier(id);
+-			reassociateProxy(li, proxy);
+-		}
+-	}
++  /**
++   * If a deleted entity instance is re-saved, and it has a proxy, we need to
++   * reset the identifier of the proxy 
++   */
++  public void reassociateProxy(Object value, Serializable id) throws MappingException {
++    if ( value instanceof ElementWrapper ) {
++      value = ( (ElementWrapper) value ).getElement();
++    }
++    
++    if ( value instanceof HibernateProxy ) {
++      if ( log.isDebugEnabled() ) log.debug("setting proxy identifier: " + id);
++      HibernateProxy proxy = (HibernateProxy) value;
++      LazyInitializer li = proxy.getHibernateLazyInitializer();
++      li.setIdentifier(id);
++      reassociateProxy(li, proxy);
++    }
++  }
+ 
+-	/**
+-	 * Associate a proxy that was instantiated by another session with this session
+-	 */
+-	private void reassociateProxy(LazyInitializer li, HibernateProxy proxy) throws HibernateException {
+-		if ( li.getSession() != this ) {
+-			EntityPersister persister = session.getFactory().getEntityPersister( li.getEntityName() );
+-			EntityKey key = new EntityKey( li.getIdentifier(), persister, session.getEntityMode() );
+-			if ( !proxiesByKey.containsKey(key) ) proxiesByKey.put(key, proxy); // any earlier proxy takes precedence
+-			proxy.getHibernateLazyInitializer().setSession(session);
+-		}
+-	}
++  /**
++   * Associate a proxy that was instantiated by another session with this session
++   */
++  private void reassociateProxy(LazyInitializer li, HibernateProxy proxy) throws HibernateException {
++    if ( li.getSession() != this ) {
++      EntityPersister persister = session.getFactory().getEntityPersister( li.getEntityName() );
++      EntityKey key = new EntityKey( li.getIdentifier(), persister, session.getEntityMode() );
++      if ( !proxiesByKey.containsKey(key) ) proxiesByKey.put(key, proxy); // any earlier proxy takes precedence
++      proxy.getHibernateLazyInitializer().setSession(session);
++    }
++  }
+ 
+-	/**
+-	 * Get the entity instance underlying the given proxy, throwing
+-	 * an exception if the proxy is uninitialized. If the given object
+-	 * is not a proxy, simply return the argument.
+-	 */
+-	public Object unproxy(Object maybeProxy) throws HibernateException {
+-		if ( maybeProxy instanceof ElementWrapper ) {
+-			maybeProxy = ( (ElementWrapper) maybeProxy ).getElement();
+-		}
+-		
+-		if ( maybeProxy instanceof HibernateProxy ) {
+-			HibernateProxy proxy = (HibernateProxy) maybeProxy;
+-			LazyInitializer li = proxy.getHibernateLazyInitializer();
+-			if ( li.isUninitialized() ) {
+-				throw new PersistentObjectException(
+-						"object was an uninitialized proxy for " +
+-						li.getEntityName()
+-				);
+-			}
+-			return li.getImplementation(); //unwrap the object
+-		}
+-		else {
+-			return maybeProxy;
+-		}
+-	}
++  /**
++   * Get the entity instance underlying the given proxy, throwing
++   * an exception if the proxy is uninitialized. If the given object
++   * is not a proxy, simply return the argument.
++   */
++  public Object unproxy(Object maybeProxy) throws HibernateException {
++    if ( maybeProxy instanceof ElementWrapper ) {
++      maybeProxy = ( (ElementWrapper) maybeProxy ).getElement();
++    }
++    
++    if ( maybeProxy instanceof HibernateProxy ) {
++      HibernateProxy proxy = (HibernateProxy) maybeProxy;
++      LazyInitializer li = proxy.getHibernateLazyInitializer();
++      if ( li.isUninitialized() ) {
++        throw new PersistentObjectException(
++            "object was an uninitialized proxy for " +
++            li.getEntityName()
++        );
++      }
++      return li.getImplementation(); //unwrap the object
++    }
++    else {
++      return maybeProxy;
++    }
++  }
+ 
+-	/**
+-	 * Possibly unproxy the given reference and reassociate it with the current session.
+-	 *
+-	 * @param maybeProxy The reference to be unproxied if it currently represents a proxy.
+-	 * @return The unproxied instance.
+-	 * @throws HibernateException
+-	 */
+-	public Object unproxyAndReassociate(Object maybeProxy) throws HibernateException {
+-		if ( maybeProxy instanceof ElementWrapper ) {
+-			maybeProxy = ( (ElementWrapper) maybeProxy ).getElement();
+-		}
+-		
+-		if ( maybeProxy instanceof HibernateProxy ) {
+-			HibernateProxy proxy = (HibernateProxy) maybeProxy;
+-			LazyInitializer li = proxy.getHibernateLazyInitializer();
+-			reassociateProxy(li, proxy);
+-			return li.getImplementation(); //initialize + unwrap the object
+-		}
+-		else {
+-			return maybeProxy;
+-		}
+-	}
++  /**
++   * Possibly unproxy the given reference and reassociate it with the current session.
++   *
++   * @param maybeProxy The reference to be unproxied if it currently represents a proxy.
++   * @return The unproxied instance.
++   * @throws HibernateException
++   */
++  public Object unproxyAndReassociate(Object maybeProxy) throws HibernateException {
++    if ( maybeProxy instanceof ElementWrapper ) {
++      maybeProxy = ( (ElementWrapper) maybeProxy ).getElement();
++    }
++    
++    if ( maybeProxy instanceof HibernateProxy ) {
++      HibernateProxy proxy = (HibernateProxy) maybeProxy;
++      LazyInitializer li = proxy.getHibernateLazyInitializer();
++      reassociateProxy(li, proxy);
++      return li.getImplementation(); //initialize + unwrap the object
++    }
++    else {
++      return maybeProxy;
++    }
++  }
+ 
+-	/**
+-	 * Attempts to check whether the given key represents an entity already loaded within the
+-	 * current session.
+-	 * @param object The entity reference against which to perform the uniqueness check.
+-	 * @throws HibernateException
+-	 */
+-	public void checkUniqueness(EntityKey key, Object object) throws HibernateException {
+-		Object entity = getEntity(key);
+-		if ( entity == object ) {
+-			throw new AssertionFailure( "object already associated, but no entry was found" );
+-		}
+-		if ( entity != null ) {
+-			throw new NonUniqueObjectException( key.getIdentifier(), key.getEntityName() );
+-		}
+-	}
++  /**
++   * Attempts to check whether the given key represents an entity already loaded within the
++   * current session.
++   * @param object The entity reference against which to perform the uniqueness check.
++   * @throws HibernateException
++   */
++  public void checkUniqueness(EntityKey key, Object object) throws HibernateException {
++    Object entity = getEntity(key);
++    if ( entity == object ) {
++      throw new AssertionFailure( "object already associated, but no entry was found" );
++    }
++    if ( entity != null ) {
++      throw new NonUniqueObjectException( key.getIdentifier(), key.getEntityName() );
++    }
++  }
+ 
+-	/**
+-	 * If the existing proxy is insufficiently "narrow" (derived), instantiate a new proxy
+-	 * and overwrite the registration of the old one. This breaks == and occurs only for
+-	 * "class" proxies rather than "interface" proxies. Also init the proxy to point to
+-	 * the given target implementation if necessary.
+-	 *
+-	 * @param proxy The proxy instance to be narrowed.
+-	 * @param persister The persister for the proxied entity.
+-	 * @param key The internal cache key for the proxied entity.
+-	 * @param object (optional) the actual proxied entity instance.
+-	 * @return An appropriately narrowed instance.
+-	 * @throws HibernateException
+-	 */
+-	public Object narrowProxy(Object proxy, EntityPersister persister, EntityKey key, Object object)
+-	throws HibernateException {
+-		
+-		boolean alreadyNarrow = persister.getConcreteProxyClass( session.getEntityMode() )
+-				.isAssignableFrom( proxy.getClass() );
+-		
+-		if ( !alreadyNarrow ) {
+-			if ( PROXY_WARN_LOG.isWarnEnabled() ) {
+-				PROXY_WARN_LOG.warn(
+-						"Narrowing proxy to " +
+-						persister.getConcreteProxyClass( session.getEntityMode() ) +
+-						" - this operation breaks =="
+-				);
+-			}
++  /**
++   * If the existing proxy is insufficiently "narrow" (derived), instantiate a new proxy
++   * and overwrite the registration of the old one. This breaks == and occurs only for
++   * "class" proxies rather than "interface" proxies. Also init the proxy to point to
++   * the given target implementation if necessary.
++   *
++   * @param proxy The proxy instance to be narrowed.
++   * @param persister The persister for the proxied entity.
++   * @param key The internal cache key for the proxied entity.
++   * @param object (optional) the actual proxied entity instance.
++   * @return An appropriately narrowed instance.
++   * @throws HibernateException
++   */
++  public Object narrowProxy(Object proxy, EntityPersister persister, EntityKey key, Object object)
++  throws HibernateException {
++    
++    boolean alreadyNarrow = persister.getConcreteProxyClass( session.getEntityMode() )
++        .isAssignableFrom( proxy.getClass() );
++    
++    if ( !alreadyNarrow ) {
++      if ( PROXY_WARN_LOG.isWarnEnabled() ) {
++        PROXY_WARN_LOG.warn(
++            "Narrowing proxy to " +
++            persister.getConcreteProxyClass( session.getEntityMode() ) +
++            " - this operation breaks =="
++        );
++      }
+ 
+-			if ( object != null ) {
+-				proxiesByKey.remove(key);
+-				return object; //return the proxied object
+-			}
+-			else {
+-				proxy = persister.createProxy( key.getIdentifier(), session );
+-				proxiesByKey.put(key, proxy); //overwrite old proxy
+-				return proxy;
+-			}
+-			
+-		}
+-		else {
+-			
+-			if ( object != null ) {
+-				LazyInitializer li = ( (HibernateProxy) proxy ).getHibernateLazyInitializer();
+-				li.setImplementation(object);
+-			}
+-			
+-			return proxy;
+-			
+-		}
+-		
+-	}
++      if ( object != null ) {
++        proxiesByKey.remove(key);
++        return object; //return the proxied object
++      }
++      else {
++        proxy = persister.createProxy( key.getIdentifier(), session );
++        proxiesByKey.put(key, proxy); //overwrite old proxy
++        return proxy;
++      }
++      
++    }
++    else {
++      
++      if ( object != null ) {
++        LazyInitializer li = ( (HibernateProxy) proxy ).getHibernateLazyInitializer();
++        li.setImplementation(object);
++      }
++      
++      return proxy;
++      
++    }
++    
++  }
+ 
+-	/**
+-	 * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
+-	 * third argument (the entity associated with the key) if no proxy exists. Init
+-	 * the proxy to the target implementation, if necessary.
+-	 */
+-	public Object proxyFor(EntityPersister persister, EntityKey key, Object impl) 
+-	throws HibernateException {
+-		if ( !persister.hasProxy() ) return impl;
+-		Object proxy = proxiesByKey.get(key);
+-		if ( proxy != null ) {
+-			return narrowProxy(proxy, persister, key, impl);
+-		}
+-		else {
+-			return impl;
+-		}
+-	}
++  /**
++   * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
++   * third argument (the entity associated with the key) if no proxy exists. Init
++   * the proxy to the target implementation, if necessary.
++   */
++  public Object proxyFor(EntityPersister persister, EntityKey key, Object impl) 
++  throws HibernateException {
++    if ( !persister.hasProxy() ) return impl;
++    Object proxy = proxiesByKey.get(key);
++    if ( proxy != null ) {
++      return narrowProxy(proxy, persister, key, impl);
++    }
++    else {
++      return impl;
++    }
++  }
+ 
+-	/**
+-	 * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
+-	 * argument (the entity associated with the key) if no proxy exists.
+-	 * (slower than the form above)
+-	 */
+-	public Object proxyFor(Object impl) throws HibernateException {
+-		EntityEntry e = getEntry(impl);
+-		EntityPersister p = e.getPersister();
+-		return proxyFor( p, new EntityKey( e.getId(), p, session.getEntityMode() ), impl );
+-	}
++  /**
++   * Return the existing proxy associated with the given <tt>EntityKey</tt>, or the
++   * argument (the entity associated with the key) if no proxy exists.
++   * (slower than the form above)
++   */
++  public Object proxyFor(Object impl) throws HibernateException {
++    EntityEntry e = getEntry(impl);
++    EntityPersister p = e.getPersister();
++    return proxyFor( p, new EntityKey( e.getId(), p, session.getEntityMode() ), impl );
++  }
+ 
+-	/**
+-	 * Get the entity that owns this persistent collection
+-	 */
+-	public Object getCollectionOwner(Serializable key, CollectionPersister collectionPersister) throws MappingException {
+-		return getEntity( new EntityKey( key, collectionPersister.getOwnerEntityPersister(), session.getEntityMode() ) );
+-	}
++  /**
++   * Get the entity that owns this persistent collection
++   */
++  public Object getCollectionOwner(Serializable key, CollectionPersister collectionPersister) throws MappingException {
++    return getEntity( new EntityKey( key, collectionPersister.getOwnerEntityPersister(), session.getEntityMode() ) );
++  }
+ 
+-	/**
+-	 * add a collection we just loaded up (still needs initializing)
+-	 */
+-	public void addUninitializedCollection(CollectionPersister persister, PersistentCollection collection, Serializable id) {
+-		CollectionEntry ce = new CollectionEntry(collection, persister, id, flushing);
+-		addCollection(collection, ce, id);
+-	}
++  /**
++   * add a collection we just loaded up (still needs initializing)
++   */
++  public void addUninitializedCollection(CollectionPersister persister, PersistentCollection collection, Serializable id) {
++    CollectionEntry ce = new CollectionEntry(collection, persister, id, flushing);
++    addCollection(collection, ce, id);
++  }
+ 
+-	/**
+-	 * add a detached uninitialized collection
+-	 */
+-	public void addUninitializedDetachedCollection(CollectionPersister persister, PersistentCollection collection) {
+-		CollectionEntry ce = new CollectionEntry( persister, collection.getKey() );
+-		addCollection( collection, ce, collection.getKey() );
+-	}
++  /**
++   * add a detached uninitialized collection
++   */
++  public void addUninitializedDetachedCollection(CollectionPersister persister, PersistentCollection collection) {
++    CollectionEntry ce = new CollectionEntry( persister, collection.getKey() );
++    addCollection( collection, ce, collection.getKey() );
++  }
+ 
+-	/**
+-	 * Add a new collection (ie. a newly created one, just instantiated by the
+-	 * application, with no database state or snapshot)
+-	 * @param collection The collection to be associated with the persistence context
+-	 */
+-	public void addNewCollection(CollectionPersister persister, PersistentCollection collection)
+-	throws HibernateException {
+-		addCollection(collection, persister);
+-	}
+-	
+-	/**
+-	 * Add an collection to the cache, with a given collection entry
+-	 */
+-	private void addCollection(PersistentCollection coll, CollectionEntry entry, Serializable key) {
+-		collectionEntries.put(coll, entry);
+-		CollectionKey collectionKey = new CollectionKey( entry.getLoadedPersister(), key, session.getEntityMode() );
+-		PersistentCollection old = (PersistentCollection) collectionsByKey.put(collectionKey, coll);
+-		if ( old != null ) {
+-			if (old==coll) throw new AssertionFailure("bug adding collection twice");
+-			// or should it actually throw an exception?
+-			old.unsetSession(session);
+-			collectionEntries.remove(old);
+-			// watch out for a case where old is still referenced
+-			// somewhere in the object graph! (which is a user error)
+-		}
+-	}
++  /**
++   * Add a new collection (ie. a newly created one, just instantiated by the
++   * application, with no database state or snapshot)
++   * @param collection The collection to be associated with the persistence context
++   */
++  public void addNewCollection(CollectionPersister persister, PersistentCollection collection)
++  throws HibernateException {
++    addCollection(collection, persister);
++  }
++  
++  /**
++   * Add an collection to the cache, with a given collection entry
++   */
++  private void addCollection(PersistentCollection coll, CollectionEntry entry, Serializable key) {
++    collectionEntries.put(coll, entry);
++    CollectionKey collectionKey = new CollectionKey( entry.getLoadedPersister(), key, session.getEntityMode() );
++    PersistentCollection old = (PersistentCollection) collectionsByKey.put(collectionKey, coll);
++    if ( old != null ) {
++      if (old==coll) throw new AssertionFailure("bug adding collection twice");
++      // or should it actually throw an exception?
++      old.unsetSession(session);
++      collectionEntries.remove(old);
++      // watch out for a case where old is still referenced
++      // somewhere in the object graph! (which is a user error)
++    }
++  }
+ 
+-	/**
+-	 * Add a collection to the cache, creating a new collection entry for it
+-	 */
+-	private void addCollection(PersistentCollection collection, CollectionPersister persister) 
+-	throws HibernateException {
+-		CollectionEntry ce = new CollectionEntry(persister, collection);
+-		collectionEntries.put(collection, ce);
+-	}
++  /**
++   * Add a collection to the cache, creating a new collection entry for it
++   */
++  private void addCollection(PersistentCollection collection, CollectionPersister persister) 
++  throws HibernateException {
++    CollectionEntry ce = new CollectionEntry(persister, collection);
++    collectionEntries.put(collection, ce);
++  }
+ 
+-	/**
+-	 * add an (initialized) collection that was created by another session and passed
+-	 * into update() (ie. one with a snapshot and existing state on the database)
+-	 */
+-	public void addInitializedDetachedCollection(CollectionPersister collectionPersister, PersistentCollection collection) 
+-	throws HibernateException {
+-		if ( collection.isUnreferenced() ) {
+-			//treat it just like a new collection
+-			addCollection( collection, collectionPersister );
+-		}
+-		else {
+-			CollectionEntry ce = new CollectionEntry( collection, session.getFactory() );
+-			addCollection( collection, ce, collection.getKey() );
+-		}
+-	}
++  /**
++   * add an (initialized) collection that was created by another session and passed
++   * into update() (ie. one with a snapshot and existing state on the database)
++   */
++  public void addInitializedDetachedCollection(CollectionPersister collectionPersister, PersistentCollection collection) 
++  throws HibernateException {
++    if ( collection.isUnreferenced() ) {
++      //treat it just like a new collection
++      addCollection( collection, collectionPersister );
++    }
++    else {
++      CollectionEntry ce = new CollectionEntry( collection, session.getFactory() );
++      addCollection( collection, ce, collection.getKey() );
++    }
++  }
+ 
+-	/**
+-	 * add a collection we just pulled out of the cache (does not need initializing)
+-	 */
+-	public CollectionEntry addInitializedCollection(CollectionPersister persister, PersistentCollection collection, Serializable id)
+-	throws HibernateException {
+-		CollectionEntry ce = new CollectionEntry(collection, persister, id, flushing);
+-		ce.postInitialize(collection);
+-		addCollection(collection, ce, id);
+-		return ce;
+-	}
+-	
+-	/**
+-	 * Get the collection instance associated with the <tt>CollectionKey</tt>
+-	 */
+-	public PersistentCollection getCollection(CollectionKey collectionKey) {
+-		return (PersistentCollection) collectionsByKey.get(collectionKey);
+-	}
+-	
+-	/**
+-	 * Register a collection for non-lazy loading at the end of the
+-	 * two-phase load
+-	 */
+-	public void addNonLazyCollection(PersistentCollection collection) {
+-		nonlazyCollections.add(collection);
+-	}
++  /**
++   * add a collection we just pulled out of the cache (does not need initializing)
++   */
++  public CollectionEntry addInitializedCollection(CollectionPersister persister, PersistentCollection collection, Serializable id)
++  throws HibernateException {
++    CollectionEntry ce = new CollectionEntry(collection, persister, id, flushing);
++    ce.postInitialize(collection);
++    addCollection(collection, ce, id);
++    return ce;
++  }
++  
++  /**
++   * Get the collection instance associated with the <tt>CollectionKey</tt>
++   */
++  public PersistentCollection getCollection(CollectionKey collectionKey) {
++    return (PersistentCollection) collectionsByKey.get(collectionKey);
++  }
++  
++  /**
++   * Register a collection for non-lazy loading at the end of the
++   * two-phase load
++   */
++  public void addNonLazyCollection(PersistentCollection collection) {
++    nonlazyCollections.add(collection);
++  }
+ 
+-	/**
+-	 * Force initialization of all non-lazy collections encountered during
+-	 * the current two-phase load (actually, this is a no-op, unless this
+-	 * is the "outermost" load)
+-	 */
+-	public void initializeNonLazyCollections() throws HibernateException {
+-		if ( loadCounter == 0 ) {
+-			log.debug( "initializing non-lazy collections" );
+-			//do this work only at the very highest level of the load
+-			loadCounter++; //don't let this method be called recursively
+-			try {
+-				int size;
+-				while ( ( size = nonlazyCollections.size() ) > 0 ) {
+-					//note that each iteration of the loop may add new elements
+-					( (PersistentCollection) nonlazyCollections.remove( size - 1 ) ).forceInitialization();
+-				}
+-			}
+-			finally {
+-				loadCounter--;
+-				clearNullProperties();
+-			}
+-		}
+-	}
++  /**
++   * Force initialization of all non-lazy collections encountered during
++   * the current two-phase load (actually, this is a no-op, unless this
++   * is the "outermost" load)
++   */
++  public void initializeNonLazyCollections() throws HibernateException {
++    if ( loadCounter == 0 ) {
++      log.debug( "initializing non-lazy collections" );
++      //do this work only at the very highest level of the load
++      loadCounter++; //don't let this method be called recursively
++      try {
++        int size;
++        while ( ( size = nonlazyCollections.size() ) > 0 ) {
++          //note that each iteration of the loop may add new elements
++          ( (PersistentCollection) nonlazyCollections.remove( size - 1 ) ).forceInitialization();
++        }
++      }
++      finally {
++        loadCounter--;
++        clearNullProperties();
++      }
++    }
++  }
+ 
+ 
+-	/**
+-	 * Get the <tt>PersistentCollection</tt> object for an array
+-	 */
+-	public PersistentCollection getCollectionHolder(Object array) {
+-		return (PersistentCollection) arrayHolders.get(array);
+-	}
++  /**
++   * Get the <tt>PersistentCollection</tt> object for an array
++   */
++  public PersistentCollection getCollectionHolder(Object array) {
++    return (PersistentCollection) arrayHolders.get(array);
++  }
+ 
+-	/**
+-	 * Register a <tt>PersistentCollection</tt> object for an array.
+-	 * Associates a holder with an array - MUST be called after loading 
+-	 * array, since the array instance is not created until endLoad().
+-	 */
+-	public void addCollectionHolder(PersistentCollection holder) {
+-		//TODO:refactor + make this method private
+-		arrayHolders.put( holder.getValue(), holder );
+-	}
++  /**
++   * Register a <tt>PersistentCollection</tt> object for an array.
++   * Associates a holder with an array - MUST be called after loading 
++   * array, since the array instance is not created until endLoad().
++   */
++  public void addCollectionHolder(PersistentCollection holder) {
++    //TODO:refactor + make this method private
++    arrayHolders.put( holder.getValue(), holder );
++  }
+ 
+-	public PersistentCollection removeCollectionHolder(Object array) {
+-		return (PersistentCollection) arrayHolders.remove(array);
+-	}
++  public PersistentCollection removeCollectionHolder(Object array) {
++    return (PersistentCollection) arrayHolders.remove(array);
++  }
+ 
+-	/**
+-	 * Get the snapshot of the pre-flush collection state
+-	 */
+-	public Serializable getSnapshot(PersistentCollection coll) {
+-		return getCollectionEntry(coll).getSnapshot();
+-	}
++  /**
++   * Get the snapshot of the pre-flush collection state
++   */
++  public Serializable getSnapshot(PersistentCollection coll) {
++    return getCollectionEntry(coll).getSnapshot();
++  }
+ 
+-	/**
+-	 * Get the collection entry for a collection passed to filter,
+-	 * which might be a collection wrapper, an array, or an unwrapped
+-	 * collection. Return null if there is no entry.
+-	 */
+-	public CollectionEntry getCollectionEntryOrNull(Object collection) {
+-		PersistentCollection coll;
+-		if ( collection instanceof PersistentCollection ) {
+-			coll = (PersistentCollection) collection;
+-			//if (collection==null) throw new TransientObjectException("Collection was not yet persistent");
+-		}
+-		else {
+-			coll = getCollectionHolder(collection);
+-			if ( coll == null ) {
+-				//it might be an unwrapped collection reference!
+-				//try to find a wrapper (slowish)
+-				Iterator wrappers = IdentityMap.keyIterator(collectionEntries);
+-				while ( wrappers.hasNext() ) {
+-					PersistentCollection pc = (PersistentCollection) wrappers.next();
+-					if ( pc.isWrapper(collection) ) {
+-						coll = pc;
+-						break;
+-					}
+-				}
+-			}
+-		}
++  /**
++   * Get the collection entry for a collection passed to filter,
++   * which might be a collection wrapper, an array, or an unwrapped
++   * collection. Return null if there is no entry.
++   */
++  public CollectionEntry getCollectionEntryOrNull(Object collection) {
++    PersistentCollection coll;
++    if ( collection instanceof PersistentCollection ) {
++      coll = (PersistentCollection) collection;
++      //if (collection==null) throw new TransientObjectException("Collection was not yet persistent");
++    }
++    else {
++      coll = getCollectionHolder(collection);
++      if ( coll == null ) {
++        //it might be an unwrapped collection reference!
++        //try to find a wrapper (slowish)
++        Iterator wrappers = IdentityMap.keyIterator(collectionEntries);
++        while ( wrappers.hasNext() ) {
++          PersistentCollection pc = (PersistentCollection) wrappers.next();
++          if ( pc.isWrapper(collection) ) {
++            coll = pc;
++            break;
++          }
++        }
++      }
++    }
+ 
+-		return (coll == null) ? null : getCollectionEntry(coll);
+-	}
++    return (coll == null) ? null : getCollectionEntry(coll);
++  }
+ 
+-	/**
+-	 * Get an existing proxy by key
+-	 */
+-	public Object getProxy(EntityKey key) {
+-		return proxiesByKey.get(key);
+-	}
++  /**
++   * Get an existing proxy by key
++   */
++  public Object getProxy(EntityKey key) {
++    return proxiesByKey.get(key);
++  }
+ 
+-	/**
+-	 * Add a proxy to the session cache
+-	 */
+-	public void addProxy(EntityKey key, Object proxy) {
+-		proxiesByKey.put(key, proxy);
+-	}
++  /**
++   * Add a proxy to the session cache
++   */
++  public void addProxy(EntityKey key, Object proxy) {
++    proxiesByKey.put(key, proxy);
++  }
+ 
+-	/**
+-	 * Remove a proxy from the session cache
+-	 */
+-	public Object removeProxy(EntityKey key) {
+-		return proxiesByKey.remove(key);
+-	}
++  /**
++   * Remove a proxy from the session cache
++   */
++  public Object removeProxy(EntityKey key) {
++    return proxiesByKey.remove(key);
++  }
+ 
+-	/**
+-	 * Record the fact that an entity does not exist in the database
+-	 * 
+-	 * @param key the primary key of the entity
+-	 */
+-	/*public void addNonExistantEntityKey(EntityKey key) {
+-		nonExistantEntityKeys.add(key);
+-	}*/
++  /**
++   * Record the fact that an entity does not exist in the database
++   * 
++   * @param key the primary key of the entity
++   */
++  /*public void addNonExistantEntityKey(EntityKey key) {
++    nonExistantEntityKeys.add(key);
++  }*/
+ 
+-	/**
+-	 * Record the fact that an entity does not exist in the database
+-	 * 
+-	 * @param key a unique key of the entity
+-	 */
+-	/*public void addNonExistantEntityUniqueKey(EntityUniqueKey key) {
+-		nonExistentEntityUniqueKeys.add(key);
+-	}*/
++  /**
++   * Record the fact that an entity does not exist in the database
++   * 
++   * @param key a unique key of the entity
++   */
++  /*public void addNonExistantEntityUniqueKey(EntityUniqueKey key) {
++    nonExistentEntityUniqueKeys.add(key);
++  }*/
+ 
+-	/*public void removeNonExist(EntityKey key) {
+-		nonExistantEntityKeys.remove(key);
+-	}*/
++  /*public void removeNonExist(EntityKey key) {
++    nonExistantEntityKeys.remove(key);
++  }*/
+ 
+-	/** 
+-	 * Retrieve the set of EntityKeys representing nullifiable references
+-	 */
+-	public HashSet getNullifiableEntityKeys() {
+-		return nullifiableEntityKeys;
+-	}
++  /** 
++   * Retrieve the set of EntityKeys representing nullifiable references
++   */
++  public HashSet getNullifiableEntityKeys() {
++    return nullifiableEntityKeys;
++  }
+ 
+-	public Map getEntitiesByKey() {
+-		return entitiesByKey;
+-	}
++  public Map getEntitiesByKey() {
++    return entitiesByKey;
++  }
+ 
+-	public Map getEntityEntries() {
+-		return entityEntries;
+-	}
++  public Map getEntityEntries() {
++    return entityEntries;
++  }
+ 
+-	public Map getCollectionEntries() {
+-		return collectionEntries;
+-	}
++  public Map getCollectionEntries() {
++    return collectionEntries;
++  }
+ 
+-	public Map getCollectionsByKey() {
+-		return collectionsByKey;
+-	}
++  public Map getCollectionsByKey() {
++    return collectionsByKey;
++  }
+ 
+-	/**
+-	 * Do we already know that the entity does not exist in the
+-	 * database?
+-	 */
+-	/*public boolean isNonExistant(EntityKey key) {
+-		return nonExistantEntityKeys.contains(key);
+-	}*/
++  /**
++   * Do we already know that the entity does not exist in the
++   * database?
++   */
++  /*public boolean isNonExistant(EntityKey key) {
++    return nonExistantEntityKeys.contains(key);
++  }*/
+ 
+-	/**
+-	 * Do we already know that the entity does not exist in the
+-	 * database?
+-	 */
+-	/*public boolean isNonExistant(EntityUniqueKey key) {
+-		return nonExistentEntityUniqueKeys.contains(key);
+-	}*/
++  /**
++   * Do we already know that the entity does not exist in the
++   * database?
++   */
++  /*public boolean isNonExistant(EntityUniqueKey key) {
++    return nonExistentEntityUniqueKeys.contains(key);
++  }*/
+ 
+-	public int getCascadeLevel() {
+-		return cascading;
+-	}
++  public int getCascadeLevel() {
++    return cascading;
++  }
+ 
+-	public int incrementCascadeLevel() {
+-		return ++cascading;
+-	}
++  public int incrementCascadeLevel() {
++    return ++cascading;
++  }
+ 
+-	public int decrementCascadeLevel() {
+-		return --cascading;
+-	}
++  public int decrementCascadeLevel() {
++    return --cascading;
++  }
+ 
+-	public boolean isFlushing() {
+-		return flushing;
+-	}
++  public boolean isFlushing() {
++    return flushing;
++  }
+ 
+-	public void setFlushing(boolean flushing) {
+-		this.flushing = flushing;
+-	}
++  public void setFlushing(boolean flushing) {
++    this.flushing = flushing;
++  }
+ 
+-	/**
+-	 * Call this before begining a two-phase load
+-	 */
+-	public void beforeLoad() {
+-		loadCounter++;
+-	}
++  /**
++   * Call this before begining a two-phase load
++   */
++  public void beforeLoad() {
++    loadCounter++;
++  }
+ 
+-	/**
+-	 * Call this after finishing a two-phase load
+-	 */
+-	public void afterLoad() {
+-		loadCounter--;
+-	}
++  /**
++   * Call this after finishing a two-phase load
++   */
++  public void afterLoad() {
++    loadCounter--;
++  }
+ 
+-	/**
+-	 * Returns a string representation of the object.
+-	 *
+-	 * @return a string representation of the object.
+-	 */
+-	public String toString() {
+-		return new StringBuffer()
+-				.append("PersistenceContext[entityKeys=")
+-				.append(entitiesByKey.keySet())
+-				.append(",collectionKeys=")
+-				.append(collectionsByKey.keySet())
+-				.append("]")
+-				.toString();
+-	}
+-	
+-	/**
+-	 * Search the persistence context for an owner for the child object,
+-	 * given a collection role. If <tt>mergeMap</tt> is non-null, also
+-	 * check the detached graph being merged for a parent.
+-	 */
+-	public Serializable getOwnerId(String entity, String property, Object childEntity, Map mergeMap) {
+-		
+-		EntityPersister persister = session.getFactory()
+-				.getEntityPersister(entity);
+-		final CollectionPersister collectionPersister = session.getFactory()
+-				.getCollectionPersister(entity + '.' + property);
+-		
+-		Iterator entities = entityEntries.entrySet().iterator();
+-		while ( entities.hasNext() ) {
+-			Map.Entry me = (Map.Entry) entities.next();
+-			EntityEntry ee = (EntityEntry) me.getValue();
+-			if ( persister.isSubclassEntityName( ee.getEntityName() ) ) {
+-				Object instance = me.getKey();
++  /**
++   * Returns a string representation of the object.
++   *
++   * @return a string representation of the object.
++   */
++  public String toString() {
++    return new StringBuffer()
++        .append("PersistenceContext[entityKeys=")
++        .append(entitiesByKey.keySet())
++        .append(",collectionKeys=")
++        .append(collectionsByKey.keySet())
++        .append("]")
++        .toString();
++  }
++  
++  /**
++   * Search the persistence context for an owner for the child object,
++   * given a collection role. If <tt>mergeMap</tt> is non-null, also
++   * check the detached graph being merged for a parent.
++   */
++  public Serializable getOwnerId(String entity, final String property, final Object childEntity, final Map mergeMap) {
++    
++    final EntityPersister persister = session.getFactory()
++        .getEntityPersister(entity);
++    final CollectionPersister cp = session.getFactory()
++        .getCollectionPersister(entity + '.' + property);
++    
++    // try cache lookup first
++    Object parent = parentsByChild.get(childEntity);
++    if (parent != null) {
++      if (isFoundInParent(property, childEntity, persister, cp, parent, mergeMap)) {
++        return getEntry(parent).getId();
++      }
++      else {
++        parentsByChild.remove(childEntity); // remove wrong entry
++      }
++    }
++    
++    // search for parent if cache entry does not exist or is wrong
++    return (Serializable) entityEntries.iterate(new IdentityMap.CallBackMapIterator() {
++      public final Object iterate (Object parent, Object value)
++      {
++        EntityEntry ee = (EntityEntry) value;
++        if ( persister.isSubclassEntityName( ee.getEntityName() ) ) {
++          // check if the managed object is the parent
++          if ( isFoundInParent(property, childEntity, persister, cp, parent, mergeMap) ) {
++            parentsByChild.put(childEntity, parent);
++            assert ee.getId() != null : "ee.getId() != null";
++            return ee.getId();
++          }
++        }
++        return null; // iterate further
++      }
++    });
++  }
+ 
+-				//check if the managed object is the parent
+-				boolean found = isFoundInParent( 
+-						property, 
+-						childEntity, 
+-						persister, 
+-						collectionPersister,
+-						instance 
+-					);
++  private boolean isFoundInParent(
++    String property, 
++    Object childEntity, 
++    EntityPersister persister, 
++    CollectionPersister collectionPersister,
++    Object potentialParent,
++    Map mergeMap
++  ) {
++    boolean found = isFoundInParent( 
++      property, 
++      childEntity, 
++      persister, 
++      collectionPersister,
++      potentialParent 
++    );
+ 
+-				if (!found && mergeMap!=null) {
+-					//check if the detached object being merged is the parent
+-					Object unmergedInstance = mergeMap.get(instance);
+-					Object unmergedChild = mergeMap.get(childEntity);
+-					if ( unmergedInstance!=null && unmergedChild!=null ) {
+-						found = isFoundInParent( 
+-								property, 
+-								unmergedChild, 
+-								persister, 
+-								collectionPersister,
+-								unmergedInstance 
+-							);
+-					}
+-				}
+-				
+-				if ( found ) {
+-					return ee.getId();
+-				}
+-				
+-			}
+-		}
+-		return null;
+-	}
++    if (!found && mergeMap!=null) {
++      //check if the detached object being merged is the parent
++      Object unmergedInstance = mergeMap.get(potentialParent);
++      Object unmergedChild = mergeMap.get(childEntity);
++      if ( unmergedInstance!=null && unmergedChild!=null ) {
++        found = isFoundInParent( 
++            property, 
++            unmergedChild, 
++            persister, 
++            collectionPersister,
++            unmergedInstance 
++          );
++      }
++    }
++    
++    return found;
++  }
++  
++  private boolean isFoundInParent(
++      String property, 
++      Object childEntity, 
++      EntityPersister persister, 
++      CollectionPersister collectionPersister,
++      Object potentialParent
++  ) {
++    Object collection = persister.getPropertyValue( 
++        potentialParent, 
++        property, 
++        session.getEntityMode() 
++      );
++    return collection!=null && Hibernate.isInitialized(collection) &&
++        collectionPersister.getCollectionType()
++            .contains(collection, childEntity, session);
++  }
+ 
+-	private boolean isFoundInParent(
+-			String property, 
+-			Object childEntity, 
+-			EntityPersister persister, 
+-			CollectionPersister collectionPersister,
+-			Object potentialParent
+-	) {
+-		Object collection = persister.getPropertyValue( 
+-				potentialParent, 
+-				property, 
+-				session.getEntityMode() 
+-			);
+-		return collection!=null && Hibernate.isInitialized(collection) &&
+-				collectionPersister.getCollectionType()
+-						.contains(collection, childEntity, session);
+-	}
++  /**
++   * Search the persistence context for an index of the child object,
++   * given a collection role
++   */
++  public Object getIndexInOwner(String entity, final String property, final Object childEntity, final Map mergeMap) {
+ 
+-	/**
+-	 * Search the persistence context for an index of the child object,
+-	 * given a collection role
+-	 */
+-	public Object getIndexInOwner(String entity, String property, Object childEntity, Map mergeMap) {
++    final EntityPersister persister = session.getFactory()
++        .getEntityPersister(entity);
++    final CollectionPersister cp = session.getFactory()
++        .getCollectionPersister(entity + '.' + property);
+ 
+-		EntityPersister persister = session.getFactory()
+-				.getEntityPersister(entity);
+-		CollectionPersister cp = session.getFactory()
+-				.getCollectionPersister(entity + '.' + property);
+-		Iterator entities = entityEntries.entrySet().iterator();
+-		while ( entities.hasNext() ) {
+-			Map.Entry me = (Map.Entry) entities.next();
+-			EntityEntry ee = (EntityEntry) me.getValue();
+-			if ( persister.isSubclassEntityName( ee.getEntityName() ) ) {
+-				Object instance = me.getKey();
+-				
+-				Object index = getIndexInParent(property, childEntity, persister, cp, instance);
+-				
+-				if (index==null && mergeMap!=null) {
+-					Object unmergedInstance = mergeMap.get(instance);
+-					Object unmergedChild = mergeMap.get(childEntity);
+-					if ( unmergedInstance!=null && unmergedChild!=null ) {
+-						index = getIndexInParent(property, unmergedChild, persister, cp, unmergedInstance);
+-					}
+-				}
+-				
+-				if (index!=null) return index;
+-			}
+-		}
+-		return null;
+-	}
+-	
+-	private Object getIndexInParent(
+-			String property, 
+-			Object childEntity, 
+-			EntityPersister persister, 
+-			CollectionPersister collectionPersister,
+-			Object potentialParent
+-	){	
+-		Object collection = persister.getPropertyValue( potentialParent, property, session.getEntityMode() );
+-		if ( collection!=null && Hibernate.isInitialized(collection) ) {
+-			return collectionPersister.getCollectionType().indexOf(collection, childEntity);
+-		}
+-		else {
+-			return null;
+-		}
+-	}
+-	
+-	/**
+-	 * Record the fact that the association belonging to the keyed
+-	 * entity is null.
+-	 */
+-	public void addNullProperty(EntityKey ownerKey, String propertyName) {
+-		nullAssociations.add( new AssociationKey(ownerKey, propertyName) );
+-	}
+-	
+-	/**
+-	 * Is the association property belonging to the keyed entity null?
+-	 */
+-	public boolean isPropertyNull(EntityKey ownerKey, String propertyName) {
+-		return nullAssociations.contains( new AssociationKey(ownerKey, propertyName) );
+-	}
+-	
+-	private void clearNullProperties() {
+-		nullAssociations.clear();
+-	}
++    // try cache lookup first
++    Object parent = parentsByChild.get(childEntity);
++    if (parent != null) {
++      Object index = getIndexInParent(property, childEntity, persister, cp, parent, mergeMap);
++      if (index != null) {
++        return index;
++      }
++      else {
++        parentsByChild.remove(childEntity); // remove wrong entry
++      }
++    }
+ 
+-	public void setReadOnly(Object entity, boolean readOnly) {
+-		EntityEntry entry = getEntry(entity);
+-		if (entry==null) {
+-			throw new TransientObjectException("Instance was not associated with the session");
+-		}
+-		entry.setReadOnly(readOnly, entity);
+-		hasNonReadOnlyEntities = hasNonReadOnlyEntities || !readOnly;
+-	}
++    // search for parent if cache entry does not exist or is wrong
++    return entityEntries.iterate(new IdentityMap.CallBackMapIterator(){
++      public final Object iterate (Object parent, Object value)
++      {
++        EntityEntry ee = (EntityEntry) value;
++        if ( persister.isSubclassEntityName( ee.getEntityName() ) ) {
++          Object index = getIndexInParent(property, childEntity, persister, cp, parent, mergeMap);
++          if (index != null) {
++            parentsByChild.put(childEntity, parent);
++            return index;
++          }
++        }
++        return null; // iterate further
++      }
++    });
++  }
++  
++  private Object getIndexInParent(
++    String property, 
++    Object childEntity, 
++    EntityPersister persister, 
++    CollectionPersister cp,
++    Object potentialParent,
++    Map mergeMap
++  ) {  
++    Object index = getIndexInParent(property, childEntity, persister, cp, potentialParent);
++    
++    if (index==null && mergeMap!=null) {
++      Object unmergedInstance = mergeMap.get(potentialParent);
++      Object unmergedChild = mergeMap.get(childEntity);
++      if ( unmergedInstance!=null && unmergedChild!=null ) {
++        index = getIndexInParent(property, unmergedChild, persister, cp, unmergedInstance);
++      }
++    }
++    
++    return index;
++  }
++  
++  private Object getIndexInParent(
++      String property, 
++      Object childEntity, 
++      EntityPersister persister, 
++      CollectionPersister collectionPersister,
++      Object potentialParent
++  ) {  
++    Object collection = persister.getPropertyValue( potentialParent, property, session.getEntityMode() );
++    if ( collection!=null && Hibernate.isInitialized(collection) ) {
++      return collectionPersister.getCollectionType().indexOf(collection, childEntity);
++    }
++    else {
++      return null;
++    }
++  }
++  
++  /**
++   * Record the fact that the association belonging to the keyed
++   * entity is null.
++   */
++  public void addNullProperty(EntityKey ownerKey, String propertyName) {
++    nullAssociations.add( new AssociationKey(ownerKey, propertyName) );
++  }
++  
++  /**
++   * Is the association property belonging to the keyed entity null?
++   */
++  public boolean isPropertyNull(EntityKey ownerKey, String propertyName) {
++    return nullAssociations.contains( new AssociationKey(ownerKey, propertyName) );
++  }
++  
++  private void clearNullProperties() {
++    nullAssociations.clear();
++  }
+ 
+-	public void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId) {
+-		Object entity = entitiesByKey.remove( oldKey );
+-		EntityEntry oldEntry = ( EntityEntry ) entityEntries.remove( entity );
++  public void setReadOnly(Object entity, boolean readOnly) {
++    EntityEntry entry = getEntry(entity);
++    if (entry==null) {
++      throw new TransientObjectException("Instance was not associated with the session");
++    }
++    entry.setReadOnly(readOnly, entity);
++    hasNonReadOnlyEntities = hasNonReadOnlyEntities || !readOnly;
++  }
+ 
+-		EntityKey newKey = new EntityKey( generatedId, oldEntry.getPersister(), getSession().getEntityMode() );
+-		addEntity( newKey, entity );
+-		addEntry(
+-				entity,
+-		        oldEntry.getStatus(),
+-		        oldEntry.getLoadedState(),
+-		        oldEntry.getRowId(),
+-		        generatedId,
+-		        oldEntry.getVersion(),
+-		        oldEntry.getLockMode(),
+-		        oldEntry.isExistsInDatabase(),
+-		        oldEntry.getPersister(),
+-		        oldEntry.isBeingReplicated(),
+-		        oldEntry.isLoadedWithLazyPropertiesUnfetched()
+-		);
+-	}
++  public void replaceDelayedEntityIdentityInsertKeys(EntityKey oldKey, Serializable generatedId) {
++    Object entity = entitiesByKey.remove( oldKey );
++    EntityEntry oldEntry = ( EntityEntry ) entityEntries.remove( entity );
+ 
+-	/**
+-	 * Used by the owning session to explicitly control serialization of the
+-	 * persistence context.
+-	 *
+-	 * @param oos The stream to which the persistence context should get written
+-	 * @throws IOException
+-	 */
+-	public void serialize(ObjectOutputStream oos) throws IOException {
+-		log.trace( "serializing persistent-context" );
++    EntityKey newKey = new EntityKey( generatedId, oldEntry.getPersister(), getSession().getEntityMode() );
++    addEntity( newKey, entity );
++    addEntry(
++        entity,
++            oldEntry.getStatus(),
++            oldEntry.getLoadedState(),
++            oldEntry.getRowId(),
++            generatedId,
++            oldEntry.getVersion(),
++            oldEntry.getLockMode(),
++            oldEntry.isExistsInDatabase(),
++            oldEntry.getPersister(),
++            oldEntry.isBeingReplicated(),
++            oldEntry.isLoadedWithLazyPropertiesUnfetched()
++    );
++  }
+ 
+-		oos.writeBoolean( hasNonReadOnlyEntities );
++  /**
++   * Used by the owning session to explicitly control serialization of the
++   * persistence context.
++   *
++   * @param oos The stream to which the persistence context should get written
++   * @throws IOException
++   */
++  public void serialize(ObjectOutputStream oos) throws IOException {
++    log.trace( "serializing persistent-context" );
+ 
+-		oos.writeInt( entitiesByKey.size() );
+-		log.trace( "starting serialization of [" + entitiesByKey.size() + "] entitiesByKey entries" );
+-		Iterator itr = entitiesByKey.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			( ( EntityKey ) entry.getKey() ).serialize( oos );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeBoolean( hasNonReadOnlyEntities );
+ 
+-		oos.writeInt( entitiesByUniqueKey.size() );
+-		log.trace( "starting serialization of [" + entitiesByUniqueKey.size() + "] entitiesByUniqueKey entries" );
+-		itr = entitiesByUniqueKey.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			( ( EntityUniqueKey ) entry.getKey() ).serialize( oos );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeInt( entitiesByKey.size() );
++    log.trace( "starting serialization of [" + entitiesByKey.size() + "] entitiesByKey entries" );
++    Iterator itr = entitiesByKey.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      ( ( EntityKey ) entry.getKey() ).serialize( oos );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-		oos.writeInt( proxiesByKey.size() );
+-		log.trace( "starting serialization of [" + proxiesByKey.size() + "] proxiesByKey entries" );
+-		itr = proxiesByKey.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			( ( EntityKey ) entry.getKey() ).serialize( oos );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeInt( entitiesByUniqueKey.size() );
++    log.trace( "starting serialization of [" + entitiesByUniqueKey.size() + "] entitiesByUniqueKey entries" );
++    itr = entitiesByUniqueKey.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      ( ( EntityUniqueKey ) entry.getKey() ).serialize( oos );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-		oos.writeInt( entitySnapshotsByKey.size() );
+-		log.trace( "starting serialization of [" + entitySnapshotsByKey.size() + "] entitySnapshotsByKey entries" );
+-		itr = entitySnapshotsByKey.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			( ( EntityKey ) entry.getKey() ).serialize( oos );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeInt( proxiesByKey.size() );
++    log.trace( "starting serialization of [" + proxiesByKey.size() + "] proxiesByKey entries" );
++    itr = proxiesByKey.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      ( ( EntityKey ) entry.getKey() ).serialize( oos );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-		oos.writeInt( entityEntries.size() );
+-		log.trace( "starting serialization of [" + entityEntries.size() + "] entityEntries entries" );
+-		itr = entityEntries.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			oos.writeObject( entry.getKey() );
+-			( ( EntityEntry ) entry.getValue() ).serialize( oos );
+-		}
++    oos.writeInt( entitySnapshotsByKey.size() );
++    log.trace( "starting serialization of [" + entitySnapshotsByKey.size() + "] entitySnapshotsByKey entries" );
++    itr = entitySnapshotsByKey.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      ( ( EntityKey ) entry.getKey() ).serialize( oos );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-		oos.writeInt( collectionsByKey.size() );
+-		log.trace( "starting serialization of [" + collectionsByKey.size() + "] collectionsByKey entries" );
+-		itr = collectionsByKey.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			( ( CollectionKey ) entry.getKey() ).serialize( oos );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeInt( entityEntries.size() );
++    log.trace( "starting serialization of [" + entityEntries.size() + "] entityEntries entries" );
++    itr = entityEntries.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      oos.writeObject( entry.getKey() );
++      ( ( EntityEntry ) entry.getValue() ).serialize( oos );
++    }
+ 
+-		oos.writeInt( collectionEntries.size() );
+-		log.trace( "starting serialization of [" + collectionEntries.size() + "] collectionEntries entries" );
+-		itr = collectionEntries.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			oos.writeObject( entry.getKey() );
+-			( ( CollectionEntry ) entry.getValue() ).serialize( oos );
+-		}
++    oos.writeInt( collectionsByKey.size() );
++    log.trace( "starting serialization of [" + collectionsByKey.size() + "] collectionsByKey entries" );
++    itr = collectionsByKey.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      ( ( CollectionKey ) entry.getKey() ).serialize( oos );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-		oos.writeInt( arrayHolders.size() );
+-		log.trace( "starting serialization of [" + arrayHolders.size() + "] arrayHolders entries" );
+-		itr = arrayHolders.entrySet().iterator();
+-		while ( itr.hasNext() ) {
+-			Map.Entry entry = ( Map.Entry ) itr.next();
+-			oos.writeObject( entry.getKey() );
+-			oos.writeObject( entry.getValue() );
+-		}
++    oos.writeInt( collectionEntries.size() );
++    log.trace( "starting serialization of [" + collectionEntries.size() + "] collectionEntries entries" );
++    itr = collectionEntries.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      oos.writeObject( entry.getKey() );
++      ( ( CollectionEntry ) entry.getValue() ).serialize( oos );
++    }
+ 
+-		oos.writeInt( nullifiableEntityKeys.size() );
+-		log.trace( "starting serialization of [" + nullifiableEntityKeys.size() + "] nullifiableEntityKeys entries" );
+-		itr = nullifiableEntityKeys.iterator();
+-		while ( itr.hasNext() ) {
+-			EntityKey entry = ( EntityKey ) itr.next();
+-			entry.serialize( oos );
+-		}
+-	}
++    oos.writeInt( arrayHolders.size() );
++    log.trace( "starting serialization of [" + arrayHolders.size() + "] arrayHolders entries" );
++    itr = arrayHolders.entrySet().iterator();
++    while ( itr.hasNext() ) {
++      Map.Entry entry = ( Map.Entry ) itr.next();
++      oos.writeObject( entry.getKey() );
++      oos.writeObject( entry.getValue() );
++    }
+ 
+-	public static StatefulPersistenceContext deserialize(
+-			ObjectInputStream ois,
+-	        SessionImplementor session) throws IOException, ClassNotFoundException {
+-		log.trace( "deserializing persistent-context" );
+-		StatefulPersistenceContext rtn = new StatefulPersistenceContext( session );
++    oos.writeInt( nullifiableEntityKeys.size() );
++    log.trace( "starting serialization of [" + nullifiableEntityKeys.size() + "] nullifiableEntityKeys entries" );
++    itr = nullifiableEntityKeys.iterator();
++    while ( itr.hasNext() ) {
++      EntityKey entry = ( EntityKey ) itr.next();
++      entry.serialize( oos );
++    }
++  }
+ 
+-		// during deserialization, we need to reconnect all proxies and
+-		// collections to this session, as well as the EntityEntry and
+-		// CollectionEntry instances; these associations are transient
+-		// because serialization is used for different things.
++  public static StatefulPersistenceContext deserialize(
++      ObjectInputStream ois,
++          SessionImplementor session) throws IOException, ClassNotFoundException {
++    log.trace( "deserializing persistent-context" );
++    StatefulPersistenceContext rtn = new StatefulPersistenceContext( session );
+ 
+-		try {
+-			// todo : we can actually just determine this from the incoming EntityEntry-s
+-			rtn.hasNonReadOnlyEntities = ois.readBoolean();
++    // during deserialization, we need to reconnect all proxies and
++    // collections to this session, as well as the EntityEntry and
++    // CollectionEntry instances; these associations are transient
++    // because serialization is used for different things.
+ 
+-			int count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] entitiesByKey entries" );
+-			rtn.entitiesByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.entitiesByKey.put( EntityKey.deserialize( ois, session ), ois.readObject() );
+-			}
++    try {
++      // todo : we can actually just determine this from the incoming EntityEntry-s
++      rtn.hasNonReadOnlyEntities = ois.readBoolean();
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] entitiesByUniqueKey entries" );
+-			rtn.entitiesByUniqueKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.entitiesByUniqueKey.put( EntityUniqueKey.deserialize( ois, session ), ois.readObject() );
+-			}
++      int count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] entitiesByKey entries" );
++      rtn.entitiesByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        rtn.entitiesByKey.put( EntityKey.deserialize( ois, session ), ois.readObject() );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] proxiesByKey entries" );
+-			rtn.proxiesByKey = new ReferenceMap( ReferenceMap.HARD, ReferenceMap.WEAK, count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count, .75f );
+-			for ( int i = 0; i < count; i++ ) {
+-				EntityKey ek = EntityKey.deserialize( ois, session );
+-				Object proxy = ois.readObject();
+-				if ( proxy instanceof HibernateProxy ) {
+-					( ( HibernateProxy ) proxy ).getHibernateLazyInitializer().setSession( session );
+-					rtn.proxiesByKey.put( ek, proxy );
+-				}
+-				else {
+-					log.trace( "encountered prunded proxy" );
+-				}
+-				// otherwise, the proxy was pruned during the serialization process
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] entitiesByUniqueKey entries" );
++      rtn.entitiesByUniqueKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        rtn.entitiesByUniqueKey.put( EntityUniqueKey.deserialize( ois, session ), ois.readObject() );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] entitySnapshotsByKey entries" );
+-			rtn.entitySnapshotsByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.entitySnapshotsByKey.put( EntityKey.deserialize( ois, session ), ois.readObject() );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] proxiesByKey entries" );
++      rtn.proxiesByKey = new ReferenceMap( ReferenceMap.HARD, ReferenceMap.WEAK, count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count, .75f );
++      for ( int i = 0; i < count; i++ ) {
++        EntityKey ek = EntityKey.deserialize( ois, session );
++        Object proxy = ois.readObject();
++        if ( proxy instanceof HibernateProxy ) {
++          ( ( HibernateProxy ) proxy ).getHibernateLazyInitializer().setSession( session );
++          rtn.proxiesByKey.put( ek, proxy );
++        }
++        else {
++          log.trace( "encountered prunded proxy" );
++        }
++        // otherwise, the proxy was pruned during the serialization process
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] entityEntries entries" );
+-			rtn.entityEntries = IdentityMap.instantiateSequenced( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				Object entity = ois.readObject();
+-				EntityEntry entry = EntityEntry.deserialize( ois, session );
+-				rtn.entityEntries.put( entity, entry );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] entitySnapshotsByKey entries" );
++      rtn.entitySnapshotsByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        rtn.entitySnapshotsByKey.put( EntityKey.deserialize( ois, session ), ois.readObject() );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] collectionsByKey entries" );
+-			rtn.collectionsByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.collectionsByKey.put( CollectionKey.deserialize( ois, session ), ois.readObject() );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] entityEntries entries" );
++      rtn.entityEntries = IdentityMap.instantiateSequenced( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        Object entity = ois.readObject();
++        EntityEntry entry = EntityEntry.deserialize( ois, session );
++        rtn.entityEntries.put( entity, entry );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] collectionEntries entries" );
+-			rtn.collectionEntries = IdentityMap.instantiateSequenced( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				final PersistentCollection pc = ( PersistentCollection ) ois.readObject();
+-				final CollectionEntry ce = CollectionEntry.deserialize( ois, session );
+-				pc.setCurrentSession( session );
+-				rtn.collectionEntries.put( pc, ce );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] collectionsByKey entries" );
++      rtn.collectionsByKey = new HashMap( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        rtn.collectionsByKey.put( CollectionKey.deserialize( ois, session ), ois.readObject() );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] arrayHolders entries" );
+-			rtn.arrayHolders = IdentityMap.instantiate( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.arrayHolders.put( ois.readObject(), ois.readObject() );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] collectionEntries entries" );
++      rtn.collectionEntries = IdentityMap.instantiateSequenced( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        final PersistentCollection pc = ( PersistentCollection ) ois.readObject();
++        final CollectionEntry ce = CollectionEntry.deserialize( ois, session );
++        pc.setCurrentSession( session );
++        rtn.collectionEntries.put( pc, ce );
++      }
+ 
+-			count = ois.readInt();
+-			log.trace( "staring deserialization of [" + count + "] nullifiableEntityKeys entries" );
+-			rtn.nullifiableEntityKeys = new HashSet();
+-			for ( int i = 0; i < count; i++ ) {
+-				rtn.nullifiableEntityKeys.add( EntityKey.deserialize( ois, session ) );
+-			}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] arrayHolders entries" );
++      rtn.arrayHolders = IdentityMap.instantiate( count < INIT_COLL_SIZE ? INIT_COLL_SIZE : count );
++      for ( int i = 0; i < count; i++ ) {
++        rtn.arrayHolders.put( ois.readObject(), ois.readObject() );
++      }
+ 
+-		}
+-		catch ( HibernateException he ) {
+-			throw new InvalidObjectException( he.getMessage() );
+-		}
++      count = ois.readInt();
++      log.trace( "staring deserialization of [" + count + "] nullifiableEntityKeys entries" );
++      rtn.nullifiableEntityKeys = new HashSet();
++      for ( int i = 0; i < count; i++ ) {
++        rtn.nullifiableEntityKeys.add( EntityKey.deserialize( ois, session ) );
++      }
+ 
+-		return rtn;
+-	}
++    }
++    catch ( HibernateException he ) {
++      throw new InvalidObjectException( he.getMessage() );
++    }
++
++    return rtn;
++  }
++
++  public void addParent (Object parent, Object child)
++  {
++    parentsByChild.put(child, parent);
++  }
+ }
+Index: D:/Projekte/hibernate320/src/org/hibernate/engine/Cascade.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/engine/Cascade.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/engine/Cascade.java	(working copy)
+@@ -28,333 +28,344 @@
+  */
+ public final class Cascade {
+ 
+-	/**
+-	 * A cascade point that occurs just after the insertion of the parent entity and
+-	 * just before deletion
+-	 */
+-	public static final int AFTER_INSERT_BEFORE_DELETE = 1;
+-	/**
+-	 * A cascade point that occurs just before the insertion of the parent entity and
+-	 * just after deletion
+-	 */
+-	public static final int BEFORE_INSERT_AFTER_DELETE = 2;
+-	/**
+-	 * A cascade point that occurs just after the insertion of the parent entity and
+-	 * just before deletion, inside a collection
+-	 */
+-	public static final int AFTER_INSERT_BEFORE_DELETE_VIA_COLLECTION = 3;
+-	/**
+-	 * A cascade point that occurs just after update of the parent entity
+-	 */
+-	public static final int AFTER_UPDATE = 0;
+-	/**
+-	 * A cascade point that occurs just before the session is flushed
+-	 */
+-	public static final int BEFORE_FLUSH = 0;
+-	/**
+-	 * A cascade point that occurs just after eviction of the parent entity from the
+-	 * session cache
+-	 */
+-	public static final int AFTER_EVICT = 0;
+-	/**
+-	 * A cascade point that occurs just after locking a transient parent entity into the
+-	 * session cache
+-	 */
+-	public static final int BEFORE_REFRESH = 0;
+-	/**
+-	 * A cascade point that occurs just after refreshing a parent entity
+-	 */
+-	public static final int AFTER_LOCK = 0;
+-	/**
+-	 * A cascade point that occurs just before merging from a transient parent entity into
+-	 * the object in the session cache
+-	 */
+-	public static final int BEFORE_MERGE = 0;
++  /**
++   * A cascade point that occurs just after the insertion of the parent entity and
++   * just before deletion
++   */
++  public static final int AFTER_INSERT_BEFORE_DELETE = 1;
++  /**
++   * A cascade point that occurs just before the insertion of the parent entity and
++   * just after deletion
++   */
++  public static final int BEFORE_INSERT_AFTER_DELETE = 2;
++  /**
++   * A cascade point that occurs just after the insertion of the parent entity and
++   * just before deletion, inside a collection
++   */
++  public static final int AFTER_INSERT_BEFORE_DELETE_VIA_COLLECTION = 3;
++  /**
++   * A cascade point that occurs just after update of the parent entity
++   */
++  public static final int AFTER_UPDATE = 0;
++  /**
++   * A cascade point that occurs just before the session is flushed
++   */
++  public static final int BEFORE_FLUSH = 0;
++  /**
++   * A cascade point that occurs just after eviction of the parent entity from the
++   * session cache
++   */
++  public static final int AFTER_EVICT = 0;
++  /**
++   * A cascade point that occurs just after locking a transient parent entity into the
++   * session cache
++   */
++  public static final int BEFORE_REFRESH = 0;
++  /**
++   * A cascade point that occurs just after refreshing a parent entity
++   */
++  public static final int AFTER_LOCK = 0;
++  /**
++   * A cascade point that occurs just before merging from a transient parent entity into
++   * the object in the session cache
++   */
++  public static final int BEFORE_MERGE = 0;
+ 
+ 
+-	private static final Log log = LogFactory.getLog( Cascade.class );
++  private static final Log log = LogFactory.getLog( Cascade.class );
+ 
+ 
+-	private int cascadeTo;
+-	private EventSource eventSource;
+-	private CascadingAction action;
++  private int cascadeTo;
++  private EventSource eventSource;
++  private CascadingAction action;
+ 
+-	public Cascade(final CascadingAction action, final int cascadeTo, final EventSource eventSource) {
+-		this.cascadeTo = cascadeTo;
+-		this.eventSource = eventSource;
+-		this.action = action;
+-	}
++  public Cascade(final CascadingAction action, final int cascadeTo, final EventSource eventSource) {
++    this.cascadeTo = cascadeTo;
++    this.eventSource = eventSource;
++    this.action = action;
++  }
+ 
+-	/**
+-	 * Cascade an action from the parent entity instance to all its children.
+-	 *
+-	 * @param persister The parent's entity persister
+-	 * @param parent The parent reference.
+-	 * @throws HibernateException
+-	 */
+-	public void cascade(final EntityPersister persister, final Object parent)
+-	throws HibernateException {
+-		cascade( persister, parent, null );
+-	}
++  /**
++   * Cascade an action from the parent entity instance to all its children.
++   *
++   * @param persister The parent's entity persister
++   * @param parent The parent reference.
++   * @throws HibernateException
++   */
++  public void cascade(final EntityPersister persister, final Object parent)
++  throws HibernateException {
++    cascade( persister, parent, null );
++  }
+ 
+-	/**
+-	 * Cascade an action from the parent entity instance to all its children.  This
+-	 * form is typicaly called from within cascade actions.
+-	 *
+-	 * @param persister The parent's entity persister
+-	 * @param parent The parent reference.
+-	 * @param anything Anything ;)   Typically some form of cascade-local cache
+-	 * which is specific to each CascadingAction type
+-	 * @throws HibernateException
+-	 */
+-	public void cascade(final EntityPersister persister, final Object parent, final Object anything)
+-			throws HibernateException {
++  /**
++   * Cascade an action from the parent entity instance to all its children.  This
++   * form is typicaly called from within cascade actions.
++   *
++   * @param persister The parent's entity persister
++   * @param parent The parent reference.
++   * @param anything Anything ;)   Typically some form of cascade-local cache
++   * which is specific to each CascadingAction type
++   * @throws HibernateException
++   */
++  public void cascade(final EntityPersister persister, final Object parent, final Object anything)
++      throws HibernateException {
+ 
+-		if ( persister.hasCascades() || action.requiresNoCascadeChecking() ) { // performance opt
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "processing cascade " + action + " for: " + persister.getEntityName() );
+-			}
++    if ( persister.hasCascades() || action.requiresNoCascadeChecking() ) { // performance opt
++      if ( log.isTraceEnabled() ) {
++        log.trace( "processing cascade " + action + " for: " + persister.getEntityName() );
++      }
+ 
+-			Type[] types = persister.getPropertyTypes();
+-			CascadeStyle[] cascadeStyles = persister.getPropertyCascadeStyles();
+-			EntityMode entityMode = eventSource.getEntityMode();
+-			boolean hasUninitializedLazyProperties = persister.hasUninitializedLazyProperties( parent, entityMode );
+-			for ( int i=0; i<types.length; i++) {
+-				CascadeStyle style = cascadeStyles[i];
+-				if ( hasUninitializedLazyProperties && persister.getPropertyLaziness()[i] && ! action.performOnLazyProperty() ) {
+-					//do nothing to avoid a lazy property initialization
+-					continue;
+-				}
++      Type[] types = persister.getPropertyTypes();
++      CascadeStyle[] cascadeStyles = persister.getPropertyCascadeStyles();
++      EntityMode entityMode = eventSource.getEntityMode();
++      boolean hasUninitializedLazyProperties = persister.hasUninitializedLazyProperties( parent, entityMode );
++      for ( int i=0; i<types.length; i++) {
++        CascadeStyle style = cascadeStyles[i];
++        if ( hasUninitializedLazyProperties && persister.getPropertyLaziness()[i] && ! action.performOnLazyProperty() ) {
++          //do nothing to avoid a lazy property initialization
++          continue;
++        }
+ 
+-				if ( style.doCascade( action ) ) {
+-					cascadeProperty(
+-					        persister.getPropertyValue( parent, i, entityMode ),
+-					        types[i],
+-					        style,
+-					        anything,
+-					        false
+-					);
+-				}
+-				else if ( action.requiresNoCascadeChecking() ) {
+-					action.noCascade(
+-							eventSource,
+-							persister.getPropertyValue( parent, i, entityMode ),
+-							parent,
+-							persister,
+-							i
+-					);
+-				}
+-			}
++        if ( style.doCascade( action ) ) {
++          cascadeProperty(
++                  parent,
++                  persister.getPropertyValue( parent, i, entityMode ),
++                  types[i],
++                  style,
++                  anything,
++                  false
++          );
++        }
++        else if ( action.requiresNoCascadeChecking() ) {
++          action.noCascade(
++              eventSource,
++              persister.getPropertyValue( parent, i, entityMode ),
++              parent,
++              persister,
++              i
++          );
++        }
++      }
+ 
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "done processing cascade " + action + " for: " + persister.getEntityName() );
+-			}
+-		}
+-	}
++      if ( log.isTraceEnabled() ) {
++        log.trace( "done processing cascade " + action + " for: " + persister.getEntityName() );
++      }
++    }
++  }
+ 
+-	/**
+-	 * Cascade an action to the child or children
+-	 */
+-	private void cascadeProperty(
+-			final Object child,
+-			final Type type,
+-			final CascadeStyle style,
+-			final Object anything,
+-			final boolean isCascadeDeleteEnabled) throws HibernateException {
++  /**
++   * Cascade an action to the child or children
++   */
++  private void cascadeProperty(
++      final Object parent,
++      final Object child,
++      final Type type,
++      final CascadeStyle style,
++      final Object anything,
++      final boolean isCascadeDeleteEnabled) throws HibernateException {
+ 
+-		if (child!=null) {
+-			if ( type.isAssociationType() ) {
+-				AssociationType associationType = (AssociationType) type;
+-				if ( cascadeAssociationNow( associationType ) ) {
+-					cascadeAssociation(
+-							child,
+-							type,
+-							style,
+-							anything,
+-							isCascadeDeleteEnabled
+-						);
+-				}
+-			}
+-			else if ( type.isComponentType() ) {
+-				cascadeComponent( child, (AbstractComponentType) type, anything );
+-			}
+-		}
+-	}
++    if (child!=null) {
++      if ( type.isAssociationType() ) {
++        AssociationType associationType = (AssociationType) type;
++        if ( cascadeAssociationNow( associationType ) ) {
++          cascadeAssociation(
++              parent,
++              child,
++              type,
++              style,
++              anything,
++              isCascadeDeleteEnabled
++            );
++        }
++      }
++      else if ( type.isComponentType() ) {
++        cascadeComponent( parent, child, (AbstractComponentType) type, anything );
++      }
++    }
++  }
+ 
+-	private boolean cascadeAssociationNow(AssociationType associationType) {
+-		return associationType.getForeignKeyDirection().cascadeNow(cascadeTo) &&
+-			( eventSource.getEntityMode()!=EntityMode.DOM4J || associationType.isEmbeddedInXML() );
+-	}
++  private boolean cascadeAssociationNow(AssociationType associationType) {
++    return associationType.getForeignKeyDirection().cascadeNow(cascadeTo) &&
++      ( eventSource.getEntityMode()!=EntityMode.DOM4J || associationType.isEmbeddedInXML() );
++  }
+ 
+-	private void cascadeComponent(
+-			final Object child,
+-			final AbstractComponentType componentType,
+-			final Object anything) {
+-		Object[] children = componentType.getPropertyValues(child, eventSource);
+-		Type[] types = componentType.getSubtypes();
+-		for ( int i=0; i<types.length; i++ ) {
+-			CascadeStyle componentPropertyStyle = componentType.getCascadeStyle(i);
+-			if ( componentPropertyStyle.doCascade(action) ) {
+-				cascadeProperty(
+-						children[i],
+-						types[i],
+-						componentPropertyStyle,
+-						anything,
+-						false
+-					);
+-			}
+-		}
+-	}
++  private void cascadeComponent(
++      final Object parent,
++      final Object child,
++      final AbstractComponentType componentType,
++      final Object anything) {
++    Object[] children = componentType.getPropertyValues(child, eventSource);
++    Type[] types = componentType.getSubtypes();
++    for ( int i=0; i<types.length; i++ ) {
++      CascadeStyle componentPropertyStyle = componentType.getCascadeStyle(i);
++      if ( componentPropertyStyle.doCascade(action) ) {
++        cascadeProperty(
++            parent,
++            children[i],
++            types[i],
++            componentPropertyStyle,
++            anything,
++            false
++          );
++      }
++    }
++  }
+ 
+-	private void cascadeAssociation(
+-			final Object child,
+-			final Type type,
+-			final CascadeStyle style,
+-			final Object anything,
+-			final boolean isCascadeDeleteEnabled) {
+-		if ( type.isEntityType() || type.isAnyType() ) {
+-			cascadeToOne( child, type, style, anything, isCascadeDeleteEnabled );
+-		}
+-		else if ( type.isCollectionType() ) {
+-			cascadeCollection( child, style, anything, (CollectionType) type );
+-		}
+-	}
++  private void cascadeAssociation(
++      final Object parent,
++      final Object child,
++      final Type type,
++      final CascadeStyle style,
++      final Object anything,
++      final boolean isCascadeDeleteEnabled) {
++    if ( type.isEntityType() || type.isAnyType() ) {
++      cascadeToOne( parent, child, type, style, anything, isCascadeDeleteEnabled );
++    }
++    else if ( type.isCollectionType() ) {
++      cascadeCollection( parent, child, style, anything, (CollectionType) type );
++    }
++  }
+ 
+-	/**
+-	 * Cascade an action to a collection
+-	 */
+-	private void cascadeCollection(
+-			final Object child,
+-			final CascadeStyle style,
+-			final Object anything,
+-			final CollectionType type) {
+-		CollectionPersister persister = eventSource.getFactory()
+-				.getCollectionPersister( type.getRole() );
+-		Type elemType = persister.getElementType();
++  /**
++   * Cascade an action to a collection
++   */
++  private void cascadeCollection(
++      final Object parent,
++      final Object child,
++      final CascadeStyle style,
++      final Object anything,
++      final CollectionType type) {
++    CollectionPersister persister = eventSource.getFactory()
++        .getCollectionPersister( type.getRole() );
++    Type elemType = persister.getElementType();
+ 
+-		final int oldCascadeTo = cascadeTo;
+-		if ( cascadeTo==AFTER_INSERT_BEFORE_DELETE) {
+-			cascadeTo = AFTER_INSERT_BEFORE_DELETE_VIA_COLLECTION;
+-		}
++    final int oldCascadeTo = cascadeTo;
++    if ( cascadeTo==AFTER_INSERT_BEFORE_DELETE) {
++      cascadeTo = AFTER_INSERT_BEFORE_DELETE_VIA_COLLECTION;
++    }
+ 
+-		//cascade to current collection elements
+-		if ( elemType.isEntityType() || elemType.isAnyType() || elemType.isComponentType() ) {
+-			cascadeCollectionElements(
+-				child,
+-				type,
+-				style,
+-				elemType,
+-				anything,
+-				persister.isCascadeDeleteEnabled()
+-			);
+-		}
++    //cascade to current collection elements
++    if ( elemType.isEntityType() || elemType.isAnyType() || elemType.isComponentType() ) {
++      cascadeCollectionElements(
++        parent,
++        child,
++        type,
++        style,
++        elemType,
++        anything,
++        persister.isCascadeDeleteEnabled()
++      );
++    }
+ 
+-		cascadeTo = oldCascadeTo;
+-	}
++    cascadeTo = oldCascadeTo;
++  }
+ 
+-	/**
+-	 * Cascade an action to a to-one association or any type
+-	 */
+-	private void cascadeToOne(
+-			final Object child,
+-			final Type type,
+-			final CascadeStyle style,
+-			final Object anything,
+-			final boolean isCascadeDeleteEnabled) {
+-		final String entityName = type.isEntityType()
+-				? ( (EntityType) type ).getAssociatedEntityName()
+-				: null;
+-		if ( style.reallyDoCascade(action) ) { //not really necessary, but good for consistency...
+-			action.cascade(eventSource, child, entityName, anything, isCascadeDeleteEnabled);
+-		}
+-	}
++  /**
++   * Cascade an action to a to-one association or any type
++   */
++  private void cascadeToOne(
++      final Object parent,
++      final Object child,
++      final Type type,
++      final CascadeStyle style,
++      final Object anything,
++      final boolean isCascadeDeleteEnabled) {
++    final String entityName = type.isEntityType()
++        ? ( (EntityType) type ).getAssociatedEntityName()
++        : null;
++    if ( style.reallyDoCascade(action) ) { //not really necessary, but good for consistency...
++      action.cascade(eventSource, parent, child, entityName, anything, isCascadeDeleteEnabled);
++    }
++  }
+ 
+-	/**
+-	 * Cascade to the collection elements
+-	 */
+-	private void cascadeCollectionElements(
+-			final Object child,
+-			final CollectionType collectionType,
+-			final CascadeStyle style,
+-			final Type elemType,
+-			final Object anything,
+-			final boolean isCascadeDeleteEnabled) throws HibernateException {
+-		// we can't cascade to non-embedded elements
+-		boolean embeddedElements = eventSource.getEntityMode()!=EntityMode.DOM4J ||
+-				( (EntityType) collectionType.getElementType( eventSource.getFactory() ) ).isEmbeddedInXML();
++  /**
++   * Cascade to the collection elements
++   */
++  private void cascadeCollectionElements(
++      final Object parent,
++      final Object child,
++      final CollectionType collectionType,
++      final CascadeStyle style,
++      final Type elemType,
++      final Object anything,
++      final boolean isCascadeDeleteEnabled) throws HibernateException {
++    // we can't cascade to non-embedded elements
++    boolean embeddedElements = eventSource.getEntityMode()!=EntityMode.DOM4J ||
++        ( (EntityType) collectionType.getElementType( eventSource.getFactory() ) ).isEmbeddedInXML();
+ 
+-		boolean reallyDoCascade = style.reallyDoCascade(action) &&
+-			embeddedElements && child!=CollectionType.UNFETCHED_COLLECTION;
++    boolean reallyDoCascade = style.reallyDoCascade(action) &&
++      embeddedElements && child!=CollectionType.UNFETCHED_COLLECTION;
+ 
+-		if ( reallyDoCascade ) {
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "cascade " + action + " for collection: " + collectionType.getRole() );
+-			}
++    if ( reallyDoCascade ) {
++      if ( log.isTraceEnabled() ) {
++        log.trace( "cascade " + action + " for collection: " + collectionType.getRole() );
++      }
+ 
+-			Iterator iter = action.getCascadableChildrenIterator(eventSource, collectionType, child);
+-			while ( iter.hasNext() ) {
+-				cascadeProperty(
+-						iter.next(),
+-						elemType,
+-						style,
+-						anything,
+-						isCascadeDeleteEnabled
+-					);
+-			}
++      Iterator iter = action.getCascadableChildrenIterator(eventSource, collectionType, child);
++      while ( iter.hasNext() ) {
++        cascadeProperty(
++            parent,
++            iter.next(),
++            elemType,
++            style,
++            anything,
++            isCascadeDeleteEnabled
++          );
++      }
+ 
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "done cascade " + action + " for collection: " + collectionType.getRole() );
+-			}
+-		}
++      if ( log.isTraceEnabled() ) {
++        log.trace( "done cascade " + action + " for collection: " + collectionType.getRole() );
++      }
++    }
+ 
+-		final boolean deleteOrphans = style.hasOrphanDelete() &&
+-				action.deleteOrphans() &&
+-				elemType.isEntityType() &&
+-				child instanceof PersistentCollection; //a newly instantiated collection can't have orphans
++    final boolean deleteOrphans = style.hasOrphanDelete() &&
++        action.deleteOrphans() &&
++        elemType.isEntityType() &&
++        child instanceof PersistentCollection; //a newly instantiated collection can't have orphans
+ 
+-		if ( deleteOrphans ) { // handle orphaned entities!!
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "deleting orphans for collection: " + collectionType.getRole() );
+-			}
++    if ( deleteOrphans ) { // handle orphaned entities!!
++      if ( log.isTraceEnabled() ) {
++        log.trace( "deleting orphans for collection: " + collectionType.getRole() );
++      }
+ 
+-			// we can do the cast since orphan-delete does not apply to:
+-			// 1. newly instantiated collections
+-			// 2. arrays (we can't track orphans for detached arrays)
+-			final String entityName = collectionType.getAssociatedEntityName( eventSource.getFactory() );
+-			deleteOrphans( entityName, (PersistentCollection) child );
++      // we can do the cast since orphan-delete does not apply to:
++      // 1. newly instantiated collections
++      // 2. arrays (we can't track orphans for detached arrays)
++      final String entityName = collectionType.getAssociatedEntityName( eventSource.getFactory() );
++      deleteOrphans( entityName, (PersistentCollection) child );
+ 
+-			if ( log.isTraceEnabled() ) {
+-				log.trace( "done deleting orphans for collection: " + collectionType.getRole() );
+-			}
+-		}
+-	}
++      if ( log.isTraceEnabled() ) {
++        log.trace( "done deleting orphans for collection: " + collectionType.getRole() );
++      }
++    }
++  }
+ 
+-	/**
+-	 * Delete any entities that were removed from the collection
+-	 */
+-	private void deleteOrphans(String entityName, PersistentCollection pc) throws HibernateException {
+-		//TODO: suck this logic into the collection!
+-		final Collection orphans;
+-		if ( pc.wasInitialized() ) {
+-			CollectionEntry ce = eventSource.getPersistenceContext().getCollectionEntry(pc);
+-			orphans = ce==null ?
+-					CollectionHelper.EMPTY_COLLECTION :
+-					ce.getOrphans(entityName, pc);
+-		}
+-		else {
+-			orphans = pc.getQueuedOrphans(entityName);
+-		}
++  /**
++   * Delete any entities that were removed from the collection
++   */
++  private void deleteOrphans(String entityName, PersistentCollection pc) throws HibernateException {
++    //TODO: suck this logic into the collection!
++    final Collection orphans;
++    if ( pc.wasInitialized() ) {
++      CollectionEntry ce = eventSource.getPersistenceContext().getCollectionEntry(pc);
++      orphans = ce==null ?
++          CollectionHelper.EMPTY_COLLECTION :
++          ce.getOrphans(entityName, pc);
++    }
++    else {
++      orphans = pc.getQueuedOrphans(entityName);
++    }
+ 
+-		final Iterator orphanIter = orphans.iterator();
+-		while ( orphanIter.hasNext() ) {
+-			Object orphan = orphanIter.next();
+-			if (orphan!=null) {
+-				if ( log.isTraceEnabled() ) {
+-					log.trace("deleting orphaned entity instance: " + entityName);
+-				}
+-				eventSource.delete( entityName, orphan, false, null );
+-			}
+-		}
+-	}
++    final Iterator orphanIter = orphans.iterator();
++    while ( orphanIter.hasNext() ) {
++      Object orphan = orphanIter.next();
++      if (orphan!=null) {
++        if ( log.isTraceEnabled() ) {
++          log.trace("deleting orphaned entity instance: " + entityName);
++        }
++        eventSource.delete( entityName, orphan, false, null );
++      }
++    }
++  }
+ 
+ }
+Index: D:/Projekte/hibernate320/src/org/hibernate/util/IdentityMap.java
+===================================================================
+--- D:/Projekte/hibernate320/src/org/hibernate/util/IdentityMap.java	(revision 10935)
++++ D:/Projekte/hibernate320/src/org/hibernate/util/IdentityMap.java	(working copy)
+@@ -20,245 +20,275 @@
+ 
+ public final class IdentityMap implements Map {
+ 
+-	private final Map map;
+-	private transient Map.Entry[] entryArray = new Map.Entry[0];
+-	private transient boolean dirty = false;
++  private final Map map;
++  private transient Map.Entry[] entryArray = new Map.Entry[0];
++  private transient boolean dirty = false;
+ 
+-	/**
+-	 * Return a new instance of this class, with an undefined
+-	 * iteration order
+-	 *
+-	 * @return Map
+-	 */
+-	public static Map instantiate(int size) {
+-		return new IdentityMap( new HashMap(size) );
+-	}
++  /**
++   * Return a new instance of this class, with an undefined
++   * iteration order
++   *
++   * @return Map
++   */
++  public static IdentityMap instantiate(int size) {
++    return new IdentityMap( new HashMap(size) );
++  }
+ 
+-	/**
+-	 * Return a new instance of this class, with iteration
+-	 * order defined by the order that entries were added
+-	 */
+-	public static Map instantiateSequenced(int size) {
+-		return new IdentityMap( new SequencedHashMap(size) );
+-	}
++  /**
++   * Return a new instance of this class, with iteration
++   * order defined by the order that entries were added
++   */
++  public static IdentityMap instantiateSequenced(int size) {
++    return new IdentityMap( new SequencedHashMap(size) );
++  }
+ 
+-	private IdentityMap(Map underlyingMap) {
+-		map = underlyingMap;
+-		dirty = true;
+-	}
++  private IdentityMap(Map underlyingMap) {
++    map = underlyingMap;
++    dirty = true;
++  }
+ 
+-	/**
+-	 * Return the map entries (as instances of <tt>Map.Entry</tt> in a collection that
+-	 * is safe from concurrent modification). ie. we may safely add new instances to
+-	 * the underlying <tt>Map</tt> during iteration of the <tt>entries()</tt>.
+-	 *
+-	 * @param map
+-	 * @return Collection
+-	 */
+-	public static Map.Entry[] concurrentEntries(Map map) {
+-		return ( (IdentityMap) map ).entryArray();
+-	}
++  /**
++   * Return the map entries (as instances of <tt>Map.Entry</tt> in a collection that
++   * is safe from concurrent modification). ie. we may safely add new instances to
++   * the underlying <tt>Map</tt> during iteration of the <tt>entries()</tt>.
++   *
++   * @param map
++   * @return Collection
++   */
++  public static Map.Entry[] concurrentEntries(Map map) {
++    return ( (IdentityMap) map ).entryArray();
++  }
+ 
+-	public static List entries(Map map) {
+-		return ( (IdentityMap) map ).entryList();
+-	}
++  public static List entries(Map map) {
++    return ( (IdentityMap) map ).entryList();
++  }
+ 
+-	public static Iterator keyIterator(Map map) {
+-		return ( (IdentityMap) map ).keyIterator();
+-	}
++  public static Iterator keyIterator(Map map) {
++    return ( (IdentityMap) map ).keyIterator();
++  }
+ 
+-	public Iterator keyIterator() {
+-		return new KeyIterator( map.keySet().iterator() );
+-	}
++  public Iterator keyIterator() {
++    return new KeyIterator( map.keySet().iterator() );
++  }
+ 
+-	public static final class IdentityMapEntry implements java.util.Map.Entry {
+-		IdentityMapEntry(Object key, Object value) {
+-			this.key=key;
+-			this.value=value;
+-		}
+-		private Object key;
+-		private Object value;
+-		public Object getKey() {
+-			return key;
+-		}
++  public static final class IdentityMapEntry implements java.util.Map.Entry {
++    IdentityMapEntry(Object key, Object value) {
++      this.key=key;
++      this.value=value;
++    }
++    private Object key;
++    private Object value;
++    public Object getKey() {
++      return key;
++    }
+ 
+-		public Object getValue() {
+-			return value;
+-		}
++    public Object getValue() {
++      return value;
++    }
+ 
+-		public Object setValue(Object value) {
+-			Object result = this.value;
+-			this.value = value;
+-			return result;
+-		}
+-	}
++    public Object setValue(Object value) {
++      Object result = this.value;
++      this.value = value;
++      return result;
++    }
++  }
+ 
+-	public static final class IdentityKey implements Serializable {
+-		private Object key;
++  public static final class IdentityKey implements Serializable {
++    private Object key;
+ 
+-		IdentityKey(Object key) {
+-			this.key=key;
+-		}
+-		public boolean equals(Object other) {
+-			return key == ( (IdentityKey) other ).key;
+-		}
+-		public int hashCode() {
+-			return System.identityHashCode(key);
+-		}
+-		public String toString() {
+-			return key.toString();
+-		}
+-		public Object getRealKey() {
+-			return key;
+-		}
+-	}
++    IdentityKey(Object key) {
++      this.key=key;
++    }
++    public boolean equals(Object other) {
++      return key == ( (IdentityKey) other ).key;
++    }
++    public int hashCode() {
++      return System.identityHashCode(key);
++    }
++    public String toString() {
++      return key.toString();
++    }
++    public Object getRealKey() {
++      return key;
++    }
++  }
+ 
+-	public int size() {
+-		return map.size();
+-	}
++  public int size() {
++    return map.size();
++  }
+ 
+-	public boolean isEmpty() {
+-		return map.isEmpty();
+-	}
++  public boolean isEmpty() {
++    return map.isEmpty();
++  }
+ 
+-	public boolean containsKey(Object key) {
+-		IdentityKey k = new IdentityKey(key);
+-		return map.containsKey(k);
+-	}
++  public boolean containsKey(Object key) {
++    IdentityKey k = new IdentityKey(key);
++    return map.containsKey(k);
++  }
+ 
+-	public boolean containsValue(Object val) {
+-		return map.containsValue(val);
+-	}
++  public boolean containsValue(Object val) {
++    return map.containsValue(val);
++  }
+ 
+-	public Object get(Object key) {
+-		IdentityKey k = new IdentityKey(key);
+-		return map.get(k);
+-	}
++  public Object get(Object key) {
++    IdentityKey k = new IdentityKey(key);
++    return map.get(k);
++  }
+ 
+-	public Object put(Object key, Object value) {
+-		dirty = true;
+-		return map.put( new IdentityKey(key), value );
+-	}
++  public Object put(Object key, Object value) {
++    dirty = true;
++    return map.put( new IdentityKey(key), value );
++  }
+ 
+-	public Object remove(Object key) {
+-		dirty = true;
+-		IdentityKey k = new IdentityKey(key);
+-		return map.remove(k);
+-	}
++  public Object remove(Object key) {
++    dirty = true;
++    IdentityKey k = new IdentityKey(key);
++    return map.remove(k);
++  }
+ 
+-	public void putAll(Map otherMap) {
+-		Iterator iter = otherMap.entrySet().iterator();
+-		while ( iter.hasNext() ) {
+-			Map.Entry me = (Map.Entry) iter.next();
+-			put( me.getKey(), me.getValue() );
+-		}
+-	}
++  public void putAll(Map otherMap) {
++    Iterator iter = otherMap.entrySet().iterator();
++    while ( iter.hasNext() ) {
++      Map.Entry me = (Map.Entry) iter.next();
++      put( me.getKey(), me.getValue() );
++    }
++  }
+ 
+-	public void clear() {
+-		dirty = true;
+-		entryArray = null;
+-		map.clear();
+-	}
++  public void clear() {
++    dirty = true;
++    entryArray = null;
++    map.clear();
++  }
+ 
+-	public Set keySet() {
+-		// would need an IdentitySet for this!
+-		throw new UnsupportedOperationException();
+-	}
++  public Set keySet() {
++    // would need an IdentitySet for this!
++    throw new UnsupportedOperationException();
++  }
+ 
+-	public Collection values() {
+-		return map.values();
+-	}
++  public Collection values() {
++    return map.values();
++  }
+ 
+-	public Set entrySet() {
+-		Set set = new HashSet( map.size() );
+-		Iterator iter = map.entrySet().iterator();
+-		while ( iter.hasNext() ) {
+-			Map.Entry me = (Map.Entry) iter.next();
+-			set.add( new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() ) );
+-		}
+-		return set;
+-	}
++  public Set entrySet() {
++    Set set = new HashSet( map.size() );
++    Iterator iter = map.entrySet().iterator();
++    while ( iter.hasNext() ) {
++      Map.Entry me = (Map.Entry) iter.next();
++      set.add( new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() ) );
++    }
++    return set;
++  }
+ 
+-	public List entryList() {
+-		ArrayList list = new ArrayList( map.size() );
+-		Iterator iter = map.entrySet().iterator();
+-		while ( iter.hasNext() ) {
+-			Map.Entry me = (Map.Entry) iter.next();
+-			list.add( new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() ) );
+-		}
+-		return list;
+-	}
++  public List entryList() {
++    ArrayList list = new ArrayList( map.size() );
++    Iterator iter = map.entrySet().iterator();
++    while ( iter.hasNext() ) {
++      Map.Entry me = (Map.Entry) iter.next();
++      list.add( new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() ) );
++    }
++    return list;
++  }
+ 
+-	public Map.Entry[] entryArray() {
+-		if (dirty) {
+-			entryArray = new Map.Entry[ map.size() ];
+-			Iterator iter = map.entrySet().iterator();
+-			int i=0;
+-			while ( iter.hasNext() ) {
+-				Map.Entry me = (Map.Entry) iter.next();
+-				entryArray[i++] = new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() );
+-			}
+-			dirty = false;
+-		}
+-		return entryArray;
+-	}
++  public Map.Entry[] entryArray() {
++    if (dirty) {
++      entryArray = new Map.Entry[ map.size() ];
++      Iterator iter = map.entrySet().iterator();
++      int i=0;
++      while ( iter.hasNext() ) {
++        Map.Entry me = (Map.Entry) iter.next();
++        entryArray[i++] = new IdentityMapEntry( ( (IdentityKey) me.getKey() ).key, me.getValue() );
++      }
++      dirty = false;
++    }
++    return entryArray;
++  }
+ 
+-	/**
+-	 * Workaround for a JDK 1.4.1 bug where <tt>IdentityHashMap</tt>s are not
+-	 * correctly deserialized.
+-	 *
+-	 * @param map
+-	 * @return Object
+-	 */
+-	public static Object serialize(Map map) {
+-		return ( (IdentityMap) map ).map;
+-	}
++  /**
++   * Workaround for a JDK 1.4.1 bug where <tt>IdentityHashMap</tt>s are not
++   * correctly deserialized.
++   *
++   * @param map
++   * @return Object
++   */
++  public static Object serialize(Map map) {
++    return ( (IdentityMap) map ).map;
++  }
+ 
+-	/**
+-	 * Workaround for a JDK 1.4.1 bug where <tt>IdentityHashMap</tt>s are not
+-	 * correctly deserialized.
+-	 *
+-	 * @param o
+-	 * @return Map
+-	 */
+-	public static Map deserialize(Object o) {
+-		return new IdentityMap( (Map) o );
+-	}
+-	
+-	public String toString() {
+-		return map.toString();
+-	}
++  /**
++   * Workaround for a JDK 1.4.1 bug where <tt>IdentityHashMap</tt>s are not
++   * correctly deserialized.
++   *
++   * @param o
++   * @return Map
++   */
++  public static Map deserialize(Object o) {
++    return new IdentityMap( (Map) o );
++  }
++  
++  public String toString() {
++    return map.toString();
++  }
+ 
+-	public static Map invert(Map map) {
+-		Map result = instantiate( map.size() );
+-		Iterator iter = map.entrySet().iterator();
+-		while ( iter.hasNext() ) {
+-			Map.Entry me = (Map.Entry) iter.next();
+-			result.put( me.getValue(), me.getKey() );
+-		}
+-		return result;
+-	}
++  public static Map invert(Map map) {
++    Map result = instantiate( map.size() );
++    Iterator iter = map.entrySet().iterator();
++    while ( iter.hasNext() ) {
++      Map.Entry me = (Map.Entry) iter.next();
++      result.put( me.getValue(), me.getKey() );
++    }
++    return result;
++  }
+ 
+-	static final class KeyIterator implements Iterator {
++  static final class KeyIterator implements Iterator {
+ 
+-		private KeyIterator(Iterator iter) {
+-			identityKeyIterator = iter;
+-		}
++    private KeyIterator(Iterator iter) {
++      identityKeyIterator = iter;
++    }
+ 
+-		private final Iterator identityKeyIterator;
++    private final Iterator identityKeyIterator;
+ 
+-		public boolean hasNext() {
+-			return identityKeyIterator.hasNext();
+-		}
++    public boolean hasNext() {
++      return identityKeyIterator.hasNext();
++    }
+ 
+-		public Object next() {
+-			return ( (IdentityKey) identityKeyIterator.next() ).key;
+-		}
++    public Object next() {
++      return ( (IdentityKey) identityKeyIterator.next() ).key;
++    }
+ 
+-		public void remove() {
+-			throw new UnsupportedOperationException();
+-		}
++    public void remove() {
++      throw new UnsupportedOperationException();
++    }
+ 
+-	}
+-
++  }
++  
++  /**
++   * Iterate entry set via call back iterator.
++   * 
++   * @param iterator iterator
++   * @return result of iteration
++   */
++  public Object iterate (CallBackMapIterator iterator) {
++    Object result = null;
++    for (Iterator iter = map.entrySet().iterator(); result == null && iter.hasNext();)
++    {
++      Map.Entry entry = (Map.Entry) iter.next();
++      result = iterator.iterate(((IdentityKey) entry.getKey()).key, entry.getValue());
++    }
++    
++    return result;
++  }
++  
++  /**
++   * Callback map iterator.
++   */
++  public interface CallBackMapIterator {
++    /**
++     * Call back method for iteration.
++     * 
++     * @param key key
++     * @param value value
++     * @return result, if not null iteration stops
++     */
++    public Object iterate (Object key, Object value);
++  }
+ }
+\ No newline at end of file

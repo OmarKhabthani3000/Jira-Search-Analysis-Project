@@ -1,0 +1,83 @@
+Index: FromParser.java
+===================================================================
+retrieving revision 1.1
+diff -u -r1.1 FromParser.java
+--- FromParser.java	17 Dec 2003 12:46:00 -0000	1.1
++++ FromParser.java	6 Mar 2004 14:10:46 -0000
+@@ -1,4 +1,4 @@
+-//$Id: FromParser.java,v 1.1 2003/12/17 12:46:00 drai Exp $
++//$Id: FromParser.java,v 1.17.2.5 2003/11/09 15:42:48 oneovthafew Exp $
+ package net.sf.hibernate.hql;
+ 
+ import java.util.HashMap;
+@@ -18,6 +18,7 @@
+ 	
+ 	private final PathExpressionParser peParser = new FromPathExpressionParser();
+ 	private String entityName;
++	private Queryable classCast;
+ 	private String alias;
+ 	private boolean afterIn;
+ 	private boolean afterAs;
+@@ -26,6 +27,8 @@
+ 	private boolean expectingIn;
+ 	private boolean expectingAs;
+ 	private boolean afterJoinType;
++	private boolean expectingClassCast;
++	private boolean expectingCloseClassCast;
+ 	private int joinType;
+ 	private boolean afterFetch;
+ 	
+@@ -95,11 +98,19 @@
+ 			afterAs = true;
+ 			expectingAs = false;
+ 		}
++		else if ( lcToken.equals(StringHelper.OPEN_PAREN) ) {
++		    expectingClassCast = true;
++		}
++		else if ( lcToken.equals(StringHelper.CLOSE_PAREN) ) {
++		    if (!expectingCloseClassCast) throw new QueryException("unexpected token: )");
++		    expectingCloseClassCast = false;
++		}
+ 		else {
+ 			
+ 			if (afterJoinType) throw new QueryException("join expected: " + token);
+ 			if (expectingJoin) throw new QueryException("unexpected token: " + token);
+ 			if (expectingIn) throw new QueryException("in expected: " + token);
++			if (expectingCloseClassCast) throw new QueryException(") expected: " + token);
+ 			
+ 			// now anything that is not a HQL keyword
+ 			
+@@ -153,6 +164,11 @@
+ 				afterClass = false;
+ 				expectingJoin = true;
+ 			}
++			else if ( expectingClassCast ) {
++			    classCast = q.getPersisterUsingImports(token);
++			    expectingClassCast = false;
++			    expectingCloseClassCast = true;
++			}
+ 			else {
+ 				
+ 				// handle a path expression or class name that
+@@ -164,6 +180,7 @@
+ 				if (p!=null) {
+ 					// starts with the name of a mapped class (new style)
+ 					if (joinType!=NONE) throw new QueryException("outer or full join must be followed by path expression");
++					
+ 					entityName = q.createNameFor( p.getMappedClass() );
+ 					q.addFromClass(entityName, p);
+ 					expectingAs = true;
+@@ -189,11 +206,13 @@
+ 						peParser.setJoinType(JoinFragment.INNER_JOIN);
+ 					}
+ 					peParser.setUseThetaStyleJoin( q.isSubquery() );
++					peParser.setClassCast( classCast );
+ 					
+ 					ParserHelper.parse(peParser, q.unalias(token), ParserHelper.PATH_SEPARATORS, q);
+ 					entityName = peParser.addFromAssociation(q);
+ 					
+ 					joinType = NONE;
++					classCast = null;
+ 					peParser.setJoinType(JoinFragment.INNER_JOIN);
+ 					
+ 					if (afterFetch) {

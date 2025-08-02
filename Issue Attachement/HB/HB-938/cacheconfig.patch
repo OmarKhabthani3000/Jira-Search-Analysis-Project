@@ -1,0 +1,357 @@
+Index: doc/reference/en/modules/configuration.xml
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/doc/reference/en/modules/configuration.xml,v
+retrieving revision 1.1.2.2
+diff -u -r1.1.2.2 configuration.xml
+--- doc/reference/en/modules/configuration.xml	29 Apr 2004 01:56:36 -0000	1.1.2.2
++++ doc/reference/en/modules/configuration.xml	8 May 2004 20:20:23 -0000
+@@ -359,7 +359,7 @@
+             <literal>Properties</literal> passed to the <literal>Configuration</literal>.
+         </para>
+ 
+-        <table frame="topbot" id="configuration-optional-properties" revision="1">
++        <table frame="topbot" id="configuration-optional-properties" revision="2">
+             <title>Hibernate Configuration Properties</title>
+             <tgroup cols="2">
+                 <colspec colname="c1" colwidth="1*"/>
+@@ -417,8 +417,7 @@
+                         <entry>
+                             Enables outer join fetching. Deprecated, use <literal>max_fetch_depth</literal>.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+-                                <literal>true</literal> | <literal>false</literal>
++                                <literal>true|false</literal>
+                             </para>
+                         </entry>
+                     </row>
+@@ -466,8 +465,7 @@
+                             This property is only necessary when using user supplied
+                             JDBC connections, Hibernate uses connection metadata otherwise.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+-                                <literal>true</literal> | <literal>false</literal>
++                                <literal>true|false</literal>
+                             </para>
+                         </entry>
+                     </row>
+@@ -480,8 +478,7 @@
+                             or <literal>serializable</literal> types to/from JDBC
+                             (system-level property).
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis>
+-                                <literal>true</literal> | <literal>false</literal>
++                                <literal>true|false</literal>
+                             </para>
+                         </entry>
+                     </row>
+@@ -496,7 +493,6 @@
+                             identifier generators. By default, tries to determine the driver capabilites
+                             using connection metadata.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis>
+                                 <literal>true|false</literal>
+                             </para>
+                         </entry>
+@@ -510,8 +506,7 @@
+                             property, default is to use CGLIB where possible). Reflection
+                             can sometimes be useful when troubleshooting.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+-                                <literal>true</literal> | <literal>false</literal>
++                                <literal>true|false</literal>
+                             </para>
+                         </entry>
+                     </row>
+@@ -561,10 +556,22 @@
+                     </row>
+                     <row>
+                         <entry>
++                            <literal>hibernate.cache.enabled</literal>
++                        </entry>
++                        <entry>
++                            Enable or disable the second-level cache globally (default true).
++                            <para>
++                                <literal>true|false</literal>
++                            </para>
++                        </entry>
++                    </row>
++                    <row>
++                        <entry>
+                             <literal>hibernate.cache.provider_class</literal>
+                         </entry>
+                         <entry>
+-                            The classname of a custom <literal>CacheProvider</literal>.
++                            The classname of a custom <literal>CacheProvider</literal>,
++                            defaults to the EHCache provider.
+                             <para>
+                                 <emphasis role="strong">eg.</emphasis> 
+                                 <literal>classname.of.CacheProvider</literal>
+@@ -579,7 +586,6 @@
+                             Optimize second-level cache operation to minimize writes, at the
+                             cost of more frequent reads (useful for clustered caches).
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+                                 <literal>true|false</literal>
+                             </para>
+                         </entry>
+@@ -591,7 +597,6 @@
+                         <entry>
+                             Enable the query cache, individual queries still have to be set cachable.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+                                 <literal>true|false</literal>
+                             </para>
+                         </entry>
+@@ -669,8 +674,7 @@
+                         <entry>
+                             Write all SQL statements to console.
+                             <para>
+-                                <emphasis role="strong">eg.</emphasis> 
+-                                <literal>true</literal> | <literal>false</literal>
++                                <literal>true|false</literal>
+                             </para>
+                         </entry>
+                     </row>
+Index: src/hibernate.properties
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/hibernate.properties,v
+retrieving revision 1.19.2.21
+diff -u -r1.19.2.21 hibernate.properties
+--- src/hibernate.properties	6 May 2004 23:44:25 -0000	1.19.2.21
++++ src/hibernate.properties	8 May 2004 20:20:31 -0000
+@@ -368,7 +368,12 @@
+ ### Second-level Cache ###
+ ##########################
+ 
+-## optimize chache for minimal "puts" instead of minimal "gets" (good for clustered cache) 
++## enable the second-level cache (enabled by default)
++
++#hibernate.cache.enabled false
++
++
++## optimize chache for minimal "puts" instead of minimal "gets" (good for clustered cache)
+ 
+ #hibernate.cache.use_minimal_puts true
+ 
+Index: src/net/sf/hibernate/cfg/Binder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Binder.java,v
+retrieving revision 1.26.2.62
+diff -u -r1.26.2.62 Binder.java
+--- src/net/sf/hibernate/cfg/Binder.java	20 Feb 2004 17:01:51 -0000	1.26.2.62
++++ src/net/sf/hibernate/cfg/Binder.java	8 May 2004 20:20:36 -0000
+@@ -344,7 +344,8 @@
+ 				model.setPolymorphic(true);
+ 				if ( "true".equals( subnode.attributeValue("force") ) ) model.setForceDiscriminator(true);
+ 			}
+-			else if ( "jcs-cache".equals(name) || "cache".equals(name) ) {
++			else if ( ("jcs-cache".equals(name) || "cache".equals(name))
++			          && Environment.useCache() ) {
+ 				String className = model.getMappedClass().getName();
+ 				CacheConcurrencyStrategy cache = CacheFactory.createCache( 
+ 					subnode, className, model.isMutable() 
+@@ -1209,7 +1210,8 @@
+ 				model.setElement(element);
+ 				bindAny(subnode, element, true, mappings);
+ 			}
+-			else if ( "jcs-cache".equals(name) || "cache".equals(name) ) {
++			else if ( ("jcs-cache".equals(name) || "cache".equals(name))
++					  && Environment.useCache() ) {
+ 				CacheConcurrencyStrategy cache = CacheFactory.createCache( 
+ 					subnode, model.getRole(), model.getOwner().isMutable()
+ 				);
+Index: src/net/sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.27.2.32
+diff -u -r1.27.2.32 Configuration.java
+--- src/net/sf/hibernate/cfg/Configuration.java	1 Apr 2004 07:32:18 -0000	1.27.2.32
++++ src/net/sf/hibernate/cfg/Configuration.java	8 May 2004 20:20:40 -0000
+@@ -1090,8 +1090,13 @@
+ 		//      cache provider property and rebuilding the SessionFactory
+ 		//      will affect existing SessionFactory!
+ 
+-		log.info("instantiating and configuring caches");
+-		
++		if ( !settings.isCacheEnabled() ) {
++			log.info("Disabling second-level cache globally");
++			return;
++		}
++
++		log.info("Instantiating and configuring caches");
++
+ 		String prefix = properties.getProperty(Environment.CACHE_REGION_PREFIX);
+ 		
+ 		Iterator iter = caches.entrySet().iterator();
+Index: src/net/sf/hibernate/cfg/Environment.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Environment.java,v
+retrieving revision 1.18.2.28
+diff -u -r1.18.2.28 Environment.java
+--- src/net/sf/hibernate/cfg/Environment.java	23 Apr 2004 09:31:49 -0000	1.18.2.28
++++ src/net/sf/hibernate/cfg/Environment.java	8 May 2004 20:20:43 -0000
+@@ -374,11 +374,15 @@
+ 	public static final String USER_TRANSACTION = "jta.UserTransaction";
+ 	
+ 	/**
++	 * Enable or disable the second-level cache globally
++	 */
++	public static final String USE_CACHE = "hibernate.cache.enabled";
++	/**
+ 	 * The <tt>CacheProvider</tt> implementation class
+ 	 */
+ 	public static final String CACHE_PROVIDER = "hibernate.cache.provider_class";
+ 	/**
+-	 * The <tt>CacheProvider</tt> implementation class
++	 * Enable caching of HQL and SQL queries, individual queries still have to be set cachable
+ 	 */
+ 	public static final String USE_QUERY_CACHE = "hibernate.cache.use_query_cache";
+ 	/**
+@@ -432,7 +436,8 @@
+ 	 * @deprecated
+ 	 */
+ 	public static final String USE_JDBC_BATCH = "hibernate.use_jdbc_batch";
+-	
++
++	private static final boolean ENABLE_CACHE;
+ 	private static final boolean ENABLE_BINARY_STREAMS;
+ 	private static final boolean ENABLE_REFLECTION_OPTIMIZER;
+ 	private static final boolean JVM_SUPPORTS_LINKED_HASH_COLLECTIONS;
+@@ -511,7 +516,8 @@
+ 		GLOBAL_PROPERTIES.putAll( System.getProperties() );
+ 		
+ 		verifyProperties(GLOBAL_PROPERTIES);
+-		
++
++		ENABLE_CACHE = PropertiesHelper.getBoolean(USE_CACHE, GLOBAL_PROPERTIES, true);
+ 		ENABLE_BINARY_STREAMS = PropertiesHelper.getBoolean(USE_STREAMS_FOR_BINARY, GLOBAL_PROPERTIES);
+ 		ENABLE_REFLECTION_OPTIMIZER = PropertiesHelper.getBoolean(USE_REFLECTION_OPTIMIZER, GLOBAL_PROPERTIES);
+ 		
+@@ -573,6 +579,15 @@
+ 	}
+ 	
+ 	/**
++	 * Should we enable the second-level cache (default true).
++	 * Property <tt>hibernate.cache.enabled</tt>
++	 * @see Environment#USE_CACHE
++	 */
++	 public static boolean useCache() {
++		return ENABLE_CACHE;
++	}
++
++	/**
+ 	 * Should we use streams to bind binary types to JDBC IN parameters.
+ 	 * Property <tt>hibernate.jdbc.use_streams_for_binary</tt>.
+ 	 * @see Environment#USE_STREAMS_FOR_BINARY
+Index: src/net/sf/hibernate/cfg/Settings.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Attic/Settings.java,v
+retrieving revision 1.1.2.11
+diff -u -r1.1.2.11 Settings.java
+--- src/net/sf/hibernate/cfg/Settings.java	4 Feb 2004 18:56:45 -0000	1.1.2.11
++++ src/net/sf/hibernate/cfg/Settings.java	8 May 2004 20:20:43 -0000
+@@ -33,6 +33,7 @@
+ 	private boolean autoCreateSchema;
+ 	private boolean autoDropSchema;
+ 	private boolean autoUpdateSchema;
++	private boolean cacheEnabled;
+ 	private CacheProvider cacheProvider;
+ 	private boolean queryCacheEnabled;
+ 	private boolean minimalPutsEnabled;
+@@ -173,6 +174,14 @@
+ 		maximumFetchDepth = i;
+ 	}
+ 
++	public boolean isCacheEnabled() {
++		return cacheEnabled;
++	}
++
++	public void setCacheEnabled(boolean cacheEnabled) {
++		this.cacheEnabled = cacheEnabled;
++	}
++
+ 	public CacheProvider getCacheProvider() {
+ 		return cacheProvider;
+ 	}
+Index: src/net/sf/hibernate/cfg/SettingsFactory.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Attic/SettingsFactory.java,v
+retrieving revision 1.1.2.17
+diff -u -r1.1.2.17 SettingsFactory.java
+--- src/net/sf/hibernate/cfg/SettingsFactory.java	9 Mar 2004 20:26:24 -0000	1.1.2.17
++++ src/net/sf/hibernate/cfg/SettingsFactory.java	8 May 2004 20:20:43 -0000
+@@ -123,16 +123,19 @@
+ 			settings.setAutoCreateSchema(true);
+ 			settings.setAutoDropSchema(true);
+ 		}
+-		
+-		String cacheClassName = PropertiesHelper.getString(Environment.CACHE_PROVIDER, properties, "net.sf.ehcache.hibernate.Provider");
+-		log.info("cache provider: " + cacheClassName);
+-		try {
+-			settings.setCacheProvider( (CacheProvider) ReflectHelper.classForName(cacheClassName).newInstance() );
+-		}
+-		catch (Exception cnfe) {
+-			throw new HibernateException("could not instantiate CacheProvider: " + cacheClassName, cnfe);
++
++		settings.setCacheEnabled( Environment.useCache() );
++		if ( settings.isCacheEnabled() ) {
++			String cacheClassName = PropertiesHelper.getString(Environment.CACHE_PROVIDER, properties, "net.sf.ehcache.hibernate.Provider");
++			log.info("cache provider: " + cacheClassName);
++			try {
++				settings.setCacheProvider( (CacheProvider) ReflectHelper.classForName(cacheClassName).newInstance() );
++			}
++			catch (Exception cnfe) {
++				throw new HibernateException("could not instantiate CacheProvider: " + cacheClassName, cnfe);
++			}
+ 		}
+-		
++
+ 		boolean useQueryCache = PropertiesHelper.getBoolean(Environment.USE_QUERY_CACHE, properties);
+ 		
+ 		String sessionFactoryName = properties.getProperty(Environment.SESSION_FACTORY_NAME);
+Index: src/net/sf/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.26.2.35
+diff -u -r1.26.2.35 SessionFactoryImpl.java
+--- src/net/sf/hibernate/impl/SessionFactoryImpl.java	20 Jan 2004 18:30:28 -0000	1.26.2.35
++++ src/net/sf/hibernate/impl/SessionFactoryImpl.java	8 May 2004 20:20:49 -0000
+@@ -207,7 +207,7 @@
+ 			transactionManager = null;
+ 		}
+ 		
+-		if ( settings.isQueryCacheEnabled() ) {
++		if ( settings.isCacheEnabled() && settings.isQueryCacheEnabled() ) {
+ 			updateTimestampsCache = new UpdateTimestampsCache( settings.getCacheProvider(), properties );
+ 			queryCache = new QueryCache( settings.getCacheProvider(), properties, updateTimestampsCache, null );
+ 			queryCaches = Collections.synchronizedMap( new HashMap() );
+@@ -321,7 +321,8 @@
+ 		// returns an older JDBC connection that was associated with a
+ 		// transaction that was already begun before openSession() was called
+ 		// (don't know any possible solution to this!)
+-		long timestamp = settings.getCacheProvider().nextTimestamp();
++		long timestamp = Long.MIN_VALUE;
++		if ( settings.isCacheEnabled() ) timestamp = settings.getCacheProvider().nextTimestamp();
+ 		return openSession( null, true, timestamp, interceptor );
+ 	}
+ 	
+@@ -548,8 +549,8 @@
+ 		finally {
+ 			SessionFactoryObjectFactory.removeInstance(uuid, name, properties);
+ 		}
+-		
+-		if ( isQueryCacheEnabled() )  {
++
++		if ( settings.isCacheEnabled() && isQueryCacheEnabled())  {
+ 			queryCache.destroy();
+ 
+ 			iter = queryCaches.values().iterator();
+@@ -642,7 +643,7 @@
+ 	}
+ 
+ 	public boolean isQueryCacheEnabled() {
+-		return settings.isQueryCacheEnabled();
++		return (settings.isCacheEnabled() && settings.isQueryCacheEnabled());
+ 	}
+ 
+ 	public void evictQueries() throws HibernateException {

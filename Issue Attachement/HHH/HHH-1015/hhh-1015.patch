@@ -1,0 +1,182 @@
+Index: core/src/main/java/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- core/src/main/java/org/hibernate/cfg/HbmBinder.java	(revision 15615)
++++ core/src/main/java/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -2399,7 +2399,55 @@
+ 				throw new MappingException( "Association references unmapped class: " + assocClass );
+ 			}
+ 			oneToMany.setAssociatedClass( persistentClass );
+-			collection.setCollectionTable( persistentClass.getTable() );
++			Table collectionTable = persistentClass.getTable();
++			
++			if (collection.isInverse() && persistentClass.getJoinClosureSpan() != 0) {
++				Element keyNode = node.element("key");
++				if (keyNode != null) {
++					// collect all column names that will be used to find the reverse property.
++					
++					java.util.List keyColumnNames = new ArrayList();
++					Attribute columnAttribute = keyNode.attribute( "column" );
++					if ( columnAttribute != null ) {
++						keyColumnNames.add(columnAttribute.getValue());
++					} else {
++						java.util.List keyColumns = keyNode.elements( "column" );
++						for (Iterator keyColumnIterator = keyColumns.iterator(); keyColumnIterator.hasNext();) {
++							Element keyColumn = (Element)keyColumnIterator.next();
++							keyColumnNames.add(keyColumn.attribute( "name" ).getValue());
++						}
++					}
++					
++					for (Iterator propertiesIterator = persistentClass.getPropertyIterator(); propertiesIterator.hasNext();) {
++						Property property = (Property)propertiesIterator.next();
++						if (property.getColumnSpan() == keyColumnNames.size() && property.getPersistentClass().equals(persistentClass)) {
++							boolean propertyMatch = true;
++							
++							for (Iterator propertyColumnIterator = property.getColumnIterator(); propertyColumnIterator.hasNext();) {
++								Object propertyColumn = propertyColumnIterator.next();
++								if (propertyColumn instanceof Column) {
++									String propertyColumnName = ((Column) propertyColumn).getName();
++									if (!keyColumnNames.contains("`" + propertyColumnName + "`") && !keyColumnNames.contains(propertyColumnName)) {
++										propertyMatch = false;
++										continue;
++									}
++								} else {
++									propertyMatch = false;
++									// we found Formula - skip the property
++									continue;
++								}
++							}
++							
++							if (propertyMatch && property.getValue() != null && property.getValue().getTable() != null) {
++								collectionTable = property.getValue().getTable();
++								break;
++							}
++						}
++					}
++				}
++			}
++			
++			collection.setCollectionTable( collectionTable );
+ 
+ 			log.info(
+ 					"Mapping collection: " + collection.getRole() +
+Index: core/src/main/java/org/hibernate/loader/collection/OneToManyJoinWalker.java
+===================================================================
+--- core/src/main/java/org/hibernate/loader/collection/OneToManyJoinWalker.java	(revision 15615)
++++ core/src/main/java/org/hibernate/loader/collection/OneToManyJoinWalker.java	(working copy)
+@@ -26,6 +26,7 @@
+ 
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ 
+@@ -34,8 +35,11 @@
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.loader.BasicLoader;
+ import org.hibernate.loader.OuterJoinableAssociation;
++import org.hibernate.metadata.ClassMetadata;
+ import org.hibernate.persister.collection.QueryableCollection;
++import org.hibernate.persister.entity.AbstractEntityPersister;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
++import org.hibernate.persister.entity.SingleTableEntityPersister;
+ import org.hibernate.sql.JoinFragment;
+ import org.hibernate.sql.Select;
+ import org.hibernate.util.CollectionHelper;
+@@ -109,8 +113,16 @@
+ 		final int collectionJoins = countCollectionPersisters( associations ) + 1;
+ 		collectionSuffixes = BasicLoader.generateSuffixes( joins + 1, collectionJoins );
+ 
++
++		String keyColumnAlias = alias;
++		
++		if (elementPersister instanceof SingleTableEntityPersister) {
++			SingleTableEntityPersister singleTablePersister = (SingleTableEntityPersister) elementPersister;
++			keyColumnAlias = singleTablePersister.getIdentifierTableAlias(keyColumnAlias, oneToManyPersister.getKeyColumnNames());
++		}
++		
+ 		StringBuffer whereString = whereString(
+-				alias, 
++				keyColumnAlias, 
+ 				oneToManyPersister.getKeyColumnNames(), 
+ 				subquery,
+ 				batchSize
+Index: core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java	(revision 15615)
++++ core/src/main/java/org/hibernate/persister/collection/OneToManyPersister.java	(working copy)
+@@ -46,9 +46,12 @@
+ import org.hibernate.loader.collection.SubselectOneToManyLoader;
+ import org.hibernate.loader.entity.CollectionElementLoader;
+ import org.hibernate.mapping.Collection;
++import org.hibernate.persister.entity.EntityPersister;
+ import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
++import org.hibernate.persister.entity.SingleTableEntityPersister;
+ import org.hibernate.pretty.MessageHelper;
++import org.hibernate.sql.SelectFragment;
+ import org.hibernate.sql.Update;
+ import org.hibernate.util.ArrayHelper;
+ 
+@@ -384,4 +387,17 @@
+ 				.loadElement( session, key, incrementIndexByBase(index) );
+ 	}
+ 
++	
++	protected SelectFragment generateSelectFragment(String alias, String columnSuffix) {
++		EntityPersister elementPersister = getElementPersister();
++		if (elementPersister instanceof SingleTableEntityPersister) {
++			return new SelectFragment()
++					.setSuffix( columnSuffix )
++					.addColumns(  ((SingleTableEntityPersister)elementPersister).getIdentifierTableAlias(alias, keyColumnNames), keyColumnNames, keyColumnAliases );
++		} 
++		return new SelectFragment()
++				.setSuffix( columnSuffix )
++				.addColumns(  alias, keyColumnNames, keyColumnAliases );
++	}
++
+ }
+Index: core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 15615)
++++ core/src/main/java/org/hibernate/persister/entity/SingleTableEntityPersister.java	(working copy)
+@@ -733,4 +733,39 @@
+ 	public String[][] getContraintOrderedTableKeyColumnClosure() {
+ 		return constraintOrderedKeyColumnNames;
+ 	}
++	
++	public String getIdentifierTableAlias(String alias, String[] keyColumnNames) {
++		String result = alias;
++		
++		final int tableSpan = getSubclassTableSpan();
++		if (tableSpan > 1) {// check for SecondaryTable
++			
++			int[] tableNumbers = new int[keyColumnNames.length];
++			
++			for (int i = 0; i < keyColumnNames.length; i++) {
++				String keyColumnName = keyColumnNames[i];
++				for (int j = 0; j < getSubclassColumnClosure().length; j++) {
++					String columnName = getSubclassColumnClosure()[j];
++					if (keyColumnName.equals(columnName)) {
++						tableNumbers[i] = getSubclassColumnTableNumberClosure()[j];
++					}
++				}
++			}
++			
++			boolean tableNumbersAreEquals = (tableNumbers.length == 1);
++			
++			for (int i = 0; i < tableNumbers.length; i++) {
++				if (i > 0 && tableNumbers[i] == tableNumbers[i - 1]) {
++					tableNumbersAreEquals = false;
++					break;
++				}
++			}
++			if (tableNumbersAreEquals && tableNumbers[0] != 0) { // we found that the key columns are defined not in the base table
++				int tableNumber = tableNumbers[0];
++				result = generateTableAlias(result, tableNumber);
++			}
++		}
++		
++		return result;
++	}
+ }

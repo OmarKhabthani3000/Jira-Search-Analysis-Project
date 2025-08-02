@@ -1,0 +1,221 @@
+Index: C:/java/workspace/hibernate-3.2/src/org/hibernate/tool/hbm2ddl/SchemaUpdate.java
+===================================================================
+--- C:/java/workspace/hibernate-3.2/src/org/hibernate/tool/hbm2ddl/SchemaUpdate.java	(revision 10462)
++++ C:/java/workspace/hibernate-3.2/src/org/hibernate/tool/hbm2ddl/SchemaUpdate.java	(working copy)
+@@ -2,8 +2,12 @@
+ package org.hibernate.tool.hbm2ddl;
+ 
+ import java.io.FileInputStream;
++import java.io.FileWriter;
++import java.io.IOException;
++import java.io.Writer;
+ import java.sql.Connection;
+ import java.sql.SQLException;
++import java.sql.SQLWarning;
+ import java.sql.Statement;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -12,11 +16,14 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.HibernateException;
++import org.hibernate.JDBCException;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.NamingStrategy;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.dialect.Dialect;
++import org.hibernate.pretty.DDLFormatter;
+ import org.hibernate.util.ReflectHelper;
++import org.hibernate.util.JDBCExceptionReporter;
+ 
+ /**
+  * A commandline tool to update a database schema. May also be called from
+@@ -29,6 +36,10 @@
+ 	private static final Log log = LogFactory.getLog( SchemaUpdate.class );
+ 	private ConnectionHelper connectionHelper;
+ 	private Configuration configuration;
++	private String outputFile = null;
++	private String delimiter = null;
++	private boolean haltOnError = false;
++	private boolean format = true;
+ 	private Dialect dialect;
+ 	private List exceptions;
+ 
+@@ -62,6 +73,10 @@
+ 			boolean script = true;
+ 			// If true then execute db updates, otherwise just generate and display updates
+ 			boolean doUpdate = true;
++			boolean halt = false;
++			String outFile = null;
++			boolean format = false;
++			String delim = null;
+ 			String propFile = null;
+ 
+ 			for ( int i = 0; i < args.length; i++ ) {
+@@ -69,6 +84,18 @@
+ 					if ( args[i].equals( "--quiet" ) ) {
+ 						script = false;
+ 					}
++					else if ( args[i].equals( "--haltonerror" ) ) {
++						halt = true;
++					}
++					else if ( args[i].startsWith( "--output=" ) ) {
++						outFile = args[i].substring( 9 );
++					}
++					else if ( args[i].equals( "--format" ) ) {
++						format = true;
++					}
++					else if ( args[i].startsWith( "--delimiter=" ) ) {
++						delim = args[i].substring( 12 );
++					}
+ 					else if ( args[i].startsWith( "--properties=" ) ) {
+ 						propFile = args[i].substring( 13 );
+ 					}
+@@ -97,7 +124,12 @@
+ 				cfg.setProperties( props );
+ 			}
+ 
+-			new SchemaUpdate( cfg ).execute( script, doUpdate );
++			SchemaUpdate su = new SchemaUpdate( cfg )
++				.setHaltOnError( halt )
++				.setOutputFile( outFile )
++				.setDelimiter( delim )
++				.setFormat( format );
++			su.execute( script, doUpdate );
+ 		}
+ 		catch ( Exception e ) {
+ 			log.error( "Error running schema update", e );
+@@ -105,6 +137,40 @@
+ 		}
+ 	}
+ 
++	private String format(String sql) {
++		return format ?
++		       new DDLFormatter( sql ).format() :
++		       sql;
++	}
++
++	private void execute(boolean script, boolean export, Writer fileOutput, Statement statement, final String sql)
++			throws IOException, SQLException {
++		String formatted = format( sql );
++		if ( delimiter != null ) {
++			formatted += delimiter;
++		}
++		if ( script ) {
++			System.out.println( formatted );
++		}
++		log.debug( formatted );
++		if ( outputFile != null ) {
++			fileOutput.write( formatted + "\n" );
++		}
++		if ( export ) {
++			statement.executeUpdate( sql );
++			try {
++				SQLWarning warnings = statement.getWarnings();
++				if ( warnings != null) {
++					JDBCExceptionReporter.logWarnings( warnings );
++					connectionHelper.getConnection().clearWarnings();
++				}
++			}
++			catch( SQLException sqle ) {
++				log.warn( "unable to log SQLWarnings : " + sqle );
++			}
++		}
++	}
++
+ 	/**
+ 	 * Execute the schema updates
+ 	 *
+@@ -114,6 +180,7 @@
+ 
+ 		log.info( "Running hbm2ddl schema update" );
+ 
++		Writer outputFileWriter = null;
+ 		Connection connection = null;
+ 		Statement stmt = null;
+ 
+@@ -121,6 +188,11 @@
+ 
+ 		try {
+ 
++			if ( outputFile != null ) {
++				log.info( "writing generated schema to file: " + outputFile );
++				outputFileWriter = new FileWriter( outputFile );
++			}
++
+ 			DatabaseMetadata meta;
+ 			try {
+ 				log.info( "fetching database metadata" );
+@@ -139,20 +211,15 @@
+ 
+ 			String[] createSQL = configuration.generateSchemaUpdateScript( dialect, meta );
+ 			for ( int j = 0; j < createSQL.length; j++ ) {
+-
+-				final String sql = createSQL[j];
+ 				try {
+-					if ( script ) {
+-						System.out.println( sql );
+-					}
+-					if ( doUpdate ) {
+-						log.debug( sql );
+-						stmt.executeUpdate( sql );
+-					}
++					execute( script, doUpdate, outputFileWriter, stmt, createSQL[j] );
+ 				}
+ 				catch ( SQLException e ) {
++					if ( haltOnError ) {
++						throw new JDBCException( "Error during DDL update export", e );
++					}
+ 					exceptions.add( e );
+-					log.error( "Unsuccessful: " + sql );
++					log.error( "Unsuccessful: " + createSQL[j] );
+ 					log.error( e.getMessage() );
+ 				}
+ 			}
+@@ -177,10 +244,46 @@
+ 				log.error( "Error closing connection", e );
+ 			}
+ 
++			try {
++				if ( outputFileWriter != null ) {
++					outputFileWriter.close();
++				}
++			}
++			catch ( IOException ioe ) {
++				exceptions.add( ioe );
++				log.error( "Error closing output file: " + outputFile, ioe );
++			}
++
+ 		}
+ 	}
+ 
++	public SchemaUpdate setFormat(boolean format) {
++		this.format = format;
++		return this;
++	}
++
++	public SchemaUpdate setHaltOnError(boolean haltOnError) {
++		this.haltOnError = haltOnError;
++		return this;
++	}
++	
+ 	/**
++	 * Set an output filename. The generated script will be written to this file.
++	 */
++	public SchemaUpdate setOutputFile(String filename) {
++		outputFile = filename;
++		return this;
++	}
++
++	/**
++	 * Set the end of statement delimiter
++	 */
++	public SchemaUpdate setDelimiter(String delimiter) {
++		this.delimiter = delimiter;
++		return this;
++	}
++
++	/**
+ 	 * Returns a List of all Exceptions which occured during the export.
+ 	 *
+ 	 * @return A List containig the Exceptions occured during the export

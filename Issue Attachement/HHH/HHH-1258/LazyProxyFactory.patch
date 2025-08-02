@@ -1,0 +1,151 @@
+Index: hibernate/cfg/Environment.java
+===================================================================
+--- hibernate/cfg/Environment.java	(revision 10874)
++++ hibernate/cfg/Environment.java	(working copy)
+@@ -410,6 +410,11 @@
+ 	 */
+ 	public static final String USE_REFLECTION_OPTIMIZER = "hibernate.bytecode.use_reflection_optimizer";
+ 
++    /**
++     * Use bytecode libraries optimized property access
++     */
++    public static final String USE_LAZY_PROXY_FACTORY = "hibernate.use_lazy_proxy_factory";
++
+ 	/**
+ 	 * The classname of the HQL query parser factory
+ 	 */
+@@ -460,7 +465,8 @@
+ 	private static final BytecodeProvider BYTECODE_PROVIDER_INSTANCE;
+ 	private static final boolean ENABLE_BINARY_STREAMS;
+ 	private static final boolean ENABLE_REFLECTION_OPTIMIZER;
+-	private static final boolean JVM_SUPPORTS_LINKED_HASH_COLLECTIONS;
++    private static final boolean ENABLE_LAZY_PROXY_FACTORY;
++    private static final boolean JVM_SUPPORTS_LINKED_HASH_COLLECTIONS;
+ 	private static final boolean JVM_HAS_TIMESTAMP_BUG;
+ 	private static final boolean JVM_HAS_JDK14_TIMESTAMP;
+ 	private static final boolean JVM_SUPPORTS_GET_GENERATED_KEYS;
+@@ -544,6 +550,7 @@
+ 
+ 		ENABLE_BINARY_STREAMS = PropertiesHelper.getBoolean(USE_STREAMS_FOR_BINARY, GLOBAL_PROPERTIES);
+ 		ENABLE_REFLECTION_OPTIMIZER = PropertiesHelper.getBoolean(USE_REFLECTION_OPTIMIZER, GLOBAL_PROPERTIES);
++        ENABLE_LAZY_PROXY_FACTORY = PropertiesHelper.getBoolean(USE_LAZY_PROXY_FACTORY, GLOBAL_PROPERTIES);
+ 
+ 		if (ENABLE_BINARY_STREAMS) {
+ 			log.info("using java.io streams to persist binary types");
+@@ -637,6 +644,15 @@
+ 		return ENABLE_REFLECTION_OPTIMIZER;
+ 	}
+ 
++    /**
++     * Should we lazily create proxy factories to improve startup speed.
++     * Property <tt>hibernate.use_lazy_proxy_factory</tt>.
++     * @see Environment#USE_LAZY_PROXY_FACTORY
++     */
++    public static boolean useLazyProxyFactory() {
++        return ENABLE_LAZY_PROXY_FACTORY;
++    }
++
+ 	private Environment() { throw new UnsupportedOperationException(); }
+ 
+ 	/**
+Index: hibernate/tuple/entity/AbstractEntityTuplizer.java
+===================================================================
+--- hibernate/tuple/entity/AbstractEntityTuplizer.java	(revision 10874)
++++ hibernate/tuple/entity/AbstractEntityTuplizer.java	(working copy)
+@@ -5,10 +5,12 @@
+ import java.util.Iterator;
+ import java.util.Map;
+ import java.util.Set;
++import java.lang.reflect.Method;
+ 
+ import org.hibernate.EntityMode;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
++import org.hibernate.cfg.Environment;
+ import org.hibernate.tuple.Instantiator;
+ import org.hibernate.tuple.VersionProperty;
+ import org.hibernate.tuple.StandardProperty;
+@@ -22,6 +24,7 @@
+ import org.hibernate.property.Getter;
+ import org.hibernate.property.Setter;
+ import org.hibernate.proxy.ProxyFactory;
++import org.hibernate.proxy.HibernateProxy;
+ import org.hibernate.type.AbstractComponentType;
+ import org.hibernate.type.ComponentType;
+ 
+@@ -46,7 +49,7 @@
+ 	protected final int propertySpan;
+ 	protected final boolean hasCustomAccessors;
+ 	private final Instantiator instantiator;
+-	private final ProxyFactory proxyFactory;
++	private ProxyFactory proxyFactory;
+ 	private final AbstractComponentType identifierMapperType;
+ 
+ 
+@@ -132,11 +135,18 @@
+         instantiator = buildInstantiator( mappingInfo );
+ 
+ 		if ( entityMetamodel.isLazy() ) {
+-			proxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
+-			if (proxyFactory == null) {
+-				entityMetamodel.setLazy( false );
+-			}
+-		}
++            if ( Environment.useLazyProxyFactory() ) {
++                proxyFactory = new LazyProxyFactory( mappingInfo );
++            }
++            else {
++                proxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
++
++                if ( proxyFactory == null ) {
++                    // TODO: is this condition possible? should it be an exception instead?
++                    entityMetamodel.setLazy( false );
++                }
++            }
++        }
+ 		else {
+ 			proxyFactory = null;
+ 		}
+@@ -407,4 +417,42 @@
+ 		return getClass().getName() + '(' + getEntityMetamodel().getName() + ')';
+ 	}
+ 
++
++    // wrapper class to handle lazy building of the proxy factory
++    class LazyProxyFactory implements ProxyFactory
++    {
++        private PersistentClass mappingInfo;
++
++        private ProxyFactory realProxyFactory;
++
++        public LazyProxyFactory( PersistentClass mappingInfo )
++        {
++            this.mappingInfo = mappingInfo;
++            realProxyFactory = null;
++        }
++
++        public void postInstantiate( String entityName, Class persistentClass, Set interfaces, Method getIdentifierMethod, Method setIdentifierMethod, AbstractComponentType componentIdType ) throws HibernateException
++        {
++            // do nothing
++        }
++
++        public synchronized HibernateProxy getProxy( Serializable id, SessionImplementor session ) throws HibernateException
++        {
++            if ( realProxyFactory == null )
++            {
++                ProxyFactory proxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
++
++                // check for null return from build proxy factory
++                if ( proxyFactory == null )
++                    throw new HibernateException( "Failed to lazily build proxy factory for entity " + entityMetamodel.getName() + ". Please disable the " + Environment.USE_LAZY_PROXY_FACTORY + " configuration option." );
++
++                realProxyFactory = proxyFactory;
++
++                // null out the mapping info for GC, no longer needed
++                mappingInfo = null;
++            }
++
++            return realProxyFactory.getProxy( id, session );
++        }
++    }
+ }

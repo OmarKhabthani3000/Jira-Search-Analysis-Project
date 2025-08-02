@@ -1,0 +1,574 @@
+@Entity
+public class Application implements ProcessActivity {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String name;
+    private LocalDate startDate;
+    private ZonedDateTime submittedDate;
+    private Boolean resubmission;
+    private String previousApplicationNumber;
+    private String previousApplicationTitle;
+    @Column(name = "manage_funding_email_date")
+    private ZonedDateTime manageDecisionEmailDate;
+    private Long previousApplicationId;
+    private LocalDate feedbackReleased;
+
+    @Min(0)
+    private Long durationInMonths; // in months
+    @Min(0)
+    @Max(100)
+    private BigDecimal completion = BigDecimal.ZERO;
+
+    @OneToMany(mappedBy = "applicationId")
+    private List<ProcessRole> processRoles = new ArrayList<>();
+
+    @OneToMany(mappedBy = "application")
+    private List<ApplicationFinance> applicationFinances = new ArrayList<>();
+
+    @OneToMany(mappedBy = "target")
+    private List<Assessment> assessments = new ArrayList<>();
+
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "competition", referencedColumnName = "id")
+    private Competition competition;
+
+    @OneToMany(mappedBy = "application")
+    private List<ApplicationInvite> invites;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "funding_decision", columnDefinition = "varchar(16)")
+    private DecisionStatus decision;
+
+    @OneToMany(mappedBy = "application", fetch = FetchType.LAZY, cascade = {CascadeType.REMOVE, CascadeType.PERSIST})
+    private List<FormInputResponse> formInputResponses = new ArrayList<>();
+
+    @OneToOne(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private ApplicationResearchCategoryLink researchCategory;
+
+    @OneToOne(mappedBy = "application", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    private ApplicationInnovationAreaLink innovationArea;
+
+    @OneToOne(mappedBy = "target", cascade = CascadeType.ALL, optional=false, fetch = FetchType.LAZY)
+    private ApplicationProcess applicationProcess;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name="assessment_period_id", referencedColumnName="id")
+    private AssessmentPeriod assessmentPeriod;
+
+    private boolean noInnovationAreaApplicable;
+
+    private Boolean stateAidAgreed;
+
+    private boolean inAssessmentReviewPanel;
+
+    @Enumerated(EnumType.STRING)
+    @Column(columnDefinition = "varchar(255)")
+    private CompetitionReferralSource competitionReferralSource;
+
+    @Enumerated(EnumType.STRING)
+    @Column(columnDefinition = "varchar(255)")
+    private CompanyAge companyAge;
+
+    @Enumerated(EnumType.STRING)
+    @Column(columnDefinition = "varchar(255)")
+    private CompanyPrimaryFocus companyPrimaryFocus;
+
+    @OneToOne(mappedBy = "application", fetch = FetchType.LAZY)
+    private Project project;
+
+    @OneToOne(mappedBy = "application", fetch = FetchType.LAZY)
+    private ProjectToBeCreated projectToBeCreated;
+
+    @OneToOne(fetch = FetchType.LAZY, cascade = CascadeType.ALL)
+    @JoinColumn(name = "applicationExternalConfigId", referencedColumnName = "id")
+    private ApplicationExternalConfig applicationExternalConfig;
+
+    @OneToOne(mappedBy = "application", fetch = FetchType.LAZY)
+    private ApplicationExpressionOfInterestConfig applicationExpressionOfInterestConfig;
+
+    @OneToOne(mappedBy = "application", fetch = FetchType.LAZY)
+    private ApplicationEoiEvidenceResponse applicationEoiEvidenceResponse;
+
+    public Application() {
+    }
+
+    public Application(String name) {
+        this.name = name;
+        this.applicationProcess = new ApplicationProcess(this, null, ApplicationState.CREATED);
+    }
+
+    public Application(Competition competition, String name, List<ProcessRole> processRoles) {
+        this.competition = competition;
+        this.name = name;
+        this.processRoles = processRoles;
+        this.applicationProcess = new ApplicationProcess(this, null, ApplicationState.CREATED);
+    }
+
+    public Application(Application application) {
+        this.name = application.getName();
+        this.startDate = application.getStartDate();
+        this.submittedDate = application.getSubmittedDate();
+        this.resubmission = application.getResubmission();
+        this.previousApplicationNumber = application.getPreviousApplicationNumber();
+        this.previousApplicationTitle = application.getPreviousApplicationTitle();
+        this.manageDecisionEmailDate = application.getManageDecisionEmailDate();
+        this.previousApplicationId = application.getId();
+        this.durationInMonths = application.getDurationInMonths();
+        this.completion = application.getCompletion();
+        setNoInnovationAreaApplicable(application.getNoInnovationAreaApplicable());
+        this.inAssessmentReviewPanel = application.isInAssessmentReviewPanel();
+        this.competition = application.getCompetition();
+        this.decision = application.getDecision();
+        setResearchCategory(application.getResearchCategory());
+        setInnovationArea(application.getInnovationArea());
+        this.assessmentPeriod = application.getAssessmentPeriod();
+        this.competitionReferralSource = application.getCompetitionReferralSource();
+        this.companyAge = application.getCompanyAge();
+        this.companyPrimaryFocus = application.getCompanyPrimaryFocus();
+        this.applicationExpressionOfInterestConfig = application.getApplicationExpressionOfInterestConfig();
+        this.applicationEoiEvidenceResponse = application.getApplicationEoiEvidenceResponse();
+    }
+
+    protected boolean canEqual(Object other) {
+        return other instanceof Application;
+    }
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public Boolean getResubmission() {
+        return resubmission;
+    }
+
+    public void setResubmission(Boolean resubmission) {
+        this.resubmission = resubmission;
+    }
+
+    public String getPreviousApplicationNumber() {
+        return previousApplicationNumber;
+    }
+
+    public void setPreviousApplicationNumber(String previousApplicationNumber) {
+        this.previousApplicationNumber = previousApplicationNumber;
+    }
+
+    public String getPreviousApplicationTitle() {
+        return previousApplicationTitle;
+    }
+
+    public void setPreviousApplicationTitle(String previousApplicationTitle) {
+        this.previousApplicationTitle = previousApplicationTitle;
+    }
+
+    public List<ProcessRole> getProcessRoles() {
+        return processRoles;
+    }
+
+    public void setProcessRoles(List<ProcessRole> processRoles) {
+        this.processRoles = processRoles;
+    }
+
+    public void removeProcessRoles(List<ProcessRole> processRolesToRemove) {
+        processRoles.removeAll(processRolesToRemove);
+    }
+
+    public void addProcessRole(ProcessRole processRole) {
+        processRoles.add(processRole);
+    }
+
+    public Competition getCompetition() {
+        return competition;
+    }
+
+    public void setCompetition(Competition competition) {
+        this.competition = competition;
+    }
+
+    public void addUserApplicationRole(ProcessRole... processRoles) {
+        if (this.processRoles == null) {
+            this.processRoles = new ArrayList<>();
+        }
+        for (ProcessRole processRole : processRoles) {
+            if (!this.processRoles.contains(processRole)) {
+                this.processRoles.add(processRole);
+            }
+        }
+    }
+
+    public ZonedDateTime getManageDecisionEmailDate() {
+        return manageDecisionEmailDate;
+    }
+
+    public void setManageDecisionEmailDate(ZonedDateTime manageDecisionEmailDate) {
+        this.manageDecisionEmailDate = manageDecisionEmailDate;
+    }
+
+    public LocalDate getStartDate() {
+        return startDate;
+    }
+
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
+    
+    public List<ApplicationFinance> getApplicationFinances() {
+        return applicationFinances;
+    }
+
+    public void setApplicationFinances(List<ApplicationFinance> applicationFinances) {
+        this.applicationFinances = applicationFinances;
+    }
+
+    public Long getDurationInMonths() {
+        return durationInMonths;
+    }
+
+    public void setDurationInMonths(Long durationInMonths) {
+        this.durationInMonths = durationInMonths;
+    }
+
+    public ProcessRole getLeadApplicantProcessRole() {
+        return getLeadProcessRole().orElse(null);
+    }
+
+    private Optional<ProcessRole> getLeadProcessRole() {
+        return this.processRoles.stream().filter(processRole -> processRole.getRole().isLeadApplicant()).findAny();
+    }
+
+    public List<ProcessRole> getApplicantProcessRoles() {
+        return this.processRoles.stream()
+                .filter(ProcessRole::isLeadApplicantOrCollaborator)
+                .collect(toList());
+    }
+
+    public List<ProcessRole> getProcessRolesByRoles(Set<ProcessRoleType> roles) {
+        return this.processRoles.stream()
+                .filter(processRole -> roles.contains(processRole.getRole()))
+                .collect(Collectors.toList());
+    }
+
+    public List<ProcessRole> getProcessRolesByOrganisation(Long organisationId) {
+        return this.processRoles.stream()
+                .filter(processRole -> processRole.getOrganisationId().equals(organisationId))
+                .collect(Collectors.toList());
+    }
+
+    public User getLeadApplicant() {
+        return getLeadProcessRole().map(ProcessRole::getUser).orElse(null);
+    }
+
+    public Long getLeadOrganisationId() {
+        return getLeadProcessRole().map(ProcessRole::getOrganisationId).orElse(null);
+    }
+
+    public List<ApplicationInvite> getInvites() {
+        return this.invites;
+    }
+
+    public void setInvites(List<ApplicationInvite> invites) {
+        this.invites = invites;
+    }
+
+    public boolean isOpen() {
+        return applicationProcess.isInState(ApplicationState.OPENED);
+    }
+
+    public boolean isSubmitted() {
+        return applicationProcess.isInState(ApplicationState.SUBMITTED);
+    }
+
+    public ZonedDateTime getSubmittedDate() {
+        return submittedDate;
+    }
+
+    public void setSubmittedDate(ZonedDateTime submittedDate) {
+        this.submittedDate = submittedDate;
+    }
+
+    public DecisionStatus getDecision() {
+        return decision;
+    }
+
+    public void setDecision(DecisionStatus decision) {
+        this.decision = decision;
+    }
+
+    public List<FormInputResponse> getFormInputResponses() {
+        return formInputResponses;
+    }
+
+    public void setFormInputResponses(List<FormInputResponse> formInputResponses) {
+        this.formInputResponses = formInputResponses;
+    }
+
+    public Project getProject() {
+        return project;
+    }
+
+    public void setProject(Project project) {
+        this.project = project;
+    }
+
+    public Long getPreviousApplicationId() {
+        return previousApplicationId;
+    }
+
+    public void setPreviousApplicationId(Long previousApplicationId) {
+        this.previousApplicationId = previousApplicationId;
+    }
+
+    public void addFormInputResponse(FormInputResponse formInputResponse, ProcessRole processRole) {
+        Optional<FormInputResponse> existing = getFormInputResponseByFormInputAndProcessRole(formInputResponse.getFormInput(), processRole);
+        if (existing.isPresent()) {
+            existing.get().setFileEntries(formInputResponse.getFileEntries());
+            existing.get().setUpdateDate(formInputResponse.getUpdateDate());
+            existing.get().setUpdatedBy(formInputResponse.getUpdatedBy());
+            existing.get().setValue(formInputResponse.getValue());
+        } else {
+            formInputResponses.add(formInputResponse);
+        }
+    }
+
+    public Optional<FormInputResponse> getFormInputResponseByFormInputAndProcessRole(FormInput formInput, ProcessRole processRole) {
+        if (formInput.getQuestion().getMultipleStatuses()) {
+            return formInputResponses.stream().filter(fir -> formInput.equals(fir.getFormInput())
+                    && fir.getUpdatedBy().getOrganisationId().equals(processRole.getOrganisationId())).findFirst();
+        } else {
+            return formInputResponses.stream().filter(fir -> formInput.equals(fir.getFormInput())).findFirst();
+        }
+    }
+
+    public BigDecimal getCompletion() {
+        return completion;
+    }
+
+    public void setCompletion(final BigDecimal completion) {
+        this.completion = completion;
+    }
+
+    public ResearchCategory getResearchCategory() {
+        if(researchCategory!=null) {
+            return researchCategory.getCategory();
+        }
+
+        return null;
+    }
+
+    public void setResearchCategory(ResearchCategory newResearchCategory) {
+        if (newResearchCategory == null) {
+            researchCategory = null;
+        }
+        else {
+            researchCategory = new ApplicationResearchCategoryLink(this, newResearchCategory);
+        }
+    }
+
+    public InnovationArea getInnovationArea() {
+        if(innovationArea!=null) {
+            return innovationArea.getCategory();
+        }
+
+        return null;
+    }
+
+    public void setInnovationArea(InnovationArea newInnovationArea) {
+        if (newInnovationArea == null) {
+            innovationArea = null;
+        }
+        else {
+            if (this.noInnovationAreaApplicable) {
+                throw new IllegalStateException("InnovationArea not reconcilable with current value of noInnovationAreaApplies.");
+            }
+            innovationArea = new ApplicationInnovationAreaLink(this, newInnovationArea);
+        }
+    }
+
+    public boolean getNoInnovationAreaApplicable()
+    {
+        return noInnovationAreaApplicable;
+    }
+
+    public void setNoInnovationAreaApplicable(boolean noInnovationAreaApplicable) {
+        if (noInnovationAreaApplicable && innovationArea != null) {
+            throw new IllegalStateException("noInnovationAreaApplicable cannot be set while an innovationArea is not null.");
+        }
+
+        this.noInnovationAreaApplicable = noInnovationAreaApplicable;
+    }
+
+    public ApplicationProcess getApplicationProcess() {
+        return applicationProcess;
+    }
+
+    public boolean applicationDecisionIsChangeable() {
+        return !(this.manageDecisionEmailDate != null &&
+                (decision != null && decision.equals(DecisionStatus.FUNDED)));
+    }
+
+    public boolean isInAssessmentReviewPanel() {
+        return inAssessmentReviewPanel;
+    }
+
+    public void setInAssessmentReviewPanel(boolean inAssessmentReviewPanel) {
+        this.inAssessmentReviewPanel = inAssessmentReviewPanel;
+    }
+
+    public boolean isCollaborativeProject() {
+        CollaborationLevel collaborationLevel = competition.getCollaborationLevel();
+
+        // A project is collaborative if the competition is collaborative or if there is more than a single
+        // organisation when the competition supports collaboration
+
+        if (collaborationLevel == null) {
+            return false;
+        }
+
+        switch (collaborationLevel) {
+            case SINGLE:
+                return false;
+            case COLLABORATIVE:
+                return true;
+            case SINGLE_OR_COLLABORATIVE: {
+                long uniqueOrganisations = processRoles
+                        .stream()
+                        .filter(ProcessRole::isLeadApplicantOrCollaborator)
+                        .map(ProcessRole::getOrganisationId)
+                        .distinct()
+                        .count();
+                return uniqueOrganisations > 1;
+            }
+            default:
+                throw new IllegalArgumentException("Unexpected enum constant: " + collaborationLevel);
+        }
+    }
+
+    public CompetitionReferralSource getCompetitionReferralSource() {
+        return competitionReferralSource;
+    }
+
+    public void setCompetitionReferralSource(CompetitionReferralSource competitionReferralSource) {
+        this.competitionReferralSource = competitionReferralSource;
+    }
+
+    public CompanyAge getCompanyAge() {
+        return companyAge;
+    }
+
+    public void setCompanyAge(CompanyAge companyAge) {
+        this.companyAge = companyAge;
+    }
+
+    public CompanyPrimaryFocus getCompanyPrimaryFocus() {
+        return companyPrimaryFocus;
+    }
+
+    public void setCompanyPrimaryFocus(CompanyPrimaryFocus companyPrimaryFocus) {
+        this.companyPrimaryFocus = companyPrimaryFocus;
+    }
+
+    public ProjectToBeCreated getProjectToBeCreated() {
+        return projectToBeCreated;
+    }
+
+    public void setProjectToBeCreated(ProjectToBeCreated projectToBeCreated) {
+        this.projectToBeCreated = projectToBeCreated;
+    }
+
+    public LocalDate getFeedbackReleased() {
+        return feedbackReleased;
+    }
+
+    public Application setFeedbackReleased(LocalDate feedbackReleased) {
+        this.feedbackReleased = feedbackReleased;
+        return this;
+    }
+
+    public AssessmentPeriod getAssessmentPeriod() {
+        return assessmentPeriod;
+    }
+
+    public void setAssessmentPeriod(AssessmentPeriod assessmentPeriod) {
+        this.assessmentPeriod = assessmentPeriod;
+    }
+
+    public Optional<Integer> getMaxMilestoneMonth(){
+        Optional<Integer> max = Optional.of(getApplicationFinances())
+                .map(Collection::stream)
+                .orElseGet(Stream::empty)
+                .map(ApplicationFinance::getMilestones)
+                .flatMap(Collection::stream)
+                .map(ProcurementMilestone::getMonth)
+                .filter(Objects::nonNull)
+                .max(Integer::compareTo);
+        return max;
+    }
+
+    public List<Assessment> getAssessments() {
+        return assessments;
+    }
+
+    public void setAssessments(List<Assessment> assessments) {
+        this.assessments = assessments;
+    }
+
+    public ApplicationExternalConfig getApplicationExternalConfig() {
+        return applicationExternalConfig;
+    }
+
+    public void setApplicationExternalConfig(ApplicationExternalConfig applicationExternalConfig) {
+        this.applicationExternalConfig = applicationExternalConfig;
+    }
+
+    public ApplicationExpressionOfInterestConfig getApplicationExpressionOfInterestConfig() {
+        return applicationExpressionOfInterestConfig;
+    }
+
+    public void setApplicationExpressionOfInterestConfig(ApplicationExpressionOfInterestConfig applicationExpressionOfInterestConfig) {
+        this.applicationExpressionOfInterestConfig = applicationExpressionOfInterestConfig;
+    }
+
+    @Transient
+    public boolean isEnabledForExpressionOfInterest() {
+        return applicationExpressionOfInterestConfig != null ? applicationExpressionOfInterestConfig.isEnabledForExpressionOfInterest() : false;
+    }
+
+    public ApplicationEoiEvidenceResponse getApplicationEoiEvidenceResponse() {
+        return applicationEoiEvidenceResponse;
+    }
+
+    public void setApplicationEoiEvidenceResponse(ApplicationEoiEvidenceResponse applicationEoiEvidenceResponse) {
+        this.applicationEoiEvidenceResponse = applicationEoiEvidenceResponse;
+    }
+
+    public boolean expressionOfInterestEvidenceDocumentRequired() {
+        return competition.getCompetitionEoiEvidenceConfig() != null && competition.getCompetitionEoiEvidenceConfig().isEvidenceRequired();
+    }
+
+    public boolean isApplicationExpressionOfInterestEvidenceResponseReceived() {
+        return getApplicationEoiEvidenceResponse() != null && evidenceResponseSubmittedForReview();
+    }
+
+    public boolean evidenceResponseSubmittedForReview() {
+        return applicationEoiEvidenceResponse.getApplicationEoiEvidenceProcess().getProcessState() == ApplicationEoiEvidenceState.SUBMITTED;
+    }
+
+    public boolean applicationEoiEvidenceIsRequiredAndNotReceived() {
+        return expressionOfInterestEvidenceDocumentRequired() && !isApplicationExpressionOfInterestEvidenceResponseReceived();
+    }
+}

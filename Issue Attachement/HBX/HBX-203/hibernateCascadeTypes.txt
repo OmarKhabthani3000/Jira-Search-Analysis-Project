@@ -1,0 +1,378 @@
+Index: org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/metadata/src/java/org/hibernate/cfg/AnnotationBinder.java,v
+retrieving revision 1.82
+diff -u -r1.82 AnnotationBinder.java
+--- org/hibernate/cfg/AnnotationBinder.java	6 May 2005 10:57:39 -0000	1.82
++++ org/hibernate/cfg/AnnotationBinder.java	8 May 2005 17:30:46 -0000
+@@ -1,16 +1,77 @@
+ //$Id: AnnotationBinder.java,v 1.82 2005/05/06 10:57:39 epbernard Exp $
+ package org.hibernate.cfg;
+ 
++import java.lang.reflect.AnnotatedElement;
++import java.lang.reflect.Field;
++import java.lang.reflect.Method;
++import java.util.ArrayList;
++import java.util.EnumSet;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++import java.util.Properties;
++import java.util.ResourceBundle;
++import java.util.Set;
++
++import javax.persistence.AccessType;
++import javax.persistence.AssociationTable;
++import javax.persistence.AttributeOverride;
++import javax.persistence.Basic;
++import javax.persistence.Column;
++import javax.persistence.DiscriminatorType;
++import javax.persistence.Embeddable;
++import javax.persistence.Embedded;
++import javax.persistence.EmbeddedId;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedIdTable;
++import javax.persistence.GeneratorType;
++import javax.persistence.Id;
++import javax.persistence.IdClass;
++import javax.persistence.InheritanceJoinColumn;
++import javax.persistence.InheritanceJoinColumns;
++import javax.persistence.InheritanceType;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinColumns;
++import javax.persistence.Lob;
++import javax.persistence.LobType;
++import javax.persistence.ManyToMany;
++import javax.persistence.ManyToOne;
++import javax.persistence.NamedQueries;
++import javax.persistence.NamedQuery;
++import javax.persistence.OneToMany;
++import javax.persistence.OneToOne;
++import javax.persistence.SequenceGenerator;
++import javax.persistence.Serialized;
++import javax.persistence.TableGenerator;
++import javax.persistence.Transient;
++import javax.persistence.UniqueConstraint;
++import javax.persistence.Version;
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.AnnotationException;
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.FetchMode;
+ import org.hibernate.MappingException;
+-import org.hibernate.validate.ClassValidator;
+-import org.hibernate.annotations.*;
++import org.hibernate.annotations.BatchSize;
++import org.hibernate.annotations.Cache;
++import org.hibernate.annotations.Cascade;
++import org.hibernate.annotations.CascadeType;
++import org.hibernate.annotations.Check;
++import org.hibernate.annotations.Filter;
++import org.hibernate.annotations.FilterDef;
++import org.hibernate.annotations.FilterDefs;
++import org.hibernate.annotations.Filters;
++import org.hibernate.annotations.ParamDef;
++import org.hibernate.annotations.Parameter;
++import org.hibernate.annotations.Proxy;
+ import org.hibernate.annotations.Type;
+ import org.hibernate.annotations.TypeDef;
++import org.hibernate.annotations.TypeDefs;
++import org.hibernate.annotations.Where;
+ import org.hibernate.cfg.annotations.AbstractCollectionBinder;
+ import org.hibernate.cfg.annotations.EntityBinder;
+ import org.hibernate.cfg.annotations.QueryBinder;
+@@ -20,28 +81,32 @@
+ import org.hibernate.id.MultipleHiLoPerTableGenerator;
+ import org.hibernate.id.PersistentIdentifierGenerator;
+ import org.hibernate.id.TableHiLoGenerator;
+-import org.hibernate.mapping.*;
++import org.hibernate.mapping.Component;
++import org.hibernate.mapping.DependantValue;
++import org.hibernate.mapping.IdGenerator;
++import org.hibernate.mapping.Join;
++import org.hibernate.mapping.JoinedSubclass;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
++import org.hibernate.mapping.RootClass;
++import org.hibernate.mapping.SimpleValue;
++import org.hibernate.mapping.Subclass;
+ import org.hibernate.mapping.Table;
++import org.hibernate.mapping.UnionSubclass;
++import org.hibernate.mapping.Value;
+ import org.hibernate.persister.entity.JoinedSubclassEntityPersister;
+ import org.hibernate.persister.entity.SingleTableEntityPersister;
+ import org.hibernate.persister.entity.UnionSubclassEntityPersister;
+-import org.hibernate.type.*;
++import org.hibernate.type.ByteArrayBlobType;
++import org.hibernate.type.CharacterArrayClobType;
++import org.hibernate.type.ForeignKeyDirection;
++import org.hibernate.type.PrimitiveByteArrayBlobType;
++import org.hibernate.type.PrimitiveCharacterArrayClobType;
++import org.hibernate.type.StringClobType;
++import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+-
+-import javax.persistence.*;
+-import javax.persistence.Column;
+-import javax.persistence.DiscriminatorType;
+-import javax.persistence.Entity;
+-import javax.persistence.ManyToOne;
+-import javax.persistence.OneToMany;
+-import javax.persistence.OneToOne;
+-import java.lang.reflect.AnnotatedElement;
+-import java.lang.reflect.Field;
+-import java.lang.reflect.Method;
+-import java.util.*;
+-import java.util.List;
+-import java.util.Map;
++import org.hibernate.validate.ClassValidator;
+ 
+ /**
+  * JSR 175 annotation binder
+@@ -677,9 +742,10 @@
+ 			log.debug( "Version name: " + rootClass.getVersion().getName() + ", unsavedValue: " + ( (SimpleValue) rootClass.getVersion().getValue() ).getNullValue() );
+ 		}
+ 		else if ( annotedElt.isAnnotationPresent(ManyToOne.class) ) {
+-			ManyToOne ann = (ManyToOne) annotedElt.getAnnotation(ManyToOne.class);
++			ManyToOne ann = annotedElt.getAnnotation(ManyToOne.class);
++			Cascade hibernateCascade = annotedElt.getAnnotation(Cascade.class);
+ 			Ejb3JoinColumn.checkIfJoinColumn(columns, propertyHolder, inferredData);
+-			bindManyToOne( getCascadeStrategy( ann.cascade() ),
++			bindManyToOne( getCascadeStrategy(ann.cascade(), hibernateCascade),
+ 				(Ejb3JoinColumn[]) columns,
+ 				ann.optional(), 
+ 				getFetchMode( ann.fetch() ), 
+@@ -693,11 +759,12 @@
+ 		}
+ 		else if ( annotedElt.isAnnotationPresent(OneToOne.class) ) {
+ 			OneToOne ann = annotedElt.getAnnotation(OneToOne.class);
++			Cascade hibernateCascade = annotedElt.getAnnotation(Cascade.class);
+ //			if (columns == null) {
+ //				columns = new Ejb3JoinColumn[0];
+ //			}
+ 			Ejb3JoinColumn.checkIfJoinColumn(columns, propertyHolder, inferredData);
+-			bindOneToOne( getCascadeStrategy( ann.cascade() ),
++			bindOneToOne( getCascadeStrategy( ann.cascade(), hibernateCascade),
+ 				(Ejb3JoinColumn[]) columns,
+ 				ann.optional(), 
+ 				getFetchMode( ann.fetch() ), 
+@@ -744,8 +811,9 @@
+ 				}
+ 			}
+ 			collectionBinder.setPropertyHolder(propertyHolder);
+-			Where whereAnn = annotedElt.getAnnotation( Where.class );
++			Where whereAnn = annotedElt.getAnnotation( Where.class );			
+ 			collectionBinder.setWhere(whereAnn);
++			Cascade hibernateCascade = annotedElt.getAnnotation(Cascade.class);
+ 			collectionBinder.setCollectionType( inferredData.getCollectionType() );
+ 			collectionBinder.setMappings(mappings);
+ 			collectionBinder.setPropertyAccessorName( inferredData.getDefaultAccess() );
+@@ -762,18 +830,18 @@
+ 					}
+ 				}
+ 				collectionBinder.setJoinColumns( ( Ejb3JoinColumn[] ) columns );
+-				mappedBy = oneToManyAnn.mappedBy();
++				mappedBy = oneToManyAnn.mappedBy();				
+ 				collectionBinder.setUnique(true);
+ 				collectionBinder.setTargetEntity( oneToManyAnn.targetEntity() );
+ 				collectionBinder.setFetchType( oneToManyAnn.fetch() );
+-				collectionBinder.setCascadeStrategy( getCascadeStrategy( oneToManyAnn.cascade() ) );
++				collectionBinder.setCascadeStrategy( getCascadeStrategy( oneToManyAnn.cascade(), hibernateCascade) );
+ 			}
+ 			else if (manyToManyAnn != null) {
+ 				mappedBy = manyToManyAnn.mappedBy();
+ 				collectionBinder.setUnique(false);
+ 				collectionBinder.setTargetEntity( manyToManyAnn.targetEntity() );
+ 				collectionBinder.setFetchType( manyToManyAnn.fetch() );
+-				collectionBinder.setCascadeStrategy( getCascadeStrategy( manyToManyAnn.cascade() ) );
++				collectionBinder.setCascadeStrategy( getCascadeStrategy( manyToManyAnn.cascade(), hibernateCascade) );
+ 			}
+ 			collectionBinder.setMappedBy( mappedBy );
+ 			if (isForeignKey) {
+@@ -1297,52 +1365,93 @@
+ 		} 
+ 		throw new AssertionFailure("Unknown GeneratorType: " + generatorEnum);
+ 	}
+-
+-	private static String getCascadeStrategy(CascadeType[] cascades) {
+-		if (cascades.length == 0) {
+-			return "none";
+-		}
+-		boolean all = false;
+-		boolean persist = false;
+-		boolean merge = false;
+-		boolean remove = false;
+-		boolean refresh = false;
+-		for(CascadeType cascade: cascades) {
+-			switch (cascade) {
+-				case ALL:
+-					all = true;
+-					//refresh = true;
+-					break;
+-				case PERSIST:
+-					persist = true;
+-					break;
+-				case MERGE:
+-					merge = true;
+-					break;
+-				case REMOVE:
+-					remove = true;
+-					break;
+-				case REFRESH:
+-					refresh = true;
+-					break;
++	
++	private static EnumSet<CascadeType> ejbCascadeTypeToHibernateCascadeType(javax.persistence.CascadeType[] ejbCascades) {
++		EnumSet<CascadeType> hibernateCascadeSet = EnumSet.noneOf(CascadeType.class);
++		if (ejbCascades != null && ejbCascades.length > 0) {
++			for(javax.persistence.CascadeType cascade: ejbCascades) {
++				switch (cascade) {
++					case ALL:
++						hibernateCascadeSet.add(CascadeType.ALL);
++						break;
++					case PERSIST:
++						hibernateCascadeSet.add(CascadeType.PERSIST);
++						break;
++					case MERGE:
++						hibernateCascadeSet.add(CascadeType.MERGE);
++						break;
++					case REMOVE:
++						hibernateCascadeSet.add(CascadeType.REMOVE);
++						break;
++					case REFRESH:
++						hibernateCascadeSet.add(CascadeType.REFRESH);
++						break;
++				}
++			}
++		}
++		
++		return hibernateCascadeSet;
++	}
++	
++	private static String getCascadeStrategy(javax.persistence.CascadeType[] ejbCascades, Cascade hibernateCascadeAnnotation) {
++		EnumSet<CascadeType> hibernateCascadeSet = ejbCascadeTypeToHibernateCascadeType(ejbCascades);
++		CascadeType[] hibernateCascades = hibernateCascadeAnnotation == null? null : hibernateCascadeAnnotation.value();
++		
++		if (hibernateCascades != null && hibernateCascades.length > 0) {
++			for (CascadeType cascadeType : hibernateCascades) {
++				hibernateCascadeSet.add(cascadeType);
+ 			}
+ 		}
++		
+ 		StringBuffer cascade = new StringBuffer();
++		Set<String> allreadyAppended = new HashSet<String>(); 
++		
+ 		//if (!all) all = persist && merge && remove;
++		if (!hibernateCascadeSet.contains(CascadeType.ALL) 
++				&& (hibernateCascadeSet.contains(CascadeType.PERSIST) 
++						&& hibernateCascadeSet.contains(CascadeType.MERGE) 
++						&& hibernateCascadeSet.contains(CascadeType.REMOVE))) {
++			hibernateCascadeSet.add(CascadeType.ALL);			
++		}
++		
+ 		//refresh is before all because it is not part of all
+-		if (refresh) cascade.append("refresh,");
+-		if (all) {
+-			cascade.append("all,");
++		if (hibernateCascadeSet.contains(CascadeType.REFRESH)) {
++			allreadyAppended.add(CascadeType.REFRESH.getHibernateCascadeTypeString());
++			cascade.append(',').append(CascadeType.REFRESH.getHibernateCascadeTypeString());
++		}
++		//if (orphanDelete) cascade.append("delete-orphan,");
++		if (hibernateCascadeSet.contains(CascadeType.DELETE_ORPHAN)) {
++			allreadyAppended.add(CascadeType.DELETE_ORPHAN.getHibernateCascadeTypeString());
++			cascade.append(',').append(CascadeType.DELETE_ORPHAN.getHibernateCascadeTypeString());
++		}
++		/*if (all) {
++			cascade.append("all,");			
+ 			cascade.deleteCharAt(cascade.length() - 1); //remove extra ','
++			
+ 			return cascade.toString();
++		}*/
++		if (hibernateCascadeSet.contains(CascadeType.ALL)) {
++			cascade.append(',').append(CascadeType.ALL.getHibernateCascadeTypeString());
++			return cascade.substring(1);
+ 		}
+-        if (persist || merge) cascade.append("save-update,"); //HBX-47
+-		if (persist) cascade.append("persist,");
+-		if (merge) cascade.append("merge,");
+-		if (remove) cascade.append("delete,");
+-		if (cascade.length() == 0) throw new AssertionFailure("Error in cascade strategies mapper");
+-		cascade.deleteCharAt(cascade.length() - 1); //remove extra ','
+-		return cascade.toString();
++		
++        //if (persist || merge) cascade.append("save-update,"); //HBX-47
++		if (hibernateCascadeSet.contains(CascadeType.PERSIST) || hibernateCascadeSet.contains(CascadeType.MERGE)) {
++			allreadyAppended.add(CascadeType.SAVE_UPDATE.getHibernateCascadeTypeString());
++			cascade.append(',').append(CascadeType.SAVE_UPDATE.getHibernateCascadeTypeString());
++		}
++		
++		//The remaining values
++		for (CascadeType cascadeType : CascadeType.values()) {
++			if (hibernateCascadeSet.contains(cascadeType) && !allreadyAppended.contains(cascadeType.getHibernateCascadeTypeString())) {
++				allreadyAppended.add(cascadeType.getHibernateCascadeTypeString());
++				cascade.append(',').append(cascadeType.getHibernateCascadeTypeString());
++			}
++		}
++		
++		//if (cascade.length() == 0) throw new AssertionFailure("Error in cascade strategies mapper");
++		
++		return cascade.length() > 0 ? cascade.substring(1) : "none";
+ 	}
+ 	
+ 	private static FetchMode getFetchMode(FetchType fetch) {
+Index: org/hibernate/annotations/Cascade.java
+===================================================================
+RCS file: org/hibernate/annotations/Cascade.java
+diff -N org/hibernate/annotations/Cascade.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/annotations/Cascade.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,12 @@
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++@Target({METHOD}) @Retention(RUNTIME)
++public @interface Cascade {
++	CascadeType[] value();
++}
+Index: org/hibernate/annotations/CascadeType.java
+===================================================================
+RCS file: org/hibernate/annotations/CascadeType.java
+diff -N org/hibernate/annotations/CascadeType.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ org/hibernate/annotations/CascadeType.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,24 @@
++package org.hibernate.annotations;
++
++public enum CascadeType {
++	ALL ("all"), 
++	PERSIST ("persist"), 
++	MERGE ("merge"), 
++	REMOVE ("delete"), 
++	REFRESH ("refresh"),
++	CREATE ("create"),
++	DELETE ("delete"),
++	SAVE_UPDATE ("save-update"),
++	REPLICATE ("replicate"),
++	DELETE_ORPHAN ("delete-orphan");
++	
++	private String hibernateCascadeType;
++	
++	CascadeType(String hibernateCascadeType) {
++		this.hibernateCascadeType = hibernateCascadeType;
++	}
++	
++	public String getHibernateCascadeTypeString() {
++		return hibernateCascadeType;
++	}
++}

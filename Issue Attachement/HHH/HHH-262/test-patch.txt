@@ -1,0 +1,289 @@
+Index: DataPoint.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/test/org/hibernate/test/proxy/DataPoint.java,v
+retrieving revision 1.4
+diff -u -r1.4 DataPoint.java
+--- DataPoint.java	30 Aug 2005 03:03:17 -0000	1.4
++++ DataPoint.java	8 Nov 2005 08:32:31 -0000
+@@ -64,4 +64,5 @@
+ 	void exception() throws Exception {
+ 		throw new Exception("foo");
+ 	}
++	
+ }
+Index: CGLIBLazyInitializerTest.java
+===================================================================
+RCS file: CGLIBLazyInitializerTest.java
+diff -N CGLIBLazyInitializerTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ CGLIBLazyInitializerTest.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,157 @@
++
++package org.hibernate.test.proxy;
++
++import java.math.BigDecimal;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++
++import net.sf.cglib.proxy.Enhancer;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import org.hibernate.test.TestCase;
++/**
++ * @author juozas
++ *
++ */
++public class CGLIBLazyInitializerTest extends TestCase {
++
++	
++	
++	public CGLIBLazyInitializerTest(String x) {
++		super(x);
++		
++	}
++
++	protected String[] getMappings() {
++		return new String[] { "proxy/DataPoint1.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite(CGLIBLazyInitializerTest.class);
++	}
++
++	public String getCacheConcurrencyStrategy() {
++		return null;
++	}
++	
++	public void testClassCache() {
++		
++		Session s = openSession();
++		try{
++			
++			Transaction t = s.beginTransaction();
++			DataPoint1 dp = persist(s);
++			s.flush();
++			s.clear();
++			
++			DataPoint1 dp1 = (DataPoint1) s.load(DataPoint1.class, new Long( dp.getId() ) );
++			
++			s.clear();
++			
++			DataPoint1 dp2 = (DataPoint1) s.load(DataPoint1.class, new Long( dp.getId() ) );
++		
++			assertTrue( dp1 != dp2 );
++			
++			assertTrue( dp1.getClass() == dp2.getClass() );
++			
++			
++			t.rollback();
++			
++		}finally{
++			s.close();
++		}
++		
++	}
++	
++	public void testSharedClassCache() {
++		
++		DataPoint1 dp1 = null;
++		DataPoint1 dp = null;
++		
++		//Factory 1
++		Session s = openSession();
++		try{
++			
++			Transaction t = s.beginTransaction();
++			dp = persist(s);
++			s.flush();
++			s.clear();
++			
++			 dp1 = (DataPoint1) s.load(DataPoint1.class, new Long( dp.getId() ) );
++			
++			t.rollback();
++			
++		}finally{
++			s.close();
++		}
++		
++      // Factory 2
++		try{
++			
++			s = getCfg().buildSessionFactory().openSession();
++			Transaction t = s.beginTransaction();
++			
++			DataPoint1 dp2 = (DataPoint1) s.load(DataPoint1.class, new Long( dp.getId() ) );
++		
++			assertTrue( dp1 != dp2 );
++     //TODO: fails in current head, cache must be enabled to save memory			
++			assertTrue( dp1.getClass() == dp2.getClass() );
++			
++			t.rollback();
++			
++			
++		}finally{
++			s.close();
++		}
++		
++	}
++	
++	
++	
++	public void testMaterializationInConstructor() {
++		
++		Session s = openSession();
++		try{
++			
++			Transaction t = s.beginTransaction();
++			DataPoint1 dp = persist(s);
++			s.flush();
++			s.clear();
++			
++			dp = (DataPoint1) s.load(DataPoint1.class, new Long( dp.getId() ) );
++		
++			assertTrue( Enhancer.isEnhanced(dp.getClass()) );
++			assertTrue( !Hibernate.isInitialized(dp) );
++		
++			
++			t.rollback();
++			
++		}finally{
++			s.close();
++		}
++		
++	}
++
++	/**
++	 * @param s
++	 * @return
++	 */
++	private DataPoint1 persist(Session s) {
++		DataPoint1 dp = new DataPoint1();
++		dp.setDescription("a data point");
++		dp.setX( new BigDecimal(1.0) );
++		dp.setY( new BigDecimal(2.0) );
++		s.persist(dp);
++		return dp;
++	}
++	
++	
++	
++	
++	
++	
++}
+Index: DataPoint1.hbm.xml
+===================================================================
+RCS file: DataPoint1.hbm.xml
+diff -N DataPoint1.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ DataPoint1.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,23 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping 
++	package="org.hibernate.test.proxy">
++
++	<class name="DataPoint1">
++	
++		<id name="id">
++			<generator class="increment"/>
++		</id>
++		<property name="x">
++			<column name="xval" not-null="true" length="4" unique-key="xy"/>
++		</property>
++		<property name="y">
++			<column name="yval" not-null="true" length="4" unique-key="xy"/>
++		</property>
++		<property name="description"/>
++	</class>
++
++</hibernate-mapping>
+Index: DataPoint1.java
+===================================================================
+RCS file: DataPoint1.java
+diff -N DataPoint1.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ DataPoint1.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,75 @@
++//$Id: DataPoint.java,v 1.4 2005/08/30 03:03:17 oneovthafew Exp $
++package org.hibernate.test.proxy;
++
++import java.io.Serializable;
++import java.math.BigDecimal;
++
++/**
++ * @author Gavin King
++ */
++public class DataPoint1 implements Serializable {
++	private long id;
++	private BigDecimal x;
++	private BigDecimal y;
++	private String description;
++	
++	{
++	
++		this.setDescription("");
++	
++	}
++	
++	/**
++	 * @return Returns the description.
++	 */
++	public String getDescription() {
++		return description;
++	}
++	/**
++	 * @param description The description to set.
++	 */
++	public void setDescription(String description) {
++		this.description = description;
++	}
++	/**
++	 * @return Returns the id.
++	 */
++	public long getId() {
++		return id;
++	}
++	/**
++	 * @param id The id to set.
++	 */
++	public void setId(long id) {
++		this.id = id;
++	}
++	/**
++	 * @return Returns the x.
++	 */
++	public BigDecimal getX() {
++		return x;
++	}
++	/**
++	 * @param x The x to set.
++	 */
++	public void setX(BigDecimal x) {
++		this.x = x;
++	}
++	/**
++	 * @return Returns the y.
++	 */
++	public BigDecimal getY() {
++		return y;
++	}
++	/**
++	 * @param y The y to set.
++	 */
++	public void setY(BigDecimal y) {
++		this.y = y;
++	}
++	
++	void exception() throws Exception {
++		throw new Exception("foo");
++	}
++	
++}

@@ -1,0 +1,117 @@
+diff -ru8pN core-orig/src/test/java/org/hibernate/dialect/DialectFactoryTest.java core/src/test/java/org/hibernate/dialect/DialectFactoryTest.java
+--- core-orig/src/test/java/org/hibernate/dialect/DialectFactoryTest.java	2008-10-13 14:14:54.000000000 +0900
++++ core/src/test/java/org/hibernate/dialect/DialectFactoryTest.java	2008-10-13 15:11:34.000000000 +0900
+@@ -114,16 +114,18 @@ public class DialectFactoryTest extends 
+ 	}
+ 
+ 	public void testCustomDialects() {
+ 		DialectFactory.registerDialectResolver( TestingDialects.MyDialectResolver1.class.getName() );
+ 		DialectFactory.registerDialectResolver( TestingDialects.MyDialectResolver2.class.getName() );
+ 		DialectFactory.registerDialectResolver( TestingDialects.ErrorDialectResolver1.class.getName() );
+ 		DialectFactory.registerDialectResolver( TestingDialects.ErrorDialectResolver2.class.getName() );
+ 		DialectFactory.registerDialectResolver( TestingDialects.MyOverridingDialectResolver1.class.getName() );
++		DialectFactory.registerDialectResolver("org.hibernate.dialect.NoSuchDialectResolver");
++		DialectFactory.registerDialectResolver("java.lang.Object");
+ 
+ 		testDetermination( "MyDatabase1", TestingDialects.MyDialect1.class );
+ 		testDetermination( "MyDatabase2", 1, TestingDialects.MyDialect21.class );
+ 		testDetermination( "MyTrickyDatabase1", TestingDialects.MyDialect1.class );
+ 
+ 		// This should be mapped to DB2Dialect by default, but actually it will be
+ 		// my custom dialect because I have registered MyOverridingDialectResolver1.
+ 		testDetermination( "DB2/MySpecialPlatform", TestingDialects.MySpecialDB2Dialect.class );
+diff -ru8pN core-orig/src/test/java/org/hibernate/dialect/TestingDialects.java core/src/test/java/org/hibernate/dialect/TestingDialects.java
+--- core-orig/src/test/java/org/hibernate/dialect/TestingDialects.java	2008-10-13 14:14:54.000000000 +0900
++++ core/src/test/java/org/hibernate/dialect/TestingDialects.java	2008-10-13 16:11:36.000000000 +0900
+@@ -72,17 +72,22 @@ public class TestingDialects {
+ 	public static class MyDialectResolver2 extends BasicDialectResolver {
+ 		public MyDialectResolver2() {
+ 			super( "MyTrickyDatabase1", MyDialect1.class );
+ 		}
+ 	}
+ 
+ 	public static class ErrorDialectResolver1 extends AbstractDialectResolver {
+ 		public Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
+-			throw new SQLException();
++			String databaseName = metaData.getDatabaseProductName();
++			if (databaseName.equals("ConnectionErrorDatabase1")) {
++				throw new SQLException("Simulated connection error", "08001");
++			} else {
++				throw new SQLException();
++			}
+ 		}
+ 	}
+ 
+ 	public static class ErrorDialectResolver2 extends AbstractDialectResolver {
+ 		public Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
+ 			String databaseName = metaData.getDatabaseProductName();
+ 			if ( databaseName.equals( "ErrorDatabase1" ) ) {
+ 				throw new SQLException();
+diff -ru8pN core-orig/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java core/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java
+--- core-orig/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java	2008-10-13 14:14:54.000000000 +0900
++++ core/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java	2008-10-13 15:57:12.000000000 +0900
+@@ -28,16 +28,17 @@ import java.sql.SQLException;
+ 
+ import junit.framework.TestSuite;
+ import junit.framework.Test;
+ import junit.framework.TestCase;
+ 
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.dialect.TestingDialects;
+ import org.hibernate.dialect.Mocks;
++import org.hibernate.exception.JDBCConnectionException;
+ 
+ /**
+  * TODO : javadoc
+  *
+  * @author Steve Ebersole
+  */
+ public class DialectResolverTest extends TestCase {
+ 
+@@ -63,20 +64,45 @@ public class DialectResolverTest extends
+ 
+ 	public void testErrorAndOrder() throws Exception {
+ 		DialectResolverSet resolvers = new DialectResolverSet();
+ 		resolvers.addResolverAtFirst( new TestingDialects.MyDialectResolver1() );
+ 		resolvers.addResolver( new TestingDialects.ErrorDialectResolver1() );
+ 		resolvers.addResolverAtFirst( new TestingDialects.ErrorDialectResolver1() );
+ 		resolvers.addResolver( new TestingDialects.MyDialectResolver2() );
+ 
+-		// This time no error is occurred not like testErrorAndOrder.
++		// Non-connection errors are suppressed.
+ 		testDetermination( resolvers, "MyDatabase1", 1, TestingDialects.MyDialect1.class );
+ 		testDetermination( resolvers, "MyTrickyDatabase1", 1, TestingDialects.MyDialect1.class );
+ 		testDetermination( resolvers, "NoSuchDatabase", 1, null );
++		
++		// Connection errors are reported
++		try {
++			testDetermination( resolvers, "ConnectionErrorDatabase1", 1, null );
++			fail();
++		} catch (JDBCConnectionException e) {
++			// expected
++		}
++	}
++	
++	public void testBasicDialectResolver() throws Exception {
++		DialectResolverSet resolvers = new DialectResolverSet();
++		// Simulating MyDialectResolver1 by BasicDialectResolvers
++		resolvers.addResolver(new BasicDialectResolver("MyDatabase1", TestingDialects.MyDialect1.class));
++		resolvers.addResolver(new BasicDialectResolver("MyDatabase2", 1, TestingDialects.MyDialect21.class));
++		resolvers.addResolver(new BasicDialectResolver("MyDatabase2", 2, TestingDialects.MyDialect22.class));
++		// Some other error cases
++		resolvers.addResolver(new BasicDialectResolver("ErrorDatabase1", Object.class));
++		
++		testDetermination( resolvers, "MyDatabase1", 1, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "MyDatabase1", 2, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "MyDatabase2", 0, null );
++		testDetermination( resolvers, "MyDatabase2", 1, TestingDialects.MyDialect21.class );
++		testDetermination( resolvers, "MyDatabase2", 2, TestingDialects.MyDialect22.class );
++		testDetermination( resolvers, "ErrorDatabase1", 0, null );
+ 	}
+ 
+ 	private void testDetermination(
+ 			DialectResolver resolver,
+ 			String databaseName,
+ 			int version,
+ 			Class dialectClass) throws SQLException {
+ 		Dialect dialect = resolver.resolveDialect( Mocks.createConnection( databaseName, version ).getMetaData() );

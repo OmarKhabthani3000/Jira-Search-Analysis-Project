@@ -1,0 +1,38 @@
+commit 4f8c91506f9b714e5c56b6a1d71e64b34e23775c
+Author: Masafumi Miura <mmiura@redhat.com>
+Date:   Thu Nov 2 15:53:32 2017 +0900
+
+    Invoke setQueryTimeout() before executeUpdate() in NativeSQLQueryPlan
+
+diff --git a/hibernate-core/src/main/java/org/hibernate/engine/query/spi/NativeSQLQueryPlan.java b/hibernate-core/src/main/java/org/hibernate/engine/query/spi/NativeSQLQueryPlan.java
+index 251c960..67d2ba8 100644
+--- a/hibernate-core/src/main/java/org/hibernate/engine/query/spi/NativeSQLQueryPlan.java
++++ b/hibernate-core/src/main/java/org/hibernate/engine/query/spi/NativeSQLQueryPlan.java
+@@ -17,6 +17,7 @@ import org.hibernate.HibernateException;
+ import org.hibernate.QueryException;
+ import org.hibernate.action.internal.BulkOperationCleanupAction;
+ import org.hibernate.engine.spi.QueryParameters;
++import org.hibernate.engine.spi.RowSelection;
+ import org.hibernate.engine.spi.SharedSessionContractImplementor;
+ import org.hibernate.engine.spi.TypedValue;
+ import org.hibernate.event.spi.EventSource;
+@@ -181,6 +182,7 @@ public class NativeSQLQueryPlan implements Serializable {
+ 
+ 		int result = 0;
+ 		PreparedStatement ps;
++		RowSelection selection = queryParameters.getRowSelection();
+ 		try {
+ 			queryParameters.processFilters( this.customQuery.getSQL(), session );
+ 			final String sql = session.getJdbcServices().getDialect()
+@@ -196,6 +198,11 @@ public class NativeSQLQueryPlan implements Serializable {
+ 				int col = 1;
+ 				col += bindPositionalParameters( ps, queryParameters, col, session );
+ 				col += bindNamedParameters( ps, queryParameters.getNamedParameters(), col, session );
++				if ( selection != null ) {
++					if ( selection.getTimeout() != null ) {
++						ps.setQueryTimeout( selection.getTimeout() );
++					}
++				}
+ 				result = session.getJdbcCoordinator().getResultSetReturn().executeUpdate( ps );
+ 			}
+ 			finally {

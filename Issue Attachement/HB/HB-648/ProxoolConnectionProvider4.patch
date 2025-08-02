@@ -1,0 +1,116 @@
+--- Hibernate-v22/src/net/sf/hibernate/connection/ProxoolConnectionProvider.java	2003-10-28 04:19:53.000000000 +0100
++++ Hibernate-v21/src/net/sf/hibernate/connection/ProxoolConnectionProvider.java	2004-01-27 10:26:49.000000000 +0100
+@@ -26,9 +26,6 @@
+  */
+ public class ProxoolConnectionProvider implements ConnectionProvider {
+ 	
+-	//TODO: currently this provider ignores the transaction isolation level
+-	//      and doesn't even toggle autocommit. I'm not sure if these are
+-	//      necessary .... need to check  
+ 
+ 	private static final String PROXOOL_JDBC_STEM = "proxool.";
+ 
+@@ -40,16 +37,47 @@
+ 
+ 	private String proxoolAlias;
+ 
++	// TRUE if the pool is borrowed from the outside, FALSE if we used to create it
+ 	private boolean existingPool;
+ 
++	// Not null if the Isolation level has been specified in the configuration file.
++	// Otherwise, it is left to the Driver's default value.
++	private Integer isolation;
++	
++	/**
++	 * Grab a connection
++	 * @return a JDBC connection
++	 * @throws SQLException
++	 */
+ 	public Connection getConnection() throws SQLException {
+-		return DriverManager.getConnection(proxoolAlias);
++	    // get a connection from the pool (thru DriverManager, cfr. Proxool doc)
++		Connection c = DriverManager.getConnection(proxoolAlias);
++		
++		// set the Transaction Isolation if defined
++		if (isolation!=null) 
++		    c.setTransactionIsolation( isolation.intValue() );
++		
++		// toggle autoCommit to false if set
++		if ( c.getAutoCommit() ) 
++		    c.setAutoCommit(false);
++		
++		// return the connection
++		return c;
+ 	}
+ 
++	/**
++	 * Dispose of a used connection.
++	 * @param conn a JDBC connection
++	 * @throws SQLException
++	 */
+ 	public void closeConnection(Connection conn) throws SQLException {
+ 		conn.close();
+ 	}
+ 
++	/**
++	 * Initialize the connection provider from given properties.
++	 * @param props <tt>SessionFactory</tt> properties
++	 */
+ 	public void configure(Properties props) throws HibernateException {
+ 
+ 		// Get the configurator files (if available)
+@@ -190,8 +218,24 @@
+ 				throw new HibernateException( "Could not instantiate Proxool connection pool", e );
+ 			}
+ 		}
++		
++		// Remember Isolation level
++		//
++		String i = props.getProperty(Environment.ISOLATION);
++		if (i==null) {
++		    isolation=null;
++		    log.info("JDBC isolation level: left to driver default");
++		}
++		else {
++		    isolation = new Integer(i);
++		    log.info("JDBC isolation level: " + Environment.isolationLevelToString( isolation.intValue() ) );
++		}
+ 	}
+ 
++	/**
++	 * Release all resources held by this provider. JavaDoc requires a second sentence.
++	 * @throws HibernateException
++	 */
+ 	public void close() throws HibernateException {
+ 
+ 		// If the provider was leeching off an existing pool don't close it
+@@ -199,12 +243,9 @@
+ 			return;
+ 		}
+ 
++		// We have created the pool ourselves, so shut it down
+ 		try {
+-
+-			// Kill all the connections (defaults gracefully) using
+-			// the ProxoolFacade
+-			ProxoolFacade.killAllConnections( proxoolAlias.substring( PROXOOL_JDBC_STEM.length() ) );
+-
++	        ProxoolFacade.shutdown(0);
+ 		}
+ 		catch (Exception e) {
+ 			// If you're closing down the ConnectionProvider chances are an
+@@ -256,14 +297,4 @@
+ 
+ 		return props1;
+ 	}
+-
+-
+ }
+-
+-
+-
+-
+-
+-
+-
+-

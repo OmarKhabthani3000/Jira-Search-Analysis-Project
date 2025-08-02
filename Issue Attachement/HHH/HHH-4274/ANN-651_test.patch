@@ -1,0 +1,168 @@
+Index: annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Parent.java
+===================================================================
+--- annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Parent.java	Thu Mar 06 16:06:37 EST 2008
++++ annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Parent.java	Thu Mar 06 16:06:37 EST 2008
+@@ -0,0 +1,40 @@
++//$
++package org.hibernate.test.annotations.onetomany.orderby;
++
++import javax.persistence.Column;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.Inheritance;
++import javax.persistence.Table;
++
++@Entity
++@Inheritance
++@Table( name = "BUG_TST" )
++public class Parent {
++	@Id
++	@GeneratedValue( strategy = GenerationType.AUTO )
++	@Column( name = "ID" )
++	protected Long id;
++
++	public Long getId() {
++		return id;
++	}
++
++	protected void setId(Long id) {
++		this.id = id;
++	}
++
++	@SuppressWarnings( "unused" )
++	@Column( name = "ELEMENT_TYPE" )
++	private int elementType;
++
++	public int getElementType() {
++		return elementType;
++	}
++
++	public void setElementType(int elementType) {
++		this.elementType = elementType;
++	}
++}
+Index: annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/OrderByTest.java
+===================================================================
+--- annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/OrderByTest.java	Thu Mar 06 16:11:52 EST 2008
++++ annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/OrderByTest.java	Thu Mar 06 16:11:52 EST 2008
+@@ -0,0 +1,44 @@
++//$
++package org.hibernate.test.annotations.onetomany.orderby;
++
++import org.hibernate.test.annotations.TestCase;
++import org.hibernate.Session;
++
++/**
++ * @author Emmanuel Bernard
++ */
++public class OrderByTest extends TestCase {
++	public void testOrderByOnSuperclassProperty() throws Exception {
++		Session s = openSession( );
++		s.getTransaction().begin();
++		Child1 c1 = new Child1();
++		c1.setElementType( 1 );
++		s.save( c1 );
++		s.flush();
++		Child2 c21 = new Child2();
++		c21.setElementType( 2 );
++		c21.setParent( c1 );
++		Child2 c22 = new Child2();
++		c22.setElementType( 1 );
++		c22.setParent( c1 );
++		s.save(c21);
++		s.save(c22);
++		s.flush();
++		s.clear();
++
++		c1 = (Child1) s.get( Child1.class, 1l );
++		assertEquals( 2, c1.getElements().size() );
++		assertEquals( 1, c1.getElements().iterator().next().getElementType() );
++
++		s.getTransaction().rollback();
++		s.close();
++	}
++
++	protected Class[] getMappings() {
++		return new Class[] {
++				Parent.class,
++				Child1.class,
++				Child2.class
++		};
++	}
++}
+Index: annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child2.java
+===================================================================
+--- annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child2.java	Thu Mar 06 16:06:37 EST 2008
++++ annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child2.java	Thu Mar 06 16:06:37 EST 2008
+@@ -0,0 +1,38 @@
++//$
++package org.hibernate.test.annotations.onetomany.orderby;
++
++import java.util.HashSet;
++import java.util.Set;
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.JoinColumn;
++import javax.persistence.ManyToOne;
++import javax.persistence.OneToMany;
++
++@Entity
++public class Child2 extends Parent {
++
++	@ManyToOne( fetch = FetchType.LAZY )
++	@JoinColumn( name = "PARENT_ID" )
++	private Parent parent;
++
++	@OneToMany( cascade = CascadeType.ALL, fetch = FetchType.EAGER, mappedBy = "parent" )
++	private Set<Child2> elements = new HashSet<Child2>();
++
++	public Parent getParent() {
++		return parent;
++	}
++
++	public void setParent(Parent parent) {
++		this.parent = parent;
++	}
++
++	public Set<Child2> getElements() {
++		return elements;
++	}
++
++	public void setElements(Set<Child2> elements) {
++		this.elements = elements;
++	}
++}
+Index: annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child1.java
+===================================================================
+--- annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child1.java	Thu Mar 06 16:06:37 EST 2008
++++ annotations/src/test/org/hibernate/test/annotations/onetomany/orderby/Child1.java	Thu Mar 06 16:06:37 EST 2008
+@@ -0,0 +1,26 @@
++//$
++package org.hibernate.test.annotations.onetomany.orderby;
++
++import java.util.HashSet;
++import java.util.Set;
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.OneToMany;
++import javax.persistence.OrderBy;
++
++@Entity
++public class Child1 extends Parent {
++
++	@OneToMany( fetch = FetchType.EAGER, cascade = CascadeType.ALL, mappedBy = "parent" )
++	@OrderBy( "elementType" )
++	private Set<Child2> elements = new HashSet<Child2>();
++
++	public Set<Child2> getElements() {
++		return elements;
++	}
++
++	public void setElements(Set<Child2> elements) {
++		this.elements = elements;
++	}
++}

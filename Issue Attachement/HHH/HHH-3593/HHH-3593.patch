@@ -1,0 +1,426 @@
+Index: src/org/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+--- src/org/hibernate/impl/SessionFactoryImpl.java	(revision 15586)
++++ src/org/hibernate/impl/SessionFactoryImpl.java	(working copy)
+@@ -67,6 +67,7 @@
+ import org.hibernate.id.IdentifierGenerator;
+ import org.hibernate.id.UUIDHexGenerator;
+ import org.hibernate.jdbc.BatcherFactory;
++import org.hibernate.jmx.JmxStatistics;
+ import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.RootClass;
+@@ -377,6 +378,15 @@
+ 
+ 		//stats
+ 		getStatistics().setStatisticsEnabled( settings.isStatisticsEnabled() );
++		if (settings.isStatisticsJmxEnabled()) {
++			try {
++				String mbeanServerName = settings.getStatisticsJmxMBeanServer(); // the default domain name
++				String objectName = settings.getStatisticsJmxObjectName();
++				new JmxStatistics(this, objectName, mbeanServerName).enableJmxStatistics();
++			} catch (Exception e) {
++				log.warn("Cannot enable JMX statistics - that feature will be disabled", e);
++			}
++		}
+ 
+ 		// EntityNotFoundDelegate
+ 		EntityNotFoundDelegate entityNotFoundDelegate = cfg.getEntityNotFoundDelegate();
+Index: src/org/hibernate/cfg/SettingsFactory.java
+===================================================================
+--- src/org/hibernate/cfg/SettingsFactory.java	(revision 15586)
++++ src/org/hibernate/cfg/SettingsFactory.java	(working copy)
+@@ -315,9 +315,20 @@
+ 		boolean formatSql = PropertiesHelper.getBoolean(Environment.FORMAT_SQL, properties);
+ 		settings.setFormatSqlEnabled(formatSql);
+ 		
+-		boolean useStatistics = PropertiesHelper.getBoolean(Environment.GENERATE_STATISTICS, properties);
++		// if generate_statistics.jmx is true, that infers the user wants to generate statistics;
++		// therefore, if either generate_statistics property or generate_statistics.jmx property
++		// is set to true, then statistics will be enabled.
++		boolean generateStatistics = PropertiesHelper.getBoolean(Environment.GENERATE_STATISTICS, properties);
++		boolean useStatisticsJmx = PropertiesHelper.getBoolean(Environment.JMX_STATISTICS_ENABLED, properties);
++		boolean useStatistics = generateStatistics || useStatisticsJmx;
+ 		log.info( "Statistics: " + enabledDisabled(useStatistics) );
+ 		settings.setStatisticsEnabled(useStatistics);
++		settings.setStatisticsJmxEnabled(useStatisticsJmx);
++
++		String jmxObjectName = PropertiesHelper.getString(Environment.JMX_STATISTICS_OBJECTNAME, properties, "hibernate:type=statistics,application=default");
++		String jmxMBeanServer = PropertiesHelper.getString(Environment.JMX_STATISTICS_MBEANSERVER, properties, "*platform*");
++		settings.setStatisticsJmxObjectName(jmxObjectName);
++		settings.setStatisticsJmxMBeanServer(jmxMBeanServer);
+ 		
+ 		boolean useIdentifierRollback = PropertiesHelper.getBoolean(Environment.USE_IDENTIFIER_ROLLBACK, properties);
+ 		log.info( "Deleted entity synthetic identifier rollback: " + enabledDisabled(useIdentifierRollback) );
+Index: src/org/hibernate/cfg/Settings.java
+===================================================================
+--- src/org/hibernate/cfg/Settings.java	(revision 15586)
++++ src/org/hibernate/cfg/Settings.java	(working copy)
+@@ -48,6 +48,9 @@
+ 	private boolean minimalPutsEnabled;
+ 	private boolean commentsEnabled;
+ 	private boolean statisticsEnabled;
++	private boolean statisticsJmxEnabled;
++	private String  statisticsJmxObjectName;
++	private String  statisticsJmxMBeanServer;
+ 	private boolean jdbcBatchVersionedData;
+ 	private boolean identifierRollbackEnabled;
+ 	private boolean flushBeforeCompletionEnabled;
+@@ -197,6 +200,19 @@
+ 		return statisticsEnabled;
+ 	}
+ 
++	public boolean isStatisticsJmxEnabled() {
++	    // note that SettingsFactory assures if this returns true, so does isStatisticsEnabled
++	    return statisticsJmxEnabled;
++	}
++	
++	public String getStatisticsJmxObjectName() {
++	    return statisticsJmxObjectName;
++	}
++	
++	public String getStatisticsJmxMBeanServer() {
++	    return statisticsJmxMBeanServer;
++	}
++	
+ 	public boolean isJdbcBatchVersionedData() {
+ 		return jdbcBatchVersionedData;
+ 	}
+@@ -392,6 +408,18 @@
+ 		this.statisticsEnabled = statisticsEnabled;
+ 	}
+ 
++	void setStatisticsJmxEnabled(boolean statisticsJmxEnabled) {
++	    this.statisticsJmxEnabled = statisticsJmxEnabled;
++	}
++	
++	void setStatisticsJmxObjectName(String statisticsJmxObjectName) {
++	    this.statisticsJmxObjectName = statisticsJmxObjectName;
++	}
++	
++	void setStatisticsJmxMBeanServer(String statisticsJmxMBeanServer) {
++	    this.statisticsJmxMBeanServer = statisticsJmxMBeanServer;
++	}
++	
+ 	void setJdbcBatchVersionedData(boolean jdbcBatchVersionedData) {
+ 		this.jdbcBatchVersionedData = jdbcBatchVersionedData;
+ 	}
+Index: src/org/hibernate/cfg/Environment.java
+===================================================================
+--- src/org/hibernate/cfg/Environment.java	(revision 15586)
++++ src/org/hibernate/cfg/Environment.java	(working copy)
+@@ -151,6 +151,39 @@
+  * <tr>
+  *   <td><tt>hibernate.query.substitutions</tt></td><td>query language token substitutions</td>
+  * </tr>
++ * <tr>
++ *   <td><tt>hibernate.generate_statistics</tt></td>
++ *   <td>if <b>true</b>, internal Hibernate statistics will be collected.
++ *       This value has a default of <code>false</code>; however, if
++ *       <code>hibernate.generate_statistics.jmx</code> is set, this
++ *       setting will be ignored and overridden to have a value of <code>true</code>.</td>
++ * </tr>
++ * <tr>
++ *   <td><tt>hibernate.generate_statistics.jmx</tt></td>
++ *   <td>If <b>true</b>, the <code>StatisticsService</code> MBean will be deployed.
++ *       If this is <code>true</code>, Hibernate must be running in a
++ *       JRE 5+ environment or JMX must be installed in classpath.
++ *       Setting this to <code>true</code> infers that you want to collect internal
++ *       statistics so <code>hibernate.generate_statistics</code> will be ignored
++ *       and assumed to have a value of <code>true</code>.</td>
++ * </tr>
++ * <tr>
++ *   <td><tt>hibernate.generate_statistics.jmx.object_name</tt></td>
++ *   <td>if <code>hibernate.generate_statistics.jmx</code> is <code>true</code>,
++ *       this will be the name the <code>StatisticsService</code> MBean will be
++ *       registered under within the MBeanServer.</td>
++ * </tr>
++ * <tr>
++ *   <td><tt>hibernate.generate_statistics.jmx.mbeanserver</tt></td>
++ *   <td>if <code>hibernate.generate_statistics.jmx</code> is <code>true</code>,
++ *       this will identify the MBeanServer where the <code>StatisticsService</code>
++ *       MBean is to be registered. If this value is <b>*platform*</b>, the
++ *       <code>ManagementFactory.getPlatformMBeanServer</code>
++ *       will be used (only supported on JRE 5 and up). Otherwise, this will be the
++ *       name of the MBeanServer's default domain name. If one does not yet exist
++ *       with that default domain name, one will be created via
++ *       <code>MBeanServerFactory.createMBeanServer</code>.</td>
++ * </tr>
+  * </table>
+  *
+  * @see org.hibernate.SessionFactory
+@@ -414,6 +447,9 @@
+ 	 * Enable statistics collection
+ 	 */
+ 	public static final String GENERATE_STATISTICS = "hibernate.generate_statistics";
++	public static final String JMX_STATISTICS_ENABLED = "hibernate.generate_statistics.jmx";
++	public static final String JMX_STATISTICS_OBJECTNAME = "hibernate.generate_statistics.jmx.object_name";
++	public static final String JMX_STATISTICS_MBEANSERVER = "hibernate.generate_statistics.jmx.mbeanserver";
+ 
+ 	public static final String USE_IDENTIFIER_ROLLBACK = "hibernate.use_identifier_rollback";
+ 
+Index: src/org/hibernate/jmx/JmxStatistics.java
+===================================================================
+--- src/org/hibernate/jmx/JmxStatistics.java	(revision 0)
++++ src/org/hibernate/jmx/JmxStatistics.java	(revision 0)
+@@ -0,0 +1,260 @@
++//$Id$
++package org.hibernate.jmx;
++
++import java.lang.reflect.Constructor;
++import java.lang.reflect.Method;
++import java.util.ArrayList;
++import java.util.Iterator;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.SessionFactory;
++
++/**
++ * Responsible for preparing the {@link StatisticsService} MBean.
++ * This can register and unregister the statistics MBean in any registered MBeanServer,
++ * including the JRE's built-in platform MBeanServer.
++ * 
++ * <p>Note that this class does not introduce any compile-time JMX dependencies.
++ * This is to fulfill the requirement that Hibernate support JDK 1.4. However, if
++ * the user configures Hibernate to enable JMX statistics, and there is no JMX
++ * libraries in the classloader, this class will fail to successfully prepare the
++ * statistics MBean. In this case, the exception messages will inform the user
++ * that the JMX statistics feature should be disabled.</p> 
++ * 
++ * @author John Mazzitelli
++ */
++public class JmxStatistics {
++    private static final Log log = LogFactory.getLog(JmxStatistics.class);
++
++    private final String mBeanName;
++    private final String mBeanServerName;
++    private final SessionFactory sessionFactory;
++
++    /**
++     * Constructor that defines the name of the Statistics MBean and the name
++     * of the MBeanServer where the MBean is to be registered.
++     * 
++     * @param factory the session factory whose statistics is being collected
++     * @param objectName the name of the statistics MBean
++     * @param mbsName the default domain name of the MBeanServer where the MBean should be registered
++     */
++    public JmxStatistics(SessionFactory factory, String objectName, String mbsName) {
++        this.sessionFactory = factory;
++        this.mBeanName = objectName;
++        this.mBeanServerName = mbsName;
++    }
++
++    /**
++     * Creates and registers the {@link StatisticsService} MBean in the configured
++     * MBeanServer under the configured object name.
++     * 
++     * <p>If, for some reason, the creation or registration fails, this will log an
++     * error but otherwise return normally. In that case, the JMX statistics feature
++     * will be non-functioning. This normally occurs when Hibernate is running in
++     * a JRE 1.4 with no JMX libraries available or Hibernate is running in JRE 1.4
++     * with JMX libraries but the configured MBeanServer is "*platform*"
++     * (which requires JRE 5+ since there is no such thing as a "platform MBeanServer"
++     * in JDK 1.4).</p>
++     */
++    public void enableJmxStatistics() {
++        try {
++            // create the stats MBean
++            StatisticsService mBean = new StatisticsService();
++            mBean.setSessionFactory(this.sessionFactory);
++
++            // register the new stats MBean in the appropriate MBeanServer under the given name
++            MBeanServer mbs = getMBeanServer(this.mBeanServerName);
++            mbs.registerMBean(mBean, newObjectName(this.mBeanName));
++        } catch (Exception e) {
++            log.error("Could not register the statistics MBean - JMX statistics will now be disabled!", e);
++        }
++        return;
++    }
++    
++    /**
++     * Unregisters the JMX statistics MBean which essentially turns off the
++     * JMX statistics feature. 
++     */
++    public void disableJmxStatistics() {
++        try {
++            MBeanServer mbs = getMBeanServer(this.mBeanServerName);
++            if (mbs.isRegistered(newObjectName(this.mBeanName))) {
++               mbs.unregisterMBean(newObjectName(this.mBeanName));
++            }
++        } catch (Exception e) {
++            log.warn("Could not unregister the statistics MBean", e);
++        }
++        return;
++    }
++
++    /**
++     * Returns the MBeanServer where the Statistics MBean should be registered.
++     * 
++     * <p>If <code>defaultDomainName</code> is "*platform*", the VM's platform
++     * MBeanServer is to be used (<code>ManagementFactory.getPlatformMBeanServer()</code>);
++     * this is only valid on JRE 5+.</p>
++     * 
++     * <p>If <code>defaultDomainName</code> is non-<code>null</code>, it will assumed
++     * to be the default domain name for an existing MBeanServer. This method
++     * will look for such an MBeanServer via
++     * <code>MBeanServerFactory.findMBeanServer(String)</code>. If one is not
++     * found, it will be created via
++     * <code>MBeanServerFactory.createMBeanServer(String)</code>. This requires
++     * the JMX classes to be available to this class.</p>
++     * 
++     * <p>If <code>defaultDomainName</code> is empty or <code>null</code>, the default
++     * behavior will be to use the first MBeanServer found in the list returned
++     * by <code>MBeanServerFactory.findMBeanServer(null)</code>; if no
++     * MBeanServers exist, an exception is thrown. This requires the
++     * JMX classes to be available to this class.</p>
++     * 
++     * @param defaultDomainName indicates which MBeanServer to use
++     * 
++     * @return MBeanServer where the MBean is supposed to be registered
++     * 
++     * @throws Exception if could not obtain the desired MBeanServer
++     */
++    private MBeanServer getMBeanServer(String defaultDomainName) throws Exception {
++        if ("*platform*".equals(defaultDomainName)) {
++            return ManagementFactory_getPlatformMBeanServer();
++        }
++
++        // we need to get the list of existing MBeanServers and try to use one of them
++        ArrayList mbsList = MBeanServerFactory_findMBeanServer();
++
++        // if we have not been given a default domain name, take the first MBeanServer we find
++        if (defaultDomainName == null || defaultDomainName.length() == 0) {
++            if (mbsList.isEmpty()) {
++                throw new Exception("There are no registered MBeanServers");
++            }
++            MBeanServer mbs = (MBeanServer) mbsList.get(0);
++            log.debug("Using MBeanServer with default domain: " + mbs.getDefaultDomain());
++            return mbs;
++        }
++
++        // let's find the MBeanServer with the given default domain name, creating one if needed
++        Iterator i = mbsList.iterator();
++        while (i.hasNext()) {
++            MBeanServer mbs = (MBeanServer) i.next();
++            if (defaultDomainName.equals(mbs.getDefaultDomain())) {
++                log.debug("Will use the MBeanServer found with default domain: " + defaultDomainName);
++                return mbs;
++            }
++        }
++
++        // didn't find an existing one with the given default domain name, create one now
++        log.debug("Creating MBeanServer with default domain: " + defaultDomainName);
++        return MBeanServerFactory_createMBeanServer(defaultDomainName);
++    }
++
++    // Because we do not want to introduce *any* JMX dependencies (either build or runtime),
++    // we must create our own proxy objects to call out to the JMX objects via reflection.
++    // If we are running in JDK 1.4 and JMX libraries do not exist, calls to these will fail. 
++    // We try to keep the names and signatures as close as we can to the JMX API so in the future
++    // we can more easily convert this class over to using the real JMX objects - simply
++    // delete all of the methods/classes below and correct the compile errors that results which
++    // should be trivial work (this can only be done when Hibernate stops supporting JDK 1.4).
++
++    class MBeanServer {
++        private final Object mbsInstance;
++
++        public MBeanServer(Object mbs) {
++            this.mbsInstance = mbs;
++        }
++
++        public void registerMBean(Object mbean, Object objectName) throws Exception {
++            try {
++                Class objectNameClass = Class.forName("javax.management.MBeanServer");
++                Method method = objectNameClass.getMethod("registerMBean", new Class[] { Object.class, objectName.getClass() });
++                method.invoke(this.mbsInstance, new Object[] { mbean, objectName });
++                return;
++            } catch (Exception e) {
++                throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++            }
++        }
++
++        public void unregisterMBean(Object objectName) throws Exception {
++            try {
++                Class objectNameClass = Class.forName("javax.management.MBeanServer");
++                Method method = objectNameClass.getMethod("unregisterMBean", new Class[] { objectName.getClass() });
++                method.invoke(this.mbsInstance, new Object[] { objectName });
++                return;
++            } catch (Exception e) {
++                throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++            }
++        }
++        
++        public boolean isRegistered(Object objectName) throws Exception {
++            try {
++                Class objectNameClass = Class.forName("javax.management.MBeanServer");
++                Method method = objectNameClass.getMethod("isRegistered", new Class[] { objectName.getClass() });
++                return ((Boolean) method.invoke(this.mbsInstance, new Object[] { objectName })).booleanValue();
++            } catch (Exception e) {
++                throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++            }
++        }
++        
++        public String getDefaultDomain() throws Exception {
++            try {
++                Class objectNameClass = Class.forName("javax.management.MBeanServer");
++                Method method = objectNameClass.getMethod("getDefaultDomain", null);
++                return (String) method.invoke(this.mbsInstance, null);
++            } catch (Exception e) {
++                throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++            }
++        }
++    }
++
++    // returns ManagementFactory.getPlatformMBeanServer()
++    private MBeanServer ManagementFactory_getPlatformMBeanServer() throws Exception {
++        try {
++            Class c = Class.forName("java.lang.management.ManagementFactory");
++            Method m = c.getMethod("getPlatformMBeanServer", null);
++            return new MBeanServer(m.invoke(null, null));
++        } catch (Exception e) {
++            throw new Exception("Failed to get platform MBeanServer - this requires JRE 5+, you should disable JMX statistics!", e);
++        }
++    }
++
++    // returns MBeanServerFactory.createMBeanServer(String defaultDomainName)
++    private MBeanServer MBeanServerFactory_createMBeanServer(String defaultDomainName) throws Exception {
++        try {
++            Class objectNameClass = Class.forName("javax.management.MBeanServerFactory");
++            Method method = objectNameClass.getMethod("createMBeanServer", new Class[] { String.class });
++            return new MBeanServer(method.invoke(null, new Object[] { defaultDomainName }));
++        } catch (Exception e) {
++            throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++        }
++    }
++
++    // returns MBeanServerFactory.findMBeanServer(null)
++    private ArrayList MBeanServerFactory_findMBeanServer() throws Exception {
++        try {
++            Class objectNameClass = Class.forName("javax.management.MBeanServerFactory");
++            Method method = objectNameClass.getMethod("findMBeanServer", new Class[] { String.class });
++            ArrayList mbsList = (ArrayList) method.invoke(null, new Object[] { null });
++            ArrayList returnList = new ArrayList();
++            if (mbsList != null) {
++                Iterator i = mbsList.iterator();
++                while (i.hasNext()) {
++                    returnList.add(new MBeanServer(i.next()));
++                }
++            }
++            return returnList;
++        } catch (Exception e) {
++            throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++        }
++    }
++
++    // returns "new ObjectName(name)"
++    private Object newObjectName(String name) throws Exception {
++        try {
++            Class objectNameClass = Class.forName("javax.management.ObjectName");
++            Constructor constructor = objectNameClass.getConstructor(new Class[] { String.class });
++            return constructor.newInstance(new Object[] { name });
++        } catch (Exception e) {
++            throw new Exception("Failed to invoke JMX API, you should disable JMX statistics!", e);
++        }
++    }
++}

@@ -1,0 +1,82 @@
+Index: BasicLazyInitializer.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/proxy/BasicLazyInitializer.java,v
+retrieving revision 1.13
+diff -u -r1.13 BasicLazyInitializer.java
+--- BasicLazyInitializer.java	30 Jul 2005 00:50:21 -0000	1.13
++++ BasicLazyInitializer.java	27 Oct 2005 06:59:57 -0000
+@@ -59,9 +59,7 @@
+ 			else if ( isUninitialized() && method.equals(getIdentifierMethod) ) {
+ 				return getIdentifier();
+ 			}
+-			else if ( "finalize".equals(methodName) ) {
+-				return null;
+-			}
++			
+ 			else if ( "getHibernateLazyInitializer".equals(methodName) ) {
+ 				return this;
+ 			}
+Index: CGLIBLazyInitializer.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/proxy/CGLIBLazyInitializer.java,v
+retrieving revision 1.14
+diff -u -r1.14 CGLIBLazyInitializer.java
+--- CGLIBLazyInitializer.java	9 Sep 2005 15:19:45 -0000	1.14
++++ CGLIBLazyInitializer.java	27 Oct 2005 06:59:57 -0000
+@@ -5,10 +5,14 @@
+ import java.lang.reflect.InvocationTargetException;
+ import java.lang.reflect.Method;
+ 
++import net.sf.cglib.proxy.Callback;
++import net.sf.cglib.proxy.CallbackFilter;
+ import net.sf.cglib.proxy.Enhancer;
+ import net.sf.cglib.proxy.Factory;
+ import net.sf.cglib.proxy.MethodInterceptor;
+ import net.sf.cglib.proxy.MethodProxy;
++import net.sf.cglib.proxy.NoOp;
++
+ import org.hibernate.HibernateException;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.type.AbstractComponentType;
+@@ -21,6 +25,20 @@
+  */
+ public final class CGLIBLazyInitializer extends BasicLazyInitializer implements MethodInterceptor {
+ 
++	
++	static private final Class[] CALLBACK_TYPES = new Class[]{ MethodInterceptor.class,NoOp.class };
++	
++	static private final CallbackFilter FINALIZE_FILTER = new CallbackFilter() {
++		
++		public int accept(Method method) {
++			if(method.getParameterTypes().length == 0 && method.getName().equals("finalize") ){
++				return 1;
++			}
++			
++			return 0;
++		}
++	};
++
+ 	private Class[] interfaces;
+ 	private boolean constructed = false;
+ 
+@@ -43,7 +61,7 @@
+ 				);
+ 			
+ 			Class concreteClass = interfaces.length == 1 ? persistentClass : null;
+-			final HibernateProxy proxy = (HibernateProxy) Enhancer.create(concreteClass, interfaces, instance);
++			final HibernateProxy proxy = (HibernateProxy) Enhancer.create(concreteClass, interfaces,FINALIZE_FILTER, new Callback[]{ instance, NoOp.INSTANCE });
+ 			
+ 			instance.constructed = true;
+ 			return proxy;
+@@ -94,7 +112,10 @@
+ 			Enhancer en = new Enhancer();
+ 			en.setUseCache( false );
+ 			en.setInterceptDuringConstruction( false );
+-			en.setCallbackType( MethodInterceptor.class );
++			
++			en.setCallbackTypes( CALLBACK_TYPES );
++			en.setCallbackFilter( FINALIZE_FILTER );
++			
+ 			en.setSuperclass( interfaces.length == 1 ? persistentClass : null );
+ 			en.setInterfaces( interfaces );
+ 

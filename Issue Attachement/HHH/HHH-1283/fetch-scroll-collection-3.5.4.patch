@@ -1,0 +1,486 @@
+diff -crBN hibernate-base/project/core/src/main/java/org/hibernate/engine/loading/CollectionLoadContext.java hibernate-patched/project/core/src/main/java/org/hibernate/engine/loading/CollectionLoadContext.java
+*** hibernate-base/project/core/src/main/java/org/hibernate/engine/loading/CollectionLoadContext.java	Wed Jul 30 18:46:34 2008
+--- hibernate-patched/project/core/src/main/java/org/hibernate/engine/loading/CollectionLoadContext.java	Thu Nov 25 17:32:40 2010
+***************
+*** 173,179 ****
+  	 *
+  	 * @param persister The persister for which to complete loading.
+  	 */
+! 	public void endLoadingCollections(CollectionPersister persister) {
+  		SessionImplementor session = getLoadContext().getPersistenceContext().getSession();
+  		if ( !loadContexts.hasLoadingCollectionEntries()
+  				&& localLoadingCollectionKeys.isEmpty() ) {
+--- 173,179 ----
+  	 *
+  	 * @param persister The persister for which to complete loading.
+  	 */
+! 	public void endLoadingCollections(CollectionPersister persister, Object loadedEntity) {
+  		SessionImplementor session = getLoadContext().getPersistenceContext().getSession();
+  		if ( !loadContexts.hasLoadingCollectionEntries()
+  				&& localLoadingCollectionKeys.isEmpty() ) {
+***************
+*** 195,210 ****
+  				log.warn( "In CollectionLoadContext#endLoadingCollections, localLoadingCollectionKeys contained [" + collectionKey + "], but no LoadingCollectionEntry was found in loadContexts" );
+  			}
+  			else if ( lce.getResultSet() == resultSet && lce.getPersister() == persister ) {
+- 				if ( matches == null ) {
+- 					matches = new ArrayList();
+- 				}
+- 				matches.add( lce );
+  				if ( lce.getCollection().getOwner() == null ) {
+  					session.getPersistenceContext().addUnownedCollection(
+  							new CollectionKey( persister, lce.getKey(), session.getEntityMode() ),
+  							lce.getCollection()
+  					);
+  				}
+  				if ( log.isTraceEnabled() ) {
+  					log.trace( "removing collection load entry [" + lce + "]" );
+  				}
+--- 195,213 ----
+  				log.warn( "In CollectionLoadContext#endLoadingCollections, localLoadingCollectionKeys contained [" + collectionKey + "], but no LoadingCollectionEntry was found in loadContexts" );
+  			}
+  			else if ( lce.getResultSet() == resultSet && lce.getPersister() == persister ) {
+  				if ( lce.getCollection().getOwner() == null ) {
+  					session.getPersistenceContext().addUnownedCollection(
+  							new CollectionKey( persister, lce.getKey(), session.getEntityMode() ),
+  							lce.getCollection()
+  					);
++ 				} else if (loadedEntity != null && lce.getCollection().getOwner() != loadedEntity) {
++ 					// The collection does not belong to the loadedEntity and is not completely initialized
++ 					continue;
+  				}
++ 				if ( matches == null ) {
++ 					matches = new ArrayList();
++ 				}
++ 				matches.add( lce );
+  				if ( log.isTraceEnabled() ) {
+  					log.trace( "removing collection load entry [" + lce + "]" );
+  				}
+diff -crBN hibernate-base/project/core/src/main/java/org/hibernate/loader/Loader.java hibernate-patched/project/core/src/main/java/org/hibernate/loader/Loader.java
+*** hibernate-base/project/core/src/main/java/org/hibernate/loader/Loader.java	Wed Mar 24 15:37:56 2010
+--- hibernate-patched/project/core/src/main/java/org/hibernate/loader/Loader.java	Thu Nov 25 17:28:27 2010
+***************
+*** 328,334 ****
+  				hydratedObjects, 
+  				resultSet, 
+  				session, 
+! 				queryParameters.isReadOnly( session )
+  			);
+  		session.getPersistenceContext().initializeNonLazyCollections();
+  		return result;
+--- 328,335 ----
+  				hydratedObjects, 
+  				resultSet, 
+  				session, 
+! 				queryParameters.isReadOnly( session ),
+! 				result
+  			);
+  		session.getPersistenceContext().initializeNonLazyCollections();
+  		return result;
+***************
+*** 379,385 ****
+  				hydratedObjects, 
+  				resultSet, 
+  				session, 
+! 				queryParameters.isReadOnly( session )
+  			);
+  		session.getPersistenceContext().initializeNonLazyCollections();
+  		return result;
+--- 380,387 ----
+  				hydratedObjects, 
+  				resultSet, 
+  				session, 
+! 				queryParameters.isReadOnly( session ),
+! 				result
+  			);
+  		session.getPersistenceContext().initializeNonLazyCollections();
+  		return result;
+***************
+*** 770,776 ****
+  			session.getBatcher().closeQueryStatement( st, rs );
+  		}
+  
+! 		initializeEntitiesAndCollections( hydratedObjects, rs, session, queryParameters.isReadOnly( session ) );
+  
+  		if ( createSubselects ) createSubselects( subselectResultKeys, queryParameters, session );
+  
+--- 772,778 ----
+  			session.getBatcher().closeQueryStatement( st, rs );
+  		}
+  
+! 		initializeEntitiesAndCollections( hydratedObjects, rs, session, queryParameters.isReadOnly( session ), null );
+  
+  		if ( createSubselects ) createSubselects( subselectResultKeys, queryParameters, session );
+  
+***************
+*** 860,866 ****
+  			final List hydratedObjects,
+  			final Object resultSetId,
+  			final SessionImplementor session,
+! 			final boolean readOnly) 
+  	throws HibernateException {
+  		
+  		final CollectionPersister[] collectionPersisters = getCollectionPersisters();
+--- 862,869 ----
+  			final List hydratedObjects,
+  			final Object resultSetId,
+  			final SessionImplementor session,
+! 			final boolean readOnly,
+! 			Object loadedEntity) 
+  	throws HibernateException {
+  		
+  		final CollectionPersister[] collectionPersisters = getCollectionPersisters();
+***************
+*** 872,878 ****
+  					//during loading
+  					//TODO: or we could do this polymorphically, and have two
+  					//      different operations implemented differently for arrays
+! 					endCollectionLoad( resultSetId, session, collectionPersisters[i] );
+  				}
+  			}
+  		}
+--- 875,881 ----
+  					//during loading
+  					//TODO: or we could do this polymorphically, and have two
+  					//      different operations implemented differently for arrays
+! 					endCollectionLoad( resultSetId, session, collectionPersisters[i], loadedEntity );
+  				}
+  			}
+  		}
+***************
+*** 906,912 ****
+  					//the entities, since we might call hashCode() on the elements
+  					//TODO: or we could do this polymorphically, and have two
+  					//      different operations implemented differently for arrays
+! 					endCollectionLoad( resultSetId, session, collectionPersisters[i] );
+  				}
+  			}
+  		}
+--- 909,915 ----
+  					//the entities, since we might call hashCode() on the elements
+  					//TODO: or we could do this polymorphically, and have two
+  					//      different operations implemented differently for arrays
+! 					endCollectionLoad( resultSetId, session, collectionPersisters[i], loadedEntity );
+  				}
+  			}
+  		}
+***************
+*** 916,927 ****
+  	private void endCollectionLoad(
+  			final Object resultSetId, 
+  			final SessionImplementor session, 
+! 			final CollectionPersister collectionPersister) {
+  		//this is a query and we are loading multiple instances of the same collection role
+  		session.getPersistenceContext()
+  				.getLoadContexts()
+  				.getCollectionLoadContext( ( ResultSet ) resultSetId )
+! 				.endLoadingCollections( collectionPersister );
+  	}
+  
+  	protected List getResultList(List results, ResultTransformer resultTransformer) throws QueryException {
+--- 919,931 ----
+  	private void endCollectionLoad(
+  			final Object resultSetId, 
+  			final SessionImplementor session, 
+! 			final CollectionPersister collectionPersister,
+! 			final Object loadedEntity) {
+  		//this is a query and we are loading multiple instances of the same collection role
+  		session.getPersistenceContext()
+  				.getLoadContexts()
+  				.getCollectionLoadContext( ( ResultSet ) resultSetId )
+! 				.endLoadingCollections( collectionPersister, loadedEntity );
+  	}
+  
+  	protected List getResultList(List results, ResultTransformer resultTransformer) throws QueryException {
+diff -crBN hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Child.java hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Child.java
+*** hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Child.java	Thu Jan  1 01:00:00 1970
+--- hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Child.java	Thu Nov 25 17:35:51 2010
+***************
+*** 0 ****
+--- 1,25 ----
++ //$Id: Group.java 6058 2005-03-11 17:05:19Z oneovthafew $
++ package org.hibernate.test.hqlfetchscroll;
++ 
++ public class Child {
++ 	
++ 	private String name;
++ 	
++ 	Child() {}
++ 	
++ 	public Child(String name) {
++ 		this.name = name;
++ 	}
++ 	
++ 	public String getName() {
++ 		return name;
++ 	}
++ 	
++ 	public void setName(String name) {
++ 		this.name = name;
++ 	}
++ 	
++ 	public String toString() {
++ 		return name;
++ 	}
++ }
+diff -crBN hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/HqlScrollFetchTest.java hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/HqlScrollFetchTest.java
+*** hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/HqlScrollFetchTest.java	Thu Jan  1 01:00:00 1970
+--- hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/HqlScrollFetchTest.java	Thu Nov 25 18:15:02 2010
+***************
+*** 0 ****
+--- 1,170 ----
++ package org.hibernate.test.hqlfetchscroll;
++ 
++ import java.util.ArrayList;
++ import java.util.Iterator;
++ import java.util.List;
++ 
++ import junit.framework.TestCase;
++ 
++ import org.hibernate.ScrollableResults;
++ import org.hibernate.TestingDatabaseInfo;
++ import org.hibernate.Transaction;
++ import org.hibernate.cfg.Configuration;
++ import org.hibernate.cfg.Environment;
++ import org.hibernate.classic.Session;
++ import org.hibernate.engine.SessionFactoryImplementor;
++ import org.hibernate.transform.DistinctRootEntityResultTransformer;
++ 
++ public class HqlScrollFetchTest extends TestCase {
++ 
++ 	private static final String QUERY = "select p from Parent p join fetch p.children c";
++ 
++ 	private Configuration cfg;
++ 	private SessionFactoryImplementor sessionFactory;
++ 
++ 	protected void setUp() throws Exception {
++ 		super.setUp();
++ 		cfg = TestingDatabaseInfo.buildBaseConfiguration().setProperty(Environment.HBM2DDL_AUTO, "create-drop");
++ 		for (int i = 0; i < getMappings().length; i++) {
++ 			cfg.addResource(getMappings()[i]);
++ 		}
++ 
++ 		sessionFactory = (SessionFactoryImplementor) cfg.buildSessionFactory();
++ 	}
++ 
++ 	public HqlScrollFetchTest(String name) {
++ 		super(name);
++ 	}
++ 
++ 	public void testNoScroll() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			List list = (List)s.createQuery(QUERY).setResultTransformer(DistinctRootEntityResultTransformer.INSTANCE).list();
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	public void testScroll() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			ScrollableResults results = s.createQuery(QUERY).scroll();
++ 			List list = new ArrayList();
++ 			while (results.next()) {
++ 				list.add((Parent)results.get(0));
++ 			}
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	public void testScrollOrderParentAsc() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			ScrollableResults results = s.createQuery(QUERY + " order by p.name asc").scroll();
++ 			List list = new ArrayList();
++ 			while (results.next()) {
++ 				list.add((Parent)results.get(0));
++ 			}
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	public void testScrollOrderParentDesc() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			ScrollableResults results = s.createQuery(QUERY + " order by p.name desc").scroll();
++ 			List list = new ArrayList();
++ 			while (results.next()) {
++ 				list.add((Parent)results.get(0));
++ 			}
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	public void testScrollOrderParentAscChildrenAsc() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			ScrollableResults results = s.createQuery(QUERY + " order by p.name asc, c.name asc").scroll();
++ 			List list = new ArrayList();
++ 			while (results.next()) {
++ 				list.add((Parent)results.get(0));
++ 			}
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	public void testScrollOrderParentAscChildrenDesc() {
++ 		try {
++ 			insertTestData();
++ 			Session s = sessionFactory.openSession();
++ 			ScrollableResults results = s.createQuery(QUERY + " order by p.name asc, c.name desc").scroll();
++ 			List list = new ArrayList();
++ 			while (results.next()) {
++ 				list.add((Parent)results.get(0));
++ 			}
++ 			assertResultFromAllUsers(list);
++ 			s.close();
++ 		} finally {
++ 			deleteAll();
++ 		}
++ 	}
++ 
++ 	private void assertResultFromAllUsers(List list) {
++ 		assertEquals("list is not correct size: ", 2, list.size());
++ 		for (Iterator i = list.iterator(); i.hasNext();) {
++ 			Parent parent = (Parent)i.next();
++ 			assertEquals("parent " + parent + " has incorrect collection(" + parent.getChildren() + ").", 3, parent.getChildren().size());
++ 		}
++ 	}
++ 
++ 	private void deleteAll() {
++ 		Session s = sessionFactory.openSession();
++ 		Transaction t = s.beginTransaction();
++ 		List list = s.createQuery("from Parent").list();
++ 		for (Iterator i = list.iterator(); i.hasNext();) {
++ 			s.delete((Parent) i.next());
++ 		}
++ 		t.commit();
++ 		s.close();
++ 	}
++ 
++ 	private void insertTestData() {
++ 		Session s = sessionFactory.openSession();
++ 		Transaction t = s.beginTransaction();
++ 		s.save(makeParent("parent1", "child1-1", "child1-2", "child1-3"));
++ 		s.save(makeParent("parent2", "child2-1", "child2-2", "child2-3"));
++ 		t.commit();
++ 		s.close();
++ 	}
++ 
++ 	protected String[] getMappings() {
++ 		return new String[] { "org/hibernate/test/hqlfetchscroll/ParentChild.hbm.xml" };
++ 	}
++ 
++ 	protected Object makeParent(String name, String child1, String child2, String child3) {
++ 		Parent parent = new Parent(name);
++ 		parent.addChild(new Child(child1));
++ 		parent.addChild(new Child(child2));
++ 		parent.addChild(new Child(child3));
++ 		return parent;
++ 	}
++ }
+diff -crBN hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Parent.java hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Parent.java
+*** hibernate-base/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Parent.java	Thu Jan  1 01:00:00 1970
+--- hibernate-patched/project/core/src/test/java/org/hibernate/test/hqlfetchscroll/Parent.java	Thu Nov 25 18:13:42 2010
+***************
+*** 0 ****
+--- 1,41 ----
++ //$Id: User.java 6058 2005-03-11 17:05:19Z oneovthafew $
++ package org.hibernate.test.hqlfetchscroll;
++ 
++ import java.util.HashSet;
++ import java.util.Set;
++ 
++ public class Parent {
++ 	private String name;
++ 	private Set children = new HashSet();
++ 	
++ 	Parent() {}
++ 	
++ 	public Parent(String name) {
++ 		this.name = name;
++ 	}
++ 
++ 	public String getName() {
++ 		return name;
++ 	}
++ 	
++ 
++ 	void setName(String name) {
++ 		this.name = name;
++ 	}
++ 
++ 	public Set getChildren() {
++ 		return children;
++ 	}
++ 	
++ 	public void setChildren(Set children) {
++ 		this.children = children;
++ 	}
++ 	
++ 	public void addChild (Child child) {
++ 		children.add(child);
++ 	}
++ 	
++ 	public String toString() {
++ 		return name;
++ 	}
++ }
+diff -crBN hibernate-base/project/core/src/test/resources/org/hibernate/test/hqlfetchscroll/ParentChild.hbm.xml hibernate-patched/project/core/src/test/resources/org/hibernate/test/hqlfetchscroll/ParentChild.hbm.xml
+*** hibernate-base/project/core/src/test/resources/org/hibernate/test/hqlfetchscroll/ParentChild.hbm.xml	Thu Jan  1 01:00:00 1970
+--- hibernate-patched/project/core/src/test/resources/org/hibernate/test/hqlfetchscroll/ParentChild.hbm.xml	Thu Nov 25 17:37:35 2010
+***************
+*** 0 ****
+--- 1,32 ----
++ <?xml version="1.0"?>
++ <!DOCTYPE hibernate-mapping PUBLIC 
++ 	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++ 	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++ 
++ <!-- 
++ 
++   This mapping demonstrates how to use an idbag to represent
++   a many-to-many association where the association table has
++   a surrogate key.
++      
++ -->
++ 
++ <hibernate-mapping package="org.hibernate.test.hqlfetchscroll">
++ 	
++ 	<class name="Parent" table="Parents">
++ 		<id name="name"/>
++ 		
++ 		<set name="children" cascade="all-delete-orphan" lazy="false">
++ 			<key column="parent_id"/>
++ 			<one-to-many class="Child"/>
++ 		</set>
++ 
++ 		
++ 	</class>
++ 	
++ 	<class name="Child" table="chlidren">
++ 		<id name="name"/>
++ 	</class>
++ 	
++ 
++ </hibernate-mapping>

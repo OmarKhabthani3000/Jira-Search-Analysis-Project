@@ -1,0 +1,184 @@
+Index: org/hibernate/cfg/HbmBinder.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/cfg/HbmBinder.java,v
+retrieving revision 1.91
+diff -u -r1.91 HbmBinder.java
+--- org/hibernate/cfg/HbmBinder.java 22 May 2005 22:41:56 -0000 1.91
++++ org/hibernate/cfg/HbmBinder.java 25 May 2005 17:36:03 -0000
+@@ -984,7 +984,9 @@
+   if ( uniqueKeyAttribute != null && table != null ) {
+    StringTokenizer tokens = new StringTokenizer( uniqueKeyAttribute.getValue(), ", " );
+    while ( tokens.hasMoreTokens() ) {
+-    table.getOrCreateUniqueKey( tokens.nextToken() ).addColumn( column );
++    String keyName = tokens.nextToken();
++    table.getOrCreateUniqueKey( keyName ).addColumn( column );
++    column.setKeyName(keyName);
+    }
+   }
+  }
+Index: org/hibernate/dialect/DerbyDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/dialect/DerbyDialect.java,v
+retrieving revision 1.7
+diff -u -r1.7 DerbyDialect.java
+--- org/hibernate/dialect/DerbyDialect.java 13 Apr 2005 04:44:34 -0000 1.7
++++ org/hibernate/dialect/DerbyDialect.java 25 May 2005 17:36:05 -0000
+@@ -59,4 +59,9 @@
+  public String getQuerySequencesString() {
+     return null ;
+  } 
++ 
++    public boolean supportsUniqueConstraintNameInCreateTable() {
++  return true;
++ }
++
+ }
+Index: org/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/dialect/Dialect.java,v
+retrieving revision 1.43
+diff -u -r1.43 Dialect.java
+--- org/hibernate/dialect/Dialect.java 22 May 2005 22:08:27 -0000 1.43
++++ org/hibernate/dialect/Dialect.java 25 May 2005 17:36:05 -0000
+@@ -803,6 +803,21 @@
+   return false;
+  }
+  
++  /**
++  * Do support to CONSTRAINT UNNAME UNIQUE (COLUMN1)
++  * 
++  */
++ public boolean supportsUniqueConstraintNameInCreateTable () {
++   return false; 
++ }
++
++     /**
++  * Do support to create cached table (HSQLDB)
++  * @return
++  */
++    public String getCreateTableString () {
++  return "create table ";
++    } 
+ }
+
+
+
+ 
+Index: org/hibernate/mapping/Column.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/mapping/Column.java,v
+retrieving revision 1.16
+diff -u -r1.16 Column.java
+--- org/hibernate/mapping/Column.java 22 May 2005 22:41:56 -0000 1.16
++++ org/hibernate/mapping/Column.java 25 May 2005 17:36:10 -0000
+@@ -33,7 +33,8 @@
+  int uniqueInteger;
+  private String checkConstraint;
+  private String comment;
+-
++ private String keyName ;
++ 
+  public Column() { };
+  
+  public Column(String columnName) {
+@@ -262,5 +263,13 @@
+  public void setComment(String comment) {
+   this.comment = comment;
+  }
++
++ public String getKeyName() {
++  return this.keyName;
++ }
++
++ public void setKeyName(String keyName) {
++  this.keyName = keyName;
++ }
+  
+ }
+Index: org/hibernate/mapping/Table.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate3/src/org/hibernate/mapping/Table.java,v
+retrieving revision 1.38
+diff -u -r1.38 Table.java
+--- org/hibernate/mapping/Table.java 22 May 2005 22:41:56 -0000 1.38
++++ org/hibernate/mapping/Table.java 25 May 2005 17:36:11 -0000
+@@ -8,7 +8,10 @@
+ import java.util.List;
+ import java.util.Map;
+ 
++
+ import org.apache.commons.collections.SequencedHashMap;
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
+ import org.hibernate.dialect.Dialect;
+@@ -22,7 +25,7 @@
+  * @author Gavin King
+  */
+ public class Table implements RelationalModel, Serializable {
+-
++ private static Log log = LogFactory.getLog(Table.class);
+  private String name;
+  private String schema;
+  private String catalog;
+@@ -226,7 +229,7 @@
+  }
+ 
+  public String sqlCreateString(Dialect dialect, Mapping p, String defaultCatalog, String defaultSchema) throws HibernateException {
+-  StringBuffer buf = new StringBuffer( "create table " )
++  StringBuffer buf = new StringBuffer( dialect.getCreateTableString() )
+     .append( getQualifiedName( dialect , defaultCatalog, defaultSchema ) )
+     .append( " (" );
+ 
+@@ -266,13 +269,15 @@
+    boolean useUniqueConstraint = col.isUnique() && 
+      ( !col.isNullable() || dialect.supportsNotNullUnique() );
+    if ( useUniqueConstraint ) {
+-    if ( dialect.supportsUnique() ) {
+-     buf.append( " unique" );
+-    }
+-    else {
+-     UniqueKey uk = getOrCreateUniqueKey( col.getQuotedName( dialect ) + '_' );
+-     uk.addColumn( col );
+-    }
++    if ( dialect.supportsUnique() && col.getKeyName() == null ) {
++     buf.append(" unique");
++    } else {
++     if (col.getKeyName() == null) {
++      UniqueKey uk = getOrCreateUniqueKey( col.getQuotedName( dialect ) + '_' );
++      uk.addColumn( col );
++     }  
++      }
++     
+    }
+    if ( col.hasCheckConstraint() && dialect.supportsColumnCheck() ) {
+     buf.append( " check (" )
+@@ -288,12 +293,25 @@
+   }
+ 
+   if ( dialect.supportsUniqueConstraintInCreateAlterTable() ) {
+-   Iterator ukiter = getUniqueKeyIterator();
++   /*Iterator ukiter = getUniqueKeyIterator();
+    while ( ukiter.hasNext() ) {
+     UniqueKey uk = ( UniqueKey ) ukiter.next();
+     buf.append( ", " )
+     .append( uk.sqlConstraintString( dialect ) );
+-   }
++   }*/
++   Iterator ukiter = getUniqueKeyIterator();
++            while ( ukiter.hasNext() ) {
++                UniqueKey uk = (UniqueKey) ukiter.next();
++    log.debug ("Criando key: " + uk.getName());
++    if ( dialect.supportsUniqueConstraintNameInCreateTable()) {//jfn
++                 buf.append(", ")
++                 .append ("constraint ").append (uk.getName()).append (" ")
++                 .append( uk.sqlConstraintString(dialect) );
++    } else {
++                 buf.append(", ")
++                 .append( uk.sqlConstraintString(dialect) );
++    }
++            }
+   }
+   /*Iterator idxiter = getIndexIterator();
+   while ( idxiter.hasNext() ) {

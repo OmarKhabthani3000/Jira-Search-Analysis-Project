@@ -1,0 +1,103 @@
+Index: src/org/hibernate/cache/OptimisticTreeCache.java
+===================================================================
+--- src/org/hibernate/cache/OptimisticTreeCache.java	(revision 9933)
++++ src/org/hibernate/cache/OptimisticTreeCache.java	(working copy)
+@@ -7,7 +7,11 @@
+ import java.util.Set;
+ import java.util.Comparator;
+ 
++import javax.transaction.SystemException;
++import javax.transaction.Transaction;
++import javax.transaction.TransactionManager;
+ 
++
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.jboss.cache.Fqn;
+@@ -35,12 +39,14 @@
+ 	private final String regionName;
+ 	private final String userRegionName;
+ 	private OptimisticCacheSource source;
++    private final TransactionManager transactionManager;
+ 
+-	public OptimisticTreeCache(org.jboss.cache.TreeCache cache, String regionName)
++	public OptimisticTreeCache(org.jboss.cache.TreeCache cache, String regionName, TransactionManager transactionManager)
+ 	throws CacheException {
+ 		this.cache = cache;
+ 		userRegionName = regionName;
+ 		this.regionName = regionName.replace('.', '/');
++        this.transactionManager = transactionManager;
+ 	}
+ 
+ 
+@@ -132,6 +138,7 @@
+ 	}
+ 
+ 	public void put(Object key, Object value) throws CacheException {
++        Transaction tx = suspend();
+ 		try {
+ 			// do the put outside the scope of the JTA txn
+ 			Option option = new Option();
+@@ -145,8 +152,33 @@
+ 		catch (Exception e) {
+ 			throw new CacheException(e);
+ 		}
++        finally {
++            resume( tx );
++        }
+ 	}
+ 
++    private void resume(Transaction tx) {
++        try {
++            if (tx!=null) transactionManager.resume(tx);
++        }
++        catch (Exception e) {
++            throw new CacheException("Could not resume transaction", e);
++        }
++    }
++
++    private Transaction suspend() {
++        Transaction tx = null;
++        try {
++            if ( transactionManager!=null ) {
++                tx = transactionManager.suspend();
++            }
++        }
++        catch (SystemException se) {
++            throw new CacheException("Could not suspend transaction", se);
++        }
++        return tx;
++    }
++
+ 	public void remove(Object key) throws CacheException {
+ 		try {
+ 			cache.remove( new Fqn( new Object[] { regionName, key } ) );
+Index: src/org/hibernate/cache/OptimisticTreeCacheProvider.java
+===================================================================
+--- src/org/hibernate/cache/OptimisticTreeCacheProvider.java	(revision 9933)
++++ src/org/hibernate/cache/OptimisticTreeCacheProvider.java	(working copy)
+@@ -35,6 +35,7 @@
+ 	private static final Log log = LogFactory.getLog( OptimisticTreeCacheProvider.class );
+ 
+ 	private org.jboss.cache.TreeCache cache;
++    private TransactionManager transactionManager;
+ 
+ 	/**
+ 	 * Construct and configure the Cache representation of a named cache region.
+@@ -46,7 +47,7 @@
+ 	 *          Indicates an error building the cache region.
+ 	 */
+ 	public Cache buildCache(String regionName, Properties properties) throws CacheException {
+-		return new OptimisticTreeCache( cache, regionName );
++		return new OptimisticTreeCache( cache, regionName, transactionManager );
+ 	}
+ 
+ 	public long nextTimestamp() {
+@@ -87,6 +88,7 @@
+ 							properties
+ 					)
+ 			);
++            transactionManager = transactionManagerLookup.getTransactionManager(properties);
+ 			if ( ! NODE_LOCKING_SCHEME.equalsIgnoreCase( cache.getNodeLockingScheme() ) ) {
+ 				log.info( "Overriding node-locking-scheme to : " + NODE_LOCKING_SCHEME );
+ 				cache.setNodeLockingScheme( NODE_LOCKING_SCHEME );

@@ -1,0 +1,46 @@
+        ECCCriteria eccCriteria = new ECCCriteria(session, Value.class);
+        Criteria criteria = eccCriteria.getCriteria();
+
+        //Search EED from technicalDefinition
+        ECCPath cvalPath = eccCriteria.createAlias(Value_.characteristicValue.getName());
+        ECCPath prodPath = eccCriteria.createAlias(cvalPath.getPropPath(CharacteristicValue_.product.getName()));
+        ECCPath prodRangPath = eccCriteria.createAlias(prodPath.getPropPath(Product_.productRange.getName()));
+        ECCPath tiuPath = eccCriteria.createAlias(cvalPath.getPropPath(CharacteristicValue_.technicalItemUse.getName()));
+        ECCPath itemPath = eccCriteria.createAlias(tiuPath.getPropPath(TechnicalItemUse_.characteristicItem.getName()));
+        ECCPath techDefPath = eccCriteria.createAlias(tiuPath.getPropPath(TechnicalItemUse_.technicalDefinition.getName()));
+        ECCPath appPath = eccCriteria.createAlias(techDefPath.getPropPath(TechnicalDefinition_.application.getName()));
+        ECCPath eedPath = eccCriteria.createAlias(techDefPath.getPropPath(TechnicalDefinition_.externalExportData.getName()));
+
+        //Search EED from contract
+        ECCPath progPath = eccCriteria.createAlias(appPath.getPropPath(Application_.program.getName()));
+        ECCPath ctrPath = eccCriteria.createAlias(progPath.getPropPath(Program_.contracts.getName()));
+        ECCPath campPath = eccCriteria.createAlias(ctrPath.getPropPath(Contract_.campaigns.getName()));
+        ECCPath refYearPath = eccCriteria.createAlias(campPath.getPropPath(Campaign_.referenceYear.getName()));
+        ECCPath ctrEedPath = eccCriteria.createAlias(ctrPath.getPropPath(Contract_.externalExportDataList.getName()));
+
+        //Restrictions
+
+        criteria.add(Restrictions.in(prodPath.getPropPath(Product_.id.getName()), productIds))
+                .add(Restrictions.eq(prodRangPath.getPropPath(ProductRange_.id.getName()), productRangeId))
+                .add(Restrictions.eq(eedPath.getPropPath(ExternalExportData_.code.getName()), nameEED))
+                .add(Restrictions.eq(ctrEedPath.getPropPath(ExternalExportData_.code.getName()), nameEED))
+                .add(Restrictions.eq(refYearPath.getPropPath(ReferenceYear_.id.getName()), refYearId))
+                .add(Restrictions.eq(ctrPath.getPropPath(Contract_.id.getName()), contractId));
+
+        //Orders
+        criteria.addOrder(Order.asc(appPath.getPropPath(Application_.order.getName())))
+                .addOrder(Order.asc(tiuPath.getPropPath(TechnicalItemUse_.order.getName())));
+
+        //Projection
+        ProjectionList projectionList = Projections.projectionList()
+                .add(Projections.property(appPath.getPropPath(Application_.order.getName())), "appOrder")
+                .add(Projections.property(tiuPath.getPropPath(TechnicalItemUse_.order.getName())), "tiuOrder")
+                .add(Projections.property(prodPath.getPropPath(Product_.id.getName())), "productId")
+                .add(Projections.property(itemPath.getPropPath(CharacteristicItem_.id.getName())), "itemId")
+                .add(Projections.property(Value_.itemValue.getName()), "itemValue");
+        criteria.setProjection(Projections.distinct(projectionList));
+
+        criteria.setResultTransformer(Criteria.DISTINCT_ROOT_ENTITY);
+        criteria.setResultTransformer(Transformers.aliasToBean(BodyBafaProj.class));
+
+        return criteria;

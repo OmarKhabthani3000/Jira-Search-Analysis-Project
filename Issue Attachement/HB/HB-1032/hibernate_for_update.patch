@@ -1,0 +1,179 @@
+Index: net/sf/hibernate/dialect/DB2Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/DB2Dialect.java,v
+retrieving revision 1.15
+diff -u -r1.15 DB2Dialect.java
+--- net/sf/hibernate/dialect/DB2Dialect.java	13 Aug 2004 06:39:27 -0000	1.15
++++ net/sf/hibernate/dialect/DB2Dialect.java	25 Oct 2004 15:20:48 -0000
+@@ -5,6 +5,7 @@
+ 
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.cfg.Environment;
++import net.sf.hibernate.util.StringHelper;
+ 
+ /**
+  * An SQL dialect for DB2.
+@@ -219,6 +220,14 @@
+ 		return true;
+ 	}
+ 
++
++	public String getForUpdateFragmentString(String[] aliases,
++			boolean isNowaitEnabled) {
++		if (aliases==null || aliases.length == 0)
++			return StringHelper.EMPTY_STRING;
++		return " for update with rr"; 
++	}
++
+ }
+ 
+ 
+Index: net/sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.27
+diff -u -r1.27 Dialect.java
+--- net/sf/hibernate/dialect/Dialect.java	24 Oct 2004 07:05:27 -0000	1.27
++++ net/sf/hibernate/dialect/Dialect.java	25 Oct 2004 15:20:48 -0000
+@@ -537,6 +537,32 @@
+ 	public boolean hasDataTypeInIdentityColumn() {
+ 		return true;
+ 	}
++
++	public String getForUpdateFragmentString(String alias, boolean isNowaitEnabled) {
++		return getForUpdateFragmentString(new String[]{alias}, isNowaitEnabled);	
++	}
++
++	public String getForUpdateFragmentString(String[] aliases, boolean isNowaitEnabled) {
++		if (aliases==null || aliases.length == 0)
++			return StringHelper.EMPTY_STRING;
++			
++		boolean nowait = isNowaitEnabled && this.supportsForUpdateNowait();
++		if (this.supportsForUpdateOf()) {
++			StringBuffer aliases_str=new StringBuffer();
++			for(int i=0;i < aliases.length;i++) {
++				if ( aliases_str.length()>0 ) aliases_str.append(", ");
++				aliases_str.append(aliases[i]);
++			}
++			return " for update of " + aliases_str
++					+ (nowait ? " nowait" : StringHelper.EMPTY_STRING);
++		} else if (this.supportsForUpdate()) {
++			return " for update"
++					+ (nowait ? " nowait" : StringHelper.EMPTY_STRING);
++		} else {
++			return StringHelper.EMPTY_STRING;
++		}
++	}
++
+ }
+ 
+ 
+Index: net/sf/hibernate/id/TableGenerator.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/id/TableGenerator.java,v
+retrieving revision 1.9
+diff -u -r1.9 TableGenerator.java
+--- net/sf/hibernate/id/TableGenerator.java	4 Jun 2004 05:43:46 -0000	1.9
++++ net/sf/hibernate/id/TableGenerator.java	25 Oct 2004 15:20:48 -0000
+@@ -67,7 +67,7 @@
+ 			tableName = schemaName + '.' + tableName;
+ 		
+ 		query = "select " + columnName + " from " + tableName;
+-		if ( dialect.supportsForUpdate() ) query += " for update";
++		if ( dialect.supportsForUpdate() ) query += dialect.getForUpdateFragmentString(tableName, false);
+ 		update = "update " + tableName + " set " + columnName + " = ? where " + columnName + " = ?";
+ 	}
+ 
+Index: net/sf/hibernate/persister/AbstractEntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/AbstractEntityPersister.java,v
+retrieving revision 1.46
+diff -u -r1.46 AbstractEntityPersister.java
+--- net/sf/hibernate/persister/AbstractEntityPersister.java	30 Sep 2004 21:22:27 -0000	1.46
++++ net/sf/hibernate/persister/AbstractEntityPersister.java	25 Oct 2004 15:20:49 -0000
+@@ -903,11 +903,11 @@
+ 		String lockString = generateLockString();
+ 		lockers.put(LockMode.READ, lockString);
+ 		String lockExclusiveString = getDialect().supportsForUpdate() ? 
+-			lockString + " for update" : 
++			lockString + getDialect().getForUpdateFragmentString(getTableName(),false) : 
+ 			lockString;
+ 		lockers.put(LockMode.UPGRADE, lockExclusiveString);
+ 		String lockExclusiveNowaitString = getDialect().supportsForUpdateNowait() ? 
+-			lockString + " for update nowait" : 
++			lockString + getDialect().getForUpdateFragmentString(getTableName(),true) : 
+ 			lockExclusiveString;
+ 		lockers.put(LockMode.UPGRADE_NOWAIT, lockExclusiveNowaitString);
+ 	}
+Index: net/sf/hibernate/persister/EntityPersister.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/persister/EntityPersister.java,v
+retrieving revision 1.49
+diff -u -r1.49 EntityPersister.java
+--- net/sf/hibernate/persister/EntityPersister.java	2 Sep 2004 01:08:01 -0000	1.49
++++ net/sf/hibernate/persister/EntityPersister.java	25 Oct 2004 15:20:49 -0000
+@@ -274,14 +274,14 @@
+ 	 * Generate the SQL that selects a row by id using <tt>FOR UPDATE</tt>
+ 	 */
+ 	protected String generateSelectForUpdateString() {
+-		return generateSelectString() + " for update";
++		return generateSelectString() + factory.getDialect().getForUpdateFragmentString(getTableName(), false);
+ 	}
+ 	
+ 	/**
+ 	 * Generate the SQL that selects a row by id using <tt>FOR UPDATE</tt>
+ 	 */
+ 	protected String generateSelectForUpdateNowaitString() {
+-		return generateSelectString() + " for update nowait";
++		return generateSelectString() + factory.getDialect().getForUpdateFragmentString(getTableName(), true);
+ 	}
+ 	
+ 	/**
+Index: net/sf/hibernate/sql/ForUpdateFragment.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/sql/ForUpdateFragment.java,v
+retrieving revision 1.6
+diff -u -r1.6 ForUpdateFragment.java
+--- net/sf/hibernate/sql/ForUpdateFragment.java	4 Jun 2004 05:43:48 -0000	1.6
++++ net/sf/hibernate/sql/ForUpdateFragment.java	25 Oct 2004 15:20:49 -0000
+@@ -1,7 +1,9 @@
+ //$Id: ForUpdateFragment.java,v 1.6 2004/06/04 05:43:48 steveebersole Exp $
+ package net.sf.hibernate.sql;
+ 
++import java.util.ArrayList;
+ import java.util.Iterator;
++import java.util.List;
+ import java.util.Map;
+ 
+ import net.sf.hibernate.LockMode;
+@@ -13,25 +15,16 @@
+  * @author Gavin King
+  */
+ public class ForUpdateFragment {
+-	private StringBuffer aliases = new StringBuffer();
++	private List aliases=new ArrayList();
+ 	private boolean isNowaitEnabled;
++
+ 	public ForUpdateFragment addTableAlias(String alias) {
+-		if ( aliases.length()>0 ) aliases.append(", ");
+-		aliases.append(alias);
++		aliases.add(alias);
+ 		return this;
+ 	}
++
+ 	public String toFragmentString(Dialect dialect) {
+-		if ( aliases.length()==0 ) return StringHelper.EMPTY_STRING;
+-		boolean nowait = isNowaitEnabled && dialect.supportsForUpdateNowait();
+-		if ( dialect.supportsForUpdateOf() ) {
+-			return " for update of " + aliases + ( nowait ? " nowait" : StringHelper.EMPTY_STRING );
+-		}
+-		else if ( dialect.supportsForUpdate() ) {
+-			return " for update" + ( nowait ? " nowait" : StringHelper.EMPTY_STRING );
+-		}
+-		else {
+-			return StringHelper.EMPTY_STRING;
+-		}
++		return dialect.getForUpdateFragmentString((String[])aliases.toArray(new String[aliases.size()]),isNowaitEnabled);
+ 	}
+ 	
+ 	public ForUpdateFragment setNowaitEnabled(boolean nowait) {

@@ -1,0 +1,590 @@
+Index: doc/reference/en/modules/optimize.xml
+===================================================================
+--- doc/reference/en/modules/optimize.xml	(revision 14468)
++++ doc/reference/en/modules/optimize.xml	(working copy)
+@@ -100,10 +100,11 @@
+     performed. Hibernate Search expose those parameters.</para>
+ 
+     <para>Further index optimisation parameters include
+-    <literal>hibernate.search.[default|&lt;indexname&gt;].merge_factor</literal>,
+-    <literal>hibernate.search.[default|&lt;indexname&gt;].max_merge_docs</literal>
++    <literal>hibernate.search.[default|&lt;indexname&gt;].[batch|transaction].merge_factor</literal>,
++    <literal>hibernate.search.[default|&lt;indexname&gt;].[batch|transaction].max_merge_docs</literal>,
++    <literal>hibernate.search.[default|&lt;indexname&gt;].[batch|transaction].max_buffered_docs</literal>
+     and
+-    <literal>hibernate.search.[default|&lt;indexname&gt;].max_buffered_docs</literal>
++    <literal>hibernate.search.[default|&lt;indexname&gt;].[batch|transaction].ram_buffer_size</literal>
+     - see <xref linkend="lucene-indexing-performance" /> for more
+     details.</para>
+   </section>
+Index: doc/reference/en/modules/configuration.xml
+===================================================================
+--- doc/reference/en/modules/configuration.xml	(revision 14468)
++++ doc/reference/en/modules/configuration.xml	(working copy)
+@@ -556,7 +556,7 @@
+     </section>
+   </section>
+ 
+-  <section id="lucene-indexing-performance" revision="1">
++  <section id="lucene-indexing-performance" revision="2">
+     <title>Tuning Lucene indexing performance</title>
+ 
+     <para>Hibernate Search allows you to tune the Lucene indexing performance
+@@ -581,6 +581,10 @@
+         <listitem>
+           <para><literal>hibernate.search.[default|&lt;indexname&gt;].transaction.max_buffered_docs</literal></para>
+         </listitem>
++        
++        <listitem>
++          <para><literal>hibernate.search.[default|&lt;indexname&gt;].transaction.ram_buffer_size</literal></para>
++        </listitem>
+       </itemizedlist>When indexing occurs via
+     <literal>FullTextSession.index()</literal> (see <xref
+     linkend="search-batchindex" />), the following properties are used:
+@@ -596,6 +600,10 @@
+         <listitem>
+           <para><literal>hibernate.search.[default|&lt;indexname&gt;].batch.max_buffered_docs</literal></para>
+         </listitem>
++        
++        <listitem>
++          <para><literal>hibernate.search.[default|&lt;indexname&gt;].batch.ram_buffer_size</literal></para>
++        </listitem>
+       </itemizedlist></para>
+ 
+     <para>Unless the corresponding <literal>.batch</literal> property is
+@@ -658,7 +666,20 @@
+ 
+             <entry>10</entry>
+           </row>
++          
++          <row>
++            <entry><literal>hibernate.search.[default|&lt;indexname&gt;].transaction.ram_buffer_size</literal></entry>
+ 
++            <entry><para>Controls the amount of RAM in MB dedicated to document buffers.
++            When used together max_buffered_docs a flush occurs for whichever event happens first.</para>
++            <para>Generally for faster indexing performance it's best to flush by RAM usage instead of document
++   			count and use as large a RAM buffer as you can.</para>
++            <para>Used by Hibernate Search during index update operations as
++            part of database modifications.</para></entry>
++
++            <entry>16 MB</entry>
++          </row>
++
+           <row>
+             <entry><literal>hibernate.search.[default|&lt;indexname&gt;].batch.merge_factor</literal></entry>
+ 
+@@ -697,6 +718,19 @@
+ 
+             <entry>10</entry>
+           </row>
++          
++          <row>
++            <entry><literal>hibernate.search.[default|&lt;indexname&gt;].batch.ram_buffer_size</literal></entry>
++
++            <entry><para>Controls the amount of RAM in MB dedicated to document buffers.
++            When used together max_buffered_docs a flush occurs for whichever event happens first.</para>
++            <para>Generally for faster indexing performance it's best to flush by RAM usage instead of document
++   			count and use as large a RAM buffer as you can.</para>
++            <para>Used during indexing via
++            <literal>FullTextSession.index()</literal></para></entry>
++
++            <entry>16 MB</entry>
++          </row>
+         </tbody>
+       </tgroup>
+     </table>
+Index: doc/reference/en/modules/batchindex.xml
+===================================================================
+--- doc/reference/en/modules/batchindex.xml	(revision 14468)
++++ doc/reference/en/modules/batchindex.xml	(working copy)
+@@ -45,8 +45,10 @@
+     <literal>hibernate.search.[default|&lt;indexname&gt;].batch.merge_factor</literal>
+     ,
+     <literal>hibernate.search.[default|&lt;indexname&gt;].batch.max_merge_docs</literal>
++    ,
++    <literal>hibernate.search.[default|&lt;indexname&gt;].batch.max_buffered_docs</literal>
+     and
+-    <literal>hibernate.search.[default|&lt;indexname&gt;].batch.max_buffered_docs</literal>
++    <literal>hibernate.search.[default|&lt;indexname&gt;].batch.ram_buffer_size</literal>
+     . These parameters are Lucene specific and Hibernate Search is just
+     passing these paramters through - see <xref
+     linkend="lucene-indexing-performance" /> for more details.</para>
+Index: src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java
+===================================================================
+--- src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java	(revision 0)
++++ src/test/org/hibernate/search/test/configuration/LuceneIndexingParametersTest.java	(revision 0)
+@@ -0,0 +1,106 @@
++package org.hibernate.search.test.configuration;
++
++import org.hibernate.search.FullTextSession;
++import org.hibernate.search.Search;
++import org.hibernate.search.backend.LuceneIndexingParameters;
++import org.hibernate.search.impl.SearchFactoryImpl;
++import org.hibernate.search.test.Document;
++import org.hibernate.search.test.SearchTestCase;
++import org.hibernate.search.test.query.Author;
++import org.hibernate.search.test.query.Book;
++
++/**
++ * @author Sanne Grinovero
++ */
++public class LuceneIndexingParametersTest extends SearchTestCase {
++	
++	protected void configure(org.hibernate.cfg.Configuration cfg) {
++		super.configure( cfg );
++		
++		//super sets:
++		//cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "100" );
++		//cfg.setProperty( "hibernate.search.default.batch.max_buffered_docs", "1000" );
++		
++		cfg.setProperty( "hibernate.search.default.batch.ram_buffer_size", "1" );
++		
++		cfg.setProperty( "hibernate.search.default.transaction.ram_buffer_size", "2" );
++		cfg.setProperty( "hibernate.search.default.transaction.max_merge_docs", "9" );
++		cfg.setProperty( "hibernate.search.default.transaction.merge_factor", "10" );
++		cfg.setProperty( "hibernate.search.default.transaction.max_buffered_docs", "11" );
++		
++		cfg.setProperty( "hibernate.search.Book.batch.ram_buffer_size", "3" );
++		cfg.setProperty( "hibernate.search.Book.batch.max_merge_docs", "12" );
++		cfg.setProperty( "hibernate.search.Book.batch.merge_factor", "13" );
++		cfg.setProperty( "hibernate.search.Book.batch.max_buffered_docs", "14" );
++		
++		cfg.setProperty( "hibernate.search.Book.transaction.ram_buffer_size", "4" );
++		cfg.setProperty( "hibernate.search.Book.transaction.max_merge_docs", "15" );
++		cfg.setProperty( "hibernate.search.Book.transaction.merge_factor", "16" );
++		cfg.setProperty( "hibernate.search.Book.transaction.max_buffered_docs", "17" );
++		
++		cfg.setProperty( "hibernate.search.Documents.ram_buffer_size", "4" );
++		
++	}
++	
++	public void testUnsetBatchValueTakesTransaction() throws Exception {
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Document.class)[0]);
++		assertEquals(10, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
++		assertEquals(1000, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
++		fullTextSession.close();
++	}
++	
++	public void testBatchParametersDefault() throws Exception {
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Author.class)[0]);
++		assertEquals(1, (int)indexingParameters.getBatchIndexParameters().getRamBufferSizeMB());
++		assertEquals(9, (int)indexingParameters.getBatchIndexParameters().getMaxMergeDocs());
++		assertEquals(1000, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
++		assertEquals(10, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
++		fullTextSession.close();
++	}
++	
++	public void testTransactionParametersDefault() throws Exception {
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Author.class)[0]);
++		assertEquals(2, (int)indexingParameters.getTransactionIndexParameters().getRamBufferSizeMB());
++		assertEquals(9, (int)indexingParameters.getTransactionIndexParameters().getMaxMergeDocs());
++		assertEquals(11, (int)indexingParameters.getTransactionIndexParameters().getMaxBufferedDocs());
++		assertEquals(10, (int)indexingParameters.getTransactionIndexParameters().getMergeFactor());
++		fullTextSession.close();
++	}
++	
++	public void testBatchParameters() throws Exception {
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Book.class)[0]);
++		assertEquals(3, (int)indexingParameters.getBatchIndexParameters().getRamBufferSizeMB());
++		assertEquals(12, (int)indexingParameters.getBatchIndexParameters().getMaxMergeDocs());
++		assertEquals(14, (int)indexingParameters.getBatchIndexParameters().getMaxBufferedDocs());
++		assertEquals(13, (int)indexingParameters.getBatchIndexParameters().getMergeFactor());
++		fullTextSession.close();
++	}
++	
++	public void testTransactionParameters() throws Exception {
++		FullTextSession fullTextSession = Search.createFullTextSession( openSession() );
++		SearchFactoryImpl searchFactory = (SearchFactoryImpl) fullTextSession.getSearchFactory();
++		LuceneIndexingParameters indexingParameters = searchFactory.getIndexingParameters(searchFactory.getDirectoryProviders(Book.class)[0]);
++		assertEquals(4, (int)indexingParameters.getTransactionIndexParameters().getRamBufferSizeMB());
++		assertEquals(15, (int)indexingParameters.getTransactionIndexParameters().getMaxMergeDocs());
++		assertEquals(17, (int)indexingParameters.getTransactionIndexParameters().getMaxBufferedDocs());
++		assertEquals(16, (int)indexingParameters.getTransactionIndexParameters().getMergeFactor());
++		fullTextSession.close();
++	}
++
++	protected Class[] getMappings() {
++		return new Class[] {
++				Book.class,
++				Author.class,
++				Document.class
++		};
++	}
++
++}
+Index: src/java/org/hibernate/search/backend/LuceneIndexingParameters.java
+===================================================================
+--- src/java/org/hibernate/search/backend/LuceneIndexingParameters.java	(revision 14468)
++++ src/java/org/hibernate/search/backend/LuceneIndexingParameters.java	(working copy)
+@@ -1,94 +1,119 @@
+ //$Id$
+ package org.hibernate.search.backend;
+ 
++import java.io.Serializable;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.apache.lucene.index.IndexWriter;
++
+ /**
+- * Wrapper class around the Lucene indexing parameters <i>mergeFactor</i>, <i>maxMergeDocs</i> and
+- * <i>maxBufferedDocs</i>.
++ * Wrapper class around the Lucene indexing parameters <i>mergeFactor</i>, <i>maxMergeDocs</i>,
++ * <i>maxBufferedDocs</i>, <i>termIndexInterval</i>, <i>RAMBufferSizeMB</i>.
+  * <p>
+  * There are two sets of these parameters. One is for regular indexing the other is for batch indexing
+  * triggered by <code>FullTextSessoin.index(Object entity)</code>
+  * 
+  * @author Hardy Ferentschik
+- *
++ * @author Sanne Grinovero
+  */
+-public class LuceneIndexingParameters {
++public class LuceneIndexingParameters implements Serializable {
++
++	private static final long serialVersionUID = -3759838776114133632L;
++
++	private static final Log log = LogFactory.getLog( LuceneIndexingParameters.class );
+ 	
+-	private int transactionMergeFactor = 10;
++	private final ParameterSet transactionIndexParameters = new ParameterSet();
++	private final ParameterSet batchIndexParameters = new ParameterSet();
+ 	
+-	private int transactionMaxMergeDocs = Integer.MAX_VALUE;
+-	
+-	private int transactionMaxBufferedDocs = 10;
+-	
+-	private int batchMergeFactor = 10;
+-	
+-	private int batchMaxMergeDocs = Integer.MAX_VALUE;
+-	
+-	private int batchMaxBufferedDocs = 10;
+-	
+-	// the defaults settings
+-	private static final int DEFAULT_MERGE_FACTOR = 10;
+-	
+-	private static final int DEFAULT_MAX_MERGE_DOCS = Integer.MAX_VALUE;
+-	
+ 	private static final int DEFAULT_MAX_BUFFERED_DOCS = 10;
+ 	
+ 	/**
+-	 * Constructor which instantiates a new parameter object with the the default values.
++	 * Constructor which instantiates new parameter objects with the default values.
+ 	 */
+ 	public LuceneIndexingParameters() {
+-		transactionMergeFactor = DEFAULT_MERGE_FACTOR;
+-		batchMergeFactor = DEFAULT_MERGE_FACTOR;
+-		transactionMaxMergeDocs = DEFAULT_MAX_MERGE_DOCS;
+-		batchMaxMergeDocs = DEFAULT_MAX_MERGE_DOCS;
+-		transactionMaxBufferedDocs = DEFAULT_MAX_BUFFERED_DOCS;
+-		batchMaxBufferedDocs = DEFAULT_MAX_BUFFERED_DOCS;
++		//FIXME: I am keeping DEFAULT_MAX_BUFFERED_DOCS to mimick previous behaviour, still this is NOT lucene's default behaviour,
++		// which would be keeping it unset, meaning RamBufferSize strategy will be used to define flush behaviour.
++		// To achieve default lucene behaviour, just remove the following two lines.
++		transactionIndexParameters.setMaxBufferedDocs(DEFAULT_MAX_BUFFERED_DOCS);
++		batchIndexParameters.setMaxBufferedDocs(DEFAULT_MAX_BUFFERED_DOCS);
++
++		//FIXME: I would recommend setting the following parameters as defaults for batch indexing:
++		//batchIndexParameters.setMaxBufferedDocs(null);
++		//batchIndexParameters.setRamBufferSizeMB(64);
+ 	}
+ 	
+-	public int getTransactionMaxMergeDocs() {
+-		return transactionMaxMergeDocs;
++	public ParameterSet getTransactionIndexParameters() {
++		return transactionIndexParameters;
+ 	}
+ 
+-	public void setTransactionMaxMergeDocs(int transactionMaxMergeDocs) {
+-		this.transactionMaxMergeDocs = transactionMaxMergeDocs;
++	public ParameterSet getBatchIndexParameters() {
++		return batchIndexParameters;
+ 	}
++	
++	public class ParameterSet implements Serializable {
+ 
+-	public int getTransactionMergeFactor() {
+-		return transactionMergeFactor;
++		private static final long serialVersionUID = -4316194817686404073L;
++		
++		Integer mergeFactor = null;
++		Integer maxMergeDocs = null;
++		Integer maxBufferedDocs = null;
++		Integer termIndexInterval = null;
++		Integer ramBufferSizeMB = null;
++		
++		public Integer getMergeFactor() {
++			return mergeFactor;
++		}
++		public void setMergeFactor(Integer mergeFactor) {
++			this.mergeFactor = mergeFactor;
++		}
++		public Integer getMaxMergeDocs() {
++			return maxMergeDocs;
++		}
++		public void setMaxMergeDocs(Integer maxMergeDocs) {
++			this.maxMergeDocs = maxMergeDocs;
++		}
++		public Integer getMaxBufferedDocs() {
++			return maxBufferedDocs;
++		}
++		public void setMaxBufferedDocs(Integer maxBufferedDocs) {
++			this.maxBufferedDocs = maxBufferedDocs;
++		}
++		public Integer getRamBufferSizeMB() {
++			return ramBufferSizeMB;
++		}
++		public void setRamBufferSizeMB(Integer ramBufferSizeMB) {
++			this.ramBufferSizeMB = ramBufferSizeMB;
++		}
++		public Integer getTermIndexInterval() {
++			return termIndexInterval;
++		}
++		public void setTermIndexInterval(Integer termIndexInterval) {
++			this.termIndexInterval = termIndexInterval;
++		}
++		
++		/**
++		 * Applies the parameters represented by this to a writer.
++		 * Undefined parameters are not set, leaving the lucene default.
++		 * @param writer the IndexWriter whereto the parameters will be applied.
++		 */
++		void applyToWriter(IndexWriter writer){
++			try {
++			if (mergeFactor!=null)
++				writer.setMergeFactor(mergeFactor);
++			if (maxMergeDocs!=null)
++				writer.setMaxMergeDocs(maxMergeDocs);
++			if (maxBufferedDocs!=null)
++				writer.setMaxBufferedDocs(maxBufferedDocs);
++			if (ramBufferSizeMB!=null)
++				writer.setRAMBufferSizeMB(ramBufferSizeMB);
++			if (termIndexInterval!=null)
++				writer.setTermIndexInterval(termIndexInterval);
++			}catch (IllegalArgumentException e) {
++				log.error("Illegal IndexWriter setting"+e.getMessage()+". Will use default settings!");
++			}
++		}
++		
+ 	}
+ 
+-	public void setTransactionMergeFactor(int transactionMergeFactor) {
+-		this.transactionMergeFactor = transactionMergeFactor;
+-	}
+-
+-	public int getBatchMaxMergeDocs() {
+-		return batchMaxMergeDocs;
+-	}
+-
+-	public void setBatchMaxMergeDocs(int batchMaxMergeDocs) {
+-		this.batchMaxMergeDocs = batchMaxMergeDocs;
+-	}
+-
+-	public int getBatchMergeFactor() {
+-		return batchMergeFactor;
+-	}
+-
+-	public void setBatchMergeFactor(int batchMergeFactor) {
+-		this.batchMergeFactor = batchMergeFactor;
+-	}
+-
+-	public int getBatchMaxBufferedDocs() {
+-		return batchMaxBufferedDocs;
+-	}
+-
+-	public void setBatchMaxBufferedDocs(int batchMaxBufferedDocs) {
+-		this.batchMaxBufferedDocs = batchMaxBufferedDocs;
+-	}
+-
+-	public int getTransactionMaxBufferedDocs() {
+-		return transactionMaxBufferedDocs;
+-	}
+-
+-	public void setTransactionMaxBufferedDocs(int transactionMaxBufferedDocs) {
+-		this.transactionMaxBufferedDocs = transactionMaxBufferedDocs;
+-	}
+ }
+Index: src/java/org/hibernate/search/backend/Workspace.java
+===================================================================
+--- src/java/org/hibernate/search/backend/Workspace.java	(revision 14468)
++++ src/java/org/hibernate/search/backend/Workspace.java	(working copy)
+@@ -119,14 +119,10 @@
+ 
+ 			LuceneIndexingParameters indexingParams = searchFactoryImplementor.getIndexingParameters( provider );
+ 			if ( isBatch ) {
+-				writer.setMergeFactor( indexingParams.getBatchMergeFactor() );
+-				writer.setMaxMergeDocs( indexingParams.getBatchMaxMergeDocs() );
+-				writer.setMaxBufferedDocs( indexingParams.getBatchMaxBufferedDocs() );
++				indexingParams.getBatchIndexParameters().applyToWriter(writer);
+ 			}
+ 			else {
+-				writer.setMergeFactor( indexingParams.getTransactionMergeFactor() );
+-				writer.setMaxMergeDocs( indexingParams.getTransactionMaxMergeDocs() );
+-				writer.setMaxBufferedDocs( indexingParams.getTransactionMaxBufferedDocs() );
++				indexingParams.getTransactionIndexParameters().applyToWriter(writer);
+ 			}
+ 
+ 			writers.put( provider, writer );
+Index: src/java/org/hibernate/search/store/DirectoryProviderFactory.java
+===================================================================
+--- src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(revision 14468)
++++ src/java/org/hibernate/search/store/DirectoryProviderFactory.java	(working copy)
+@@ -53,6 +53,8 @@
+ 	private static final String MERGE_FACTOR = "merge_factor";
+ 	private static final String MAX_MERGE_DOCS = "max_merge_docs";
+ 	private static final String MAX_BUFFERED_DOCS = "max_buffered_docs";
++	private static final String RAM_BUFFER_SIZE = "ram_buffer_size";
++	
+ 	private static final String BATCH = "batch.";
+ 	private static final String TRANSACTION = "transaction.";
+ 
+@@ -183,75 +185,98 @@
+ 	 * NOTE:</br>
+ 	 * If a non  batch value is set in the configuration apply it also to the
+      * batch mode. This covers the case where users only specify 
+-	 * paramters for the non batch mode. In this case the same parameters apply for 
++	 * parameters for the non batch mode. In this case the same parameters apply for 
+ 	 * batch indexing.
+ 	 * </p>
+ 	 * 
+ 	 * @param searchFactoryImplementor the search factory.
+ 	 * @param indexProps The properties extracted from the configuration.
+-	 * @param provider The direcotry provider for which to configure the indexing parameters.
++	 * @param provider The directory provider for which to configure the indexing parameters.
+ 	 */
+ 	private void configureIndexingParameters(SearchFactoryImplementor searchFactoryImplementor, Properties indexProps, DirectoryProvider<?> provider) {
+ 		
+ 		LuceneIndexingParameters indexingParams = new LuceneIndexingParameters();
+-		String s = indexProps.getProperty(TRANSACTION + MERGE_FACTOR);
+ 		
+-		if (!StringHelper.isEmpty( s )) {
+-			try{
+-				indexingParams.setTransactionMergeFactor(Integer.valueOf(s));
+-				indexingParams.setBatchMergeFactor(Integer.valueOf(s));
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + TRANSACTION + MERGE_FACTOR + ": " + s);
++		{
++			Integer val = getIntegerProperty(indexProps, TRANSACTION + MERGE_FACTOR);
++			if (val!=null) {
++				indexingParams.getTransactionIndexParameters().setMergeFactor(val);
++				indexingParams.getBatchIndexParameters().setMergeFactor(val);
+ 			}
+ 		}
++		
++		{
++			Integer val = getIntegerProperty(indexProps, TRANSACTION + MAX_MERGE_DOCS);
++			if (val!=null) {
++				indexingParams.getTransactionIndexParameters().setMaxMergeDocs(val);
++				indexingParams.getBatchIndexParameters().setMaxMergeDocs(val);
++			}
++		}
+ 
+-		s = indexProps.getProperty(TRANSACTION + MAX_MERGE_DOCS);
+-		if (!StringHelper.isEmpty( s )) {
+-			try{
+-				indexingParams.setTransactionMaxMergeDocs(Integer.valueOf(s));
+-				indexingParams.setBatchMaxMergeDocs(Integer.valueOf(s));
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + TRANSACTION + MAX_MERGE_DOCS + ": " + s);
++		{
++			Integer val = getIntegerProperty(indexProps, TRANSACTION + MAX_BUFFERED_DOCS);
++			if (val!=null) {
++				indexingParams.getTransactionIndexParameters().setMaxBufferedDocs(val);
++				indexingParams.getBatchIndexParameters().setMaxBufferedDocs(val);
+ 			}
+ 		}
+ 		
+-		s = indexProps.getProperty(TRANSACTION + MAX_BUFFERED_DOCS);
+-		if (!StringHelper.isEmpty( s )) {
+-			try{
+-				indexingParams.setTransactionMaxBufferedDocs(Integer.valueOf(s));
+-				indexingParams.setBatchMaxBufferedDocs(Integer.valueOf(s));
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + TRANSACTION + MAX_BUFFERED_DOCS + ": " + s);
++		{
++			Integer val = getIntegerProperty(indexProps, TRANSACTION + RAM_BUFFER_SIZE);
++			if (val!=null) {
++				indexingParams.getTransactionIndexParameters().setRamBufferSizeMB(val);
++				indexingParams.getBatchIndexParameters().setRamBufferSizeMB(val);
+ 			}
+-		}		
+-				
+-		s = indexProps.getProperty(BATCH + MERGE_FACTOR);
+-		if (!StringHelper.isEmpty( s )) {
+-			try{
+-				indexingParams.setBatchMergeFactor(Integer.valueOf(s));
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + BATCH + MERGE_FACTOR + ": " + s);
++		}
++		
++		{
++			Integer val = getIntegerProperty(indexProps, BATCH + MERGE_FACTOR);
++			if (val!=null) {
++				indexingParams.getBatchIndexParameters().setMergeFactor(val);
+ 			}
+ 		}
+ 		
+-		s = indexProps.getProperty(BATCH + MAX_MERGE_DOCS);
+-		if (!StringHelper.isEmpty( s )) {
+-			try{
+-				indexingParams.setBatchMaxMergeDocs(Integer.valueOf(s));
+-			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + BATCH + MAX_MERGE_DOCS + ": " + s);
++		{
++			Integer val = getIntegerProperty(indexProps, BATCH + MAX_MERGE_DOCS);
++			if (val!=null) {
++				indexingParams.getBatchIndexParameters().setMaxMergeDocs(val);
+ 			}
+ 		}
+ 		
+-		s = indexProps.getProperty(BATCH + MAX_BUFFERED_DOCS);
+-		if (!StringHelper.isEmpty( s )) {
++		{
++			Integer val = getIntegerProperty(indexProps, BATCH + MAX_BUFFERED_DOCS);
++			if (val!=null) {
++				indexingParams.getBatchIndexParameters().setMaxBufferedDocs(val);
++			}
++		}
++		
++		{
++			Integer val = getIntegerProperty(indexProps, BATCH + RAM_BUFFER_SIZE);
++			if (val!=null) {
++				indexingParams.getBatchIndexParameters().setRamBufferSizeMB(val);
++			}
++		}
++		
++		searchFactoryImplementor.addIndexingParmeters(provider, indexingParams);
++	}
++
++	/**
++	 * @param indexProps The properties to look into for the value.
++	 * @param propertyName The value key.
++	 * @return null if the property is not defined, the parse value otherwise.
++	 * @throws SearchException if the property is defined but not in an integer format.
++	 */
++	private Integer getIntegerProperty(Properties indexProps, String propertyName) {
++		String propertyValue = indexProps.getProperty(propertyName);
++		Integer i = null;
++		if (StringHelper.isNotEmpty( propertyValue )) {
+ 			try{
+-				indexingParams.setBatchMaxBufferedDocs(Integer.valueOf(s));
++				i = Integer.valueOf(propertyValue);
+ 			} catch (NumberFormatException ne) {
+-				throw new SearchException("Invalid value for " + BATCH + MAX_BUFFERED_DOCS + ": " + s);
++				throw new SearchException("Invalid value for " + propertyName + ": " + propertyValue);
+ 			}
+-		}	
+-		searchFactoryImplementor.addIndexingParmeters(provider, indexingParams);
++		}
++		return i;
+ 	}
+ 
+ 	/**

@@ -1,0 +1,125 @@
+Index: E:/Projekte/Hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- E:/Projekte/Hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java	(revision 14995)
++++ E:/Projekte/Hibernate/HibernateExt/tools/src/java/org/hibernate/cfg/JDBCBinder.java	(working copy)
+@@ -36,6 +36,7 @@
+ import org.hibernate.mapping.ForeignKey;
+ import org.hibernate.mapping.KeyValue;
+ import org.hibernate.mapping.ManyToOne;
++import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.MetaAttribute;
+ import org.hibernate.mapping.OneToMany;
+ import org.hibernate.mapping.PersistentClass;
+@@ -200,6 +201,10 @@
+ 						TableIdentifier.create(foreignKey.getReferencedTable() ),
+ 						foreignKey.getReferencedColumns())) {
+ 					log.debug("Rev.eng excluded one-to-many for foreignkey " + foreignKey.getName());
++				} else if (isOneToOne(foreignKey)){
++
++					Property property = bindOneToOne(rc, foreignKey.getTable(), foreignKey, processed);
++					rc.addProperty(property);
+ 				} else {
+ 										
+ 					Property property = bindOneToMany(rc, foreignKey, processed, mapping);
+@@ -209,6 +214,53 @@
+ 		}
+ 	}
+ 
++    protected boolean isOneToOne(ForeignKey foreignKey) {
++        List fkColumns = foreignKey.getColumns();
++        List pkForeignTableColumns = null;
++
++        if (foreignKey.getTable().hasPrimaryKey())
++            pkForeignTableColumns = foreignKey.getTable().getPrimaryKey().getColumns();
++
++        boolean equals =
++                fkColumns != null && pkForeignTableColumns != null
++                        && fkColumns.size() == pkForeignTableColumns.size();
++
++        Iterator columns = foreignKey.getColumnIterator();
++        while (equals && columns.hasNext()) {
++            Column fkColumn = (Column) columns.next();
++            equals = equals && pkForeignTableColumns.contains(fkColumn);
++        }
++
++        return equals;
++    }
++
++    private Property bindOneToOne(PersistentClass rc, Table table,
++            ForeignKey fk, Set processedColumns) {
++
++        OneToOne value = new OneToOne(table, rc);
++        value.setReferencedEntityName(revengStrategy
++                .tableToClassName(TableIdentifier.create(table)));
++
++        boolean isUnique = isUniqueReference(fk);
++        String propertyName =
++                revengStrategy.foreignKeyToEntityName(fk.getName(),
++                        TableIdentifier.create(fk.getReferencedTable()), fk
++                                .getReferencedColumns(), TableIdentifier
++                                .create(table), fk.getColumns(), isUnique);
++
++        Iterator columns = fk.getColumnIterator();
++        while (columns.hasNext()) {
++            Column fkcolumn = (Column) columns.next();
++            checkColumn(fkcolumn);
++            value.addColumn(fkcolumn);
++            processedColumns.add(fkcolumn);
++        }
++
++        value.setFetchMode(FetchMode.SELECT);
++        return makeProperty(TableIdentifier.create(table), propertyName, value,
++                true, true, value.getFetchMode() != FetchMode.JOIN, null, null);
++    }
++
+     /**
+      * @param table
+      * @param fk
+@@ -498,7 +550,11 @@
+         			foreignKey.getReferencedColumns())) {
+             	// TODO: if many-to-one is excluded should the column be marked as processed so it won't show up at all ?
+             	log.debug("Rev.eng excluded many-to-one for foreignkey " + foreignKey.getName());
+-            } else {
++            } else if (isOneToOne(foreignKey)){
++
++				Property property = bindOneToOne(rc, foreignKey.getReferencedTable(), foreignKey, processedColumns);
++				rc.addProperty(property);
++			} else {
+             	boolean isUnique = isUniqueReference(foreignKey);
+             	String propertyName = revengStrategy.foreignKeyToEntityName(
+             			foreignKey.getName(), 
+Index: E:/Projekte/Hibernate/HibernateExt/tools/src/templates/hbm/one-to-one.hbm.ftl
+===================================================================
+--- E:/Projekte/Hibernate/HibernateExt/tools/src/templates/hbm/one-to-one.hbm.ftl	(revision 0)
++++ E:/Projekte/Hibernate/HibernateExt/tools/src/templates/hbm/one-to-one.hbm.ftl	(revision 0)
+@@ -0,0 +1,30 @@
++    <one-to-one
++	    name="${property.name}"
++	    class="${c2j.getJavaTypeName(property, false)}"
++<#if !property.updateable> 
++        update="false"
++</#if>
++<#if !property.insertable>
++        insert="false"
++</#if>
++<#if !property.basicPropertyAccessor>
++        access="${property.propertyAccessorName}"
++</#if>
++<#if property.cascade != "none">
++        cascade="${property.cascade}"
++</#if>
++<#assign fetchmode = c2h.getFetchMode(property)>
++<#if fetchmode != "default">
++        fetch="${fetchmode}"
++</#if>
++<#if !property.optimisticLocked>
++        optimistic-lock="false"
++</#if>
++<#if property.value.hasFormula()>
++<#assign formula = c2h.getFormulaForProperty(property)>
++<#if formula>
++        formula="${formula.text}"
++</#if>
++</#if>
++    >
++   </one-to-one>

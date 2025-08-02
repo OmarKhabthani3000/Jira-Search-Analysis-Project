@@ -1,0 +1,273 @@
+Index: annotations/src/test/java/org/hibernate/test/annotations/manytoone/ManyToOneTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/manytoone/ManyToOneTest.java	(revision 18240)
++++ annotations/src/test/java/org/hibernate/test/annotations/manytoone/ManyToOneTest.java	(working copy)
+@@ -248,7 +248,90 @@
+ 		tx.commit();
+ 		s.close();
+ 	}
++	
++	public void testDeleteSubqueryCompositeFk() throws Exception {
++        Session s;
++        Transaction tx;
++        s = openSession();
++        tx = s.beginTransaction();
++        Node n1 = new Node();
++        n1.setDescription( "Parent" );
++        NodePk n1pk = new NodePk();
++        n1pk.setLevel( 1 );
++        n1pk.setName( "Root" );
++        n1.setId( n1pk );
++        Node n2 = new Node();
++        NodePk n2pk = new NodePk();
++        n2pk.setLevel( 2 );
++        n2pk.setName( "Level 1: A" );
++        n2.setParent( n1 );
++        n2.setId( n2pk );
++        s.persist( n2 );
++        NodeProperty nodeProp1 = new NodeProperty();
++        NodePropertyPk np1pk = new NodePropertyPk();
++        np1pk.setLevel( 2 );
++        np1pk.setName( "Level 1: A" );
++        np1pk.setPropertyCode( "codeA" );
++        nodeProp1.setId( np1pk );
++        s.persist(nodeProp1);
++        NodeProperty nodeProp2 = new NodeProperty();
++        NodePropertyPk np2pk = new NodePropertyPk();
++        np2pk.setLevel( 2 );
++        np2pk.setName( "Level 1: A" );
++        np2pk.setPropertyCode( "codeB" );
++        nodeProp2.setId( np2pk );
++        s.persist(nodeProp2);
++        NodeProperty nodeProp3 = new NodeProperty();
++        NodePropertyPk np3pk = new NodePropertyPk();
++        np3pk.setLevel( 1 );
++        np3pk.setName( "Root" );
++        np3pk.setPropertyCode( "code0" );
++        nodeProp3.setId( np3pk );
++        s.persist(nodeProp3);
++        tx.commit();
+ 
++        s = openSession();
++        tx = s.beginTransaction();
++        
++        //Try to delete NodeProperty of all children node of root node
++        
++        //Ultimatly I would like to write this
++        //s.createQuery("delete from NodeProperty np where np.node.parent.id = :parentId").setParameter("parentId", n1pk).executeUpdate();//KO
++        //but I get the following Exception: org.hibernate.QueryException: could not resolve property: parent of: org.hibernate.test.annotations.manytoone.NodeProperty
++        
++        //So I tried to use a subquery but I get a NPE
++        s.createQuery("delete from NodeProperty np where np in (select np1 from NodeProperty np1 left join np1.node n left join n.parent p where p.id = :parentId)")
++        .setParameter("parentId", n1pk)
++        .executeUpdate();
++
++        //Even this simple case is not working (too much parenthesis and ambiguous column name)
++        //s.createQuery("delete from NodeProperty np where np in (select np1 from NodeProperty np1)").executeUpdate();
++        
++        //I wrote a patch to remove parenthesis and add qualified column name. With the patch the query look good but the test is still failing...
++        
++        //In fact it seems HSQL doesn't support "in" subquery with a tuple. This SQL query is valid with Oracle but not with HSQL
++        //s.createSQLQuery("delete from NodeProperty where (fld_lvl, name, propertyCode) in (select nodeproper1_.fld_lvl, nodeproper1_.name, nodeproper1_.propertyCode from NodeProperty nodeproper1_)").executeUpdate();
++        
++        //A last try with an exists query
++//        s.createQuery("delete from NodeProperty np where exists (select np1 from NodeProperty np1 left join np1.node n left join n.parent p where p.id = :parentId and np1 = np)")
++//            .setParameter("parentId", n1pk)
++//            .executeUpdate();
++        //But still NPE
++        
++        tx.commit();
++        
++        s = openSession();
++        tx = s.beginTransaction();
++        nodeProp1 = (NodeProperty) s.get( NodeProperty.class, np1pk );
++        assertNull( nodeProp1 );
++        nodeProp2 = (NodeProperty) s.get( NodeProperty.class, np2pk );
++        assertNull( nodeProp2 );
++        nodeProp3 = (NodeProperty) s.get( NodeProperty.class, np3pk );
++        assertNotNull( nodeProp3 );
++        tx.commit();
++        s.close();
++    }
++
+ 	public void testManyToOneNonPk() throws Exception {
+ 		Session s = openSession();
+ 		Transaction tx = s.beginTransaction();
+@@ -334,6 +417,7 @@
+ 				Parent.class,
+ 				Child.class,
+ 				Node.class,
++				NodeProperty.class,
+ 				User.class,
+ 				DistrictUser.class,
+ 				Order.class,
+Index: annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodeProperty.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodeProperty.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodeProperty.java	(revision 0)
+@@ -0,0 +1,69 @@
++//$Id: Node.java 14736 2008-06-04 14:23:42Z hardy.ferentschik $
++package org.hibernate.test.annotations.manytoone;
++
++import java.io.Serializable;
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.JoinColumns;
++import javax.persistence.ManyToOne;
++
++/**
++ * @author Julien Henry
++ */
++@Entity
++public class NodeProperty implements Serializable {
++
++	private NodePropertyPk id;
++	private String value;
++	
++    @ManyToOne(fetch = FetchType.LAZY)
++    @JoinColumns({
++    @JoinColumn(name = "nodeName", referencedColumnName = "name", updatable = false, insertable = false),
++    @JoinColumn(name = "nodeLevel", referencedColumnName = "fld_lvl", updatable = false, insertable = false)
++            })
++	private Node node;
++
++	public boolean equals(Object o) {
++		if ( this == o ) return true;
++		if ( !( o instanceof NodeProperty ) ) return false;
++
++		final NodeProperty node = (NodeProperty) o;
++
++		if ( !id.equals( node.id ) ) return false;
++
++		return true;
++	}
++
++	public int hashCode() {
++		return id.hashCode();
++	}
++
++	@Id
++	public NodePropertyPk getId() {
++		return id;
++	}
++	
++	public void setId(NodePropertyPk id) {
++        this.id = id;
++    }
++	
++	public String getValue() {
++        return value;
++    }
++	
++	public void setValue(String value) {
++        this.value = value;
++    }
++	
++	public Node getNode() {
++        return node;
++    }
++	
++	public void setNode(Node node) {
++        this.node = node;
++    }
++	
++}
+Index: annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodePropertyPk.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodePropertyPk.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/annotations/manytoone/NodePropertyPk.java	(revision 0)
+@@ -0,0 +1,65 @@
++//$Id: NodePk.java 14736 2008-06-04 14:23:42Z hardy.ferentschik $
++package org.hibernate.test.annotations.manytoone;
++
++import java.io.Serializable;
++
++import javax.persistence.Column;
++import javax.persistence.Embeddable;
++
++/**
++ * @author Julien Henry
++ */
++@Embeddable
++public class NodePropertyPk implements Serializable {
++    
++    private String name;
++    private int level;
++    private String propertyCode;
++
++    public boolean equals(Object o) {
++        if ( this == o ) return true;
++        if ( !( o instanceof NodePropertyPk ) ) return false;
++
++        final NodePropertyPk nodePropertyPk = (NodePropertyPk) o;
++
++        if ( level != nodePropertyPk.level ) return false;
++        if ( !name.equals( nodePropertyPk.name ) ) return false;
++        if ( !propertyCode.equals( nodePropertyPk.propertyCode ) ) return false;
++
++        return true;
++    }
++
++    public int hashCode() {
++        int result;
++        result = name.hashCode();
++        result = 29 * result + level;
++        result = 63 * result + propertyCode.hashCode();
++        return result;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public void setName(String name) {
++        this.name = name;
++    }
++
++    @Column(name = "fld_lvl")
++    public int getLevel() {
++        return level;
++    }
++
++    public void setLevel(int level) {
++        this.level = level;
++    }    
++
++	public String getPropertyCode() {
++        return propertyCode;
++    }
++	
++	public void setPropertyCode(String propertyCode) {
++        this.propertyCode = propertyCode;
++    }
++
++}
+Index: core/src/main/java/org/hibernate/hql/ast/tree/FromElement.java
+===================================================================
+--- core/src/main/java/org/hibernate/hql/ast/tree/FromElement.java	(revision 18240)
++++ core/src/main/java/org/hibernate/hql/ast/tree/FromElement.java	(working copy)
+@@ -339,14 +339,19 @@
+ 		else {
+ 			propertyName = EntityPersister.ENTITY_ID;
+ 		}
+-		if ( getWalker().getStatementType() == HqlSqlWalker.SELECT ) {
++		if ( getWalker().getCurrentClauseType() == HqlSqlWalker.SELECT ) {
+ 			cols = getPropertyMapping( propertyName ).toColumns( table, propertyName );
+ 		}
+ 		else {
+ 			cols = getPropertyMapping( propertyName ).toColumns( propertyName );
+ 		}
+ 		String result = StringHelper.join( ", ", cols );
+-		return  cols.length == 1 ? result : "(" + result + ")";
++		if ( getWalker().getCurrentClauseType() == HqlSqlWalker.WHERE ) {
++		    return  cols.length == 1 ? result : "(" + result + ")";
++		}
++		else {
++		    return result;
++		}
+ 	}
+ 
+ 	public void setCollectionJoin(boolean collectionJoin) {

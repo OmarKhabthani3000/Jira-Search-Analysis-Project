@@ -1,0 +1,148 @@
+? cvs
+? patch.diff
+? cache/cvs
+? cfg/cvs
+? cfg/semantic.cache
+? collection/cvs
+? connection/cvs
+? dialect/cvs
+? eg/cvs
+? engine/cvs
+? exception/cvs
+? expression/cvs
+? hql/cvs
+? hql/antlr/cvs
+? hql/ast/cvs
+? id/cvs
+? impl/cvs
+? jca/cvs
+? jmx/cvs
+? loader/cvs
+? lob/cvs
+? mapping/cvs
+? metadata/cvs
+? odmg/cvs
+? persister/cvs
+? property/cvs
+? proxy/cvs
+? ps/cvs
+? snapshot/cvs
+? sql/cvs
+? test/cvs
+? test/mssql/cvs
+? tool/cvs
+? tool/class2hbm/cvs
+? tool/ddl2hbm/cvs
+? tool/hbm2ddl/DatabaseMetadata.java.patched
+? tool/hbm2ddl/ForeignKeyMetadata.java.patched
+? tool/hbm2ddl/cvs
+? tool/hbm2ddl/schemeUpdateHibernatePatch-01-07-04.diff
+? tool/hbm2java/cvs
+? tool/hbm2java/test/cvs
+? transaction/cvs
+? transform/cvs
+? type/cvs
+? util/cvs
+? xml/cvs
+Index: tool/hbm2ddl/DatabaseMetadata.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/tool/hbm2ddl/DatabaseMetadata.java,v
+retrieving revision 1.7
+diff -b -u -r1.7 DatabaseMetadata.java
+--- tool/hbm2ddl/DatabaseMetadata.java	13 Aug 2004 09:13:20 -0000	1.7
++++ tool/hbm2ddl/DatabaseMetadata.java	7 Dec 2004 08:59:09 -0000
+@@ -37,6 +37,8 @@
+ 	}
+ 	
+ 	private static final String[] TYPES = {"TABLE"};
++    private static final String[] SEQUENCE_TYPES = {"SEQUENCE"};
++
+ 
+ 	public TableMetadata getTableMetadata(String name, String schema, String catalog) throws HibernateException {
+ 
+@@ -58,6 +60,14 @@
+ 								TYPES 
+ 						);
+ 					}
++                    else if ( meta.storesLowerCaseIdentifiers() ) {
++						rs = meta.getTables( 
++								StringHelper.toLowerCase(catalog), 
++								StringHelper.toLowerCase(schema), 
++								StringHelper.toLowerCase(name), 
++								TYPES 
++						);
++					}
+ 					else {
+ 						rs = meta.getTables(catalog, schema, name, TYPES);
+ 					}
+@@ -107,8 +117,50 @@
+ 		}
+ 	}
+ 
+-	public boolean isSequence(Object key) {
+-		return key instanceof String && sequences.contains( ( (String) key ).toUpperCase() );
++    private boolean sequenceAlreadyExists(String name, String schema, String catalog) throws HibernateException {
++ 		ResultSet rs = null;
++ 		try {
++            try {
++                if (meta.storesLowerCaseIdentifiers()) {
++                    rs = meta.getTables(StringHelper.toLowerCase(catalog), 
++                                        StringHelper.toLowerCase(schema), 
++                                        StringHelper.toLowerCase(name), 
++                                        SEQUENCE_TYPES);
++                } else if (meta.storesUpperCaseIdentifiers()) {
++                    rs = meta.getTables(StringHelper.toUpperCase(catalog), 
++                                        StringHelper.toUpperCase(schema), 
++                                        StringHelper.toUpperCase(name), 
++                                        SEQUENCE_TYPES);
++                } else {
++                    rs = meta.getTables(catalog, schema, name, SEQUENCE_TYPES);
++                }
++                
++                while (rs != null && rs.next()) {
++                    String sequenceName = rs.getString("TABLE_NAME");
++                    if ( name.equalsIgnoreCase(sequenceName) ) {
++                        // Add to the cache so that we don't have to do this expensive
++                        // lookup again.
++                        sequences.add( name.toUpperCase() );
++                        return true;
++                    }
++                }
++            } finally {
++                if (rs != null) {
++                    rs.close();
++                }
++            }
++        } catch(SQLException e) {
++            throw new HibernateException(e);
++        }
++
++        return false;
++    }
++
++	public boolean isSequence(Object key) throws HibernateException {
++        // The default implementation of dialect.getQuerySequencesString() returns
++        // null and the sequence cache is therefore not initialized so we do a check
++        // against the db to see if the sequence already exists.
++		return key instanceof String && (sequences.contains( ( (String) key ).toUpperCase() ) || sequenceAlreadyExists( (String) key, null, null ));
+ 	}
+ 
+ 	public boolean isTable(Object key) throws HibernateException {
+Index: util/StringHelper.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/util/StringHelper.java,v
+retrieving revision 1.23
+diff -b -u -r1.23 StringHelper.java
+--- util/StringHelper.java	2 Sep 2004 10:23:30 -0000	1.23
++++ util/StringHelper.java	7 Dec 2004 08:59:09 -0000
+@@ -296,6 +296,10 @@
+ 		return str==null ? null : str.toUpperCase();
+ 	}
+ 
++	public static String toLowerCase(String str) {
++		return str==null ? null : str.toLowerCase();
++	}
++
+ }
+ 
+ 

@@ -1,0 +1,1409 @@
+Index: core/src/main/java/org/hibernate/dialect/resolver/DialectResolver.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/DialectResolver.java	Fri Oct 10 08:27:46 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/DialectResolver.java	Fri Oct 10 08:27:46 CDT 2008
+@@ -0,0 +1,51 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.Connection;
++import java.sql.DatabaseMetaData;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.exception.JDBCConnectionException;
++
++/**
++ * Contract for determining the {@link Dialect} to use based on a JDBC {@link Connection}.
++ * 
++ * @author Tomoto Shimizu Washio
++ * @author Steve Ebersole
++ */
++public interface DialectResolver {
++	/**
++	 * Determine the {@link Dialect} to use based on the given JDBC {@link DatabaseMetaData}.  Implementations are
++	 * expected to return the {@link Dialect} instance to use, or null if the {@link DatabaseMetaData} does not match
++	 * the criteria handled by this impl.
++	 * 
++	 * @param metaData The JDBC metadata.
++	 * @return The dialect to use, or null.
++	 * @throws JDBCConnectionException Indicates a 'non transient connection problem', which indicates that
++	 * we should stop resolution attempts.
++	 */
++	public Dialect resolveDialect(DatabaseMetaData metaData) throws JDBCConnectionException;
++}
+Index: core/src/main/java/org/hibernate/dialect/resolver/AbstractDialectResolver.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/AbstractDialectResolver.java	Sun Oct 12 10:25:17 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/AbstractDialectResolver.java	Sun Oct 12 10:25:17 CDT 2008
+@@ -0,0 +1,80 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.DatabaseMetaData;
++import java.sql.SQLException;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.exception.JDBCConnectionException;
++import org.hibernate.JDBCException;
++
++/**
++ * A templated resolver impl which delegates to the {@link #resolveDialectInternal} method
++ * and handles any thrown {@link SQLException}s.
++ *
++ * @author Steve Ebersole
++ */
++public abstract class AbstractDialectResolver implements DialectResolver {
++	private static final Logger log = LoggerFactory.getLogger( AbstractDialectResolver.class );
++
++	/**
++	 * {@inheritDoc}
++	 * <p/>
++	 * Here we template the resolution, delegating to {@link #resolveDialectInternal} and handling
++	 * {@link java.sql.SQLException}s properly.
++	 */
++	public final Dialect resolveDialect(DatabaseMetaData metaData) {
++		try {
++			return resolveDialectInternal( metaData );
++		}
++		catch ( SQLException sqlException ) {
++			JDBCException jdbcException = BasicSQLExceptionConverter.INSTANCE.convert( sqlException );
++			if ( jdbcException instanceof JDBCConnectionException ) {
++				throw jdbcException;
++			}
++			else {
++				log.warn( BasicSQLExceptionConverter.MSG + " : " + sqlException.getMessage() );
++				return null;
++			}
++		}
++		catch ( Throwable t ) {
++			log.warn( "Error executing resolver [" + this + "] : " + t.getMessage() );
++			return null;
++		}
++	}
++
++	/**
++	 * Perform the actual resolution without caring about handling {@link SQLException}s.
++	 *
++	 * @param metaData The database metadata
++	 * @return The resolved dialect, or null if we could not resolve.
++	 * @throws SQLException Indicates problems accessing the metadata.
++	 */
++	protected abstract Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException;
++}
+Index: core/src/test/java/org/hibernate/dialect/TestingDialects.java
+===================================================================
+--- core/src/test/java/org/hibernate/dialect/TestingDialects.java	Sun Oct 12 11:29:47 CDT 2008
++++ core/src/test/java/org/hibernate/dialect/TestingDialects.java	Sun Oct 12 11:29:47 CDT 2008
+@@ -0,0 +1,103 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect;
++
++import java.sql.SQLException;
++import java.sql.DatabaseMetaData;
++
++import org.hibernate.dialect.resolver.AbstractDialectResolver;
++import org.hibernate.dialect.resolver.BasicDialectResolver;
++import org.hibernate.HibernateException;
++
++/**
++ * TODO : javadoc
++ *
++ * @author Steve Ebersole
++ */
++public class TestingDialects {
++
++	public static class MyDialect1 extends Dialect {
++	}
++
++	public static class MyDialect21 extends Dialect {
++	}
++
++	public static class MyDialect22 extends Dialect {
++	}
++
++	public static class MySpecialDB2Dialect extends Dialect {
++	}
++
++	public static class MyDialectResolver1 extends AbstractDialectResolver {
++		protected Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
++			String databaseName = metaData.getDatabaseProductName();
++			int databaseMajorVersion = metaData.getDatabaseMajorVersion();
++			if ( "MyDatabase1".equals( databaseName ) ) {
++				return new MyDialect1();
++			}
++			if ( "MyDatabase2".equals( databaseName ) ) {
++				if ( databaseMajorVersion >= 2 ) {
++					return new MyDialect22();
++				}
++				if ( databaseMajorVersion >= 1 ) {
++					return new MyDialect21();
++				}
++			}
++			return null;
++		}
++	}
++
++	public static class MyDialectResolver2 extends BasicDialectResolver {
++		public MyDialectResolver2() {
++			super( "MyTrickyDatabase1", MyDialect1.class );
++		}
++	}
++
++	public static class ErrorDialectResolver1 extends AbstractDialectResolver {
++		public Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
++			throw new SQLException();
++		}
++	}
++
++	public static class ErrorDialectResolver2 extends AbstractDialectResolver {
++		public Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
++			String databaseName = metaData.getDatabaseProductName();
++			if ( databaseName.equals( "ErrorDatabase1" ) ) {
++				throw new SQLException();
++			}
++			if ( databaseName.equals( "ErrorDatabase2" ) ) {
++				throw new HibernateException( "This is a trap!" );
++			}
++			return null;
++		}
++	}
++
++	public static class MyOverridingDialectResolver1 extends BasicDialectResolver {
++		public MyOverridingDialectResolver1() {
++			super( "DB2/MySpecialPlatform", MySpecialDB2Dialect.class );
++		}
++	}
++
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/dialect/resolver/StandardDialectResolver.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/StandardDialectResolver.java	Fri Oct 10 09:36:30 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/StandardDialectResolver.java	Fri Oct 10 09:36:30 CDT 2008
+@@ -0,0 +1,118 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.DatabaseMetaData;
++import java.sql.SQLException;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.dialect.HSQLDialect;
++import org.hibernate.dialect.H2Dialect;
++import org.hibernate.dialect.MySQLDialect;
++import org.hibernate.dialect.PostgreSQLDialect;
++import org.hibernate.dialect.DerbyDialect;
++import org.hibernate.dialect.IngresDialect;
++import org.hibernate.dialect.SQLServerDialect;
++import org.hibernate.dialect.SybaseDialect;
++import org.hibernate.dialect.InformixDialect;
++import org.hibernate.dialect.DB2Dialect;
++import org.hibernate.dialect.Oracle10gDialect;
++import org.hibernate.dialect.Oracle9iDialect;
++import org.hibernate.dialect.Oracle8iDialect;
++
++/**
++ * The standard Hibernate resolver.
++ *
++ * @author Steve Ebersole
++ */
++public class StandardDialectResolver extends AbstractDialectResolver{
++	private static final Logger log = LoggerFactory.getLogger( StandardDialectResolver.class );
++
++	protected Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
++		String databaseName = metaData.getDatabaseProductName();
++		int databaseMajorVersion = metaData.getDatabaseMajorVersion();
++
++		if ( "HSQL Database Engine".equals( databaseName ) ) {
++			return new HSQLDialect();
++		}
++
++		if ( "H2".equals( databaseName ) ) {
++			return new H2Dialect();
++		}
++
++		if ( "MySQL".equals( databaseName ) ) {
++			return new MySQLDialect();
++		}
++
++		if ( "PostgreSQL".equals( databaseName ) ) {
++			return new PostgreSQLDialect();
++		}
++
++		if ( "Apache Derby".equals( databaseName ) ) {
++			return new DerbyDialect();
++		}
++
++		if ( "ingres".equalsIgnoreCase( databaseName ) ) {
++			return new IngresDialect();
++		}
++
++		if ( databaseName.startsWith( "Microsoft SQL Server" ) ) {
++			return new SQLServerDialect();
++		}
++
++		if ( "Sybase SQL Server".equals( databaseName ) || "Adaptive Server Enterprise".equals( databaseName ) ) {
++			return new SybaseDialect();
++		}
++
++		if ( "Informix Dynamic Server".equals( databaseName ) ) {
++			return new InformixDialect();
++		}
++
++		if ( databaseName.startsWith( "DB2/" ) ) {
++			return new DB2Dialect();
++		}
++
++		if ( "Oracle".equals( databaseName ) ) {
++			switch ( databaseMajorVersion ) {
++				case 11:
++					log.warn( "Oracle 11g is not yet fully supported; using 10g dialect" );
++					return new Oracle10gDialect();
++				case 10:
++					return new Oracle10gDialect();
++				case 9:
++					return new Oracle9iDialect();
++				case 8:
++					return new Oracle8iDialect();
++				default:
++					log.warn( "unknown Oracle major version [" + databaseMajorVersion + "]" );
++			}
++		}
++
++		return null;
++	}
++}
+Index: core/src/test/resources/log4j.properties
+===================================================================
+--- core/src/test/resources/log4j.properties	Fri Oct 10 11:25:00 CDT 2008
++++ core/src/test/resources/log4j.properties	Fri Oct 10 11:25:00 CDT 2008
+@@ -0,0 +1,33 @@
++#
++# Hibernate, Relational Persistence for Idiomatic Java
++#
++# Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++# indicated by the @author tags or express copyright attribution
++# statements applied by the authors.  All third-party contributions are
++# distributed under license by Red Hat Middleware LLC.
++#
++# This copyrighted material is made available to anyone wishing to use, modify,
++# copy, or redistribute it subject to the terms and conditions of the GNU
++# Lesser General Public License, as published by the Free Software Foundation.
++#
++# This program is distributed in the hope that it will be useful,
++# but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++# or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++# for more details.
++#
++# You should have received a copy of the GNU Lesser General Public License
++# along with this distribution; if not, write to:
++# Free Software Foundation, Inc.
++# 51 Franklin Street, Fifth Floor
++# Boston, MA  02110-1301  USA
++#
++#
++log4j.appender.stdout=org.apache.log4j.ConsoleAppender
++log4j.appender.stdout.Target=System.out
++log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
++log4j.appender.stdout.layout.ConversionPattern=%d{ABSOLUTE} %5p %c{1}:%L - %m%n
++
++log4j.rootLogger=info, stdout
++
++log4j.logger.org.hibernate.test=info
++log4j.logger.org.hibernate.tool.hbm2ddl=debug
+\ No newline at end of file
+Index: core/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java
+===================================================================
+--- core/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java	Fri Oct 10 14:33:25 CDT 2008
++++ core/src/test/java/org/hibernate/dialect/resolver/DialectResolverTest.java	Fri Oct 10 14:33:25 CDT 2008
+@@ -0,0 +1,94 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.SQLException;
++
++import junit.framework.TestSuite;
++import junit.framework.Test;
++import junit.framework.TestCase;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.dialect.TestingDialects;
++import org.hibernate.dialect.Mocks;
++
++/**
++ * TODO : javadoc
++ *
++ * @author Steve Ebersole
++ */
++public class DialectResolverTest extends TestCase {
++
++	public DialectResolverTest(String name) {
++		super( name );
++	}
++
++	public void testDialects() throws Exception {
++		DialectResolverSet resolvers = new DialectResolverSet();
++
++		resolvers.addResolverAtFirst( new TestingDialects.MyDialectResolver1() );
++		resolvers.addResolverAtFirst( new TestingDialects.MyDialectResolver2() );
++
++		testDetermination( resolvers, "MyDatabase1", 1, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "MyDatabase1", 2, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "MyDatabase2", 0, null );
++		testDetermination( resolvers, "MyDatabase2", 1, TestingDialects.MyDialect21.class );
++		testDetermination( resolvers, "MyDatabase2", 2, TestingDialects.MyDialect22.class );
++		testDetermination( resolvers, "MyDatabase2", 3, TestingDialects.MyDialect22.class );
++		testDetermination( resolvers, "MyDatabase3", 1, null );
++		testDetermination( resolvers, "MyTrickyDatabase1", 1, TestingDialects.MyDialect1.class );
++	}
++
++	public void testErrorAndOrder() throws Exception {
++		DialectResolverSet resolvers = new DialectResolverSet();
++		resolvers.addResolverAtFirst( new TestingDialects.MyDialectResolver1() );
++		resolvers.addResolver( new TestingDialects.ErrorDialectResolver1() );
++		resolvers.addResolverAtFirst( new TestingDialects.ErrorDialectResolver1() );
++		resolvers.addResolver( new TestingDialects.MyDialectResolver2() );
++
++		// This time no error is occurred not like testErrorAndOrder.
++		testDetermination( resolvers, "MyDatabase1", 1, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "MyTrickyDatabase1", 1, TestingDialects.MyDialect1.class );
++		testDetermination( resolvers, "NoSuchDatabase", 1, null );
++	}
++
++	private void testDetermination(
++			DialectResolver resolver,
++			String databaseName,
++			int version,
++			Class dialectClass) throws SQLException {
++		Dialect dialect = resolver.resolveDialect( Mocks.createConnection( databaseName, version ).getMetaData() );
++		if ( dialectClass == null ) {
++			assertEquals( null, dialect );
++		}
++		else {
++			assertEquals( dialectClass, dialect.getClass() );
++		}
++	}
++
++	public static Test suite() {
++		return new TestSuite( DialectResolverTest.class );
++	}
++}
+Index: core/src/test/java/org/hibernate/dialect/DialectFactoryTest.java
+===================================================================
+--- core/src/test/java/org/hibernate/dialect/DialectFactoryTest.java	Fri Oct 10 14:22:35 CDT 2008
++++ core/src/test/java/org/hibernate/dialect/DialectFactoryTest.java	Fri Oct 10 14:22:35 CDT 2008
+@@ -0,0 +1,168 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect;
++
++import java.util.Properties;
++import java.sql.Connection;
++
++import junit.framework.TestSuite;
++import junit.framework.TestCase;
++import junit.framework.Test;
++
++import org.hibernate.HibernateException;
++import org.hibernate.cfg.Environment;
++
++/**
++ * TODO : javadoc
++ *
++ * @author Steve Ebersole
++ */
++public class DialectFactoryTest extends TestCase {
++	public DialectFactoryTest(String name) {
++		super( name );
++	}
++
++	public static Test suite() {
++		return new TestSuite( DialectFactoryTest.class );
++	}
++
++	public void testBuildDialectByClass() {
++		assertEquals(
++				HSQLDialect.class,
++				DialectFactory.constructDialect( "org.hibernate.dialect.HSQLDialect" ).getClass()
++		);
++
++		try {
++			DialectFactory.constructDialect( "org.hibernate.dialect.NoSuchDialect" );
++			fail();
++		}
++		catch ( HibernateException e ) {
++			assertEquals( "unexpected exception type", e.getCause().getClass(), ClassNotFoundException.class );
++		}
++
++		try {
++			DialectFactory.constructDialect( "java.lang.Object" );
++			fail();
++		}
++		catch ( HibernateException e ) {
++			assertEquals( "unexpected exception type", e.getCause().getClass(), ClassCastException.class );
++		}
++	}
++
++	public void testBuildDialectByProperties() {
++		Properties props = new Properties();
++
++		try {
++			DialectFactory.buildDialect( props, null );
++			fail();
++		}
++		catch ( HibernateException e ) {
++			assertNull( e.getCause() );
++		}
++
++		props.setProperty( Environment.DIALECT, "org.hibernate.dialect.HSQLDialect" );
++		assertTrue( DialectFactory.buildDialect( props, null ) instanceof HSQLDialect );
++	}
++
++	public void testPreregisteredDialects() {
++		testDetermination( "HSQL Database Engine", HSQLDialect.class );
++		testDetermination( "H2", H2Dialect.class );
++		testDetermination( "MySQL", MySQLDialect.class );
++		testDetermination( "PostgreSQL", PostgreSQLDialect.class );
++		testDetermination( "Apache Derby", DerbyDialect.class );
++		testDetermination( "Ingres", IngresDialect.class );
++		testDetermination( "ingres", IngresDialect.class );
++		testDetermination( "INGRES", IngresDialect.class );
++		testDetermination( "Microsoft SQL Server Database", SQLServerDialect.class );
++		testDetermination( "Microsoft SQL Server", SQLServerDialect.class );
++		testDetermination( "Sybase SQL Server", SybaseDialect.class );
++		testDetermination( "Adaptive Server Enterprise", SybaseDialect.class );
++		testDetermination( "Informix Dynamic Server", InformixDialect.class );
++		testDetermination( "DB2/NT", DB2Dialect.class );
++		testDetermination( "DB2/LINUX", DB2Dialect.class );
++		testDetermination( "DB2/6000", DB2Dialect.class );
++		testDetermination( "DB2/HPUX", DB2Dialect.class );
++		testDetermination( "DB2/SUN", DB2Dialect.class );
++		testDetermination( "DB2/LINUX390", DB2Dialect.class );
++		testDetermination( "DB2/AIX64", DB2Dialect.class );
++		testDetermination( "Oracle", 8, Oracle8iDialect.class );
++		testDetermination( "Oracle", 9, Oracle9iDialect.class );
++		testDetermination( "Oracle", 10, Oracle10gDialect.class );
++		testDetermination( "Oracle", 11, Oracle10gDialect.class );
++	}
++
++	public void testCustomDialects() {
++		DialectFactory.registerDialectResolver( TestingDialects.MyDialectResolver1.class.getName() );
++		DialectFactory.registerDialectResolver( TestingDialects.MyDialectResolver2.class.getName() );
++		DialectFactory.registerDialectResolver( TestingDialects.ErrorDialectResolver1.class.getName() );
++		DialectFactory.registerDialectResolver( TestingDialects.ErrorDialectResolver2.class.getName() );
++		DialectFactory.registerDialectResolver( TestingDialects.MyOverridingDialectResolver1.class.getName() );
++
++		testDetermination( "MyDatabase1", TestingDialects.MyDialect1.class );
++		testDetermination( "MyDatabase2", 1, TestingDialects.MyDialect21.class );
++		testDetermination( "MyTrickyDatabase1", TestingDialects.MyDialect1.class );
++
++		// This should be mapped to DB2Dialect by default, but actually it will be
++		// my custom dialect because I have registered MyOverridingDialectResolver1.
++		testDetermination( "DB2/MySpecialPlatform", TestingDialects.MySpecialDB2Dialect.class );
++
++		try {
++			testDetermination( "ErrorDatabase1", Void.TYPE );
++			fail();
++		}
++		catch ( HibernateException e ) {
++//			log.info( "Expected SQL error in resolveDialect and ignored", e );
++		}
++
++		try {
++			testDetermination( "ErrorDatabase2", Void.TYPE );
++			fail();
++		}
++		catch ( HibernateException e ) {
++//			log.info( "Expected runtime error in resolveDialect", e );
++		}
++	}
++
++	public void testDialectNotFound() {
++		Properties properties = new Properties();
++		try {
++			DialectFactory.buildDialect( properties, Mocks.createConnection( "NoSuchDatabase", 666 ) );
++			fail();
++		}
++		catch ( HibernateException e ) {
++			assertNull( e.getCause() );
++		}
++	}
++
++	private void testDetermination(String databaseName, Class clazz) {
++		testDetermination( databaseName, -9999, clazz );
++	}
++
++	private void testDetermination(String databaseName, int databaseMajorVersion, Class clazz) {
++		Properties properties = new Properties();
++		Connection conn = Mocks.createConnection( databaseName, databaseMajorVersion );
++		assertEquals( clazz, DialectFactory.buildDialect( properties, conn ).getClass() );
++	}
++}
+Index: core/src/main/java/org/hibernate/dialect/DialectFactory.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/DialectFactory.java	(revision 15266)
++++ core/src/main/java/org/hibernate/dialect/DialectFactory.java	Fri Oct 10 14:05:12 CDT 2008
+@@ -24,70 +24,117 @@
+  */
+ package org.hibernate.dialect;
+ 
+-import java.util.HashMap;
+-import java.util.Map;
++import java.sql.Connection;
++import java.sql.SQLException;
++import java.sql.DatabaseMetaData;
+ import java.util.Properties;
+ 
+ import org.hibernate.HibernateException;
++import org.hibernate.dialect.resolver.DialectResolver;
++import org.hibernate.dialect.resolver.DialectResolverSet;
++import org.hibernate.dialect.resolver.StandardDialectResolver;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.util.ReflectHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+  * A factory for generating Dialect instances.
+  *
+  * @author Steve Ebersole
++ * @author Tomoto Shimizu Washio
+  */
+ public class DialectFactory {
++	private static final Logger log = LoggerFactory.getLogger( DialectFactory.class );
+ 
++	private static DialectResolverSet DIALECT_RESOLVERS = new DialectResolverSet();
++
++	static {
++		// register the standard dialect resolver
++		DIALECT_RESOLVERS.addResolver( new StandardDialectResolver() );
++
++		// register resolvers set via Environment property
++		String userSpecifedResolverSetting = Environment.getProperties().getProperty( Environment.DIALECT_RESOLVERS );
++		if ( userSpecifedResolverSetting != null ) {
++			String[] userSpecifedResolvers = userSpecifedResolverSetting.split( "\\s+" );
++			for ( int i = 0; i < userSpecifedResolvers.length; i++ ) {
++				registerDialectResolver( userSpecifedResolvers[i] );
++			}
++		}
++	}
++
++	/*package*/ static void registerDialectResolver(String resolverName) {
++		try {
++			DialectResolver resolver = ( DialectResolver ) ReflectHelper.classForName( resolverName ).newInstance();
++			DIALECT_RESOLVERS.addResolverAtFirst( resolver );
++		}
++		catch ( ClassNotFoundException cnfe ) {
++			log.warn( "Dialect resolver class not found: " + resolverName );
++		}
++		catch ( Exception e ) {
++			log.warn( "Could not instantiate dialect resolver class", e );
++		}
++	}
++
+ 	/**
+ 	 * Builds an appropriate Dialect instance.
+ 	 * <p/>
+-	 * If a dialect is explicitly named in the incoming properties, it is used. Otherwise, the database name and version
+-	 * (obtained from connection metadata) are used to make the dertemination.
++	 * If a dialect is explicitly named in the incoming properties, it is used. Otherwise, it is
++	 * determined by dialect resolvers based on the passed connection.
+ 	 * <p/>
+-	 * An exception is thrown if a dialect was not explicitly set and the database name is not known.
++	 * An exception is thrown if a dialect was not explicitly set and no resolver could make
++	 * the determination from the given connection.
+ 	 *
+ 	 * @param props The configuration properties.
+-	 * @param databaseName The name of the database product (obtained from metadata).
+-	 * @param databaseMajorVersion The major version of the database product (obtained from metadata).
+-	 *
+-	 * @return The appropriate dialect.
+-	 *
+-	 * @throws HibernateException No dialect specified and database name not known.
++	 * @param conn The configured connection.
++	 * @return The appropriate dialect instance.
++	 * @throws HibernateException No dialect specified and no resolver could make the determination.
+ 	 */
+-	public static Dialect buildDialect(Properties props, String databaseName, int databaseMajorVersion)
+-	        throws HibernateException {
++	public static Dialect buildDialect(Properties props, Connection conn) throws HibernateException {
+ 		String dialectName = props.getProperty( Environment.DIALECT );
+ 		if ( dialectName == null ) {
+-			return determineDialect( databaseName, databaseMajorVersion );
++			return determineDialect( conn );
+ 		}
+ 		else {
+-			return buildDialect( dialectName );
++			return constructDialect( dialectName );
+ 		}
+ 	}
+ 
+ 	/**
+-	 * Determine the appropriate Dialect to use given the database product name
+-	 * and major version.
++	 * Determine the appropriate Dialect to use given the connection.
+ 	 *
+-	 * @param databaseName The name of the database product (obtained from metadata).
+-	 * @param databaseMajorVersion The major version of the database product (obtained from metadata).
++	 * @param connection The configured connection.
++	 * @return The appropriate dialect instance.
+ 	 *
+-	 * @return An appropriate dialect instance.
++	 * @throws HibernateException No connection given or no resolver could make
++	 * the determination from the given connection.
+ 	 */
+-	public static Dialect determineDialect(String databaseName, int databaseMajorVersion) {
+-		if ( databaseName == null ) {
+-			throw new HibernateException( "Hibernate Dialect must be explicitly set" );
++	private static Dialect determineDialect(Connection connection) {
++		if ( connection == null ) {
++			throw new HibernateException( "Connection cannot be null when 'hibernate.dialect' not set" );
+ 		}
+ 
+-		DatabaseDialectMapper mapper = ( DatabaseDialectMapper ) MAPPERS.get( databaseName );
+-		if ( mapper == null ) {
+-			throw new HibernateException( "Hibernate Dialect must be explicitly set for database: " + databaseName );
++		try {
++			final DatabaseMetaData databaseMetaData = connection.getMetaData();
++			final Dialect dialect = DIALECT_RESOLVERS.resolveDialect( databaseMetaData );
++
++			if ( dialect == null ) {
++				throw new HibernateException(
++						"Unable to determine Dialect to use [name=" + databaseMetaData.getDatabaseProductName() +
++								", majorVersion=" + databaseMetaData.getDatabaseMajorVersion() +
++								"]; user must register resolver or explicitly set 'hibernate.dialect'"
++				);
+-		}
++			}
+ 
+-		String dialectName = mapper.getDialectClass( databaseMajorVersion );
+-		return buildDialect( dialectName );
++			return dialect;
+-	}
++		}
++		catch ( SQLException sqlException ) {
++			throw new HibernateException(
++					"Unable to access java.sql.DatabaseMetaData to determine appropriate Dialect to use",
++					sqlException
++			);
++		}
++	}
+ 
+ 	/**
+ 	 * Returns a dialect instance given the name of the class to use.
+@@ -96,84 +143,15 @@
+ 	 *
+ 	 * @return The dialect instance.
+ 	 */
+-	public static Dialect buildDialect(String dialectName) {
++	public static Dialect constructDialect(String dialectName) {
+ 		try {
+ 			return ( Dialect ) ReflectHelper.classForName( dialectName ).newInstance();
+ 		}
+ 		catch ( ClassNotFoundException cnfe ) {
+-			throw new HibernateException( "Dialect class not found: " + dialectName );
++			throw new HibernateException( "Dialect class not found: " + dialectName, cnfe );
+ 		}
+ 		catch ( Exception e ) {
+ 			throw new HibernateException( "Could not instantiate dialect class", e );
+ 		}
+ 	}
+-
+-	/**
+-	 * For a given database product name, instances of
+-	 * DatabaseDialectMapper know which Dialect to use for different versions.
+-	 */
+-	public static interface DatabaseDialectMapper {
+-		public String getDialectClass(int majorVersion);
+-	}
++}
+-
+-	/**
+-	 * A simple DatabaseDialectMapper for dialects which are independent
+-	 * of the underlying database product version.
+-	 */
+-	public static class VersionInsensitiveMapper implements DatabaseDialectMapper {
+-		private String dialectClassName;
+-
+-		public VersionInsensitiveMapper(String dialectClassName) {
+-			this.dialectClassName = dialectClassName;
+-		}
+-
+-		public String getDialectClass(int majorVersion) {
+-			return dialectClassName;
+-		}
+-	}
+-
+-	// TODO : this is the stuff it'd be nice to move to a properties file or some other easily user-editable place
+-	private static final Map MAPPERS = new HashMap();
+-	static {
+-		// detectors...
+-		MAPPERS.put( "HSQL Database Engine", new VersionInsensitiveMapper( "org.hibernate.dialect.HSQLDialect" ) );
+-		MAPPERS.put( "H2", new VersionInsensitiveMapper( "org.hibernate.dialect.H2Dialect" ) );
+-		MAPPERS.put( "MySQL", new VersionInsensitiveMapper( "org.hibernate.dialect.MySQLDialect" ) );
+-		MAPPERS.put( "PostgreSQL", new VersionInsensitiveMapper( "org.hibernate.dialect.PostgreSQLDialect" ) );
+-		MAPPERS.put( "Apache Derby", new VersionInsensitiveMapper( "org.hibernate.dialect.DerbyDialect" ) );
+-
+-		MAPPERS.put( "Ingres", new VersionInsensitiveMapper( "org.hibernate.dialect.IngresDialect" ) );
+-		MAPPERS.put( "ingres", new VersionInsensitiveMapper( "org.hibernate.dialect.IngresDialect" ) );
+-		MAPPERS.put( "INGRES", new VersionInsensitiveMapper( "org.hibernate.dialect.IngresDialect" ) );
+-
+-		MAPPERS.put( "Microsoft SQL Server Database", new VersionInsensitiveMapper( "org.hibernate.dialect.SQLServerDialect" ) );
+-		MAPPERS.put( "Microsoft SQL Server", new VersionInsensitiveMapper( "org.hibernate.dialect.SQLServerDialect" ) );
+-		MAPPERS.put( "Sybase SQL Server", new VersionInsensitiveMapper( "org.hibernate.dialect.SybaseDialect" ) );
+-		MAPPERS.put( "Adaptive Server Enterprise", new VersionInsensitiveMapper( "org.hibernate.dialect.SybaseDialect" ) );
+-
+-		MAPPERS.put( "Informix Dynamic Server", new VersionInsensitiveMapper( "org.hibernate.dialect.InformixDialect" ) );
+-
+-		// thanks goodness for "universal" databases...
+-		MAPPERS.put( "DB2/NT", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/LINUX", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/6000", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/HPUX", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/SUN", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/LINUX390", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-		MAPPERS.put( "DB2/AIX64", new VersionInsensitiveMapper( "org.hibernate.dialect.DB2Dialect" ) );
+-
+-		MAPPERS.put(
+-		        "Oracle",
+-		        new DatabaseDialectMapper() {
+-			        public String getDialectClass(int majorVersion) {
+-						switch ( majorVersion ) {
+-							case 8: return Oracle8iDialect.class.getName();
+-							case 9: return Oracle9iDialect.class.getName();
+-							case 10: return Oracle10gDialect.class.getName();
+-							default: throw new HibernateException( "unknown Oracle major version [" + majorVersion + "]" );
+-						}
+-			        }
+-		        }
+-		);
+-	}
+-}
+Index: core/src/main/java/org/hibernate/cfg/SettingsFactory.java
+===================================================================
+--- core/src/main/java/org/hibernate/cfg/SettingsFactory.java	(revision 15266)
++++ core/src/main/java/org/hibernate/cfg/SettingsFactory.java	Fri Oct 10 10:16:01 CDT 2008
+@@ -91,13 +91,12 @@
+ 
+ 		//Interrogate JDBC metadata
+ 
+-		String databaseName = null;
+-		int databaseMajorVersion = 0;
+ 		boolean metaSupportsScrollable = false;
+ 		boolean metaSupportsGetGeneratedKeys = false;
+ 		boolean metaSupportsBatchUpdates = false;
+ 		boolean metaReportsDDLCausesTxnCommit = false;
+ 		boolean metaReportsDDLInTxnSupported = true;
++		Dialect dialect = null;
+ 
+ 		// 'hibernate.temp.use_jdbc_metadata_defaults' is a temporary magic value.
+ 		// The need for it is intended to be alleviated with 3.3 developement, thus it is
+@@ -111,9 +110,7 @@
+ 				Connection conn = connections.getConnection();
+ 				try {
+ 					DatabaseMetaData meta = conn.getMetaData();
+-					databaseName = meta.getDatabaseProductName();
+-					databaseMajorVersion = getDatabaseMajorVersion(meta);
+-					log.info("RDBMS: " + databaseName + ", version: " + meta.getDatabaseProductVersion() );
++					log.info("RDBMS: " + meta.getDatabaseProductName() + ", version: " + meta.getDatabaseProductVersion() );
+ 					log.info("JDBC driver: " + meta.getDriverName() + ", version: " + meta.getDriverVersion() );
+ 
+ 					metaSupportsScrollable = meta.supportsResultSetType(ResultSet.TYPE_SCROLL_INSENSITIVE);
+@@ -135,6 +132,7 @@
+ 						}
+ 					}
+ 
++					dialect = determineDialect( props, conn );
+ 				}
+ 				finally {
+ 					connections.closeConnection(conn);
+@@ -149,11 +147,7 @@
+ 		}
+ 		settings.setDataDefinitionImplicitCommit( metaReportsDDLCausesTxnCommit );
+ 		settings.setDataDefinitionInTransactionSupported( metaReportsDDLInTxnSupported );
+-
+-
+-		//SQL Dialect:
+-		Dialect dialect = determineDialect( props, databaseName, databaseMajorVersion );
+-		settings.setDialect(dialect);
++		settings.setDialect( dialect );
+ 		
+ 		//use dialect default properties
+ 		final Properties properties = new Properties();
+@@ -456,8 +450,8 @@
+ 		return TransactionManagerLookupFactory.getTransactionManagerLookup(properties);		
+ 	}
+ 
+-	private Dialect determineDialect(Properties props, String databaseName, int databaseMajorVersion) {
+-		return DialectFactory.buildDialect( props, databaseName, databaseMajorVersion );
++	private Dialect determineDialect(Properties props, Connection conn) {
++		return DialectFactory.buildDialect( props, conn );
+ 	}
+ 	
+ }
+Index: core/src/main/java/org/hibernate/dialect/resolver/BasicDialectResolver.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/BasicDialectResolver.java	Sun Oct 12 11:29:40 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/BasicDialectResolver.java	Sun Oct 12 11:29:40 CDT 2008
+@@ -0,0 +1,78 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.DatabaseMetaData;
++import java.sql.SQLException;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.HibernateException;
++
++/**
++ * Intended as support for custom resolvers.
++ *
++ * @author Steve Ebersole
++ */
++public class BasicDialectResolver extends AbstractDialectResolver {
++	public static final int VERSION_INSENSITIVE_VERSION = -9999;
++
++	private final String matchingName;
++	private final int matchingVersion;
++	private final Class dialectClass;
++
++	public BasicDialectResolver(String matchingName, Class dialectClass) {
++		this( matchingName, VERSION_INSENSITIVE_VERSION, dialectClass );
++	}
++
++	public BasicDialectResolver(String matchingName, int matchingVersion, Class dialectClass) {
++		this.matchingName = matchingName;
++		this.matchingVersion = matchingVersion;
++		this.dialectClass = dialectClass;
++	}
++
++	protected final Dialect resolveDialectInternal(DatabaseMetaData metaData) throws SQLException {
++		final String databaseName = metaData.getDatabaseProductName();
++		final int databaseMajorVersion = metaData.getDatabaseMajorVersion();
++
++		if ( matchingName.equalsIgnoreCase( databaseName )
++				&& ( matchingVersion == VERSION_INSENSITIVE_VERSION || matchingVersion == databaseMajorVersion ) ) {
++			try {
++				return ( Dialect ) dialectClass.newInstance();
++			}
++			catch ( HibernateException e ) {
++				// conceivable that the dialect ctor could throw HibernateExceptions, so don't re-wrap
++				throw e;
++			}
++			catch ( Throwable t ) {
++				throw new HibernateException(
++						"Could not instantiate specified Dialect class [" + dialectClass.getName() + "]",
++						t
++				);
++			}
++		}
++
++		return null;
++	}
++}
+Index: core/src/main/java/org/hibernate/dialect/resolver/BasicSQLExceptionConverter.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/BasicSQLExceptionConverter.java	Fri Oct 10 09:36:30 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/BasicSQLExceptionConverter.java	Fri Oct 10 09:36:30 CDT 2008
+@@ -0,0 +1,62 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.SQLException;
++
++import org.hibernate.exception.SQLStateConverter;
++import org.hibernate.exception.ViolatedConstraintNameExtracter;
++import org.hibernate.JDBCException;
++
++/**
++ * A helper to centralize conversion of {@link java.sql.SQLException}s to {@link org.hibernate.JDBCException}s.
++ *
++ * @author Steve Ebersole
++ */
++public class BasicSQLExceptionConverter {
++	public static final BasicSQLExceptionConverter INSTANCE = new BasicSQLExceptionConverter();
++	public static final String MSG = "Unable to query java.sql.DatabaseMetaData";
++
++	private static final SQLStateConverter CONVERTER = new SQLStateConverter( new ConstraintNameExtracter() );
++
++	/**
++	 * Perform a conversion.
++	 *
++	 * @param sqlException The exception to convert.
++	 * @return The converted exception.
++	 */
++	public JDBCException convert(SQLException sqlException) {
++		return CONVERTER.convert( sqlException, MSG, null );
++	}
++
++	private static class ConstraintNameExtracter implements ViolatedConstraintNameExtracter {
++		/**
++		 * {@inheritDoc}
++		 */
++		public String extractConstraintName(SQLException sqle) {
++			return "???";
++		}
++	}
++}
+Index: core/src/main/java/org/hibernate/dialect/resolver/DialectResolverSet.java
+===================================================================
+--- core/src/main/java/org/hibernate/dialect/resolver/DialectResolverSet.java	Fri Oct 10 10:11:44 CDT 2008
++++ core/src/main/java/org/hibernate/dialect/resolver/DialectResolverSet.java	Fri Oct 10 10:11:44 CDT 2008
+@@ -0,0 +1,92 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect.resolver;
++
++import java.sql.DatabaseMetaData;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.exception.JDBCConnectionException;
++
++/**
++ * A {@link DialectResolver} implementation which coordinates resolution by delegating to its
++ * registered sub-resolvers.  Sub-resolvers may be registered by calling either {@link #addResolver} or
++ * {@link #addResolverAtFirst}.
++ *
++ * @author Tomoto Shimizu Washio
++ */
++public class DialectResolverSet implements DialectResolver {
++	private static Logger log = LoggerFactory.getLogger( DialectResolverSet.class );
++
++	private List resolvers = new ArrayList();
++
++	/**
++	 * {@inheritDoc}
++	 */
++	public Dialect resolveDialect(DatabaseMetaData metaData) {
++		Iterator i = resolvers.iterator();
++		while ( i.hasNext() ) {
++			final DialectResolver resolver = ( DialectResolver ) i.next();
++			try {
++				Dialect dialect = resolver.resolveDialect( metaData );
++				if ( dialect != null ) {
++					return dialect;
++				}
++			}
++			catch ( JDBCConnectionException e ) {
++				throw e;
++			}
++			catch ( Throwable t ) {
++				log.info( "sub-resolver threw unexpected exception, continuing to next : " + t.getMessage() );
++			}
++		}
++		return null;
++	}
++
++	/**
++	 * Add a resolver at the end of the underlying resolver list.  The resolver added by this method is at lower
++	 * priority than any other existing resolvers.
++	 *
++	 * @param resolver The resolver to add.
++	 */
++	public void addResolver(DialectResolver resolver) {
++		resolvers.add( resolver );
++	}
++
++	/**
++	 * Add a resolver at the beginning of the underlying resolver list.  The resolver added by this method is at higher
++	 * priority than any other existing resolvers.
++	 *
++	 * @param resolver The resolver to add.
++	 */
++	public void addResolverAtFirst(DialectResolver resolver) {
++		resolvers.add( 0, resolver );
++	}
++}
+Index: core/src/main/java/org/hibernate/cfg/Environment.java
+===================================================================
+--- core/src/main/java/org/hibernate/cfg/Environment.java	(revision 15266)
++++ core/src/main/java/org/hibernate/cfg/Environment.java	Fri Oct 10 14:13:03 CDT 2008
+@@ -237,10 +237,17 @@
+ 	public static final String SESSION_FACTORY_NAME = "hibernate.session_factory_name";
+ 
+ 	/**
+-	 * Hibernate SQL <tt>Dialect</tt> class
++	 * Hibernate SQL {@link org.hibernate.dialect.Dialect}| class
+ 	 */
+ 	public static final String DIALECT ="hibernate.dialect";
++
+ 	/**
++	 * {@link org.hibernate.dialect.resolver.DialectResolver} classes to register with the
++	 * {@link org.hibernate.dialect.DialectFactory}
++	 */
++	public static final String DIALECT_RESOLVERS = "hibernate.dialect_resolvers";
++
++	/**
+ 	 * A default database schema (owner) name to use for unqualified tablenames
+ 	 */
+ 	public static final String DEFAULT_SCHEMA = "hibernate.default_schema";
+Index: core/src/test/java/org/hibernate/dialect/Mocks.java
+===================================================================
+--- core/src/test/java/org/hibernate/dialect/Mocks.java	Fri Oct 10 11:18:09 CDT 2008
++++ core/src/test/java/org/hibernate/dialect/Mocks.java	Fri Oct 10 11:18:09 CDT 2008
+@@ -0,0 +1,148 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Middleware LLC.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ *
++ */
++package org.hibernate.dialect;
++
++import java.lang.reflect.InvocationHandler;
++import java.lang.reflect.Method;
++import java.lang.reflect.Proxy;
++import java.sql.SQLException;
++import java.sql.Connection;
++import java.sql.DatabaseMetaData;
++
++/**
++ * TODO : javadoc
++ *
++ * @author Steve Ebersole
++ */
++public class Mocks {
++
++	public static Connection createConnection(String dbName, int version) {
++		DatabaseMetaDataHandler metadataHandler = new DatabaseMetaDataHandler( dbName, version );
++		ConnectionHandler connectionHandler = new ConnectionHandler();
++
++		DatabaseMetaData metadataProxy = ( DatabaseMetaData ) Proxy.newProxyInstance(
++				ClassLoader.getSystemClassLoader(),
++				new Class[] { DatabaseMetaData.class },
++				metadataHandler
++		);
++
++		Connection connectionProxy = ( Connection ) Proxy.newProxyInstance(
++				ClassLoader.getSystemClassLoader(),
++				new Class[] { Connection.class },
++				connectionHandler
++		);
++
++		metadataHandler.setConnectionProxy( connectionProxy );
++		connectionHandler.setMetadataProxy( metadataProxy );
++
++		return connectionProxy;
++	}
++
++	private static class ConnectionHandler implements InvocationHandler {
++		private DatabaseMetaData metadataProxy;
++
++		public void setMetadataProxy(DatabaseMetaData metadataProxy) {
++			this.metadataProxy = metadataProxy;
++		}
++
++		public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
++			final String methodName = method.getName();
++			if ( "getMetaData".equals( methodName ) ) {
++				return metadataProxy;
++			}
++
++			if ( "toString".equals( methodName ) ) {
++				return "Connection proxy [@" + hashCode() + "]";
++			}
++
++			if ( "hashCode".equals( methodName ) ) {
++				return new Integer( this.hashCode() );
++			}
++
++			if ( canThrowSQLException( method ) ) {
++				throw new SQLException();
++			}
++			else {
++				throw new UnsupportedOperationException();
++			}
++		}
++	}
++
++	private static class DatabaseMetaDataHandler implements InvocationHandler {
++		private final String databaseName;
++		private final int majorVersion;
++
++		private Connection connectionProxy;
++
++		public void setConnectionProxy(Connection connectionProxy) {
++			this.connectionProxy = connectionProxy;
++		}
++
++		private DatabaseMetaDataHandler(String databaseName, int majorVersion) {
++			this.databaseName = databaseName;
++			this.majorVersion = majorVersion;
++		}
++
++		public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
++			final String methodName = method.getName();
++			if ( "getDatabaseProductName".equals( methodName ) ) {
++				return databaseName;
++			}
++
++			if ( "getDatabaseMajorVersion".equals( methodName ) ) {
++				return new Integer( majorVersion );
++			}
++
++			if ( "getConnection".equals( methodName ) ) {
++				return connectionProxy;
++			}
++
++			if ( "toString".equals( methodName ) ) {
++				return "DatabaseMetaData proxy [db-name=" + databaseName + ", version=" + majorVersion + "]";
++			}
++
++			if ( "hashCode".equals( methodName ) ) {
++				return new Integer( this.hashCode() );
++			}
++
++			if ( canThrowSQLException( method ) ) {
++				throw new SQLException();
++			}
++			else {
++				throw new UnsupportedOperationException();
++			}
++		}
++	}
++
++	private static boolean canThrowSQLException(Method method) {
++		final Class[] exceptions = method.getExceptionTypes();
++		for ( int i = 0; i < exceptions.length; i++ ) {
++			if ( SQLException.class.isAssignableFrom( exceptions[i] ) ) {
++				return true;
++			}
++		}
++		return false;
++	}
++}

@@ -1,0 +1,557 @@
+Index: src/test/org/hibernate/shards/ShardedSessionFactoryDefaultMock.java
+===================================================================
+--- src/test/org/hibernate/shards/ShardedSessionFactoryDefaultMock.java	(revision 17808)
++++ src/test/org/hibernate/shards/ShardedSessionFactoryDefaultMock.java	(working copy)
+@@ -26,6 +26,7 @@
+ import org.hibernate.StatelessSession;
+ import org.hibernate.cache.Cache;
+ import org.hibernate.cache.QueryCache;
++import org.hibernate.cache.Region;
+ import org.hibernate.cache.UpdateTimestampsCache;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.classic.Session;
+@@ -275,7 +276,7 @@
+     throw new UnsupportedOperationException();
+   }
+ 
+-  public Cache getSecondLevelCacheRegion(String regionName) {
++  public Region getSecondLevelCacheRegion(String regionName) {
+     throw new UnsupportedOperationException();
+   }
+ 
+Index: src/test/org/hibernate/shards/defaultmock/SessionFactoryDefaultMock.java
+===================================================================
+--- src/test/org/hibernate/shards/defaultmock/SessionFactoryDefaultMock.java	(revision 17808)
++++ src/test/org/hibernate/shards/defaultmock/SessionFactoryDefaultMock.java	(working copy)
+@@ -25,6 +25,7 @@
+ import org.hibernate.StatelessSession;
+ import org.hibernate.cache.Cache;
+ import org.hibernate.cache.QueryCache;
++import org.hibernate.cache.Region;
+ import org.hibernate.cache.UpdateTimestampsCache;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.classic.Session;
+@@ -252,7 +253,7 @@
+     throw new UnsupportedOperationException();
+   }
+ 
+-  public Cache getSecondLevelCacheRegion(String regionName) {
++  public Region getSecondLevelCacheRegion(String regionName) {
+     throw new UnsupportedOperationException();
+   }
+ 
+Index: src/test/org/hibernate/shards/defaultmock/EntityPersisterDefaultMock.java
+===================================================================
+--- src/test/org/hibernate/shards/defaultmock/EntityPersisterDefaultMock.java	(revision 17808)
++++ src/test/org/hibernate/shards/defaultmock/EntityPersisterDefaultMock.java	(working copy)
+@@ -23,6 +23,7 @@
+ import org.hibernate.LockMode;
+ import org.hibernate.MappingException;
+ import org.hibernate.cache.CacheConcurrencyStrategy;
++import org.hibernate.cache.access.EntityRegionAccessStrategy;
+ import org.hibernate.cache.entry.CacheEntryStructure;
+ import org.hibernate.engine.CascadeStyle;
+ import org.hibernate.engine.SessionFactoryImplementor;
+@@ -440,4 +441,9 @@
+   public ValueInclusion[] getPropertyUpdateGenerationInclusions() {
+     throw new UnsupportedOperationException();
+   }
++
++	@Override
++	public EntityRegionAccessStrategy getCacheAccessStrategy() {
++	   throw new UnsupportedOperationException();
++	}
+ }
+Index: src/test/org/hibernate/shards/defaultmock/SessionDefaultMock.java
+===================================================================
+--- src/test/org/hibernate/shards/defaultmock/SessionDefaultMock.java	(revision 17808)
++++ src/test/org/hibernate/shards/defaultmock/SessionDefaultMock.java	(working copy)
+@@ -31,6 +31,7 @@
+ import org.hibernate.SessionFactory;
+ import org.hibernate.Transaction;
+ import org.hibernate.classic.Session;
++import org.hibernate.jdbc.Work;
+ import org.hibernate.stat.SessionStatistics;
+ import org.hibernate.type.Type;
+ 
+@@ -498,4 +499,9 @@
+   public void reconnect(Connection connection) throws HibernateException {
+     throw new UnsupportedOperationException();
+   }
++
++  @Override
++  public void doWork(Work work) throws HibernateException {
++    throw new UnsupportedOperationException();
++  }
+ }
+Index: src/java/org/hibernate/shards/session/ShardedSessionImpl.java
+===================================================================
+--- src/java/org/hibernate/shards/session/ShardedSessionImpl.java	(revision 17808)
++++ src/java/org/hibernate/shards/session/ShardedSessionImpl.java	(working copy)
+@@ -39,6 +39,7 @@
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.id.IdentifierGenerator;
++import org.hibernate.jdbc.Work;
+ import org.hibernate.metadata.ClassMetadata;
+ import org.hibernate.proxy.HibernateProxy;
+ import org.hibernate.shards.CrossShardAssociationException;
+@@ -1600,6 +1601,11 @@
+     return so.execute(shardToUse);
+   }
+ 
+-
++   @Override
++  public void doWork(Work work) throws HibernateException {
++    for( Shard s : shards ){
++      s.getSession().doWork(work);
++    }
++  }
+ 
+ }
+Index: src/java/org/hibernate/shards/session/ShardedSessionFactoryImpl.java
+===================================================================
+--- src/java/org/hibernate/shards/session/ShardedSessionFactoryImpl.java	(revision 17808)
++++ src/java/org/hibernate/shards/session/ShardedSessionFactoryImpl.java	(working copy)
+@@ -28,6 +28,7 @@
+ import org.hibernate.StatelessSession;
+ import org.hibernate.cache.Cache;
+ import org.hibernate.cache.QueryCache;
++import org.hibernate.cache.Region;
+ import org.hibernate.cache.UpdateTimestampsCache;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.classic.Session;
+@@ -599,7 +600,7 @@
+     return getAnyFactory().getResultSetMapping(name);
+   }
+ 
+-  public Cache getSecondLevelCacheRegion(String regionName) {
++  public Region getSecondLevelCacheRegion(String regionName) {
+     // assumption is that all session factories are configured the same way,
+     // so it doesn't matter which session factory answers this question
+     return getAnyFactory().getSecondLevelCacheRegion(regionName);
+Index: pom.xml
+===================================================================
+--- pom.xml	(revision 0)
++++ pom.xml	(revision 0)
+@@ -0,0 +1,419 @@
++<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
++	<modelVersion>4.0.0</modelVersion>
++	<packaging>jar</packaging>
++	<groupId>org.hibernate</groupId>
++	<artifactId>hibernate-shards</artifactId>
++	<version>3.0.1-SNAPSHOT</version>
++	<name>hibernate-shards</name>
++	<!--
++		*******************************************************************
++	-->
++	<!-- Repositories      -->
++	<!--
++		*******************************************************************
++	-->
++	<repositories>
++		<repository>
++			<id>Maven 2 Central</id>
++			<url>http://repo1.maven.org/maven2</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</repository>
++		<repository>
++			<id>Codehaus</id>
++			<url>http://repository.codehaus.org/</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</repository>
++		<repository>
++			<id>JavaNet1</id>
++			<url>http://download.java.net/maven/1</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++			<layout>legacy</layout>
++		</repository>
++		<repository>
++			<id>JavaNet2</id>
++			<url>http://download.java.net/maven/2</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</repository>
++		<repository>
++			<id>jboss</id>
++			<url>http://repository.jboss.com/maven2/</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</repository>
++	</repositories>
++
++
++	<!--
++		*******************************************************************
++	-->
++	<!-- Plugin Repository -->
++	<!--
++		*******************************************************************
++	-->
++	<pluginRepositories>
++		<pluginRepository>
++			<id>Maven 2 Central</id>
++			<url>http://repo1.maven.org/maven2</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</pluginRepository>
++		<pluginRepository>
++			<id>Codehaus</id>
++			<url>http://repository.codehaus.org/</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</pluginRepository>
++		<pluginRepository>
++			<id>JavaNet1</id>
++			<url>http://download.java.net/maven/1</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++			<layout>legacy</layout>
++		</pluginRepository>
++		<pluginRepository>
++			<id>JavaNet2</id>
++			<url>http://download.java.net/maven/2</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</pluginRepository>
++		<pluginRepository>
++			<id>jboss</id>
++			<url>http://repository.jboss.com/maven2/</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</pluginRepository>
++		<pluginRepository>
++			<id>jfrog</id>
++			<url>http://www.jfrog.org/artifactory/plugins-releases</url>
++			<releases>
++				<enabled>true</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</releases>
++			<snapshots>
++				<enabled>false</enabled>
++				<updatePolicy>never</updatePolicy>
++				<checksumPolicy>warn</checksumPolicy>
++			</snapshots>
++		</pluginRepository>
++	</pluginRepositories>
++
++	<!--
++		*******************************************************************
++	-->
++	<!-- Custom Properties -->
++	<!--
++		*******************************************************************
++	-->
++	<properties>
++		<source.version>1.6</source.version>
++		<encoding>UTF-8</encoding>
++		<aspectj.rt.version>1.6.5</aspectj.rt.version>
++		<c3p0.version>0.9.1.2</c3p0.version>
++		<cglib.version>2.2</cglib.version>
++		<hibernate.annotations.version>3.4.0.GA</hibernate.annotations.version>
++		<hibernate.core.version>3.3.2.GA</hibernate.core.version>
++		<javassist.version>3.9.0.GA</javassist.version>
++		<log4j.version>1.2.14</log4j.version>
++		<slf4j.version>1.5.6</slf4j.version>
++		<commons.logging.version>1.1.1</commons.logging.version>
++		<ant.version>1.7.0</ant.version>
++		<hsql.version>1.8.0.10</hsql.version>
++	</properties>
++	<dependencies>
++		<!-- LOGGING -->
++		<dependency>
++			<groupId>org.slf4j</groupId>
++			<artifactId>slf4j-api</artifactId>
++			<version>${slf4j.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>org.slf4j</groupId>
++			<artifactId>slf4j-log4j12</artifactId>
++			<version>${slf4j.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>log4j</groupId>
++			<artifactId>log4j</artifactId>
++			<version>${log4j.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>commons-logging</groupId>
++			<artifactId>commons-logging</artifactId>
++			<version>${commons.logging.version}</version>
++		</dependency>
++
++
++
++		<!-- Hibernate -->
++		<dependency>
++			<groupId>org.hibernate</groupId>
++			<artifactId>hibernate-annotations</artifactId>
++			<version>${hibernate.annotations.version}</version>
++			<exclusions>
++				<exclusion>
++					<groupId>commons-logging</groupId>
++					<artifactId>commons-logging</artifactId>
++				</exclusion>
++				<exclusion>
++					<groupId>xml-apis</groupId>
++					<artifactId>xml-apis</artifactId>
++				</exclusion>
++			</exclusions>
++		</dependency>
++		<dependency>
++			<groupId>org.hibernate</groupId>
++			<artifactId>hibernate-core</artifactId>
++			<version>${hibernate.core.version}</version>
++			<exclusions>
++				<exclusion>
++					<groupId>commons-logging</groupId>
++					<artifactId>commons-logging</artifactId>
++				</exclusion>
++				<exclusion>
++					<groupId>xml-apis</groupId>
++					<artifactId>xml-apis</artifactId>
++				</exclusion>
++			</exclusions>
++		</dependency>
++		<dependency>
++			<groupId>c3p0</groupId>
++			<artifactId>c3p0</artifactId>
++			<version>${c3p0.version}</version>
++			<exclusions>
++				<exclusion>
++					<groupId>xml-apis</groupId>
++					<artifactId>xml-apis</artifactId>
++				</exclusion>
++				<exclusion>
++					<groupId>xerces</groupId>
++					<artifactId>xercesImpl</artifactId>
++				</exclusion>
++			</exclusions>
++		</dependency>
++		<dependency>
++			<groupId>javassist</groupId>
++			<artifactId>javassist</artifactId>
++			<version>${javassist.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>cglib</groupId>
++			<artifactId>cglib</artifactId>
++			<version>${cglib.version}</version>
++		</dependency>
++
++
++		<!-- ASPECTJ -->
++		<dependency>
++			<groupId>org.aspectj</groupId>
++			<artifactId>aspectjweaver</artifactId>
++			<version>${aspectj.rt.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>org.aspectj</groupId>
++			<artifactId>aspectjrt</artifactId>
++			<version>${aspectj.rt.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>hsqldb</groupId>
++			<artifactId>hsqldb</artifactId>
++			<version>${hsql.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>org.apache.ant</groupId>
++			<artifactId>ant</artifactId>
++			<version>${ant.version}</version>
++		</dependency>
++		<dependency>
++			<groupId>org.apache.ant</groupId>
++			<artifactId>ant-junit</artifactId>
++			<version>${ant.version}</version>
++		</dependency>
++	</dependencies>
++	<build>
++		<sourceDirectory>src/java</sourceDirectory>
++		<testSourceDirectory>src/test</testSourceDirectory>
++		<plugins>
++			<plugin>
++				<groupId>org.apache.maven.plugins</groupId>
++				<artifactId>maven-compiler-plugin</artifactId>
++				<configuration>
++					<source>${source.version}</source>
++					<target>${source.version}</target>
++					<fork>true</fork>
++					<meminitial>128m</meminitial>
++					<maxmem>256m</maxmem>
++					<encoding>${encoding}</encoding>
++				</configuration>
++			</plugin>
++			<plugin>
++				<groupId>org.codehaus.mojo</groupId>
++				<artifactId>aspectj-maven-plugin</artifactId>
++				<executions>
++					<execution>
++						<phase>compile</phase>
++						<goals>
++							<goal>compile</goal>
++							<goal>test-compile</goal>
++						</goals>
++					</execution>
++				</executions>
++				<configuration>
++					<source>${source.version}</source>
++					<target>${source.version}</target>
++				</configuration>
++			</plugin>
++			<plugin>
++				<groupId>org.apache.maven.plugins</groupId>
++				<artifactId>maven-resources-plugin</artifactId>
++				<configuration>
++					<encoding>${encoding}</encoding>
++				</configuration>
++			</plugin>
++			<plugin>
++				<groupId>org.apache.maven.plugins</groupId>
++				<artifactId>maven-eclipse-plugin</artifactId>
++				<version>2.7</version>
++				<configuration>
++					<sourceExcludes>
++						<sourceExclude>**/.svn/**</sourceExclude>
++					</sourceExcludes>
++					<downloadJavadoc>false</downloadJavadoc>
++					<downloadSources>true</downloadSources>
++					<useProjectReferences>true</useProjectReferences>
++				</configuration>
++				<executions>
++					<execution>
++						<id>generate-eclipse-configuration</id>
++						<phase>generate-resources</phase>
++						<goals>
++							<goal>eclipse</goal>
++						</goals>
++					</execution>
++					<execution>
++						<id>clean-eclipse-configuration</id>
++						<phase>clean</phase>
++						<goals>
++							<goal>clean</goal>
++						</goals>
++					</execution>
++				</executions>
++			</plugin>
++			<plugin>
++				<groupId>org.apache.maven.plugins</groupId>
++				<artifactId>maven-surefire-plugin</artifactId>
++				<configuration>
++					<redirectTestOutputToFile>true</redirectTestOutputToFile>
++				</configuration>
++			</plugin>
++		</plugins>
++	</build>
++	<profiles>
++		<profile>
++			<id>compile-without-testing</id>
++			<build>
++				<plugins>
++					<plugin>
++						<groupId>org.apache.maven.plugins</groupId>
++						<artifactId>maven-compiler-plugin</artifactId>
++						<configuration>
++							<skip>true</skip>
++						</configuration>
++					</plugin>
++					<plugin>
++						<groupId>org.apache.maven.plugins</groupId>
++						<artifactId>maven-surefire-plugin</artifactId>
++						<configuration>
++							<skipTests>true</skipTests>
++						</configuration>
++					</plugin>
++				</plugins>
++			</build>
++		</profile>
++	</profiles>
++</project>
+\ No newline at end of file

@@ -1,0 +1,207 @@
+Index: testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(revision 14914)
++++ testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java	(working copy)
+@@ -41,7 +41,7 @@
+ 	}
+ 
+ 	public String[] getMappings() {
+-		return new String[] { "criteria/Enrolment.hbm.xml", "hql/Animal.hbm.xml" };
++		return new String[] { "criteria/Enrolment.hbm.xml", "hql/Animal.hbm.xml", "criteria/PhaseAIT.hbm.xml", "criteria/PhaseAITOnCID.hbm.xml" };
+ 	}
+ 
+ 	public void configure(Configuration cfg) {
+@@ -794,5 +794,43 @@
+ 		t.commit();
+ 		session.close();
+ 	}
++	
++	public void testCriteriaFetchCompositeIdKeyManyToOne() {
++        Session session = openSession();
++        Transaction t = session.beginTransaction();
++        
++        PhaseAIT pait = new PhaseAIT("pait");
++        pait.setLabel("the label");
++        session.persist(pait);
++        
++        PhaseAITOnCID paitc = new PhaseAITOnCID(pait);
++        session.persist(paitc);
++        
++        t.commit();
++        session.clear();
++        session.close();
++
++        session = openSession();
++        t = session.beginTransaction();
++
++        List result2 = session.createCriteria( PhaseAITOnCID.class )
++                .setFetchMode( "phaseAIT", FetchMode.JOIN )
++                .list();
++
++        t.commit();
++        session.clear();
++        session.close();
++        
++        PhaseAITOnCID thePaitc = ((PhaseAITOnCID)result2.get(0));
++        assertTrue( Hibernate.isInitialized(thePaitc.getPhaseAIT()) );
++        
++        session = openSession();
++        t = session.beginTransaction();
++      
++        session.delete(paitc);
++        session.delete(pait);
++        t.commit();
++        session.close();
++    }
+ }
+ 
+Index: testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.hbm.xml	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.hbm.xml	(revision 0)
+@@ -0,0 +1,13 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++  "-//Hibernate/Hibernate Mapping DTD//EN"
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
++
++<hibernate-mapping package="org.hibernate.test.criteria">    
++    <class name="PhaseAIT">
++        <id name="reference">
++            <generator class="assigned"/>
++        </id>
++        <property name="label"></property>
++    </class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/criteria/PhaseAIT.java	(revision 0)
+@@ -0,0 +1,58 @@
++package org.hibernate.test.criteria;
++
++
++import java.io.Serializable;
++import java.util.HashSet;
++import java.util.Set;
++
++
++
++/**
++ * Not in a specific table but in SGP_PARAM
++ * @author jhenry
++ *
++ */
++public class PhaseAIT implements Serializable {
++    
++    private static final long serialVersionUID = PhaseAIT.class.hashCode();
++
++    private String reference;
++
++    private String label;
++    
++    public PhaseAIT() {
++        
++    }
++    
++    public PhaseAIT(String reference) {
++        this.reference = reference;
++    }
++
++    public String getReference() {
++        return reference;
++    }
++
++    public void setReference(String reference) {
++        this.reference = reference;
++    }
++
++    public String getLabel() {
++        return label;
++    }
++
++    public void setLabel(String label) {
++        this.label = label;
++    }
++
++    public boolean equals(Object o) {
++        if ( this == o ) return true;
++        if (!(o instanceof PhaseAIT)) {
++            return false;
++        }
++        return getReference().equals(((PhaseAIT) o).getReference());
++    }
++    
++    public int hashCode() {
++        return getReference().hashCode();
++    }
++}
+Index: testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.hbm.xml
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.hbm.xml	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.hbm.xml	(revision 0)
+@@ -0,0 +1,12 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++  "-//Hibernate/Hibernate Mapping DTD//EN"
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd" >
++
++<hibernate-mapping package="org.hibernate.test.criteria">    
++    <class name="PhaseAITOnCID">
++        <composite-id>
++            <key-many-to-one name="phaseAIT" class="PhaseAIT"/>        
++        </composite-id>
++    </class>
++</hibernate-mapping>
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/criteria/PhaseAITOnCID.java	(revision 0)
+@@ -0,0 +1,45 @@
++package org.hibernate.test.criteria;
++
++
++import java.io.Serializable;
++
++
++/**
++ * PAITC
++ * @author jhenry
++ *
++ */
++public class PhaseAITOnCID implements Serializable {
++    
++    private static final long serialVersionUID = PhaseAITOnCID.class.hashCode();
++
++    private PhaseAIT phaseAIT;
++    
++    public PhaseAITOnCID() {
++        
++    }
++    
++    public PhaseAITOnCID(PhaseAIT phaseAIT) {
++        this.phaseAIT = phaseAIT;
++    }
++    
++    public PhaseAIT getPhaseAIT() {
++        return phaseAIT;
++    }
++
++    public void setPhaseAIT(PhaseAIT phaseAIT) {
++        this.phaseAIT = phaseAIT;
++    }
++
++    public boolean equals(Object o) {
++        if ( this == o ) return true;
++        if (!(o instanceof PhaseAITOnCID)) {
++            return false;
++        }
++        return getPhaseAIT().equals(((PhaseAITOnCID) o).getPhaseAIT());
++    }
++    
++    public int hashCode() {
++        return getPhaseAIT().hashCode();
++    }
++}

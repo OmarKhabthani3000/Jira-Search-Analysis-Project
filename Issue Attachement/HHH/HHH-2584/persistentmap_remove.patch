@@ -1,0 +1,90 @@
+Index: test/org/hibernate/test/collection/map/Mappings.hbm.xml
+===================================================================
+--- test/org/hibernate/test/collection/map/Mappings.hbm.xml	(revision 11420)
++++ test/org/hibernate/test/collection/map/Mappings.hbm.xml	(working copy)
+@@ -11,7 +11,7 @@
+ 
+         <map name="children" inverse="true" cascade="all">
+             <key column="PARENT" />
+-            <map-key type="string" />
++            <map-key type="string" formula="NAME"/>
+             <one-to-many class="Child" />
+         </map>
+ 	</class>
+Index: test/org/hibernate/test/collection/map/PersistentMapTest.java
+===================================================================
+--- test/org/hibernate/test/collection/map/PersistentMapTest.java	(revision 11420)
++++ test/org/hibernate/test/collection/map/PersistentMapTest.java	(working copy)
+@@ -1,6 +1,7 @@
+ package org.hibernate.test.collection.map;
+ 
+ import java.util.HashMap;
++import java.util.Map;
+ 
+ import junit.framework.Test;
+ 
+@@ -99,4 +100,33 @@
+ 		session.getTransaction().commit();
+ 		session.close();
+ 	}
++
++    public void testRemoveAgainstUninitializedMap() {
++        Parent parent = new Parent( "p1" );
++        Child child = new Child( "c1" );
++        parent.addChild(child);
++
++        Session session = openSession();
++        session.beginTransaction();
++        session.save( parent );
++        session.getTransaction().commit();
++        session.close();
++
++        // Now reload the parent and test removing the child
++        session = openSession();
++        session.beginTransaction();
++        parent = ( Parent ) session.get( Parent.class, parent.getName() );
++        Map children = parent.getChildren();
++        children.remove(child.getName());
++        session.getTransaction().commit();
++        session.close();
++
++        assertTrue( parent.getChildren().isEmpty() );
++
++        session = openSession();
++        session.beginTransaction();
++        session.delete( parent );
++        session.getTransaction().commit();
++        session.close();
++    }
+ }
+Index: src/org/hibernate/collection/PersistentMap.java
+===================================================================
+--- src/org/hibernate/collection/PersistentMap.java	(revision 11420)
++++ src/org/hibernate/collection/PersistentMap.java	(working copy)
+@@ -176,17 +176,17 @@
+ 	public Object remove(Object key) {
+ 		if ( isPutQueueEnabled() ) {
+ 			Object old = readElementByIndex( key );
+-			queueOperation( new Remove( key, old ) );
+-			return old;
+-		}
+-		else {
+-			// TODO : safe to interpret "map.remove(key) == null" as non-dirty?
+-			initialize( true );
+-			if ( map.containsKey( key ) ) {
+-				dirty();
++			if ( old != UNKNOWN ) {
++				queueOperation( new Remove( key, old ) );
++				return old;
+ 			}
+-			return map.remove( key );
+ 		}
++		// TODO : safe to interpret "map.remove(key) == null" as non-dirty?
++		initialize( true );
++		if ( map.containsKey( key ) ) {
++			dirty();
++		}
++		return map.remove( key );
+ 	}
+ 
+ 	/**

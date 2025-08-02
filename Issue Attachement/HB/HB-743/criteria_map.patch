@@ -1,0 +1,1004 @@
+Index: src/net/sf/hibernate/Criteria.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Criteria.java,v
+retrieving revision 1.4.2.18
+diff -u -w -b -U5 -b -B -B -b -r1.4.2.18 Criteria.java
+--- src/net/sf/hibernate/Criteria.java	29 Jan 2004 02:11:53 -0000	1.4.2.18
++++ src/net/sf/hibernate/Criteria.java	25 Feb 2004 18:23:21 -0000
+@@ -1,9 +1,11 @@
+ //$Id: Criteria.java,v 1.4.2.18 2004/01/29 02:11:53 oneovthafew Exp $
+ package net.sf.hibernate;
+ 
+ import java.util.List;
++import java.util.Map;
+
++import java.util.Comparator;
+
+ 
+ import net.sf.hibernate.expression.Criterion;
+ import net.sf.hibernate.expression.Order;
+ import net.sf.hibernate.transform.AliasToEntityMapResultTransformer;
+ import net.sf.hibernate.transform.DistinctRootEntityResultTransformer;
+@@ -112,10 +114,19 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public List list() throws HibernateException;
+ 	
+ 	/**
++	 * Get the result using the given comparator
+
++	 *
+
++	 * @param comparator the comparator, you can use a different comparator, even it the result was cached
+
++	 * @return
+
++	 * @throws HibernateException
+
++	 */
+
++	public Map map(Comparator comparator) throws HibernateException;
+
++
+
++	/**
+
+ 	 * Convenience method to return a single instance that matches
+ 	 * the query, or null if the query returns no results.
+ 	 * 
+ 	 * @return the single result or <tt>null</tt>
+ 	 * @throws HibernateException if there is more than one matching result
+Index: src/net/sf/hibernate/impl/CriteriaImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/CriteriaImpl.java,v
+retrieving revision 1.4.2.18
+diff -u -w -b -U5 -b -B -B -b -r1.4.2.18 CriteriaImpl.java
+--- src/net/sf/hibernate/impl/CriteriaImpl.java	29 Jan 2004 02:12:18 -0000	1.4.2.18
++++ src/net/sf/hibernate/impl/CriteriaImpl.java	25 Feb 2004 18:23:21 -0000
+@@ -4,10 +4,11 @@
+ import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Comparator;
+
+ 
+ import net.sf.hibernate.Criteria;
+ import net.sf.hibernate.FetchMode;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.LockMode;
+@@ -82,10 +83,15 @@
+ 
+ 		public List list() throws HibernateException {
+ 			return CriteriaImpl.this.list();
+ 		}
+ 
++		public Map map(Comparator comparator) throws HibernateException
+
++		{
+
++			return CriteriaImpl.this.map(comparator);
+
++		}
+
++
+
+ 		public Object uniqueResult() throws HibernateException {
+ 			return CriteriaImpl.this.uniqueResult();
+ 		}
+ 
+ 		public Criteria setFetchMode(String associationPath, FetchMode mode)
+@@ -221,10 +227,15 @@
+ 	
+ 	public List list() throws HibernateException {
+ 		return session.find(this);
+ 	}
+ 	
++	public Map map(Comparator comparator) throws HibernateException
+
++	{
+
++		return session.findMap(this, comparator);
+
++	}
+
++
+
+ 	public Iterator iterateExpressionEntries() {
+ 		return criteria.iterator();
+ 	}
+ 	
+ 	public Iterator iterateOrderings() {
+Index: src/net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.59.2.127
+diff -u -w -b -U5 -b -B -B -b -r1.59.2.127 SessionImpl.java
+--- src/net/sf/hibernate/impl/SessionImpl.java	23 Feb 2004 18:35:45 -0000	1.59.2.127
++++ src/net/sf/hibernate/impl/SessionImpl.java	25 Feb 2004 18:23:30 -0000
+@@ -17,10 +17,11 @@
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.Comparator;
+
+ 
+ import javax.transaction.SystemException;
+ import javax.transaction.TransactionManager;
+ 
+ import net.sf.hibernate.AssertionFailure;
+@@ -3585,10 +3586,67 @@
+ 		}
+ 			
+ 		return results;
+ 	}
+ 	
++	public Map findMap(CriteriaImpl criteria, Comparator comparator) throws HibernateException
+
++	{
+
++		String[] implementors = factory.getImplementors(criteria.getCriteriaClass());
+
++		int size = implementors.length;
+
++
+
++		CriteriaLoader[] loaders = new CriteriaLoader[size];
+
++		Set spaces = new HashSet();
+
++		for (int i = 0; i < size; i++)
+
++		{
+
++
+
++			Class newCriteriaClazz;
+
++			try
+
++			{
+
++				newCriteriaClazz = ReflectHelper.classForName(implementors[i]);
+
++			}
+
++			catch (ClassNotFoundException cnfe)
+
++			{
+
++				throw new HibernateException("class not found", cnfe);
+
++			}
+
++
+
++			loaders[i] = new CriteriaLoader(getOuterJoinLoadable(newCriteriaClazz),
+
++				factory,
+
++				new CriteriaImpl(newCriteriaClazz, criteria));
+
++
+
++			spaces.addAll(loaders[i].getQuerySpaces());
+
++
+
++		}
+
++
+
++		autoFlushIfRequired(spaces);
+
++
+
++		Map results = Collections.EMPTY_MAP;
+
++		dontFlushFromFind++;
+
++		try
+
++		{
+
++			for (int i = 0; i < size; i++)
+
++			{
+
++				Map currentResults;
+
++				try
+
++				{
+
++					currentResults = loaders[i].map(this, comparator);
+
++				}
+
++				catch (SQLException sqle)
+
++				{
+
++					throw new JDBCException(sqle);
+
++				}
+
++				currentResults.putAll(currentResults);
+
++				results = currentResults;
+
++			}
+
++		}
+
++		finally
+
++		{
+
++			dontFlushFromFind--;
+
++		}
+
++
+
++		return results;
+
++	}
+
++
+
+ 	private OuterJoinLoadable getOuterJoinLoadable(Class clazz) throws MappingException {
+ 		ClassPersister persister = getClassPersister(clazz);
+ 		if ( !(persister instanceof OuterJoinLoadable) ) {
+ 			throw new MappingException( "class persister is not OuterJoinLoadable: " + clazz.getName() );
+ 		}
+Index: src/net/sf/hibernate/loader/CriteriaLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/CriteriaLoader.java,v
+retrieving revision 1.8.2.25
+diff -u -w -b -U5 -b -B -B -b -r1.8.2.25 CriteriaLoader.java
+--- src/net/sf/hibernate/loader/CriteriaLoader.java	29 Jan 2004 02:12:20 -0000	1.8.2.25
++++ src/net/sf/hibernate/loader/CriteriaLoader.java	25 Feb 2004 18:23:30 -0000
+@@ -8,10 +8,11 @@
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.Comparator;
+
+ 
+ import net.sf.hibernate.Criteria;
+ import net.sf.hibernate.FetchMode;
+ import net.sf.hibernate.Hibernate;
+ import net.sf.hibernate.HibernateException;
+@@ -86,11 +87,11 @@
+ 		postInstantiate();
+ 		
+ 		aliasArray = (String[]) aliases.toArray(ArrayHelper.EMPTY_STRING_ARRAY);
+ 	}
+ 	
+-	public List list(SessionImplementor session) throws HibernateException, SQLException {
++	protected QueryParameters prepare(SessionImplementor session, Comparator comparator) throws HibernateException, SQLException {
+
+ 		List values = new ArrayList();
+ 		List types = new ArrayList();
+ 		Iterator iter = criteria.iterateExpressionEntries();
+ 		while ( iter.hasNext() ) {
+ 			CriteriaImpl.CriterionEntry ce = (CriteriaImpl.CriterionEntry) iter.next();
+@@ -113,13 +114,26 @@
+ 		selection.setTimeout( criteria.getTimeout() );
+ 		
+ 		QueryParameters qp = new QueryParameters(typeArray, valueArray, criteria.getLockModes(), selection);
+ 		qp.setCacheable( criteria.getCacheable() );
+ 		qp.setCacheRegion( criteria.getCacheRegion() );
++		return qp;
+
++	}
+
++
+
++	public List list(SessionImplementor session) throws HibernateException, SQLException
+
++	{
+
++		QueryParameters qp = prepare(session, null);
+
+ 		return list(session, qp, querySpaces, resultTypes);
+ 	}
+ 
++	public Map map(SessionImplementor session, Comparator comparator) throws HibernateException, SQLException
+
++	{
+
++		QueryParameters qp = prepare(session, comparator);
+
++		qp.setComparator(comparator);
+
++		return map(session, qp, querySpaces, resultTypes);
+
++	}
+
++
+
+ 	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session)
+ 	throws SQLException, HibernateException {
+ 		return criteria.getResultTransformer().transformTuple(row, aliasArray);
+ 	}
+ 
+Index: src/net/sf/hibernate/loader/Loader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/Loader.java,v
+retrieving revision 1.33.2.29
+diff -u -w -b -U5 -b -B -B -b -r1.33.2.29 Loader.java
+--- src/net/sf/hibernate/loader/Loader.java	26 Jan 2004 04:57:08 -0000	1.33.2.29
++++ src/net/sf/hibernate/loader/Loader.java	25 Feb 2004 18:23:31 -0000
+@@ -8,10 +8,11 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.TreeMap;
+
+ 
+ import net.sf.hibernate.AssertionFailure;
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.QueryException;
+@@ -137,10 +138,37 @@
+ 		}
+ 		session.initializeNonLazyCollections();
+ 		return result;
+ 	}
+ 
++	/**
+
++	 * Execute an SQL query and attempt to instantiate instances of the class mapped by the given
+
++	 * persister from each row of the <tt>ResultSet</tt>. If an object is supplied, will attempt to
+
++	 * initialize that object. If a collection is supplied, attempt to initialize that collection.
+
++	 */
+
++	private Map doQueryAndInitializeNonLazyCollectionsMap(final SessionImplementor session,
+
++														final QueryParameters queryParameters,
+
++														final Object optionalObject,
+
++														final Serializable optionalId,
+
++														final Serializable[] optionalCollectionKeys,
+
++														final boolean returnProxies) throws SQLException, HibernateException
+
++	{
+
++
+
++		session.beforeLoad();
+
++		Map result;
+
++		try
+
++		{
+
++			result = doQueryMap(session, queryParameters, optionalObject, optionalId, optionalCollectionKeys, returnProxies);
+
++		}
+
++		finally
+
++		{
+
++			session.afterLoad();
+
++		}
+
++		session.initializeNonLazyCollections();
+
++		return result;
+
++	}
+
++
+
+ 	private List doQuery(
+ 		final SessionImplementor session,
+ 		final QueryParameters queryParameters,
+ 		final Object optionalObject,
+ 		final Serializable optionalId,
+@@ -244,14 +272,138 @@
+ 
+ 		return results; //getResultList(results);
+ 
+ 	}
+ 	
++	private Map doQueryMap(final SessionImplementor session,
+
++						 final QueryParameters queryParameters,
+
++						 final Object optionalObject,
+
++						 final Serializable optionalId,
+
++						 final Serializable[] optionalCollectionKeys,
+
++						 boolean returnProxies) throws SQLException, HibernateException
+
++	{
+
++
+
++		returnProxies = returnProxies && Environment.jvmSupportsProxies();
+
++
+
++		RowSelection selection = queryParameters.getRowSelection();
+
++		int maxRows = hasMaxRows(selection) ?
+
++			selection.getMaxRows().intValue() :
+
++			Integer.MAX_VALUE;
+
++
+
++		final Loadable[] persisters = getPersisters();
+
++		final int cols = persisters.length;
+
++		final CollectionPersister collectionPersister = getCollectionPersister();
+
++		final int collectionOwner = getCollectionOwner();
+
++		final boolean returnsEntities = cols > 0;
+
++		final String[] suffixes = getSuffixes();
+
++		final LockMode[] lockModeArray = getLockModes(queryParameters.getLockModes());
+
++		final int[] owners = getOwners();
+
++
+
++		//this is a CollectionInitializer and we are loading up a single collection
+
++		final boolean hasCollections = collectionPersister != null;
+
++		//this is a query and we are loading multiple instances of the same collection role
+
++		final boolean hasCollectionOwners = hasCollections && collectionOwner >= 0;
+
++
+
++		final ArrayList hydratedObjects = returnsEntities ? new ArrayList() : null;
+
++
+
++		final Key optionalObjectKey;
+
++
+
++		if (optionalObject != null)
+
++		{
+
++			optionalObjectKey = new Key(optionalId, session.getPersister(optionalObject));
+
++		}
+
++		else
+
++		{
+
++			optionalObjectKey = null;
+
++		}
+
++
+
++		final Map results = new TreeMap(queryParameters.getComparator()); //new net.sf.hibernate.collections.List(this);
+
++
+
++		final PreparedStatement st = prepareQueryStatement(applyLocks(getSQLString(), queryParameters.getLockModes(), session.getFactory().getDialect()),
+
++			queryParameters, false, session);
+
++		final ResultSet rs = getResultSet(st, selection, session);
+
++
+
++		try
+
++		{
+
++
+
++			if (optionalCollectionKeys != null) handleEmptyCollections(optionalCollectionKeys, rs, session);
+
++
+
++			final Key[] keys = new Key[cols]; //we can reuse it each time
+
++
+
++			if (log.isTraceEnabled()) log.trace("processing result set");
+
++
+
++			int count;
+
++			for (count = 0; count < maxRows && rs.next(); count++)
+
++			{
+
++
+
++				for (int i = 0; i < cols; i++)
+
++				{
+
++					keys[i] = getKeyFromResultSet(i, persisters[i], (i == cols - 1) ? optionalId : null, rs, session);
+
++					//TODO: the i==cols-1 bit depends upon subclass implementation (very bad)
+
++				}
+
++				if (owners != null) registerNonExists(keys, owners, persisters, session);
+
++
+
++				// this call is side-effecty
+
++				Object[] row = getRow(rs, persisters, suffixes, keys, optionalObject, optionalObjectKey, lockModeArray, hydratedObjects, session);
+
++
+
++				if (returnProxies)
+
++				{
+
++					// now get an existing proxy for each row element (if there is one)
+
++					for (int i = 0; i < cols; i++) row[i] = session.proxyFor(persisters[i], keys[i], row[i]);
+
++				}
+
++
+
++				if (hasCollections)
+
++				{
+
++					Object owner = hasCollectionOwners ? row[collectionOwner] : null; //if null, owner will be retrieved from session
+
++					Serializable key = owner != null ? keys[collectionOwner].getIdentifier() : null;
+
++					readCollectionElement(owner, key, rs, session);
+
++				}
+
++
+
++				Object colOrRow = getResultColumnOrRow(row, rs, session);
+
++
+
++				if (returnsEntities)
+
++				{
+
++					int hydratedObjectsSize = hydratedObjects.size();
+
++					if (log.isTraceEnabled()) log.trace("total objects hydrated: " + hydratedObjectsSize);
+
++					for (int i = 0; i < hydratedObjectsSize; i++)
+
++					{
+
++						session.initializeEntity(hydratedObjects.get(0));
+
++					}
+
++					hydratedObjects.clear();
+
++				}
+
++
+
++				results.put(colOrRow, colOrRow);
+
++			}
+
++
+
++			if (log.isTraceEnabled()) log.trace("done processing result set (" + count + " rows)");
+
++
+
++		}
+
++		catch (SQLException sqle)
+
++		{
+
++			JDBCExceptionReporter.logExceptions(sqle);
+
++			throw sqle;
+
++		}
+
++		finally
+
++		{
+
++			session.getBatcher().closeQueryStatement(st, rs);
+
++		}
+
++
+
++		if (hasCollections) session.endLoadingCollections(collectionPersister, rs);
+
++
+
++		return results; //getResultList(results);
+
++
+
++	}
+
++
+
+ 	protected List getResultList(List results) throws QueryException {
+ 		return results;
+ 	}
+ 	
++	protected Map getResultMap(Map results) throws QueryException
+
++	{
+
++		return results;
+
++	}
+
++
+
+ 	/**
+ 	 * Get the actual object that is returned in the user-visible result list.
+ 	 * This empty implementation merely returns its first argument. This is
+ 	 * overridden by some subclasses.
+ 	 */
+@@ -941,19 +1093,61 @@
+ 			return getResultList( doList(session, queryParameters) );
+ 		}
+ 	}
+ 	
+ 	/**
++	 * Return the query results as map, using the query cache, called
+
++	 * by subclasses that implement cacheable queries
+
++	 */
+
++	protected Map map(final SessionImplementor session,
+
++						final QueryParameters queryParameters,
+
++						final Set querySpaces,
+
++						final Type[] resultTypes)
+
++		throws SQLException, HibernateException
+
++	{
+
++
+
++		final SessionFactoryImplementor factory = session.getFactory();
+
++
+
++		final boolean cacheable = factory.isQueryCacheEnabled() && queryParameters.isCacheable();
+
++
+
++		if (cacheable)
+
++		{
+
++			QueryCache queryCache = factory.getQueryCache(queryParameters.getCacheRegion());
+
++			QueryKey key = new QueryKey(getSQLString(), queryParameters);
+
++			Map result = queryCache.getMap(key, resultTypes, querySpaces, session, queryParameters.getComparator());
+
++			if (result == null)
+
++			{
+
++				result = doMap(session, queryParameters);
+
++				if (cacheable) queryCache.putMap(key, resultTypes, result, session);
+
++			}
+
++			return getResultMap(result);
+
++		}
+
++		else
+
++		{
+
++			return getResultMap(doMap(session, queryParameters));
+
++		}
+
++	}
+
++
+
++	/**
+
+ 	 * Actually execute a query, ignoring the query cache
+ 	 */
+ 	protected final List doList(final SessionImplementor session, final QueryParameters queryParameters)
+ 	throws SQLException, HibernateException {
+ 		return doQueryAndInitializeNonLazyCollections(
+ 			session, queryParameters, null, null, null, true
+ 		);
+ 	}
+ 
++	/**
+
++	 * Actually execute a query, ignoring the query cache
+
++	 */
+
++	protected final Map doMap(final SessionImplementor session, final QueryParameters queryParameters)
+
++		throws SQLException, HibernateException
+
++	{
+
++		return doQueryAndInitializeNonLazyCollectionsMap(session, queryParameters, null, null, null, true);
+
++	}
+
++
+
+ 	private String[][] suffixedKeyColumns;
+ 	private String[][] suffixedVersionColumNames;
+ 	private String[][][] suffixedPropertyColumns;
+ 	private String[] suffixedDiscriminatorColumn;
+ 	
+Index: src/net/sf/hibernate/cache/QueryCache.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cache/Attic/QueryCache.java,v
+retrieving revision 1.1.2.6
+diff -u -w -b -U5 -b -B -B -b -r1.1.2.6 QueryCache.java
+--- src/net/sf/hibernate/cache/QueryCache.java	1 Feb 2004 16:47:56 -0000	1.1.2.6
++++ src/net/sf/hibernate/cache/QueryCache.java	25 Feb 2004 18:23:31 -0000
+@@ -4,10 +4,14 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Properties;
+ import java.util.Set;
++import java.util.Map;
+
++import java.util.TreeMap;
+
++import java.util.Comparator;
+
++import java.util.Iterator;
+
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
+ import net.sf.hibernate.HibernateException;
+@@ -55,10 +59,32 @@
+ 			}
+ 		}
+ 		queryCache.put(key, cacheable);
+ 	}
+ 
++	public void putMap(QueryKey key, Type[] returnTypes, Map result, SessionImplementor session) throws HibernateException
+
++	{
+
++		if (log.isDebugEnabled()) log.debug("caching query results in region: " + regionName);
+
++		List cacheable = new ArrayList(result.size() + 1);
+
++		cacheable.add(new Long(session.getTimestamp()));
+
++		// for (int i = 0; i < result.size(); i++)
+
++		Iterator iterResult = result.values().iterator();
+
++		while (iterResult.hasNext())
+
++		{
+
++			Object entry = iterResult.next();
+
++			if (returnTypes.length == 1)
+
++			{
+
++				cacheable.add(returnTypes[0].disassemble(entry, session));
+
++			}
+
++			else
+
++			{
+
++				cacheable.add(TypeFactory.disassemble((Object[]) entry, returnTypes, session));
+
++			}
+
++		}
+
++		queryCache.put(key, cacheable);
+
++	}
+
++
+
+ 	public List get(QueryKey key, Type[] returnTypes, Set spaces, SessionImplementor session) throws HibernateException {
+ 		if ( log.isDebugEnabled() ) log.debug("checking cached query results in region: " + regionName);
+ 		List cacheable = (List) queryCache.get(key);
+ 		if (cacheable==null) {
+ 			log.debug("query results were not found in cache");
+@@ -80,10 +106,43 @@
+ 			}
+ 		}
+ 		return result;
+ 	}
+ 
++	public Map getMap(QueryKey key, Type[] returnTypes, Set spaces, SessionImplementor session, Comparator comparator) throws HibernateException
+
++	{
+
++		if (log.isDebugEnabled()) log.debug("checking cached query results in region: " + regionName);
+
++		List cacheable = (List) queryCache.get(key);
+
++		if (cacheable == null)
+
++		{
+
++			log.debug("query results were not found in cache");
+
++			return null;
+
++		}
+
++		Map result = new TreeMap(comparator);
+
++		Long timestamp = (Long) cacheable.get(0);
+
++		if (!updateTimestampsCache.isUpToDate(spaces, timestamp))
+
++		{
+
++			log.debug("cached query results were not up to date");
+
++			return null;
+
++		}
+
++		log.debug("returning cached query results");
+
++		for (int i = 1; i < cacheable.size(); i++)
+
++		{
+
++			if (returnTypes.length == 1)
+
++			{
+
++				Object obj = returnTypes[0].assemble((Serializable) cacheable.get(i), session, null);
+
++				result.put(obj, obj);
+
++			}
+
++			else
+
++			{
+
++				Object obj = TypeFactory.assemble((Serializable[]) cacheable.get(i), returnTypes, session, null);
+
++				result.put(obj, obj);
+
++			}
+
++		}
+
++		return result;
+
++	}
+
++
+
+ 	public void destroy() {
+ 		try {
+ 			queryCache.destroy();
+ 		}
+ 		catch (Exception e) {
+Index: src/net/sf/hibernate/engine/QueryParameters.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Attic/QueryParameters.java,v
+retrieving revision 1.1.2.5
+diff -u -w -b -U5 -b -B -B -b -r1.1.2.5 QueryParameters.java
+--- src/net/sf/hibernate/engine/QueryParameters.java	22 Feb 2004 18:11:45 -0000	1.1.2.5
++++ src/net/sf/hibernate/engine/QueryParameters.java	25 Feb 2004 18:23:31 -0000
+@@ -1,9 +1,10 @@
+ //$Id: QueryParameters.java,v 1.1.2.5 2004/02/22 18:11:45 maxcsaucdk Exp $
+ package net.sf.hibernate.engine;
+ 
+ import java.util.Map;
++import java.util.Comparator;
+
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
+ import net.sf.hibernate.HibernateException;
+@@ -23,10 +24,11 @@
+ 	private Map namedParameters;
+ 	private Map lockModes;
+ 	private RowSelection rowSelection;
+ 	private boolean cacheable;
+ 	private String cacheRegion;
++	private Comparator comparator;
+
+ 	
+ 	public QueryParameters(Type[] positionalParameterTypes, Object[] postionalParameterValues) {
+ 		this(positionalParameterTypes, postionalParameterValues, null, null);
+ 	}
+ 	
+@@ -99,10 +101,20 @@
+ 
+ 	public void setLockModes(Map map) {
+ 		lockModes = map;
+ 	}
+ 	
++	public Comparator getComparator()
+
++	{
+
++		return comparator;
+
++	}
+
++
+
++	public void setComparator(Comparator comparator)
+
++	{
+
++		this.comparator = comparator;
+
++	}
+
++
+
+ 	public void traceParameters(SessionFactoryImplementor factory) throws HibernateException {
+ 		Printer print = new Printer(factory);
+ 		if (positionalParameterValues.length!=0) log.trace( 
+ 			"parameters: " + print.toString(positionalParameterTypes, positionalParameterValues) 
+ 		);

@@ -1,0 +1,268 @@
+﻿#########################################################
+	category entity
+#########################################################
+
+@Entity
+@Audited
+public class Category implements Serializable {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    @org.hibernate.annotations.AccessType("property")
+    private Long id;
+    
+    private String categoryName;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getCategoryName() {
+        return categoryName;
+    }
+
+    public void setCategoryName(String categoryName) {
+        this.categoryName = categoryName;
+    }
+
+
+    public int hashCode() {
+        return new HashCodeBuilder(11, 13).append(categoryName).toHashCode();
+
+    }
+
+    
+    public boolean equals(Object object) {
+        if (object == null) {
+            return false;
+        }
+        if (object == this) {
+            return true;
+        }
+        if (object.getClass() != getClass()) {
+            return false;
+        }
+
+        Category that = (Category) object;
+        return new EqualsBuilder().append(categoryName, that.categoryName).isEquals();
+    }
+
+    
+    public String toString() {
+        return new ToStringBuilder(this)
+                .append("id",id)
+                .append("categoryName",categoryName)
+                .toString();
+
+    }
+
+
+}
+
+#########################################################
+	item entity
+#########################################################
+
+@Entity
+@Audited
+public class Item implements Serializable {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.AUTO)
+    @org.hibernate.annotations.AccessType("property")
+    private Long id;
+
+    private String itemName;
+
+    @ManyToOne(fetch=FetchType.LAZY)
+    private Category category;
+
+    public Long getId() {
+        return id;
+    }
+
+    public void setId(Long id) {
+        this.id = id;
+    }
+
+    public String getItemName() {
+        return itemName;
+    }
+
+    
+    public void setItemName(String itemName) {
+        this.itemName = itemName;
+    }
+    
+    public Category getCategory() {
+        return category;
+    }
+
+    public void setCategory(Category category) {
+        this.category = category;
+    }
+
+     
+    @Override
+    public int hashCode() {
+        return new HashCodeBuilder(11, 13).append(itemName).toHashCode();
+
+    }
+
+    
+    @Override
+    public boolean equals(Object object) {
+        if (object == null) {
+            return false;
+        }
+        if (object == this) {
+            return true;
+        }
+        if (object.getClass() != getClass()) {
+            return false;
+        }
+
+        Item that = (Item) object;
+        return new EqualsBuilder().append(itemName, that.itemName).isEquals();
+    }
+
+    @Override
+    public String toString() {
+        return new ToStringBuilder(this)
+                .append("id",id)
+                .append("itemName",itemName)
+                .toString();
+
+    }
+
+
+#########################################################
+	simple utility run class
+#########################################################
+
+
+
+public class Run {
+
+    public static void main(String[] args) {
+        
+        EntityManagerFactory emf = Persistence.createEntityManagerFactory("PU");
+        EntityManager em = emf.createEntityManager();
+
+        Long assignedCategoryId = null;
+        EntityTransaction tx = em.getTransaction();
+      
+	// create category entity
+
+        tx.begin();
+
+        Category category = new Category();
+        category.setCategoryName("myCategory");
+        assignedCategoryId = em.merge(category).getId();
+        System.out.println(assignedCategoryId);
+
+        tx.commit();
+
+        em.clear();
+
+	// create item entity
+
+        tx.begin();
+
+        Item item = new Item();
+        Category categoryProxy = em.getReference(Category.class, 1L);
+        item.setItemName("myItem");
+        item.setCategory(categoryProxy);
+
+        em.merge(item);
+
+        tx.commit();
+
+        
+        em.close();
+        emf.close();
+
+
+
+        
+    }
+
+
+#########################################################
+	output
+#########################################################
+
+#########################################################
+	output - create new category
+#########################################################
+
+Hibernate: 
+    /* insert Category
+        */ insert 
+        into
+            Category
+            (categoryName) 
+        values
+            (?)
+1
+Hibernate: 
+    /* insert org.hibernate.envers.DefaultRevisionEntity
+        */ insert 
+        into
+            REVINFO
+            (REVTSTMP) 
+        values
+            (?)
+Hibernate: 
+    /* insert Category_AUD
+        */ insert 
+        into
+            Category_AUD
+            (REVTYPE, categoryName, id, REV) 
+        values
+            (?, ?, ?, ?)
+
+#########################################################
+	output -create new item	
+#########################################################
+
+Hibernate: 
+    /* insert Item
+        */ insert 
+        into
+            Item
+            (category_id, itemName) 
+        values
+            (?, ?)
+Hibernate: 
+    /* insert org.hibernate.envers.DefaultRevisionEntity
+        */ insert 
+        into
+            REVINFO
+            (REVTSTMP) 
+        values
+            (?)
+
+
+Hibernate: ############# this is the unneccessary database hit
+
+    /* load Category */ select
+        category0_.id as id1_0_,
+        category0_.categoryName as category2_1_0_ 
+    from
+        Category category0_ 
+    where
+        category0_.id=?
+
+Hibernate: 
+    /* insert Item_AUD
+        */ insert 
+        into
+            Item_AUD
+            (REVTYPE, itemName, category_id, id, REV) 
+        values
+            (?, ?, ?, ?, ?)

@@ -1,0 +1,500 @@
+Index: org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- org/hibernate/action/EntityDeleteAction.java	(revision 11156)
++++ org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -71,7 +71,7 @@
+ 		}
+ 
+ 		if ( !isCascadeDeleteEnabled && !veto ) {
+-			persister.delete( id, version, instance, session );
++			persister.delete( id, version, instance, state, session );
+ 		}
+ 		
+ 		//postDelete:
+Index: org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- org/hibernate/cfg/HbmBinder.java	(revision 11156)
++++ org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -945,7 +945,15 @@
+ 
+ 		// KEY
+ 		Element keyNode = node.element( "key" );
+-		SimpleValue key = new DependantValue( table, persistentClass.getIdentifier() );
++		String propertyRef = keyNode.attributeValue("property-ref");
++		KeyValue keyValue;
++		if (propertyRef == null) {
++			keyValue = persistentClass.getIdentifier();
++		} else {
++			keyValue = (KeyValue) persistentClass.getProperty(propertyRef).getValue();
++		}
++		DependantValue key = new DependantValue( table, keyValue);
++		key.setReferencedPropertyName(propertyRef);
+ 		join.setKey( key );
+ 		key.setCascadeDeleteEnabled( "cascade".equals( keyNode.attributeValue( "on-delete" ) ) );
+ 		bindSimpleValue( keyNode, key, false, persistentClass.getEntityName(), mappings );
+Index: org/hibernate/hql/ast/exec/AbstractStatementExecutor.java
+===================================================================
+--- org/hibernate/hql/ast/exec/AbstractStatementExecutor.java	(revision 11156)
++++ org/hibernate/hql/ast/exec/AbstractStatementExecutor.java	(working copy)
+@@ -52,8 +52,8 @@
+ 
+ 	protected String generateIdInsertSelect(Queryable persister, String tableAlias, AST whereClause) {
+ 		Select select = new Select( getFactory().getDialect() );
+-		SelectFragment selectFragment = new SelectFragment()
+-				.addColumns( tableAlias, persister.getIdentifierColumnNames(), persister.getIdentifierColumnNames() );
++		SelectFragment selectFragment = new SelectFragment();
++		persister.addIdentifierColumns(tableAlias, selectFragment);
+ 		select.setSelectClause( selectFragment.toFragmentString().substring( 2 ) );
+ 
+ 		String rootTableName = persister.getTableName();
+@@ -100,8 +100,8 @@
+ 		return insert.toStatementString();
+ 	}
+ 
+-	protected String generateIdSubselect(Queryable persister) {
+-		return "select " + StringHelper.join( ", ", persister.getIdentifierColumnNames() ) +
++	protected String generateIdSubselect(Queryable persister, int j) {
++		return "select " + StringHelper.join( ", ", persister.getIdentifierColumnNames(j) ) +
+ 			        " from " + persister.getTemporaryIdTableName();
+ 	}
+ 
+Index: org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java
+===================================================================
+--- org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	(revision 11156)
++++ org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	(working copy)
+@@ -49,8 +49,6 @@
+ 
+ 		String[] tableNames = persister.getConstraintOrderedTableNameClosure();
+ 		String[][] columnNames = persister.getContraintOrderedTableKeyColumnClosure();
+-		String idSubselect = generateIdSubselect( persister );
+-
+ 		deletes = new String[tableNames.length];
+ 		for ( int i = tableNames.length - 1; i >= 0; i-- ) {
+ 			// TODO : an optimization here would be to consider cascade deletes and not gen those delete statements;
+@@ -59,7 +57,7 @@
+ 			//          defining all the needed attributes), then we could then get an array of those
+ 			final Delete delete = new Delete()
+ 					.setTableName( tableNames[i] )
+-					.setWhere( "(" + StringHelper.join( ", ", columnNames[i] ) + ") IN (" + idSubselect + ")" );
++					.setWhere( "(" + StringHelper.join( ", ", columnNames[i] ) + ") IN (" + generateIdSubselect( persister, tableNames.length - i - 1) + ")" );
+ 			if ( getFactory().getSettings().isCommentsEnabled() && getFactory().getDialect().supportsCommentOn() ) {
+ 				delete.setComment( "bulk delete" );
+ 			}
+Index: org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java
+===================================================================
+--- org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(revision 11156)
++++ org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(working copy)
+@@ -54,7 +54,6 @@
+ 		String[] tableNames = persister.getConstraintOrderedTableNameClosure();
+ 		String[][] columnNames = persister.getContraintOrderedTableKeyColumnClosure();
+ 
+-		String idSubselect = generateIdSubselect( persister );
+ 		List assignmentSpecifications = walker.getAssignmentSpecifications();
+ 
+ 		updates = new String[tableNames.length];
+@@ -64,7 +63,7 @@
+ 			List parameterList = new ArrayList();
+ 			Update update = new Update( getFactory().getDialect() )
+ 					.setTableName( tableNames[tableIndex] )
+-					.setWhere( "(" + StringHelper.join( ", ", columnNames[tableIndex] ) + ") IN (" + idSubselect + ")" );
++					.setWhere( "(" + StringHelper.join( ", ", columnNames[tableIndex] ) + ") IN (" + generateIdSubselect( persister, tableNames.length - tableIndex - 1 ) + ")" );
+ 			if ( getFactory().getSettings().isCommentsEnabled() && getFactory().getDialect().supportsCommentOn() ) {
+ 				update.setComment( "bulk update" );
+ 			}
+Index: org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+--- org/hibernate/impl/StatelessSessionImpl.java	(revision 11156)
++++ org/hibernate/impl/StatelessSessionImpl.java	(working copy)
+@@ -109,7 +109,8 @@
+ 		EntityPersister persister = getEntityPersister(entityName, entity);
+ 		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
+ 		Object version = persister.getVersion(entity, EntityMode.POJO);
+-		persister.delete(id, version, entity, this);
++		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
++		persister.delete(id, version, entity, state, this);
+ 	}
+ 
+ 
+Index: org/hibernate/mapping/DependantValue.java
+===================================================================
+--- org/hibernate/mapping/DependantValue.java	(revision 11156)
++++ org/hibernate/mapping/DependantValue.java	(working copy)
+@@ -1,6 +1,8 @@
+ //$Id$
+ package org.hibernate.mapping;
+ 
++import java.util.Iterator;
++
+ import org.hibernate.MappingException;
+ import org.hibernate.type.Type;
+ 
+@@ -15,6 +17,7 @@
+ 	private KeyValue wrappedValue;
+ 	private boolean nullable;
+ 	private boolean updateable;
++	private String referencedPropertyName;
+ 
+ 	public DependantValue(Table table, KeyValue prototype) {
+ 		super(table);
+@@ -47,4 +50,27 @@
+ 	public void setUpdateable(boolean updateable) {
+ 		this.updateable = updateable;
+ 	}
++
++	public void setReferencedPropertyName(String propertyRef) {
++		this.referencedPropertyName = propertyRef;
++	}
++	
++	public void createForeignKeyOfEntity(String entityName) {
++		if (referencedPropertyName != null && wrappedValue instanceof SimpleValue) {
++			SimpleValue sv = (SimpleValue) wrappedValue;
++			sv.getTable().createUniqueKey(sv.getConstraintColumns());
++			ForeignKey foreignKey = getTable().createForeignKey(referencedPropertyName, getConstraintColumns(), entityName, sv.getConstraintColumns());
++			foreignKey.setCascadeDeleteEnabled(isCascadeDeleteEnabled());
++		} else {
++			super.createForeignKeyOfEntity(entityName);
++		}
++	}
++
++	public String getReferencedPropertyName() {
++		return referencedPropertyName;
++	}
++
++	public Iterator getReferencedColumns() {
++		return wrappedValue.getColumnIterator();
++	}
+ }
+Index: org/hibernate/mapping/Join.java
+===================================================================
+--- org/hibernate/mapping/Join.java	(revision 11156)
++++ org/hibernate/mapping/Join.java	(working copy)
+@@ -17,7 +17,7 @@
+ 
+ 	private ArrayList properties = new ArrayList();
+ 	private Table table;
+-	private KeyValue key;
++	private DependantValue key;
+ 	private PersistentClass persistentClass;
+ 	private boolean sequentialSelect;
+ 	private boolean inverse;
+@@ -52,10 +52,10 @@
+ 		this.table = table;
+ 	}
+ 
+-	public KeyValue getKey() {
++	public DependantValue getKey() {
+ 		return key;
+ 	}
+-	public void setKey(KeyValue key) {
++	public void setKey(DependantValue key) {
+ 		this.key = key;
+ 	}
+ 
+Index: org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- org/hibernate/mapping/PersistentClass.java	(revision 11156)
++++ org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -729,10 +729,10 @@
+ 			temporaryIdTableName = dialect.generateTemporaryTableName( getTable().getName() );
+ 			Table table = new Table();
+ 			table.setName( temporaryIdTableName );
+-			Iterator itr = getTable().getPrimaryKey().getColumnIterator();
+-			while( itr.hasNext() ) {
+-				Column column = (Column) itr.next();
+-				table.addColumn( (Column) column.clone()  );
++			table.addColumns(getTable().getPrimaryKey().getColumnIterator());
++			for (Iterator joins = getJoinIterator(); joins.hasNext(); ) {
++				Join join = (Join) joins.next();
++				table.addColumns(join.getKey().getReferencedColumns());
+ 			}
+ 			temporaryIdTableDDL = table.sqlTemporaryTableCreateString( dialect, mapping );
+ 		}
+Index: org/hibernate/mapping/SimpleValue.java
+===================================================================
+--- org/hibernate/mapping/SimpleValue.java	(revision 11156)
++++ org/hibernate/mapping/SimpleValue.java	(working copy)
+@@ -34,7 +34,6 @@
+ 	private boolean alternateUniqueKey;
+ 	private Properties typeParameters;
+ 	private boolean cascadeDeleteEnabled;
+-
+ 	public boolean isCascadeDeleteEnabled() {
+ 		return cascadeDeleteEnabled;
+ 	}
+Index: org/hibernate/mapping/Table.java
+===================================================================
+--- org/hibernate/mapping/Table.java	(revision 11156)
++++ org/hibernate/mapping/Table.java	(working copy)
+@@ -765,4 +765,11 @@
+ 		return comments.iterator();
+ 	}
+ 
++	void addColumns(Iterator itr) {
++		while( itr.hasNext() ) {
++			Column column = (Column) itr.next();
++			addColumn( (Column) column.clone()  );
++		}
++	}
++
+ }
+Index: org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 11156)
++++ org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -886,6 +886,10 @@
+ 	public String[] getIdentifierColumnNames() {
+ 		return rootTableKeyColumnNames;
+ 	}
++	
++	public String[] getIdentifierColumnNames(int join) {
++		return getIdentifierColumnNames();
++	}
+ 
+ 	protected int getIdentifierColumnSpan() {
+ 		return identifierColumnSpan;
+@@ -2005,7 +2009,7 @@
+ 			index += 1;
+ 		}
+ 		else if ( id != null ) {
+-			getIdentifierType().nullSafeSet( ps, id, index, session );
++			getIdentifierType(j).nullSafeSet( ps, id, index, session );
+ 			index += getIdentifierColumnSpan();
+ 		}
+ 
+@@ -2494,7 +2498,7 @@
+ 
+ 				// Do the key. The key is immutable so we can use the _current_ object state - not necessarily
+ 				// the state at the time the delete was issued
+-				getIdentifierType().nullSafeSet( delete, id, index, session );
++				getIdentifierType(j).nullSafeSet( delete, id, index, session );
+ 				index += getIdentifierColumnSpan();
+ 
+ 				// We should use the _current_ object state (ie. after any updates that occurred during flush)
+@@ -2630,7 +2634,7 @@
+ 			boolean[] notNull = getPropertiesToInsert( fields );
+ 			id = insert( fields, notNull, generateInsertString( true, notNull ), object, session );
+ 			for ( int j = 1; j < span; j++ ) {
+-				insert( id, fields, notNull, j, generateInsertString( notNull, j ), object, session );
++				insert( getIdentifierForJoin(j,id, fields), fields, notNull, j, generateInsertString( notNull, j ), object, session );
+ 			}
+ 		}
+ 		else {
+@@ -2637,7 +2641,7 @@
+ 			// For the case of dynamic-insert="false", use the static SQL
+ 			id = insert( fields, getPropertyInsertability(), getSQLIdentityInsertString(), object, session );
+ 			for ( int j = 1; j < span; j++ ) {
+-				insert( id, fields, getPropertyInsertability(), j, getSQLInsertStrings()[j], object, session );
++				insert( getIdentifierForJoin(j,id, fields), fields, getPropertyInsertability(), j, getSQLInsertStrings()[j], object, session );
+ 			}
+ 		}
+ 		return id;
+@@ -2643,6 +2647,10 @@
+ 		return id;
+ 	}
+ 
++	protected Serializable getIdentifierForJoin(int j, Serializable id, Object[] values) {
++		return id;
++	}
++
+ 	public void insert(Serializable id, Object[] fields, Object object, SessionImplementor session)
+ 			throws HibernateException {
+ 
+@@ -2665,7 +2673,7 @@
+ 	/**
+ 	 * Delete an object
+ 	 */
+-	public void delete(Serializable id, Object version, Object object, SessionImplementor session)
++	public void delete(Serializable id, Object version, Object object, Object[] state,  SessionImplementor session)
+ 			throws HibernateException {
+ 		final int span = getTableSpan();
+ 		boolean isImpliedOptimisticLocking = !entityMetamodel.isVersioned() && entityMetamodel.getOptimisticLockMode() > Versioning.OPTIMISTIC_LOCK_VERSION;
+@@ -2694,7 +2702,7 @@
+ 		}
+ 
+ 		for ( int j = span - 1; j >= 0; j-- ) {
+-			delete( id, version, j, object, deleteStrings[j], session, loadedState );
++			delete( getIdentifierForJoin(j, id, state), version, j, object, deleteStrings[j], session, loadedState );
+ 		}
+ 
+ 	}
+@@ -2801,7 +2809,6 @@
+ 	}
+ 
+ 	protected JoinFragment createJoin(String name, boolean innerJoin, boolean includeSubclasses) {
+-		final String[] idCols = StringHelper.qualify( name, getIdentifierColumnNames() ); //all joins join to the pk of the driving table
+ 		final JoinFragment join = getFactory().getDialect().createOuterJoinFragment();
+ 		final int tableSpan = getSubclassTableSpan();
+ 		for ( int j = 1; j < tableSpan; j++ ) { //notice that we skip the first table; it is the driving table!
+@@ -2810,7 +2817,7 @@
+ 			if ( joinIsIncluded ) {
+ 				join.addJoin( getSubclassTableName( j ),
+ 						generateTableAlias( name, j ),
+-						idCols,
++						StringHelper.qualify( name, getJoinColumnNames(j) ),
+ 						getSubclassTableKeyColumns( j ),
+ 						innerJoin && isClassOrSuperclassTable( j ) && !isInverseTable( j ) && !isNullableTable( j ) ?
+ 						JoinFragment.INNER_JOIN : //we can inner join to superclass tables (the row MUST be there)
+@@ -2821,6 +2828,10 @@
+ 		return join;
+ 	}
+ 
++	protected String[] getJoinColumnNames(int j) {
++		return getIdentifierColumnNames();
++	}
++	
+ 	protected JoinFragment createJoin(int[] tableNumbers, String drivingAlias) {
+ 		final String[] keyCols = StringHelper.qualify( drivingAlias, getSubclassTableKeyColumns( tableNumbers[0] ) );
+ 		final JoinFragment jf = getFactory().getDialect().createOuterJoinFragment();
+@@ -3733,6 +3744,10 @@
+ 		return entityMetamodel.getIdentifierProperty().getType();
+ 	}
+ 
++	public Type getIdentifierType(int j) {
++		return getIdentifierType();
++	}
++	
+ 	public boolean hasSubselectLoadableCollections() {
+ 		return hasSubselectLoadableCollections;
+ 	}
+@@ -3834,4 +3849,7 @@
+ 	}
+ 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment) {
++		selectFragment.addColumns(tableAlias, getIdentifierColumnNames(), getIdentifierColumnNames());
++	}
+ }
+Index: org/hibernate/persister/entity/EntityPersister.java
+===================================================================
+--- org/hibernate/persister/entity/EntityPersister.java	(revision 11156)
++++ org/hibernate/persister/entity/EntityPersister.java	(working copy)
+@@ -324,7 +324,7 @@
+ 	/**
+ 	 * Delete a persistent instance
+ 	 */
+-	public void delete(Serializable id, Object version, Object object, SessionImplementor session)
++	public void delete(Serializable id, Object version, Object object, Object[] state, SessionImplementor session)
+ 	throws HibernateException;
+ 
+ 	/**
+Index: org/hibernate/persister/entity/Loadable.java
+===================================================================
+--- org/hibernate/persister/entity/Loadable.java	(revision 11156)
++++ org/hibernate/persister/entity/Loadable.java	(working copy)
+@@ -41,6 +41,8 @@
+ 	 */
+ 	public String[] getIdentifierColumnNames();
+ 
++	public String[] getIdentifierColumnNames(int join);
++
+ 	/**
+ 	 * Get the result set aliases used for the identifier columns, given a suffix
+ 	 */
+Index: org/hibernate/persister/entity/Queryable.java
+===================================================================
+--- org/hibernate/persister/entity/Queryable.java	(revision 11156)
++++ org/hibernate/persister/entity/Queryable.java	(working copy)
+@@ -1,6 +1,8 @@
+ //$Id$
+ package org.hibernate.persister.entity;
+ 
++import org.hibernate.sql.SelectFragment;
++
+ /**
+  * Extends the generic <tt>EntityPersister</tt> contract to add
+  * operations required by the Hibernate Query Language
+@@ -40,7 +42,7 @@
+ 	/**
+ 	 * Get the names of columns used to persist the identifier
+ 	 */
+-	public String[] getIdentifierColumnNames();
++	public String[] getIdentifierColumnNames(int join);
+ 
+ 	/**
+ 	 * Is the inheritence hierarchy described by this persister contained across
+@@ -151,4 +153,6 @@
+ 			return name;
+ 		}
+ 	}
++
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment);
+ }
+Index: org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 11156)
++++ org/hibernate/persister/entity/SingleTableEntityPersister.java	(working copy)
+@@ -50,6 +50,7 @@
+ 	private final boolean[] isInverseTable;
+ 	private final boolean[] isNullableTable;
+ 	private final String[][] keyColumnNames;
++	private final int[] keyProperty;
+ 	private final boolean[] cascadeDeleteEnabled;
+ 	private final boolean hasSequentialSelects;
+ 	
+@@ -114,6 +115,7 @@
+ 		qualifiedTableNames = new String[joinSpan];
+ 		isInverseTable = new boolean[joinSpan];
+ 		isNullableTable = new boolean[joinSpan];
++		keyProperty = new int[joinSpan];
+ 		keyColumnNames = new String[joinSpan][];
+ 		final Table table = persistentClass.getRootTable();
+ 		qualifiedTableNames[0] = table.getQualifiedName( 
+@@ -123,6 +125,7 @@
+ 		);
+ 		isInverseTable[0] = false;
+ 		isNullableTable[0] = false;
++		keyProperty[0] = -1;
+ 		keyColumnNames[0] = getIdentifierColumnNames();
+ 		cascadeDeleteEnabled = new boolean[joinSpan];
+ 
+@@ -192,6 +195,13 @@
+ 				Column col = (Column) iter.next();
+ 				keyColumnNames[j][i++] = col.getQuotedName( factory.getDialect() );
+ 			}
++			String referencedPropertyName = join.getKey().getReferencedPropertyName();
++			if (referencedPropertyName == null) {
++				//Use id as reference identifier.
++				keyProperty[j] = -1;
++			} else {
++				keyProperty[j] = getPropertyIndex(referencedPropertyName);
++			}
+ 
+ 			j++;
+ 		}
+@@ -711,4 +721,36 @@
+ 	public String[][] getContraintOrderedTableKeyColumnClosure() {
+ 		return constraintOrderedKeyColumnNames;
+ 	}
++	
++	protected Serializable getIdentifierForJoin(int j, Serializable id, Object[] values) {
++		if (keyProperty[j] == -1)
++			return id;
++		return (Serializable) values[keyProperty[j]];
++	}
++	
++	public Type getIdentifierType(int j) {
++		if (keyProperty[j] == -1)
++			return getIdentifierType();
++		return getPropertyTypes()[keyProperty[j]];
++	}
++	
++	protected String[] getJoinColumnNames(int j) {
++		if (j >= keyProperty.length || keyProperty[j] == -1)
++			return super.getJoinColumnNames(j);
++		return getSubclassPropertyColumnNames(keyProperty[j]);
++	}
++	
++	public String[] getIdentifierColumnNames(int j) {
++		if (keyProperty[j] == -1)
++			return super.getIdentifierColumnNames(j);
++		return getSubclassPropertyColumnNames(keyProperty[j]);
++	}
++	
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment) {
++		super.addIdentifierColumns(tableAlias, selectFragment);
++		for (int j = 1; j < joinSpan; j++) {
++			String[] joinColumnNames = getJoinColumnNames(j);
++			selectFragment.addColumns(tableAlias, joinColumnNames, joinColumnNames);
++		}
++	}
+ }

@@ -1,0 +1,80 @@
+--- //depot/ThirdParty/main/hibernate4/project/hibernate-core/src/main/java/org/hibernate/engine/internal/Cascade.java	2012-06-20 01:25:13.000000000 -0700
++++ c:\commander\ThirdParty\main\hibernate4\project\hibernate-core\src\main\java\org\hibernate\engine\internal\Cascade.java	2012-06-20 01:25:13.000000000 -0700
+--- C:\cygwin\tmp\t15624t97.tmp	2012-06-26 18:00:47.164359400 -0700
++++ c:\commander\ThirdParty\main\hibernate4\project\hibernate-core\src\main\java\org\hibernate\engine\internal\Cascade.java	2012-06-26 17:50:28.369527700 -0700
+@@ -236,26 +236,50 @@
+ 							loadedValue = entry.getLoadedValue( propertyName );
+ 						}
+ 						else {
+-							// association defined on component
+-							// 		todo : this is currently unsupported because of the fact that
+-							//		we do not know the loaded state of this value properly
+-							//		and doing so would be very difficult given how components and
+-							//		entities are loaded (and how 'loaded state' is put into the
+-							//		EntityEntry).  Solutions here are to either:
+-							//			1) properly account for components as a 2-phase load construct
+-							//			2) just assume the association was just now orphaned and
+-							// 				issue the orphan delete.  This would require a special
+-							//				set of SQL statements though since we do not know the
+-							//				orphaned value, something a delete with a subquery to
+-							// 				match the owner.
+-//							final EntityType entityType = (EntityType) type;
+-//							final String propertyPath = composePropertyPath( entityType.getPropertyName() );
+-							loadedValue = null;
++                            // Simple hack for single-level component orphan delete
++                            if (componentPathStack.size() == 1) {
++                                String componentPropertyName = (String) componentPathStack.peek();
++                                Object loadedComponentValue = entry.getLoadedValue(
++                                        componentPropertyName);
++
++                                if (loadedComponentValue == null) {
++                                    loadedValue = null;
++                                } else {
++                                    CompositeType componentType = (CompositeType)entry.getPersister().getPropertyType(componentPropertyName);
++                                    String[] propertyNames = componentType.getPropertyNames();
++                                    Object value = null;
++
++                                    for (int i = 0; i < propertyNames.length; ++i) {
++                                        if (propertyName.equals(propertyNames[i])) {
++                                            value = componentType.getPropertyValue(loadedComponentValue, i, eventSource);
++                                            break;
++                                        }
++                                    }
++                                    loadedValue = value;
++                                }
++                            }
++                            else {
++                                // association defined on component
++                                // 		todo : this is currently unsupported because of the fact that
++                                //		we do not know the loaded state of this value properly
++                                //		and doing so would be very difficult given how components and
++                                //		entities are loaded (and how 'loaded state' is put into the
++                                //		EntityEntry).  Solutions here are to either:
++                                //			1) properly account for components as a 2-phase load construct
++                                //			2) just assume the association was just now orphaned and
++                                // 				issue the orphan delete.  This would require a special
++                                //				set of SQL statements though since we do not know the
++                                //				orphaned value, something a delete with a subquery to
++                                // 				match the owner.
++    //							final EntityType entityType = (EntityType) type;
++    //							final String propertyPath = composePropertyPath( entityType.getPropertyName() );
++                                loadedValue = null;
++                            }
+ 						}
+ 						if ( loadedValue != null ) {
+ 							final String entityName = entry.getPersister().getEntityName();
+ 							if ( LOG.isTraceEnabled() ) {
+-								final Serializable id = entry.getPersister().getIdentifier( loadedValue, eventSource );
++								final Serializable id = eventSource.getPersistenceContext().getEntry( loadedValue ).getPersister().getIdentifier( loadedValue, eventSource );
+ 								final String description = MessageHelper.infoString( entityName, id );
+ 								LOG.tracev( "Deleting orphaned entity instance: {0}", description );
+ 							}
+@@ -377,7 +401,7 @@
+ 		if ( style.reallyDoCascade(action) ) { //not really necessary, but good for consistency...
+ 			eventSource.getPersistenceContext().addChildParent(child, parent);
+ 			try {
+-				action.cascade(eventSource, child, entityName, anything, isCascadeDeleteEnabled);
++				action.cascade(eventSource, parent, entityName, anything, isCascadeDeleteEnabled);
+ 			}
+ 			finally {
+ 				eventSource.getPersistenceContext().removeChildParent(child);

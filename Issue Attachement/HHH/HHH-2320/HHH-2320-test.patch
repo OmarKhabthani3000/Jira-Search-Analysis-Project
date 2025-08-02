@@ -1,0 +1,222 @@
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+--- test/org/hibernate/test/AllTests.java	(revision 11393)
++++ test/org/hibernate/test/AllTests.java	(working copy)
+@@ -55,7 +55,7 @@
+ import org.hibernate.test.interceptor.InterceptorTest;
+ import org.hibernate.test.interfaceproxy.InterfaceProxyTest;
+ import org.hibernate.test.iterate.IterateTest;
+-import org.hibernate.test.join.JoinTest;
++import org.hibernate.test.join.JoinSuite;
+ import org.hibernate.test.joinedsubclass.JoinedSubclassTest;
+ import org.hibernate.test.joinfetch.JoinFetchTest;
+ import org.hibernate.test.jpa.JPAComplianceSuite;
+@@ -220,7 +220,7 @@
+ 			suite.addTest( DynamicFilterTest.suite() );
+ 			suite.addTest( InterfaceProxyTest.suite() );
+ 			suite.addTest( OrphanSuite.suite() );
+-			suite.addTest( JoinTest.suite() );
++			suite.addTest( JoinSuite.suite() );
+ 			suite.addTest( JoinedSubclassTest.suite() );
+ 			suite.addTest( org.hibernate.test.unionsubclass2.UnionSubclassTest.suite() );
+ 			suite.addTest( MixedTest.suite() );
+@@ -434,4 +434,4 @@
+ 			}
+ 		}
+ 	}
+-}
+\ No newline at end of file
++}
+Index: test/org/hibernate/test/join/OptionalJoinTest.java
+===================================================================
+--- test/org/hibernate/test/join/OptionalJoinTest.java	(revision 0)
++++ test/org/hibernate/test/join/OptionalJoinTest.java	(revision 0)
+@@ -0,0 +1,109 @@
++package org.hibernate.test.join;
++
++import org.hibernate.junit.functional.FunctionalTestCase;
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++import org.hibernate.Session;
++import org.hibernate.Transaction;
++import junit.framework.Test;
++
++import java.sql.ResultSet;
++
++public class OptionalJoinTest extends FunctionalTestCase {
++
++	public OptionalJoinTest(String name) {
++		super(name);
++	}
++
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite( OptionalJoinTest.class );
++	}
++
++	public String[] getMappings() {
++		return new String[] { "join/Thing.hbm.xml" };
++	}
++
++	public void testOptionalJoin() throws Exception {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		ResultSet resultSet;
++
++		// ---------------------------------------------
++		// control - create a new thing with a name
++		// ---------------------------------------------
++		// create a new thing with a name
++		Thing thing = new Thing();
++		thing.setName("one");
++		s.save(thing);
++		assertEquals(1, s.createQuery("from Thing").list().size());
++		assertEquals("one", ((Thing) s.createQuery("from Thing").list().get(0)).getName());
++
++		t.commit();
++		s.close();
++		s = openSession();
++		t = s.beginTransaction();
++
++		// then try to give it a name and save it
++		thing.setName("one_changed");
++		s.update(thing);
++		t.commit();
++		s.close();
++
++		s = openSession();
++		t = s.beginTransaction();
++		assertEquals(1, s.createQuery("from Thing").list().size());
++		thing = (Thing) s.createQuery("from Thing").list().get(0);
++		assertEquals("one_changed", thing.getName());
++		// double-check in the table
++		resultSet = s.connection().createStatement().executeQuery("select name from thing_name");
++		assertTrue(resultSet.next());
++		assertEquals("one_changed", resultSet.getString(1));
++		assertFalse(resultSet.next());
++		s.delete(thing);
++		t.commit();
++		s.close();
++		s = openSession();
++		t = s.beginTransaction();
++
++
++		// ---------------------------------------------
++		// bug HHH-2320, used to work prior to rev 10217
++		// ---------------------------------------------
++		// create a new thing without a name
++		Thing thing2 = new Thing();
++		thing2.setName(null);
++		s.save(thing2);
++		assertEquals(1, s.createQuery("from Thing").list().size());
++		assertNull(((Thing) s.createQuery("from Thing").list().get(0)).getName());
++
++		resultSet = s.connection().createStatement().executeQuery("select name from thing_name");
++		assertFalse(resultSet.next());
++
++		t.commit();
++		s.close();
++		s = openSession();
++		t = s.beginTransaction();
++
++		// then try to give it a name and save it
++		thing2.setName("two");
++		s.update(thing2);
++		assertEquals(1, s.createQuery("from Thing").list().size());
++		// the hibernate query shows the name properly updated in the same session...
++		assertEquals("two", ((Thing) s.createQuery("from Thing").list().get(0)).getName());
++
++		t.commit();
++		s.close();
++		s = openSession();
++		t = s.beginTransaction();
++
++		// ... but a new session shows it has not been persisted properly.
++		assertEquals("two", ((Thing) s.createQuery("from Thing").list().get(0)).getName());
++		// ... and no record was created in the thing_name table to reflect it (hibernate tried to perform an update instead of an insert)
++		resultSet = s.connection().createStatement().executeQuery("select name from thing_name");
++		assertTrue(resultSet.next());
++		assertEquals("two", resultSet.getString(1));
++		assertFalse(resultSet.next());
++
++		t.commit();
++		s.close();
++	}
++}
+Index: test/org/hibernate/test/join/JoinSuite.java
+===================================================================
+--- test/org/hibernate/test/join/JoinSuite.java	(revision 0)
++++ test/org/hibernate/test/join/JoinSuite.java	(revision 0)
+@@ -0,0 +1,18 @@
++// $Id: ConnectionsSuite.java 6974 2005-05-31 21:32:56Z steveebersole $
++package org.hibernate.test.join;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++/**
++ * Implementation of JoinSuite.
++ */
++public class JoinSuite {
++
++	public static Test suite() {
++		TestSuite suite = new TestSuite( "Join tests");
++		suite.addTest( JoinTest.suite() );
++		suite.addTest( OptionalJoinTest.suite() );
++		return suite;
++	}
++}
+Index: test/org/hibernate/test/join/Thing.java
+===================================================================
+--- test/org/hibernate/test/join/Thing.java	(revision 0)
++++ test/org/hibernate/test/join/Thing.java	(revision 0)
+@@ -0,0 +1,22 @@
++package org.hibernate.test.join;
++
++public class Thing {
++	Long id;
++	String name;
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++}
+Index: test/org/hibernate/test/join/Thing.hbm.xml
+===================================================================
+--- test/org/hibernate/test/join/Thing.hbm.xml	(revision 0)
++++ test/org/hibernate/test/join/Thing.hbm.xml	(revision 0)
+@@ -0,0 +1,24 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- 
++  This mapping demonstrates optional joined properties
++-->
++
++<hibernate-mapping package="org.hibernate.test.join" default-access="field">
++
++	<class name="Thing" table="thing">
++
++		<id name="id" column="thing_id" unsaved-value="0">
++			<generator class="native"/>
++		</id>
++
++		<join table="thing_name" optional="true">
++			<key column="thing_id"/>
++			<property name="name"/>
++		</join>
++	</class>
++
++</hibernate-mapping>

@@ -1,0 +1,152 @@
+Index: ./src/org/hibernate/dialect/Dialect.java
+===================================================================
+--- ./src/org/hibernate/dialect/Dialect.java	(revision 14265)
++++ ./src/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -885,6 +885,15 @@
+ 	}
+ 
+ 	/**
++	 * Does this dialect support the <tt>FOR READ ONLY</tt> syntax?
++	 *
++	 * @return boolean
++	 */
++	public String getForReadOnlyString() {
++		return "";
++	}
++	
++	/**
+ 	 * Is <tt>FOR UPDATE OF</tt> syntax supported?
+ 	 *
+ 	 * @return True if the database supports <tt>FOR UPDATE OF</tt> syntax;
+Index: ./src/org/hibernate/dialect/DB2Dialect.java
+===================================================================
+--- ./src/org/hibernate/dialect/DB2Dialect.java	(revision 14265)
++++ ./src/org/hibernate/dialect/DB2Dialect.java	(working copy)
+@@ -19,7 +19,7 @@
+  * @author Gavin King
+  */
+ public class DB2Dialect extends Dialect {
+-
++	
+ 	public DB2Dialect() {
+ 		super();
+ 		registerColumnType( Types.BIT, "smallint" );
+@@ -253,10 +253,14 @@
+ 	private static boolean hasDistinct(String sql) {
+ 		return sql.toLowerCase().indexOf("select distinct")>=0;
+ 	}
+-
++    
+ 	public String getForUpdateString() {
+ 		return " for read only with rs";
+ 	}
++	
++	public String getForReadOnlyString() {
++		return " for read only ";
++	}
+ 
+ 	public boolean useMaxForLimit() {
+ 		return true;
+Index: ./src/org/hibernate/sql/QuerySelect.java
+===================================================================
+--- ./src/org/hibernate/sql/QuerySelect.java	(revision 14265)
++++ ./src/org/hibernate/sql/QuerySelect.java	(working copy)
+@@ -150,7 +150,7 @@
+ 		if ( groupBy.length() > 0 ) buf.append(" group by ").append( groupBy.toString() );
+ 		if ( having.length() > 0 ) buf.append(" having ").append( having.toString() );
+ 		if ( orderBy.length() > 0 ) buf.append(" order by ").append( orderBy.toString() );
+-
++		buf.append(dialect.getForReadOnlyString());
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+ 
+Index: ./src/org/hibernate/sql/Select.java
+===================================================================
+--- ./src/org/hibernate/sql/Select.java	(revision 14265)
++++ ./src/org/hibernate/sql/Select.java	(working copy)
+@@ -71,6 +71,9 @@
+ 		if (lockMode!=null) {
+ 			buf.append( dialect.getForUpdateString(lockMode) );
+ 		}
++		else {
++			buf.append( dialect.getForReadOnlyString() );
++      }
+ 		
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+Index: ./src/org/hibernate/sql/SimpleSelect.java
+===================================================================
+--- ./src/org/hibernate/sql/SimpleSelect.java	(revision 14265)
++++ ./src/org/hibernate/sql/SimpleSelect.java	(working copy)
+@@ -161,6 +161,9 @@
+ 		if (lockMode!=null) {
+ 			buf.append( dialect.getForUpdateString(lockMode) );
+ 		}
++		else {
++			buf.append( dialect.getForReadOnlyString() );
++		}
+ 
+ 		return dialect.transformSelectString( buf.toString() );
+ 	}
+Index: ./src/org/hibernate/hql/classic/QueryTranslatorImpl.java
+===================================================================
+--- ./src/org/hibernate/hql/classic/QueryTranslatorImpl.java	(revision 14265)
++++ ./src/org/hibernate/hql/classic/QueryTranslatorImpl.java	(working copy)
+@@ -1039,7 +1039,7 @@
+ 		// can't cache this stuff either (per-invocation)
+ 		final String result;
+ 		if ( lockModes == null || lockModes.size() == 0 ) {
+-			result = sql;
++			result = applyForReadOnly(sql, dialect);
+ 		}
+ 		else {
+ 			Map aliasedLockModes = new HashMap();
+Index: ./src/org/hibernate/loader/hql/QueryLoader.java
+===================================================================
+--- ./src/org/hibernate/loader/hql/QueryLoader.java	(revision 14265)
++++ ./src/org/hibernate/loader/hql/QueryLoader.java	(working copy)
+@@ -280,7 +280,7 @@
+ 
+ 	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws QueryException {
+ 		if ( lockModes == null || lockModes.size() == 0 ) {
+-			return sql;
++			return applyForReadOnly(sql, dialect);
+ 		}
+ 
+ 		// can't cache this stuff either (per-invocation)
+Index: ./src/org/hibernate/loader/Loader.java
+===================================================================
+--- ./src/org/hibernate/loader/Loader.java	(revision 14265)
++++ ./src/org/hibernate/loader/Loader.java	(working copy)
+@@ -164,8 +164,18 @@
+ 	 * argument.
+ 	 */
+ 	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws HibernateException {
++		if ( lockModes == null || lockModes.size() == 0 ) {
++            return applyForReadOnly(sql, dialect);
++		}
+ 		return sql;
+ 	}
++	
++	protected String applyForReadOnly(String sql, Dialect dialect) throws HibernateException {
++        if (!sql.endsWith(dialect.getForReadOnlyString())) {
++            sql += dialect.getForReadOnlyString();
++        }
++        return sql;
++	}
+ 
+ 	/**
+ 	 * Does this query return objects that might be already cached
+Index: ./src/org/hibernate/loader/criteria/CriteriaLoader.java
+===================================================================
+--- ./src/org/hibernate/loader/criteria/CriteriaLoader.java	(revision 14265)
++++ ./src/org/hibernate/loader/criteria/CriteriaLoader.java	(working copy)
+@@ -122,7 +122,7 @@
+ 
+ 	protected String applyLocks(String sqlSelectString, Map lockModes, Dialect dialect) throws QueryException {
+ 		if ( lockModes == null || lockModes.isEmpty() ) {
+-			return sqlSelectString;
++			return applyForReadOnly(sqlSelectString, dialect);
+ 		}
+ 
+ 		final Map aliasedLockModes = new HashMap();

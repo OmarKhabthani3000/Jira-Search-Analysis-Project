@@ -1,0 +1,89 @@
+Index: src/net/sf/hibernate/engine/SessionFactoryImplementor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/SessionFactoryImplementor.java,v
+retrieving revision 1.11
+diff -u -r1.11 SessionFactoryImplementor.java
+--- src/net/sf/hibernate/engine/SessionFactoryImplementor.java	22 May 2003 03:30:00 -0000	1.11
++++ src/net/sf/hibernate/engine/SessionFactoryImplementor.java	27 Sep 2003 20:09:56 -0000
+@@ -103,6 +103,11 @@
+ 	 * Set the fetch size
+ 	 */
+ 	public void setFetchSize(PreparedStatement statement) throws SQLException;
++
++    /**
++     * Gets the last session opened in the current thread (for rebinding proxies)
++     */
++    public SessionImplementor getLastThreadSession();
+ }
+ 
+ 
+Index: src/net/sf/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.26
+diff -u -r1.26 SessionFactoryImpl.java
+--- src/net/sf/hibernate/impl/SessionFactoryImpl.java	28 Jul 2003 00:34:32 -0000	1.26
++++ src/net/sf/hibernate/impl/SessionFactoryImpl.java	27 Sep 2003 20:09:56 -0000
+@@ -49,6 +49,7 @@
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.dialect.GenericDialect;
+ import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.hql.FilterTranslator;
+ import net.sf.hibernate.hql.QueryTranslator;
+ import net.sf.hibernate.id.IdentifierGenerator;
+@@ -122,6 +123,7 @@
+ 	private final transient String defaultSchema;
+ 	private final transient Integer statementFetchSize;
+ 	private final transient Interceptor interceptor;
++    private final transient ThreadLocal lastSession = new ThreadLocal();
+ 	
+ 	private static final IdentifierGenerator UUID_GENERATOR = new UUIDHexGenerator();
+ 	
+@@ -371,7 +373,9 @@
+ 	}
+ 	
+ 	private Session openSession(Connection connection, boolean autoClose, long timestamp, Interceptor interceptor) {
+-		return new SessionImpl( connection, this, autoClose, timestamp, interceptor );
++		Session s = new SessionImpl( connection, this, autoClose, timestamp, interceptor );
++        lastSession.set(s);
++        return s;
+ 	}
+ 	
+ 	public Session openSession(Connection connection, Interceptor interceptor) {
+@@ -725,6 +729,9 @@
+ 		if ( p.hasCache() ) p.getCache().clear();
+ 	}
+ 
++    public SessionImplementor getLastThreadSession() {
++        return (SessionImplementor)lastSession.get();
++    }
+ }
+ 
+ 
+Index: src/net/sf/hibernate/proxy/LazyInitializer.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/proxy/LazyInitializer.java,v
+retrieving revision 1.10
+diff -u -r1.10 LazyInitializer.java
+--- src/net/sf/hibernate/proxy/LazyInitializer.java	28 Jul 2003 00:34:32 -0000	1.10
++++ src/net/sf/hibernate/proxy/LazyInitializer.java	27 Sep 2003 20:09:56 -0000
+@@ -41,11 +41,14 @@
+ 				throw new HibernateException("Could not initialize proxy - no Session");
+ 			}
+ 			else if ( !session.isOpen() ) {
+-				throw new HibernateException("Could not initialize proxy - the owning Session was closed");
+-			}
+-			else {
+-				target = session.immediateLoad(persistentClass, id);
++                SessionImplementor last = session.getFactory().getLastThreadSession();
++                if (last == null || !last.isOpen()) {
++                    throw new HibernateException("Could not initialize proxy - the owning Session was closed");
++                }
++                // associate with new session
++                session = last;
+ 			}
++            target = session.immediateLoad(persistentClass, id);
+ 		}
+ 	}
+

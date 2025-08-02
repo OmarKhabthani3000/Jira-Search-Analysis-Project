@@ -1,0 +1,202 @@
+Index: C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/JTAEntityManagerContext.java
+===================================================================
+--- C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/JTAEntityManagerContext.java	(revision 0)
++++ C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/JTAEntityManagerContext.java	(revision 0)
+@@ -0,0 +1,125 @@
++package org.hibernate.ejb;
++
++import org.hibernate.HibernateException;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.util.JTAHelper;
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
++import javax.persistence.EntityManager;
++import javax.persistence.PersistenceContextType;
++import javax.persistence.spi.PersistenceUnitTransactionType;
++import javax.transaction.Transaction;
++import javax.transaction.TransactionManager;
++import javax.transaction.Synchronization;
++import java.util.Map;
++import java.util.Hashtable;
++
++/**
++ * Scopes the notion of a current EntityManager to a JTA transaction.
++ * Implementation based on {@link org.hibernate.context.JTASessionContext} and
++ * leverages Hibernate's current session capability.
++ * Allows transitional use of the JPA API in containers that do not yet fully
++ * implement the EJB3 spec.
++ * 
++ * TODO Should probably get rid of this once EJB3 is pervasive.
++ *
++ * @author James Olsen
++ */
++public class JTAEntityManagerContext {
++
++	private static final Log log = LogFactory.getLog( JTAEntityManagerContext.class );
++
++	protected final SessionFactoryImplementor factory;
++	private transient Map currentEntityManagerMap = new Hashtable();
++
++	private PersistenceUnitTransactionType transactionType;
++	private boolean discardOnClose;
++
++	public JTAEntityManagerContext(SessionFactoryImplementor factory, PersistenceUnitTransactionType transactionType,
++			boolean discardOnClose) {
++		this.factory = factory;
++		this.transactionType = transactionType;
++		this.discardOnClose = discardOnClose;
++	}
++
++	public EntityManager currentEntityManager() throws HibernateException {
++		TransactionManager transactionManager = factory.getTransactionManager();
++		if ( transactionManager == null ) {
++			throw new HibernateException( "No TransactionManagerLookup specified" );
++		}
++
++		Transaction txn = null;
++		try {
++			txn = transactionManager.getTransaction();
++			if ( txn == null ) {
++				throw new HibernateException( "Unable to locate current JTA transaction" );
++			}
++			if ( !JTAHelper.isInProgress( txn.getStatus() ) ) {
++				// We could register the EntityManager against the transaction even though it is
++				// not started, but we'd have no guarentee of ever getting the map
++				// entries cleaned up (aside from spawning threads).
++				throw new HibernateException( "Current transaction is not in progress" );
++			}
++		}
++		catch ( HibernateException e ) {
++			throw e;
++		}
++		catch ( Throwable t ) {
++			throw new HibernateException( "Problem locating/validating JTA transaction", t );
++		}
++
++		EntityManager currentEntityManager = ( EntityManager ) currentEntityManagerMap.get( txn );
++
++		if ( currentEntityManager == null ) {
++			currentEntityManager = buildEntityManager();
++
++			try {
++				txn.registerSynchronization( buildCleanupSynch( txn ) );
++			}
++			catch ( Throwable t ) {
++				try {
++					currentEntityManager.close();
++				}
++				catch ( Throwable ignore ) {
++					log.debug( "Unable to release generated current-session on failed synch registration", ignore );
++				}
++				throw new HibernateException( "Unable to register cleanup Synchronization with TransactionManager" );
++			}
++
++			currentEntityManagerMap.put( txn, currentEntityManager );
++		}
++
++		return currentEntityManager;
++	}
++
++	private CleanupSynch buildCleanupSynch(Transaction txn) {
++		return new CleanupSynch( txn, this );
++	}
++
++	protected EntityManager buildEntityManager() {
++		return new EntityManagerImpl(
++			factory.getCurrentSession(), PersistenceContextType.EXTENDED, transactionType, discardOnClose, null
++		);
++	}
++
++	/**
++	 * JTA transaction synch used for cleanup of the internal EntityManager map.
++	 */
++	protected static class CleanupSynch implements Synchronization {
++		private Transaction txn;
++		private JTAEntityManagerContext context;
++
++		public CleanupSynch(Transaction txn, JTAEntityManagerContext context) {
++			this.txn = txn;
++			this.context = context;
++		}
++
++		public void beforeCompletion() {
++		}
++
++		public void afterCompletion(int i) {
++			context.currentEntityManagerMap.remove( txn );
++		}
++	}
++}
+Index: C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerFactoryImpl.java
+===================================================================
+--- C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerFactoryImpl.java	(revision 10305)
++++ C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerFactoryImpl.java	(working copy)
+@@ -7,6 +7,7 @@
+ import javax.persistence.spi.PersistenceUnitTransactionType;
+ 
+ import org.hibernate.SessionFactory;
++import org.hibernate.engine.SessionFactoryImplementor;
+ 
+ /**
+  * @author Gavin King
+@@ -17,6 +18,8 @@
+ 	private SessionFactory sessionFactory;
+ 	private PersistenceUnitTransactionType transactionType;
+ 	private boolean discardOnClose;
++	
++	private JTAEntityManagerContext jtaEMContext;
+ 
+ 	public EntityManagerFactoryImpl(
+ 			SessionFactory sessionFactory,
+@@ -26,12 +29,23 @@
+ 		this.sessionFactory = sessionFactory;
+ 		this.transactionType = transactionType;
+ 		this.discardOnClose = discardOnClose;
++		
++		jtaEMContext = new JTAEntityManagerContext((SessionFactoryImplementor) sessionFactory, transactionType, discardOnClose);
+ 	}
+ 
+ 	public EntityManager createEntityManager() {
+ 		return createEntityManager( null );
+ 	}
+ 
++	/**
++	 * Non standard Hibernate scope managed EntityManager.
++	 * TODO Should probably get rid of this and the {@link JTAEntityManagerContext} once EJB3 is pervasive.
++	 * @return An EntityManager scoped in the same way as Hibernate's current JTA session notion.
++	 */
++	public EntityManager getCurrentEntityManager() {
++		return jtaEMContext.currentEntityManager();
++	}
++
+ 	public EntityManager createEntityManager(Map map) {
+ 		//TODO support discardOnClose, persistencecontexttype?, interceptor,
+ 		return new EntityManagerImpl(
+Index: C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerImpl.java
+===================================================================
+--- C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerImpl.java	(revision 10305)
++++ C:/workspace-1.1/HibernateExt/ejb/src/java/org/hibernate/ejb/EntityManagerImpl.java	(working copy)
+@@ -37,6 +37,22 @@
+ 		postInit();
+ 	}
+ 
++	/**
++	 * Special constructor to support non standard Hibernate scope managed EntityManager.
++	 * TODO Should probably get rid of this and the {@link JTAEntityManagerContext} once EJB3 is pervasive.
++	 */
++	public EntityManagerImpl(
++			Session session, PersistenceContextType pcType,
++			PersistenceUnitTransactionType transactionType,
++			boolean discardOnClose, Map properties
++	) {
++		super( pcType, transactionType, properties );
++		this.session = session;
++		this.open = true;
++		this.discardOnClose = discardOnClose;
++		postInit();
++	}
++
+ 	public Session getSession() {
+ 
+ 		if ( !open ) throw new IllegalStateException( "EntityManager is closed" );

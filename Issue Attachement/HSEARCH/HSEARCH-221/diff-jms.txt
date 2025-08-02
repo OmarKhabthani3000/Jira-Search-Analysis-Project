@@ -1,0 +1,248 @@
+Index: src/java/org/hibernate/search/backend/PurgeAllLuceneWork.java
+===================================================================
+--- src/java/org/hibernate/search/backend/PurgeAllLuceneWork.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/PurgeAllLuceneWork.java	(working copy)
+@@ -10,6 +10,6 @@
+  */
+ public class PurgeAllLuceneWork extends LuceneWork {
+ 	public PurgeAllLuceneWork(Class entity) {
+-		super( null, null, entity, null );
++		super( null, null, entity, null, null );
+ 	}
+ }
+Index: src/java/org/hibernate/search/backend/LuceneWork.java
+===================================================================
+--- src/java/org/hibernate/search/backend/LuceneWork.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/LuceneWork.java	(working copy)
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ 
+ import org.apache.lucene.document.Document;
++import org.hibernate.search.EntityInstanceAnalyzer;
+ 
+ /**
+  * Represent a Serializable Lucene unit work
+@@ -16,25 +17,35 @@
+ 	private Document document;
+ 	private Class entityClass;
+ 	private Serializable id;
+-	
+-	/**
++	private EntityInstanceAnalyzer entityInstanceAnalyzer;
++
++    /**
+ 	 * Flag indicating if this lucene work has to be indexed in batch mode.
+ 	 */
+ 	private boolean batch = false;
+ 	private String idInString;
+ 
+ 	public LuceneWork(Serializable id, String idInString, Class entity) {
+-		this( id, idInString, entity, null );
++		this( id, idInString, entity, null, null );
+ 	}
+ 
+ 	public LuceneWork(Serializable id, String idInString, Class entity, Document document) {
+-		this.id = id;
+-		this.idInString = idInString;
+-		this.entityClass = entity;
+-		this.document = document;
++        this( id, idInString, entity, document, null );
+ 	}
+ 
+-	public boolean isBatch() {
++    public LuceneWork(Serializable id, String idInString, Class entity, EntityInstanceAnalyzer entityInstanceAnalyzer) {
++        this( id, idInString, entity, null, entityInstanceAnalyzer);
++    }
++
++    public LuceneWork(Serializable id, String idInString, Class entity, Document document, EntityInstanceAnalyzer entityInstanceAnalyzer) {
++        this.id = id;
++        this.idInString = idInString;
++        this.entityClass = entity;
++        this.document = document;
++        this.entityInstanceAnalyzer = entityInstanceAnalyzer;
++    }
++
++    public boolean isBatch() {
+ 		return batch;
+ 	}
+ 
+@@ -57,4 +68,8 @@
+ 	public String getIdInString() {
+ 		return idInString;
+ 	}
++
++    public EntityInstanceAnalyzer getEntityInstanceAnalyzer() {
++        return entityInstanceAnalyzer;
++    }
+ }
+Index: src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java
+===================================================================
+--- src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/impl/lucene/LuceneWorker.java	(working copy)
+@@ -11,8 +11,10 @@
+ import org.apache.lucene.index.IndexWriter;
+ import org.apache.lucene.index.Term;
+ import org.apache.lucene.index.TermDocs;
++import org.apache.lucene.analysis.Analyzer;
+ import org.hibernate.annotations.common.AssertionFailure;
+ import org.hibernate.search.SearchException;
++import org.hibernate.search.EntityInstanceAnalyzer;
+ import org.hibernate.search.backend.AddLuceneWork;
+ import org.hibernate.search.backend.DeleteLuceneWork;
+ import org.hibernate.search.backend.LuceneWork;
+@@ -59,15 +61,57 @@
+ 		Class entity = work.getEntityClass();
+ 		Serializable id = work.getId();
+ 		Document document = work.getDocument();
+-		add( entity, id, document, provider );
++        EntityInstanceAnalyzer entityInstanceAnalyzer = work.getEntityInstanceAnalyzer();
++        add( entity, id, document, provider, entityInstanceAnalyzer );
+ 	}
+ 
+-	private void add(Class entity, Serializable id, Document document, DirectoryProvider provider) {
++    private void add(Class entity, Serializable id, Document document, DirectoryProvider provider, EntityInstanceAnalyzer entityInstanceAnalyzer) {
+ 		if ( log.isTraceEnabled() )
+ 			log.trace( "add to Lucene index: " + entity + "#" + id + ": " + document );
+ 		IndexWriter writer = workspace.getIndexWriter( provider, entity, true );
+ 		try {
+-			writer.addDocument( document );
++            if (entityInstanceAnalyzer == null) {
++                writer.addDocument( document );
++            } else {
++                Analyzer analyzer = null;
++
++                String analyzerClassName = entityInstanceAnalyzer.getAnalyzerClassName();
++                Class[] analyzerParameterTypes = entityInstanceAnalyzer.getAnalyzerParameterTypes();
++                Object[] analyzerParameterValues = entityInstanceAnalyzer.getAnalyzerParameterValues();
++
++                try {
++                    Class clazz = Class.forName(analyzerClassName);
++                    if (analyzerParameterTypes != null) {
++                        analyzer = (Analyzer) clazz.getConstructor(analyzerParameterTypes).newInstance(analyzerParameterValues);
++                    } else {
++                        analyzer = (Analyzer) clazz.newInstance();
++                    }
++
++                    if ( log.isTraceEnabled() ) {
++                        log.trace( "Lucene analyzer resolved. ClassName: " + analyzerClassName);
++                        log.trace( "Lucene analyzer resolved: Object (instance):" + analyzer);
++
++                        if (analyzerParameterValues != null) {
++                            for (int i = 0; i < analyzerParameterValues.length; i++) {
++                                log.trace( "Lucene analyzer resolved. Parameter #" + i + ": " + analyzerParameterValues[i]);
++                            }
++                        }
++                    }
++
++                    writer.addDocument( document, analyzer );
++                } catch (Exception e) {
++                    if ( log.isWarnEnabled() ) {
++                        log.warn( "Couldn't resolve Lucene analyzer. ClassName: " + analyzerClassName, e);
++                    }
++
++                    if ( log.isInfoEnabled() ) {
++                        log.info("Using Lucene analyzer '" + writer.getAnalyzer().getClass().getName()
++                                + "' instead of '" + analyzerClassName + "'");
++                    }
++                    
++                    writer.addDocument( document );
++                }
++            }
+ 		}
+ 		catch (IOException e) {
+ 			throw new SearchException( "Unable to add to Lucene index: " + entity + "#" + id, e );
+Index: src/java/org/hibernate/search/backend/AddLuceneWork.java
+===================================================================
+--- src/java/org/hibernate/search/backend/AddLuceneWork.java	(revision 14800)
++++ src/java/org/hibernate/search/backend/AddLuceneWork.java	(working copy)
+@@ -4,6 +4,7 @@
+ import java.io.Serializable;
+ 
+ import org.apache.lucene.document.Document;
++import org.hibernate.search.EntityInstanceAnalyzer;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -12,4 +13,8 @@
+ 	public AddLuceneWork(Serializable id, String idInString, Class entity, Document document) {
+ 		super( id, idInString, entity, document );
+ 	}
++
++    public AddLuceneWork(Serializable id, String idInString, Class entity, Document document, EntityInstanceAnalyzer entityInstanceAnalyzer) {
++        super(id, idInString, entity, document, entityInstanceAnalyzer);
++    }
+ }
+Index: src/java/org/hibernate/search/annotations/Analyzer.java
+===================================================================
+--- src/java/org/hibernate/search/annotations/Analyzer.java	(revision 14800)
++++ src/java/org/hibernate/search/annotations/Analyzer.java	(working copy)
+@@ -23,4 +23,5 @@
+ 
+ public @interface Analyzer {
+ 	Class impl() default void.class;
++    String factoryMethodName() default "";
+ }
+Index: src/java/org/hibernate/search/engine/DocumentBuilder.java
+===================================================================
+--- src/java/org/hibernate/search/engine/DocumentBuilder.java	(revision 14800)
++++ src/java/org/hibernate/search/engine/DocumentBuilder.java	(working copy)
+@@ -3,6 +3,9 @@
+ 
+ import java.io.Serializable;
+ import java.lang.reflect.Modifier;
++import java.lang.reflect.Method;
++import java.lang.reflect.InvocationTargetException;
++import java.lang.annotation.Annotation;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -27,6 +30,7 @@
+ import org.hibernate.annotations.common.util.ReflectHelper;
+ import org.hibernate.proxy.HibernateProxy;
+ import org.hibernate.search.SearchException;
++import org.hibernate.search.EntityInstanceAnalyzer;
+ import org.hibernate.search.annotations.Boost;
+ import org.hibernate.search.annotations.ContainedIn;
+ import org.hibernate.search.annotations.DocumentId;
+@@ -411,11 +415,23 @@
+ 			}
+ 
+ 		}
+-		boolean searchForContainers = false;
++
++        EntityInstanceAnalyzer entityInstanceAnalyzer = null;
++        org.hibernate.search.annotations.Analyzer analyzerAnn = entity.getClass().getAnnotation(org.hibernate.search.annotations.Analyzer.class);
++        if (analyzerAnn != null && analyzerAnn.factoryMethodName() != null && analyzerAnn.factoryMethodName().length() > 0) {
++            try {
++                Method method = entity.getClass().getMethod(analyzerAnn.factoryMethodName());
++                entityInstanceAnalyzer = (EntityInstanceAnalyzer) method.invoke(entity);
++            } catch (Exception e) {
++                log.warn(e.getMessage(), e);                
++            }
++        }
++
++        boolean searchForContainers = false;
+ 		String idInString = idBridge.objectToString( id );
+ 		if ( workType == WorkType.ADD ) {
+ 			Document doc = getDocument( entity, id );
+-			queue.add( new AddLuceneWork( id, idInString, entityClass, doc ) );
++			queue.add( new AddLuceneWork( id, idInString, entityClass, doc, entityInstanceAnalyzer ) );
+ 			searchForContainers = true;
+ 		}
+ 		else if ( workType == WorkType.DELETE || workType == WorkType.PURGE ) {
+@@ -434,13 +450,13 @@
+ 			 * double file opening.
+ 			 */
+ 			queue.add( new DeleteLuceneWork( id, idInString, entityClass ) );
+-			queue.add( new AddLuceneWork( id, idInString, entityClass, doc ) );
++			queue.add( new AddLuceneWork( id, idInString, entityClass, doc, entityInstanceAnalyzer ) );
+ 			searchForContainers = true;
+ 		}
+ 		else if ( workType == WorkType.INDEX ) {
+ 			Document doc = getDocument( entity, id );
+ 			queue.add( new DeleteLuceneWork( id, idInString, entityClass ) );
+-			LuceneWork work = new AddLuceneWork( id, idInString, entityClass, doc );
++			LuceneWork work = new AddLuceneWork( id, idInString, entityClass, doc, entityInstanceAnalyzer );
+ 			work.setBatch( true );
+ 			queue.add( work );
+ 			searchForContainers = true;

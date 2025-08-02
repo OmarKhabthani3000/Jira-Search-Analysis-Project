@@ -1,0 +1,346 @@
+Index: src/main/java/org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- src/main/java/org/hibernate/action/EntityDeleteAction.java	(revision 15615)
++++ src/main/java/org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -61,6 +61,10 @@
+ 		this.isCascadeDeleteEnabled = isCascadeDeleteEnabled;
+ 		this.state = state;
+ 	}
++	
++	public Object[] getState() {
++		return state;
++	}
+ 
+ 	public void execute() throws HibernateException {
+ 		Serializable id = getId();
+Index: src/main/java/org/hibernate/action/EntityIdentityInsertAction.java
+===================================================================
+--- src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(revision 15615)
++++ src/main/java/org/hibernate/action/EntityIdentityInsertAction.java	(working copy)
+@@ -55,6 +55,10 @@
+ 		this.isDelayed = isDelayed;
+ 		delayedEntityKey = isDelayed ? generateDelayedEntityKey() : null;
+ 	}
++	
++	public Object[] getState() {
++		return state;
++	}
+ 
+ 	public void execute() throws HibernateException {
+ 		
+Index: src/main/java/org/hibernate/engine/ActionQueue.java
+===================================================================
+--- src/main/java/org/hibernate/engine/ActionQueue.java	(revision 15615)
++++ src/main/java/org/hibernate/engine/ActionQueue.java	(working copy)
+@@ -29,10 +29,13 @@
+ import java.io.ObjectOutputStream;
+ import java.io.Serializable;
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.HashMap;
++import java.util.IdentityHashMap;
+ import java.util.Iterator;
+ import java.util.LinkedList;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Set;
+ 
+ import org.slf4j.Logger;
+@@ -44,14 +47,22 @@
+ import org.hibernate.action.CollectionRecreateAction;
+ import org.hibernate.action.CollectionRemoveAction;
+ import org.hibernate.action.CollectionUpdateAction;
++import org.hibernate.action.EntityAction;
+ import org.hibernate.action.EntityDeleteAction;
+ import org.hibernate.action.EntityIdentityInsertAction;
+ import org.hibernate.action.EntityInsertAction;
+ import org.hibernate.action.EntityUpdateAction;
+ import org.hibernate.action.Executable;
+ import org.hibernate.cache.CacheException;
++import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.proxy.HibernateProxy;
++import org.hibernate.type.EntityType;
++import org.hibernate.type.ForeignKeyDirection;
++import org.hibernate.type.OneToOneType;
+ import org.hibernate.type.Type;
+ 
++import com.sun.org.apache.bcel.internal.generic.GETSTATIC;
++
+ /**
+  * Responsible for maintaining the queue of actions related to events.
+  * </p>
+@@ -155,20 +166,151 @@
+ 	 * @throws HibernateException error executing queued insertion actions.
+ 	 */
+ 	public void executeInserts() throws HibernateException {
++		orderPersistentActions(insertions, true);
+ 		executeActions( insertions );
+ 	}
+ 
++	// fix for http://opensource.atlassian.com/projects/hibernate/browse/HHH-3544
++	private void orderPersistentActions(ArrayList actions, boolean insertActions) {
++		int originalSize = actions.size();
++		IdentityHashMap dependencyGraph = new IdentityHashMap();
++		
++		for ( Iterator actionItr = actions.iterator(); actionItr.hasNext(); ) {
++			EntityAction action = ( EntityAction ) actionItr.next();
++			ArrayList dependencies = new ArrayList();
++			dependencyGraph.put(action, dependencies );
++			
++			String entityName = action.getEntityName();
++			Object[] state = null;
++			if (action instanceof EntityInsertAction) {
++				state = ((EntityInsertAction)action).getState();
++			} else if (action instanceof EntityIdentityInsertAction) {
++				state = ((EntityIdentityInsertAction)action).getState();
++			} else if (action instanceof EntityDeleteAction) {
++				state = ((EntityDeleteAction)action).getState();
++			}
++			Type[] propertyTypes = action.getPersister().getPropertyTypes();
++			
++			for (int i = 0; i < propertyTypes.length; i++) {
++				Type propertyType = propertyTypes[i];
++				
++				if ( propertyType.isEntityType()) {
++					EntityType entityType = (EntityType) propertyType;
++					
++					if (entityType.isReferenceToPrimaryKey() && ForeignKeyDirection.FOREIGN_KEY_FROM_PARENT.equals(entityType.getForeignKeyDirection())) {
++
++						if (state[i] != null) { // we are not interested in null
++							if (insertActions && (state[i] instanceof HibernateProxy)) {
++								// not interested in already persistent entities during the insert.
++							}
++							// get the actual entity name - e.g. consider subclasses.
++							EntityPersister stateEntityPersister = session.getEntityPersister(entityType.getAssociatedEntityName(), state[i]);
++							String stateEntityName = stateEntityPersister.getEntityName();
++							
++							Serializable stateId = ForeignKeys.getEntityIdentifierIfNotUnsaved( stateEntityName, state[i], session );
++							//TODO: we could check if the field is nullable to explicitly nullify the data and schedule an update so that we can minimize the dependencies 
++							
++							for (Iterator dependencyActionItr = actions.iterator(); dependencyActionItr.hasNext();) {
++								EntityAction dependencyAction = ( EntityAction ) dependencyActionItr.next();
++								
++								if (stateEntityPersister.isIdentifierAssignedByInsert() && (dependencyAction instanceof EntityIdentityInsertAction)) {
++									if (((EntityIdentityInsertAction)dependencyAction).getEntityName().equals(stateEntityName) &&
++											((EntityIdentityInsertAction)dependencyAction).getDelayedEntityKey() != null &&
++											((EntityIdentityInsertAction)dependencyAction).getDelayedEntityKey().getIdentifier() != null &&
++											((EntityIdentityInsertAction)dependencyAction).getDelayedEntityKey().getIdentifier().equals(stateId)) {
++										dependencies.add(dependencyAction);
++									}
++								} else {
++									if (dependencyAction.getEntityName().equals(stateEntityName) && dependencyAction.getId() != null && dependencyAction.getId().equals(stateId)) {
++										dependencies.add(dependencyAction);
++									}
++								}
++							}
++						}
++					}
++				}
++			}
++		}
++		
++
++		ArrayList newActions = new ArrayList();
++		IdentityHashMap processedActionsMap = new IdentityHashMap();
++		
++		while (!actions.isEmpty()) {
++			boolean atleastOneActionProcessed = false;
++			
++			for (Iterator actionIterator = actions.iterator(); actionIterator.hasNext();) {
++				EntityAction action = (EntityAction)actionIterator.next();
++				ArrayList dependentActions = (ArrayList)dependencyGraph.get(action);
++	
++				if (dependentActions.isEmpty()) {
++					newActions.add(action);
++					processedActionsMap.put(action, Boolean.TRUE);
++					actionIterator.remove();
++					atleastOneActionProcessed = true;
++				} else {
++					boolean allDependentActionsAreProcessed = true;
++					for (Iterator dependentActionIterator = dependentActions.iterator(); dependentActionIterator.hasNext();) {
++						EntityAction dependentAction = (EntityAction)dependentActionIterator.next();
++						if (!processedActionsMap.containsKey(dependentAction)) {
++							allDependentActionsAreProcessed = false;
++							break;
++						}
++					}
++					
++					if (allDependentActionsAreProcessed) {
++						newActions.add(action);
++						processedActionsMap.put(action, Boolean.TRUE);
++						actionIterator.remove();
++						atleastOneActionProcessed = true;
++					} else {
++						// postpone the add
++					}
++				}
++			}
++			
++			if (!atleastOneActionProcessed) {
++				break;
++			}
++		}
++		
++		if (!insertActions) {
++			// reverse the order
++			int size = newActions.size();
++			ArrayList inverse = new ArrayList();
++			for (int i = size - 1; i >= 0; i--) {
++				inverse.add(newActions.get(i));
++			}
++			newActions = inverse;
++		}
++		
++		// add any leftovers - probably interdependent not-null entities.
++		for (Iterator actionIterator = actions.iterator(); actionIterator.hasNext();) {
++			EntityAction action = (EntityAction)actionIterator.next();
++			newActions.add(action);
++		}
++		
++		actions.clear();
++		actions.addAll(newActions);
++		
++		if (actions.size() != originalSize) {
++			throw new AssertionFailure( "Exception sorting the actions");			
++		}
++	}
++	
+ 	/**
+ 	 * Perform all currently queued actions.
+ 	 *
+ 	 * @throws HibernateException error executing queued actions.
+ 	 */
+ 	public void executeActions() throws HibernateException {
++		orderPersistentActions(insertions, true);
+ 		executeActions( insertions );
+ 		executeActions( updates );
+ 		executeActions( collectionRemovals );
+ 		executeActions( collectionUpdates );
+ 		executeActions( collectionCreations );
++		orderPersistentActions(deletions, false);
+ 		executeActions( deletions );
+ 	}
+ 
+Index: src/main/java/org/hibernate/engine/EntityEntry.java
+===================================================================
+--- src/main/java/org/hibernate/engine/EntityEntry.java	(revision 15615)
++++ src/main/java/org/hibernate/engine/EntityEntry.java	(working copy)
+@@ -221,7 +221,7 @@
+ 	}
+ 	
+ 	public boolean isNullifiable(boolean earlyInsert, SessionImplementor session) {
+-		return getStatus() == Status.SAVING || (
++		return /*getStatus() == Status.SAVING || */(
+ 				earlyInsert ?
+ 						!isExistsInDatabase() :
+ 						session.getPersistenceContext().getNullifiableEntityKeys()
+Index: src/main/java/org/hibernate/engine/ForeignKeys.java
+===================================================================
+--- src/main/java/org/hibernate/engine/ForeignKeys.java	(revision 15615)
++++ src/main/java/org/hibernate/engine/ForeignKeys.java	(working copy)
+@@ -64,10 +64,10 @@
+ 		 * been inserted in the database, where the foreign key
+ 		 * points toward that entity
+ 		 */
+-		public void nullifyTransientReferences(final Object[] values, final Type[] types) 
++		public void nullifyTransientReferences(final Object[] values, final Type[] types, final EntityPersister persister) 
+ 		throws HibernateException {
+ 			for ( int i = 0; i < types.length; i++ ) {
+-				values[i] = nullifyTransientReferences( values[i], types[i] );
++				values[i] = nullifyTransientReferences( values[i], types[i], persister.getPropertyNullability()[i] );
+ 			}
+ 		}
+ 	
+@@ -77,7 +77,7 @@
+ 		 * otherwise. This is how Hibernate avoids foreign key constraint
+ 		 * violations.
+ 		 */
+-		private Object nullifyTransientReferences(final Object value, final Type type) 
++		private Object nullifyTransientReferences(final Object value, final Type type, boolean propertyNullability) 
+ 		throws HibernateException {
+ 			if ( value == null ) {
+ 				return null;
+@@ -85,15 +85,19 @@
+ 			else if ( type.isEntityType() ) {
+ 				EntityType entityType = (EntityType) type;
+ 				if ( entityType.isOneToOne() ) {
+-					return value;
++					// process OneToOne as well in case we do have parent-children relationship
++					// and at the same time parent-child where the child object is the current child
++					//return (propertyNullability && isDelete) ? null: value;
++					String entityName = entityType.getAssociatedEntityName();
++					return isNullifiable(entityName, value, propertyNullability) ? null : value;
+ 				}
+ 				else {
+ 					String entityName = entityType.getAssociatedEntityName();
+-					return isNullifiable(entityName, value) ? null : value;
++					return isNullifiable(entityName, value, propertyNullability) ? null : value;
+ 				}
+ 			}
+ 			else if ( type.isAnyType() ) {
+-				return isNullifiable(null, value) ? null : value;
++				return isNullifiable(null, value, propertyNullability) ? null : value;
+ 			}
+ 			else if ( type.isComponentType() ) {
+ 				AbstractComponentType actype = (AbstractComponentType) type;
+@@ -101,7 +105,7 @@
+ 				Type[] subtypes = actype.getSubtypes();
+ 				boolean substitute = false;
+ 				for ( int i = 0; i < subvalues.length; i++ ) {
+-					Object replacement = nullifyTransientReferences( subvalues[i], subtypes[i] );
++					Object replacement = nullifyTransientReferences( subvalues[i], subtypes[i], false );
+ 					if ( replacement != subvalues[i] ) {
+ 						substitute = true;
+ 						subvalues[i] = replacement;
+@@ -119,8 +123,15 @@
+ 		 * Determine if the object already exists in the database, 
+ 		 * using a "best guess"
+ 		 */
+-		private boolean isNullifiable(final String entityName, Object object) 
++		private boolean isNullifiable(final String entityName, Object object, boolean propertyNullability) 
+ 		throws HibernateException {
++			if (!propertyNullability) {
++				return false;
++			}
++			if (propertyNullability && isDelete) {
++				// always nullify references that does not have DB constraint and we are about to delete the entity.
++				return true;
++			}
+ 			
+ 			if (object==LazyPropertyInitializer.UNFETCHED_PROPERTY) return false; //this is kinda the best we can do...
+ 			
+@@ -160,7 +171,7 @@
+ 				return isTransient(entityName, object, null, session);
+ 			}
+ 			else {
+-				return entityEntry.isNullifiable(isEarlyInsert, session);
++				return entityEntry.isNullifiable(isEarlyInsert, session) || (!entityEntry.isExistsInDatabase() && propertyNullability);
+ 			}
+ 	
+ 		}
+Index: src/main/java/org/hibernate/event/def/AbstractSaveEventListener.java
+===================================================================
+--- src/main/java/org/hibernate/event/def/AbstractSaveEventListener.java	(revision 15615)
++++ src/main/java/org/hibernate/event/def/AbstractSaveEventListener.java	(working copy)
+@@ -309,7 +309,7 @@
+ 		);
+ 
+ 		new ForeignKeys.Nullifier( entity, false, useIdentityColumn, source )
+-				.nullifyTransientReferences( values, types );
++				.nullifyTransientReferences( values, types, persister );
+ 		new Nullability( source ).checkNullability( values, persister, false );
+ 
+ 		if ( useIdentityColumn ) {
+Index: src/main/java/org/hibernate/event/def/DefaultDeleteEventListener.java
+===================================================================
+--- src/main/java/org/hibernate/event/def/DefaultDeleteEventListener.java	(revision 15615)
++++ src/main/java/org/hibernate/event/def/DefaultDeleteEventListener.java	(working copy)
+@@ -268,7 +268,7 @@
+ 		cascadeBeforeDelete( session, persister, entity, entityEntry, transientEntities );
+ 
+ 		new ForeignKeys.Nullifier( entity, true, false, session )
+-				.nullifyTransientReferences( entityEntry.getDeletedState(), propTypes );
++				.nullifyTransientReferences( entityEntry.getDeletedState(), propTypes, persister );
+ 		new Nullability( session ).checkNullability( entityEntry.getDeletedState(), persister, true );
+ 		persistenceContext.getNullifiableEntityKeys().add( key );
+ 

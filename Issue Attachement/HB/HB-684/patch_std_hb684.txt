@@ -1,0 +1,160 @@
+Index: src/net/sf/hibernate/cfg/Configuration.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/cfg/Configuration.java,v
+retrieving revision 1.27.2.29
+diff -r1.27.2.29 Configuration.java
+116a117,119
+> 		public PersistentClass getClassMapping(Class persistentClass) {
+> 			return Configuration.this.getClassMapping(persistentClass);
+> 		}
+Index: src/net/sf/hibernate/dialect/Dialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/Dialect.java,v
+retrieving revision 1.20.2.23
+diff -r1.20.2.23 Dialect.java
+12a13
+> import net.sf.hibernate.mapping.Column;
+534a536,539
+> 	}
+> 	
+> 	public String getDataTypeInIdentityColumn(Column col,  Mapping p) throws HibernateException {
+> 		return col.getSqlType(this, p);
+Index: src/net/sf/hibernate/dialect/SybaseDialect.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/dialect/SybaseDialect.java,v
+retrieving revision 1.7.2.4
+diff -r1.7.2.4 SybaseDialect.java
+5a6
+> import net.sf.hibernate.HibernateException;
+6a8,11
+> import net.sf.hibernate.engine.Mapping;
+> import net.sf.hibernate.mapping.Column;
+> import net.sf.hibernate.type.IntegerType;
+> import net.sf.hibernate.type.Type;
+74a80,96
+> 	}
+> 
+> 	
+> 	/* (non-Javadoc)
+> 	 * @see net.sf.hibernate.dialect.Dialect#getDataTypeInIdentityColumn(net.sf.hibernate.mapping.Column, net.sf.hibernate.engine.Mapping)
+> 	 */
+> 	public String getDataTypeInIdentityColumn(Column col, Mapping p) throws HibernateException
+> 	{
+> 		String sqlType = null;
+> 		Type type = col.getType();
+> 		if (type instanceof IntegerType) {
+> 			sqlType = "NUMERIC(10,0)";
+> 		}
+> 		else {
+> 			sqlType = super.getDataTypeInIdentityColumn(col, p);
+> 		}
+> 		return sqlType;
+Index: src/net/sf/hibernate/engine/Mapping.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/Mapping.java,v
+retrieving revision 1.5.2.2
+diff -r1.5.2.2 Mapping.java
+4a5
+> import net.sf.hibernate.mapping.PersistentClass;
+20a22
+> 	public PersistentClass getClassMapping(Class persistentClass);
+Index: src/net/sf/hibernate/impl/SessionFactoryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionFactoryImpl.java,v
+retrieving revision 1.26.2.35
+diff -r1.26.2.35 SessionFactoryImpl.java
+111a112
+> 	private final transient Map classMappings;
+134a136
+> 		classMappings = new HashMap(); 
+140c142,144
+< 			classMeta.put( model.getMappedClass(), cp.getClassMetadata() );
+---
+> 			Class mappedClass = model.getMappedClass();
+> 			classMeta.put( mappedClass, cp.getClassMetadata() );
+> 			classMappings.put(mappedClass, model);
+662a667,670
+> 	public PersistentClass getClassMapping(Class persistentClass) {
+> 		return (PersistentClass) classMappings.get(persistentClass);	
+> 	}
+> 	
+Index: src/net/sf/hibernate/mapping/Table.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/mapping/Table.java,v
+retrieving revision 1.13.2.15
+diff -r1.13.2.15 Table.java
+14a15
+> import net.sf.hibernate.MappingException;
+16a18,19
+> import net.sf.hibernate.type.EntityType;
+> import net.sf.hibernate.type.Type;
+165c168,169
+< 					buf.append( col.getSqlType(dialect, p) );
+---
+> 					String sqlType = dialect.getDataTypeInIdentityColumn(col, p);
+> 					buf.append( sqlType );
+170c174,185
+< 				buf.append( col.getSqlType(dialect, p) );
+---
+> 				// Column could be an association type to table that has identity base primary key id
+> 				String sqlType = getAssociationSqlType(col, dialect, p);				
+> 				// or it could be a foreign key referencing an identity based primary key id
+> 				if (null == sqlType) {
+> 					sqlType = getForeignKeySqlType(col.getName(), dialect, p); 
+> 				}
+> 				if (null == sqlType) {
+> 					// use the default mapping
+> 					sqlType = col.getSqlType(dialect, p);
+> 				}
+> 				
+> 				buf.append( sqlType );
+341c356,402
+< 
+---
+> 	
+> 	public boolean hasIdentityColumn(Dialect dialect) throws MappingException {
+> 		boolean identityColumn = idValue!=null && idValue.createIdentifierGenerator(dialect) instanceof IdentityGenerator;
+> 		return identityColumn;
+> 	}
+> 	
+> 	private String getForeignKeySqlType(String columnName,Dialect dialect, Mapping mapping) throws HibernateException {
+> 		String sqlType = null;
+> 		Iterator iterator = getForeignKeyIterator();
+> 		FK_ITERATOR: while(iterator.hasNext()) {
+> 			ForeignKey fk = (ForeignKey) iterator.next();
+> 			Iterator colIterator = fk.columnIterator();
+> 			while(colIterator.hasNext()) {
+> 				Column fkCol = (Column) colIterator.next();
+> 				String fkName = fkCol.getName();
+> 				if (fkName.equals(columnName)) {
+> 					Table otherTable = fk.getReferencedTable();
+> 					Column pkColumn =
+> 						(Column) otherTable.getPrimaryKey().getColumnIterator().next();
+> 					if (otherTable.hasIdentityColumn(dialect)) {
+> 						sqlType = dialect.getDataTypeInIdentityColumn(pkColumn, mapping);
+> 						break FK_ITERATOR;
+> 					}
+> 				}
+> 			}
+> 		}
+> 		return sqlType;		
+> 	}
+> 	
+> 	private String getAssociationSqlType(Column col, Dialect dialect, Mapping p) throws HibernateException {
+> 		String sqlType = null;
+> 		Type type = col.getType();
+> 		if (type.isAssociationType()) {
+> 			if (type instanceof EntityType) {
+> 				EntityType entityType = (EntityType) type;
+> 				Class associatedClass = entityType.getAssociatedClass();
+> 				PersistentClass persistentClass = p.getClassMapping(associatedClass);
+> 				Table otherTable = persistentClass.getTable();
+> 				if (otherTable.hasIdentityColumn(dialect)) {
+> 					Column pkColumn =
+> 						(Column) otherTable.getPrimaryKey().getColumnIterator().next();
+> 					sqlType = dialect.getDataTypeInIdentityColumn(pkColumn, p);
+> 				}
+> 			}					
+> 		}				
+> 		return sqlType;		
+> 	}

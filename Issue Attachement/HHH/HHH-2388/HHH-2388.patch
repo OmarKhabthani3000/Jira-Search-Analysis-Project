@@ -1,0 +1,51 @@
+Index: src/org/hibernate/id/IdentityGenerator.java
+===================================================================
+--- src/org/hibernate/id/IdentityGenerator.java	(revision 17935)
++++ src/org/hibernate/id/IdentityGenerator.java	(working copy)
+@@ -5,6 +5,7 @@
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
+ import java.sql.PreparedStatement;
++import java.sql.SQLWarning;
+ 
+ import org.hibernate.engine.SessionImplementor;
+ import org.hibernate.id.insert.InsertGeneratedIdentifierDelegate;
+@@ -70,7 +71,18 @@
+ 		}
+ 
+ 		public Serializable executeAndExtract(PreparedStatement insert) throws SQLException {
+-			insert.executeUpdate();
++			int result=insert.executeUpdate();
++			if( result==0 ){
++				SQLWarning  warning=insert.getWarnings();
++				if( warning!=null ){
++					String msg = warning.getMessage();
++					while( warning.getNextWarning()!=null ){
++						warning=warning.getNextWarning();
++						msg = msg + warning.getMessage();
++					}
++					throw new HibernateException(msg);
++				}
++			}
+ 			ResultSet rs = null;
+ 			try {
+ 				rs = GetGeneratedKeysHelper.getGeneratedKey( insert );
+@@ -115,6 +127,18 @@
+ 
+ 		public Serializable executeAndExtract(PreparedStatement insert) throws SQLException {
+ 			if ( !insert.execute() ) {
++				if(insert.getUpdateCount()==0){
++					SQLWarning  warning=insert.getWarnings();
++					if( warning!=null ){
++						String msg = warning.getMessage();
++						while( warning.getNextWarning()!=null ){
++							warning=warning.getNextWarning();
++							msg = msg+warning.getMessage();
++						}
++						throw new HibernateException(msg);
++					}
++					
++				}
+ 				while ( !insert.getMoreResults() && insert.getUpdateCount() != -1 ) {
+ 					// do nothing until we hit the rsult set containing the generated id
+ 				}

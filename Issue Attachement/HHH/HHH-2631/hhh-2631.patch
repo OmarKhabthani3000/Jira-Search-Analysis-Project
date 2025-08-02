@@ -1,0 +1,112 @@
+Index: src/org/hibernate/engine/loading/CollectionLoadContext.java
+===================================================================
+--- src/org/hibernate/engine/loading/CollectionLoadContext.java	(revision 11608)
++++ src/org/hibernate/engine/loading/CollectionLoadContext.java	(working copy)
+@@ -153,8 +153,7 @@
+ 	 */
+ 	public void endLoadingCollections(CollectionPersister persister) {
+ 		SessionImplementor session = getLoadContext().getPersistenceContext().getSession();
+-		if ( loadContexts.getLoadingCollectionEntryMap() == null
+-				|| loadContexts.getLoadingCollectionEntryMap().isEmpty()
++		if ( !loadContexts.hasLoadingCollectionEntries()
+ 				|| localLoadingCollectionKeys.isEmpty() ) {
+ 			return;
+ 		}
+@@ -166,12 +165,14 @@
+ 		// in a temp collection.  the temp collection is then used to "drive"
+ 		// the #endRead processing.
+ 		List matches = null;
+-		Iterator iter = loadContexts.getLoadingCollectionEntryMap().entrySet().iterator();
++		Iterator iter = localLoadingCollectionKeys.iterator();
+ 		while ( iter.hasNext() ) {
+-			final Map.Entry mapEntry = ( Map.Entry ) iter.next();
+-			final CollectionKey collectionKey = ( CollectionKey ) mapEntry.getKey();
+-			final LoadingCollectionEntry lce = ( LoadingCollectionEntry ) mapEntry.getValue();
+-			if ( localLoadingCollectionKeys.contains( collectionKey ) && lce.getResultSet() == resultSet && lce.getPersister() == persister) {
++			final CollectionKey collectionKey = (CollectionKey) iter.next();
++			final LoadingCollectionEntry lce = loadContexts.locateLoadingCollectionEntry( collectionKey );
++			if ( lce == null) {
++				log.warn( "In CollectionLoadContext#endLoadingCollections, localLoadingCollectionKeys contained [" + collectionKey + "], but no LoadingCollectionEntry was found in loadContexts" );
++			}
++			else if ( lce.getResultSet() == resultSet && lce.getPersister() == persister ) {
+ 				if ( matches == null ) {
+ 					matches = new ArrayList();
+ 				}
+@@ -185,11 +186,16 @@
+ 				if ( log.isTraceEnabled() ) {
+ 					log.trace( "removing collection load entry [" + lce + "]" );
+ 				}
++
++				loadContexts.unregisterLoadingCollectionEntry( collectionKey );
+ 				iter.remove();
+ 			}
+ 		}
+ 
+ 		endLoadingCollections( persister, matches );
++		if ( localLoadingCollectionKeys.isEmpty() ) {
++			loadContexts.removeCollectionLoadContext(this);
++		}
+ 	}
+ 
+ 	private void endLoadingCollections(CollectionPersister persister, List matchedCollectionEntries) {
+@@ -314,7 +320,7 @@
+ 
+ 	void cleanup() {
+ 		if ( !localLoadingCollectionKeys.isEmpty() ) {
+-			log.warn( "On CollectionLoadContext#clear, loadingCollections contained [" + localLoadingCollectionKeys.size() + "] entries" );
++			log.warn( "On CollectionLoadContext#cleanup, localLoadingCollectionKeys contained [" + localLoadingCollectionKeys.size() + "] entries" );
+ 		}
+ 		loadContexts.cleanupCollectionEntries( localLoadingCollectionKeys );
+ 		localLoadingCollectionKeys.clear();
+Index: src/org/hibernate/engine/loading/LoadContexts.java
+===================================================================
+--- src/org/hibernate/engine/loading/LoadContexts.java	(revision 11608)
++++ src/org/hibernate/engine/loading/LoadContexts.java	(working copy)
+@@ -88,6 +88,22 @@
+ 		return context;
+ 	}
+ 
++    /**
++     * Remove the {@link CollectionLoadContext}.
++     * <p/>
++     * Implementation note: package protected, as this is meant solely for use
++     * by {@link CollectionLoadContext} to remove itself when it has completed
++     * loading all of its collections.
++     *
++     * @param collectionLoadContext The collection load context to remove.
++     */
++	/*package*/void removeCollectionLoadContext( CollectionLoadContext collectionLoadContext ) {
++		if ( collectionLoadContexts == null || !collectionLoadContexts.containsKey( collectionLoadContext.getResultSet() ) ) {
++			log.warn( "attempt to remove collection load context [" + collectionLoadContext + "], but it was not found" );
++		}
++		collectionLoadContexts.remove( collectionLoadContext.getResultSet() );
++	}
++
+ 	/**
+ 	 * Attempt to locate the loading collection given the owner's key.  The lookup here
+ 	 * occurs against all result-set contexts...
+@@ -143,6 +159,10 @@
+ 		return rtn;
+ 	}
+ 
++	/*package*/boolean hasLoadingCollectionEntries() {
++		return ( xrefLoadingCollectionEntries != null && !xrefLoadingCollectionEntries.isEmpty() );
++	}
++
+ 	/*package*/void registerLoadingCollectionEntry(CollectionKey entryKey, LoadingCollectionEntry entry) {
+ 		if ( xrefLoadingCollectionEntries == null ) {
+ 			xrefLoadingCollectionEntries = new HashMap();
+@@ -150,8 +170,11 @@
+ 		xrefLoadingCollectionEntries.put( entryKey, entry );
+ 	}
+ 
+-	/*package*/Map getLoadingCollectionEntryMap() {
+-		return xrefLoadingCollectionEntries;
++	/*package*/void unregisterLoadingCollectionEntry( CollectionKey key ) {
++		if ( !hasLoadingCollectionEntries() ) {
++			return;
++		}
++		xrefLoadingCollectionEntries.remove(key);
+ 	}
+ 
+ 	/*package*/void cleanupCollectionEntries(Set entryKeys) {

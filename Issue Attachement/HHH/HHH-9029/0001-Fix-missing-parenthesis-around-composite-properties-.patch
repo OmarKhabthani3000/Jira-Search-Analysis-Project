@@ -1,0 +1,199 @@
+From 3b19854563dc8b14bb80d750fa6912e63b05d858 Mon Sep 17 00:00:00 2001
+From: Eskil Bylund <eskil@vidispine.com>
+Date: Thu, 9 Aug 2012 12:53:38 +0200
+Subject: [PATCH] Fix missing parenthesis around composite properties in WHERE
+ clauses
+
+The currentClauseType field would not be correct if the query contained a
+subquery.
+---
+ hibernate-core/src/main/antlr/hql-sql.g            | 28 ++++++++++++--
+ .../java/org/hibernate/jpa/test/CompositeId.java   |  8 ++++
+ .../jpa/test/CompositeIdRowValueTest.java          | 43 ++++++++++++++++++++++
+ 3 files changed, 75 insertions(+), 4 deletions(-)
+ create mode 100644 hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeIdRowValueTest.java
+
+diff --git a/hibernate-core/src/main/antlr/hql-sql.g b/hibernate-core/src/main/antlr/hql-sql.g
+index 3a4c382..f5bb222 100644
+--- a/hibernate-core/src/main/antlr/hql-sql.g
++++ b/hibernate-core/src/main/antlr/hql-sql.g
+@@ -2,6 +2,8 @@ header
+ {
+ package org.hibernate.hql.internal.antlr;
+ 
++import java.util.Stack;
++
+ import org.hibernate.internal.CoreMessageLogger;
+ import org.jboss.logging.Logger;
+ }
+@@ -75,6 +77,7 @@ tokens
+ 	private int currentClauseType;
+ 	private int currentTopLevelClauseType;
+ 	private int currentStatementType;
++	private Stack<Integer> parentClauses = new Stack<Integer>();
+ 
+ 	public final boolean isSubQuery() {
+ 		return level > 1;
+@@ -153,12 +156,17 @@ tokens
+ 	}
+ 
+ 	private void handleClauseStart(int clauseType) {
++		parentClauses.push(currentClauseType);
+ 		currentClauseType = clauseType;
+ 		if ( level == 1 ) {
+ 			currentTopLevelClauseType = clauseType;
+ 		}
+ 	}
+ 
++	private void handleClauseEnd() {
++		currentClauseType = parentClauses.pop();
++	}
++
+ 	///////////////////////////////////////////////////////////////////////////
+ 	// NOTE: The real implementations for the following are in the subclass.
+ 
+@@ -298,6 +306,7 @@ intoClause! {
+ 	}
+ 	: #( INTO { handleClauseStart( INTO ); } (p=path) ps:insertablePropertySpec ) {
+ 		#intoClause = createIntoClause(p, ps);
++		handleClauseEnd();
+ 	}
+ 	;
+ 
+@@ -306,7 +315,9 @@ insertablePropertySpec
+ 	;
+ 
+ setClause
+-	: #( SET { handleClauseStart( SET ); } (assignment)* )
++	: #( SET { handleClauseStart( SET ); } (assignment)* ) {
++		handleClauseEnd();
++	}
+ 	;
+ 
+ assignment
+@@ -344,7 +355,9 @@ query!
+ 	;
+ 
+ orderClause
+-	: #(ORDER { handleClauseStart( ORDER ); } orderExprs)
++	: #(ORDER { handleClauseStart( ORDER ); } orderExprs) {
++		handleClauseEnd();
++	}
+ 	;
+ 
+ orderExprs
+@@ -374,12 +387,15 @@ resultVariableRef!
+ 	;
+ 
+ groupClause
+-	: #(GROUP { handleClauseStart( GROUP ); } (expr)+ ( #(HAVING logicalExpr) )? )
++	: #(GROUP { handleClauseStart( GROUP ); } (expr)+ ( #(HAVING logicalExpr) )? ) {
++		handleClauseEnd();
++	}
+ 	;
+ 
+ selectClause!
+ 	: #(SELECT { handleClauseStart( SELECT ); beforeSelectClause(); } (d:DISTINCT)? x:selectExprList ) {
+ 		#selectClause = #([SELECT_CLAUSE,"{select clause}"], #d, #x);
++		handleClauseEnd();
+ 	}
+ 	;
+ 
+@@ -437,7 +453,9 @@ fromClause {
+ 		// the ouput AST (#fromClause) has not been built yet.
+ 		prepareFromClauseInputTree(#fromClause_in);
+ 	}
+-	: #(f:FROM { pushFromClause(#fromClause,f); handleClauseStart( FROM ); } fromElementList )
++	: #(f:FROM { pushFromClause(#fromClause,f); handleClauseStart( FROM ); } fromElementList ) {
++		handleClauseEnd();
++	}
+ 	;
+ 
+ fromElementList {
+@@ -528,6 +546,7 @@ withClause
+ 	// rule during recognition...
+ 	: #(w:WITH { handleClauseStart( WITH ); } b:logicalExpr ) {
+ 		#withClause = #(w , #b);
++		handleClauseEnd();
+ 	}
+ 	;
+ 
+@@ -535,6 +554,7 @@ whereClause
+ 	: #(w:WHERE { handleClauseStart( WHERE ); } b:logicalExpr ) {
+ 		// Use the *output* AST for the boolean expression!
+ 		#whereClause = #(w , #b);
++		handleClauseEnd();
+ 	}
+ 	;
+ 
+diff --git a/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeId.java b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeId.java
+index 9cf084b..eb6c319 100644
+--- a/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeId.java
++++ b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeId.java
+@@ -12,6 +12,14 @@ public class CompositeId implements Serializable {
+     private int id1;
+     private int id2;
+ 
++    public CompositeId() {
++    }
++
++    public CompositeId(int id1, int id2) {
++        this.id1 = id1;
++        this.id2 = id2;
++    }
++
+     public int getId1() {
+         return id1;
+     }
+diff --git a/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeIdRowValueTest.java b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeIdRowValueTest.java
+new file mode 100644
+index 0000000..48611ab
+--- /dev/null
++++ b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/CompositeIdRowValueTest.java
+@@ -0,0 +1,43 @@
++package org.hibernate.jpa.test;
++
++import javax.persistence.EntityManager;
++import javax.persistence.Query;
++
++import org.hibernate.dialect.Dialect;
++import org.hibernate.dialect.H2Dialect;
++import org.junit.Test;
++
++import static org.junit.Assert.assertThat;
++import static org.hamcrest.core.Is.is;
++
++public class CompositeIdRowValueTest extends BaseEntityManagerFunctionalTestCase {
++
++	@Override
++	protected Dialect getDialect() {
++		return new RowValueConstructorDialect();
++	}
++
++    @Test
++    public void testTupleAfterSubQuery() {
++        EntityManager em = getOrCreateEntityManager();
++        Query q = em.createQuery("SELECT e FROM EntityWithCompositeId e "
++                + "WHERE EXISTS (SELECT 1 FROM EntityWithCompositeId) "
++                + "AND e.id = :id");
++
++        q.setParameter("id", new CompositeId(1, 2));
++
++        assertThat(q.getResultList().size(), is(0));
++    }
++
++    @Override
++    protected Class[] getAnnotatedClasses() {
++        return new Class[] {EntityWithCompositeId.class, CompositeId.class};
++    }
++
++    public static class RowValueConstructorDialect extends H2Dialect {
++		@Override
++		public boolean supportsRowValueConstructorSyntax() {
++			return true;
++		}
++    }
++}
+-- 
+1.8.3.2
+

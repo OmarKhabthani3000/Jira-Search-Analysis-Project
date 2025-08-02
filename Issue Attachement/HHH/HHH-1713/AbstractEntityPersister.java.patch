@@ -1,0 +1,45 @@
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java.orig	2006-05-02 08:53:44.000000000 -0700
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	2006-05-02 09:32:39.000000000 -0700
+@@ -1865,6 +1865,7 @@
+ 		final boolean hasDeferred = rootPersister.hasSequentialSelect();
+ 		PreparedStatement sequentialSelect = null;
+ 		ResultSet sequentialResultSet = null;
++		boolean sequentialSelectEmpty = false;
+ 		try {
+ 
+ 			if ( hasDeferred ) {
+@@ -1874,7 +1875,13 @@
+ 					sequentialSelect = session.getBatcher().prepareSelectStatement( sql );
+ 					rootPersister.getIdentifierType().nullSafeSet( sequentialSelect, id, 1, session );
+ 					sequentialResultSet = sequentialSelect.executeQuery();
+-					sequentialResultSet.next();
++					if (!sequentialResultSet.next()) {
++                        // TODO: Deal with the "optional" attribute in the
++                        // <join> mapping; this code assumes that optional
++                        // defaults to "true" because it doesn't actually seem
++                        // to work in the fetch="join" code
++						sequentialSelectEmpty = true;
++					}
+ 				}
+ 			}
+ 
+@@ -1892,11 +1899,15 @@
+ 					//decide which ResultSet to get the property value from:
+ 					final boolean propertyIsDeferred = hasDeferred &&
+ 							rootPersister.isSubclassPropertyDeferred( propNames[i], propSubclassNames[i] );
+-					final ResultSet propertyResultSet = propertyIsDeferred ? sequentialResultSet : rs;
+-					final String[] cols = propertyIsDeferred ? 
+-							propertyColumnAliases[i] : suffixedPropertyColumns[i];
++					if (propertyIsDeferred && sequentialSelectEmpty) {
++						values[i] = null;
++					} else {
++						final ResultSet propertyResultSet = propertyIsDeferred ? sequentialResultSet : rs;
++						final String[] cols = propertyIsDeferred ? 
++								propertyColumnAliases[i] : suffixedPropertyColumns[i];
+ 
+-					values[i] = types[i].hydrate( propertyResultSet, cols, session, object );
++						values[i] = types[i].hydrate( propertyResultSet, cols, session, object );
++					}
+ 				}
+ 				else {
+ 					values[i] = LazyPropertyInitializer.UNFETCHED_PROPERTY;

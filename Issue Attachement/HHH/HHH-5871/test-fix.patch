@@ -1,0 +1,259 @@
+Index: src/main/java/org/hibernate/engine/TwoPhaseLoad.java
+===================================================================
+--- src/main/java/org/hibernate/engine/TwoPhaseLoad.java	(revision 20883)
++++ src/main/java/org/hibernate/engine/TwoPhaseLoad.java	(working copy)
+@@ -32,6 +32,7 @@
+ import org.hibernate.HibernateException;
+ import org.hibernate.LockMode;
+ import org.hibernate.proxy.HibernateProxy;
++import org.hibernate.proxy.LazyInitializer;
+ import org.hibernate.cache.CacheKey;
+ import org.hibernate.cache.entry.CacheEntry;
+ import org.hibernate.event.PostLoadEvent;
+@@ -213,9 +214,12 @@
+ 		else {
+ 			Object proxy = persistenceContext.getProxy( entityEntry.getEntityKey() );
+ 			if ( proxy != null ) {
+-				// there is already a proxy for this impl
+-				// only set the status to read-only if the proxy is read-only
+-				isReallyReadOnly = ( ( HibernateProxy ) proxy ).getHibernateLazyInitializer().isReadOnly();
++				LazyInitializer lazyInitializer = ((HibernateProxy) proxy).getHibernateLazyInitializer();
++				if(lazyInitializer.isReadOnlySettingAvailable()){
++					// there is already a proxy for this impl
++					// only set the status to read-only if the proxy is read-only
++					isReallyReadOnly = lazyInitializer.isReadOnly();
++				}
+ 			}
+ 		}
+ 		if ( isReallyReadOnly ) {
+Index: src/test/java/org/hibernate/id/lock/DataPoint.hbm.xml
+===================================================================
+--- src/test/java/org/hibernate/id/lock/DataPoint.hbm.xml	(revision 0)
++++ src/test/java/org/hibernate/id/lock/DataPoint.hbm.xml	(revision 0)
+@@ -0,0 +1,22 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://www.hibernate.org/dtd/hibernate-mapping-3.0.dtd">
++
++<hibernate-mapping 
++	package="org.hibernate.id.lock">
++
++	<class name="DataPoint">
++		<id name="id">
++			<generator class="increment"/>
++		</id>
++		<property name="x">
++			<column name="xval" not-null="true" length="4" unique-key="xy"/>
++		</property>
++		<property name="y">
++			<column name="yval" not-null="true" length="4" unique-key="xy"/>
++		</property>
++		<property name="description"/>
++	</class>
++
++</hibernate-mapping>
+Index: src/test/java/org/hibernate/id/lock/DataPoint.java
+===================================================================
+--- src/test/java/org/hibernate/id/lock/DataPoint.java	(revision 0)
++++ src/test/java/org/hibernate/id/lock/DataPoint.java	(revision 0)
+@@ -0,0 +1,77 @@
++//$Id: DataPoint.java 10223 2006-08-04 20:29:21Z steve.ebersole@jboss.com $
++package org.hibernate.id.lock;
++
++import java.io.Serializable;
++import java.math.BigDecimal;
++
++/**
++ * @author Gavin King
++ */
++public class DataPoint implements Serializable {
++	private long id;
++	private BigDecimal x;
++	private BigDecimal y;
++	private String description;
++
++	public DataPoint() {
++	}
++
++	public DataPoint(BigDecimal x, BigDecimal y, String description) {
++		this.x = x;
++		this.y = y;
++		this.description = description;
++	}
++
++	/**
++	 * @return Returns the description.
++	 */
++	public String getDescription() {
++		return description;
++	}
++	/**
++	 * @param description The description to set.
++	 */
++	public void setDescription(String description) {
++		this.description = description;
++	}
++	/**
++	 * @return Returns the id.
++	 */
++	public long getId() {
++		return id;
++	}
++	/**
++	 * @param id The id to set.
++	 */
++	public void setId(long id) {
++		this.id = id;
++	}
++	/**
++	 * @return Returns the x.
++	 */
++	public BigDecimal getX() {
++		return x;
++	}
++	/**
++	 * @param x The x to set.
++	 */
++	public void setX(BigDecimal x) {
++		this.x = x;
++	}
++	/**
++	 * @return Returns the y.
++	 */
++	public BigDecimal getY() {
++		return y;
++	}
++	/**
++	 * @param y The y to set.
++	 */
++	public void setY(BigDecimal y) {
++		this.y = y;
++	}
++	
++	void exception() throws Exception {
++		throw new Exception("foo");
++	}
++}
+Index: src/test/java/org/hibernate/id/lock/DetachedTest.java
+===================================================================
+--- src/test/java/org/hibernate/id/lock/DetachedTest.java	(revision 0)
++++ src/test/java/org/hibernate/id/lock/DetachedTest.java	(revision 0)
+@@ -0,0 +1,116 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2010, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.id.lock;
++
++import java.math.BigDecimal;
++
++import junit.framework.TestCase;
++
++import org.apache.log4j.ConsoleAppender;
++import org.apache.log4j.Level;
++import org.apache.log4j.Logger;
++import org.apache.log4j.SimpleLayout;
++import org.hibernate.LockMode;
++import org.hibernate.TestingDatabaseInfo;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.engine.EntityEntry;
++import org.hibernate.engine.PersistenceContext;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.impl.SessionImpl;
++import org.hibernate.subclassProxyInterface.Person;
++
++/**
++ * I went back to 3.3 source and grabbed the code/logic as it existed back then
++ * and crafted this unit test so that we can make sure the value keep being
++ * generated in the expected manner
++ * 
++ * @author Steve Ebersole
++ */
++@SuppressWarnings({ "deprecation" })
++public class DetachedTest extends TestCase {
++
++	private Configuration cfg;
++	private SessionFactoryImplementor sessionFactory;
++
++	@Override
++	protected void setUp() throws Exception {
++		Logger.getRootLogger().addAppender(
++				new ConsoleAppender(new SimpleLayout()));
++		Logger.getRootLogger().setLevel(Level.ERROR);
++		super.setUp();
++		cfg = TestingDatabaseInfo.buildBaseConfiguration().setProperty(
++				Environment.HBM2DDL_AUTO, "create-drop");
++		cfg = cfg.setProperty(Environment.SHOW_SQL, "tue");
++		cfg.addClass(DataPoint.class);
++		sessionFactory = (SessionFactoryImplementor) cfg.buildSessionFactory();
++	}
++
++	@Override
++	protected void tearDown() throws Exception {
++		if (sessionFactory != null) {
++			sessionFactory.close();
++		}
++
++		super.tearDown();
++	}
++
++	public void testLockWhenThereAreAnDetachedProxyOnSession() {
++		SessionImpl session = (SessionImpl) sessionFactory.openSession();
++		session.beginTransaction();
++
++		DataPoint data = new DataPoint(BigDecimal.ZERO, BigDecimal.ZERO, "test");
++		session.save(data);
++		session.flush();
++
++		PersistenceContext persistenceContext = session.getPersistenceContext();
++		EntityEntry entityEntry = persistenceContext.getEntry(data);
++
++		session.clear();
++		DataPoint proxy = (DataPoint) session.load(DataPoint.class,
++				data.getId());
++
++		session.getTransaction().commit();
++		session.close();
++
++		session = (SessionImpl) sessionFactory.openSession();
++		session.beginTransaction();
++
++		DataPoint proxy2 = (DataPoint) session.load(DataPoint.class,
++				data.getId());
++		session.clear();
++
++		PersistenceContext persistenceContext2 = session
++				.getPersistenceContext();
++		persistenceContext2.addProxy(entityEntry.getEntityKey(), proxy);
++
++		session.lock(proxy2, LockMode.NONE);
++
++		session.getTransaction().commit();
++		session.close();
++
++		assertEquals("test", proxy2.getDescription());
++	}
++
++}
+\ No newline at end of file

@@ -1,0 +1,496 @@
+Subject: [PATCH] HHH-000 equals sheenanigans
+---
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalID2Test.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalID2Test.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalID2Test.java
+new file mode 100644
+--- /dev/null	(date 1702377366131)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalID2Test.java	(date 1702377366131)
+@@ -0,0 +1,254 @@
++package org.hibernate.orm.test.annotations.naturalid;
++
++import jakarta.persistence.*;
++import org.hamcrest.MatcherAssert;
++import org.hamcrest.Matchers;
++import org.hibernate.Hibernate;
++import org.hibernate.annotations.NaturalId;
++import org.hibernate.annotations.NaturalIdCache;
++import org.hibernate.engine.spi.SessionImplementor;
++import org.hibernate.testing.orm.junit.DomainModel;
++import org.hibernate.testing.orm.junit.SessionFactory;
++import org.hibernate.testing.orm.junit.SessionFactoryScope;
++import org.junit.jupiter.api.Assertions;
++import org.junit.jupiter.api.Test;
++
++import java.util.HashMap;
++import java.util.Objects;
++
++@DomainModel(
++        annotatedClasses = {
++                EqualsNaturalID2Test.State.class,
++                EqualsNaturalID2Test.Citizen.class,
++                EqualsNaturalID2Test.NaturalIdOnManyToOne.class,
++        }
++)
++
++@SessionFactory
++public class EqualsNaturalID2Test {
++
++    @Test
++    void name(SessionFactoryScope scope) {
++
++        scope.inTransaction(s-> {
++            create(s, 1, "Aa");
++            create(s, 2, "BB");
++            create(s, 3, "CC");
++        });
++        scope.inSession(s -> {
++            final var object = s.createQuery("select c from NaturalIdOnManyToOne c where c.id=1",NaturalIdOnManyToOne.class).uniqueResult();
++            Assertions.assertFalse(Hibernate.isInitialized(object.getCitizen()));
++            Assertions.assertEquals(1, object.getCitizen().getId());
++            final var citizen = s.createQuery("select  c from Citizen c  where c.id=1 ", Citizen.class).uniqueResult();
++            Assertions.assertEquals(object.getCitizen(), citizen);
++        });
++
++    }
++
++    @Test
++    void hashColision(SessionFactoryScope scope) {
++        scope.inTransaction(s-> {
++            final var object = new State();
++            object.setName("Aa");
++            object.setId(1);
++            s.persist(object);
++            final var object1 = new State();
++            object1.setName("Bb");
++            object1.setId(2);
++            s.persist(object1);
++            final var map = new HashMap<Integer, NaturalIdOnManyToOne>();
++            final var map2 = new HashMap<Integer, Citizen>();
++            Citizen citizen = null;
++            Citizen citizen1 = null;
++            while (true) {
++                citizen = new Citizen();
++                citizen1 = map2.put(System.identityHashCode(citizen), citizen);
++                if (citizen1 != null) {
++                    citizen.setSsn("");
++                    citizen.setState(object);
++                    s.persist(citizen);
++                    citizen1.setSsn("");
++                    citizen1.setState(object1);
++                    s.persist(citizen1);
++                    break;
++                }
++            }
++            while (true) {
++                final var x = new NaturalIdOnManyToOne();
++                final var put = map.put(System.identityHashCode(x), x);
++                if (put != null) {
++                    put.setCitizen(citizen);
++                    x.setCitizen(citizen1);
++                    s.persist(put);
++                    s.persist(x);
++                    break;
++                }
++            }
++            MatcherAssert.assertThat(s.createQuery("select c from NaturalIdOnManyToOne c ",NaturalIdOnManyToOne.class).list(), Matchers.hasSize(2));
++
++        });
++        scope.inSession(s -> {
++            final var object = s.createQuery("select c from NaturalIdOnManyToOne c ",NaturalIdOnManyToOne.class).list();
++            MatcherAssert.assertThat(object, Matchers.hasSize(2));
++
++        });
++
++    }
++
++    private static void create(SessionImplementor s, final int id, final String name) {
++        final var object = new State();
++        object.setName(name);
++        object.setId(id);
++        s.persist(object);
++        final var citizen = new Citizen();
++        citizen.setSsn("");
++        citizen.setState(object);
++        s.persist(citizen);
++        final var naturalIdOnManyToOne = new NaturalIdOnManyToOne();
++        naturalIdOnManyToOne.setCitizen(citizen);
++        s.persist(naturalIdOnManyToOne);
++
++    }
++
++    @Entity(name = "State")
++    public static class State {
++        @Id
++        private Integer id;
++        @NaturalId
++        private String name;
++
++        public Integer getId() {
++            return id;
++        }
++
++        public void setId(Integer id) {
++            this.id = id;
++        }
++
++        public String getName() {
++            return name;
++        }
++
++        public void setName(String name) {
++            this.name = name;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            if (o == null || getClass() != o.getClass()) return false;
++            State state = (State) o;
++            return Objects.equals(name, state.name);
++        }
++
++        @Override
++        public int hashCode() {
++            // use an unoptimized hashCode to make this break realiable
++            return 1;
++        }
++    }
++
++    @Entity(name = "Citizen")
++    @NaturalIdCache
++    public static class Citizen {
++        @Id
++        @GeneratedValue
++        private Integer id;
++        @NaturalId
++        @ManyToOne(fetch = FetchType.LAZY)
++        private State state;
++        @NaturalId
++        private String ssn;
++
++
++        public Integer getId() {
++            return id;
++        }
++
++        public void setId(Integer id) {
++            this.id = id;
++        }
++
++
++        public State getState() {
++            return state;
++        }
++
++        public void setState(State state) {
++            this.state = state;
++        }
++
++        public String getSsn() {
++            return ssn;
++        }
++
++        public void setSsn(String ssn) {
++            this.ssn = ssn;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            if (Hibernate.getClass(o) != getClass()) {
++                return false;
++            }
++            Citizen citizen = Hibernate.unproxy((Citizen) o, Citizen.class);
++            return Objects.equals(state, citizen.state) && Objects.equals(ssn, citizen.ssn);
++        }
++
++        @Override
++        public int hashCode() {
++            // use an unoptimized hashCode to make this break realiable
++            return 1;
++        }
++    }
++
++    @Entity(name = "NaturalIdOnManyToOne")
++    @NaturalIdCache
++    public static class NaturalIdOnManyToOne {
++
++        @Id
++        @GeneratedValue
++        int id;
++
++        @NaturalId
++        @ManyToOne(fetch = FetchType.LAZY)
++        Citizen citizen;
++
++        @NaturalId
++        String dummy="dummy";
++
++        public int getId() {
++            return id;
++        }
++
++        public void setId(int id) {
++            this.id = id;
++        }
++
++        public Citizen getCitizen() {
++            return citizen;
++        }
++
++        public void setCitizen(Citizen citizen) {
++            this.citizen = citizen;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            final var unproxy = Hibernate.unproxy(o);
++            if (!(unproxy instanceof NaturalIdOnManyToOne)) {
++                return false;
++            }
++            NaturalIdOnManyToOne that = (NaturalIdOnManyToOne) unproxy;
++            return Objects.equals(citizen, that.citizen) && Objects.equals(dummy, that.dummy);
++        }
++
++        @Override
++        public int hashCode() {
++            return 1;
++        }
++    }
++
++}
+Index: hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalIDTest.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalIDTest.java b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalIDTest.java
+new file mode 100644
+--- /dev/null	(date 1702378407991)
++++ b/hibernate-core/src/test/java/org/hibernate/orm/test/annotations/naturalid/EqualsNaturalIDTest.java	(date 1702378407991)
+@@ -0,0 +1,202 @@
++package org.hibernate.orm.test.annotations.naturalid;
++
++import jakarta.persistence.*;
++import org.hibernate.Hibernate;
++import org.hibernate.annotations.NaturalId;
++import org.hibernate.annotations.NaturalIdCache;
++import org.hibernate.engine.spi.SessionImplementor;
++import org.hibernate.testing.orm.junit.DomainModel;
++import org.hibernate.testing.orm.junit.SessionFactory;
++import org.hibernate.testing.orm.junit.SessionFactoryScope;
++import org.junit.jupiter.api.Assertions;
++import org.junit.jupiter.api.Test;
++
++import java.util.List;
++import java.util.Objects;
++
++@DomainModel(
++        annotatedClasses = {
++                EqualsNaturalIDTest.State.class,
++                EqualsNaturalIDTest.Citizen.class,
++                EqualsNaturalIDTest.NaturalIdOnManyToOne.class,
++        }
++)
++
++@SessionFactory
++public class EqualsNaturalIDTest {
++
++    @Test
++    void name(SessionFactoryScope scope) {
++        scope.inTransaction(s-> {
++            create(s, 1, "Aa");
++            create(s, 2, "BB");
++            create(s, 3, "CC");
++        });
++        scope.inTransaction(s -> {
++            final var object = s.createQuery("select c from NaturalIdOnManyToOne c where c.id=1",NaturalIdOnManyToOne.class).uniqueResult();
++            Assertions.assertFalse(Hibernate.isInitialized(object.getCitizen()));
++            final var citizen = s.createQuery("select c from Citizen c where c.id=1", Citizen.class).uniqueResult();
++            //despite being really the same thing, they are not equals...
++            Assertions.assertEquals(object.getCitizen().getId(),citizen.getId());
++            Assertions.assertEquals(object.getCitizen().getState().getId(),citizen.getState().getId());
++            Assertions.assertEquals(object.getCitizen().getSsn(),citizen.getSsn());
++            //and this fails
++            Assertions.assertEquals(object.getCitizen(), citizen);
++        });
++
++    }
++
++
++
++    private static void create(SessionImplementor s, final int id, final String name) {
++        final var object = new State();
++        object.setName(name);
++        object.setId(id);
++        s.persist(object);
++        final var citizen = new Citizen();
++        citizen.setSsn("");
++        citizen.setState(object);
++        s.persist(citizen);
++        final var naturalIdOnManyToOne = new NaturalIdOnManyToOne();
++        naturalIdOnManyToOne.setCitizen(citizen);
++        s.persist(naturalIdOnManyToOne);
++
++    }
++
++    @Entity(name = "State")
++    public static class State {
++        @Id
++        private Integer id;
++        @NaturalId
++        private String name;
++
++        public Integer getId() {
++            return id;
++        }
++
++        public void setId(Integer id) {
++            this.id = id;
++        }
++
++        public String getName() {
++            return name;
++        }
++
++        public void setName(String name) {
++            this.name = name;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            if (o == null || getClass() != o.getClass()) return false;
++            State state = (State) o;
++            return Objects.equals(name, state.name);
++        }
++
++        @Override
++        public int hashCode() {
++            // use an unoptimized hashCode to make this break realiable
++            return 1;
++        }
++    }
++
++    @Entity(name = "Citizen")
++    @NaturalIdCache
++    public static class Citizen {
++        @Id
++        @GeneratedValue
++        private Integer id;
++        @NaturalId
++        @ManyToOne(fetch = FetchType.LAZY)
++        private State state;
++        @NaturalId
++        private String ssn;
++
++
++        public Integer getId() {
++            return id;
++        }
++
++        public void setId(Integer id) {
++            this.id = id;
++        }
++
++
++        public State getState() {
++            return state;
++        }
++
++        public void setState(State state) {
++            this.state = state;
++        }
++
++        public String getSsn() {
++            return ssn;
++        }
++
++        public void setSsn(String ssn) {
++            this.ssn = ssn;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            if (o == null || getClass() != o.getClass()) return false;
++            Citizen citizen = (Citizen) o;
++            return Objects.equals(getState(), citizen.getState()) && Objects.equals(getSsn(), citizen.getSsn());
++        }
++
++        @Override
++        public int hashCode() {
++            // use an unoptimized hashCode to make this break realiable
++            return 1;
++        }
++    }
++
++    @Entity(name = "NaturalIdOnManyToOne")
++    @NaturalIdCache
++    public static class NaturalIdOnManyToOne {
++
++        @Id
++        @GeneratedValue
++        int id;
++
++        @NaturalId
++        @ManyToOne(fetch = FetchType.LAZY)
++        Citizen citizen;
++
++        @NaturalId
++        String dummy="dummy";
++
++        public int getId() {
++            return id;
++        }
++
++        public void setId(int id) {
++            this.id = id;
++        }
++
++        public Citizen getCitizen() {
++            return citizen;
++        }
++
++        public void setCitizen(Citizen citizen) {
++            this.citizen = citizen;
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (this == o) return true;
++            if (o == null || getClass() != o.getClass()) return false;
++            NaturalIdOnManyToOne that = (NaturalIdOnManyToOne) o;
++            return Objects.equals(citizen, that.citizen) && Objects.equals(dummy, that.dummy);
++        }
++
++        @Override
++        public int hashCode() {
++            return Objects.hash(citizen, dummy);
++        }
++    }
++
++}
+Index: hibernate-core/src/main/java/org/hibernate/type/descriptor/java/spi/EntityJavaType.java
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/hibernate-core/src/main/java/org/hibernate/type/descriptor/java/spi/EntityJavaType.java b/hibernate-core/src/main/java/org/hibernate/type/descriptor/java/spi/EntityJavaType.java
+--- a/hibernate-core/src/main/java/org/hibernate/type/descriptor/java/spi/EntityJavaType.java	(revision 287bcc71265cd0dcc93704c5320bd81eaad35b50)
++++ b/hibernate-core/src/main/java/org/hibernate/type/descriptor/java/spi/EntityJavaType.java	(date 1702377578518)
+@@ -33,7 +33,8 @@
+ 
+ 	@Override
+ 	public int extractHashCode(T value) {
+-		return System.identityHashCode( value );
++		return 1; // hacked to simulate an identityHashCode collision
++		//return System.identityHashCode( value );
+ 	}
+ 
+ 	@Override

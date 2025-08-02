@@ -1,0 +1,62 @@
+Index: src/org/hibernate/dialect/Dialect.java
+===================================================================
+--- src/org/hibernate/dialect/Dialect.java	(revision 15766)
++++ src/org/hibernate/dialect/Dialect.java	(working copy)
+@@ -1080,4 +1080,18 @@ public abstract class Dialect {
+ 		// return false here, as most databases do not properly support this construct...
+ 		return false;
+ 	}
++
++	/**
++	 * Does this dialect automatically define indexes when a Unique field is
++	 * defined?
++	 * <p/>
++	 * This is primarily a defense against multiply defined indicies in MySql.
++	 * 
++	 * @return True if this SQL dialect automatically generates indexes when
++	 * a field is defined as "unique"; false otherwise.
++	 * @since 3.x
++	 */
++	public boolean uniqueAutoGeneratesIndexes() {
++		return false;
++	}
+ }
+Index: src/org/hibernate/dialect/MySQLInnoDBDialect.java
+===================================================================
+--- src/org/hibernate/dialect/MySQLInnoDBDialect.java	(revision 15766)
++++ src/org/hibernate/dialect/MySQLInnoDBDialect.java	(working copy)
+@@ -18,4 +18,7 @@ public class MySQLInnoDBDialect extends 
+ 		return true;
+ 	}
+ 	
++	public boolean uniqueAutoGeneratesIndexes() {
++		return true;
++	}
+ }
+Index: src/org/hibernate/cfg/Configuration.java
+===================================================================
+--- src/org/hibernate/cfg/Configuration.java	(revision 15766)
++++ src/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -806,16 +806,18 @@ public class Configuration implements Se
+ 
+ 
+ 				Iterator subIter = table.getIndexIterator();
+-				while ( subIter.hasNext() ) {
+-					Index index = (Index) subIter.next();
+-					script.add(
++				if (!dialect.uniqueAutoGeneratesIndexes()) {
++					while ( subIter.hasNext() ) {
++						Index index = (Index) subIter.next();
++						script.add(
+ 							index.sqlCreateString(
+ 									dialect,
+ 									mapping,
+ 									defaultCatalog,
+ 									defaultSchema
+ 								)
+-						);
++							);
++					}
+ 				}
+ 
+ 				if ( dialect.hasAlterTable() ) {

@@ -1,0 +1,278 @@
+Index: src/org/hibernate/type/EntityType.java
+===================================================================
+--- src/org/hibernate/type/EntityType.java	(revision 10552)
++++ src/org/hibernate/type/EntityType.java	(working copy)
+@@ -111,9 +111,18 @@
+ 			return null;
+ 		}
+ 		else {
+-			return session.getFactory()
+-			        .getEntityPersister( getAssociatedEntityName() )
+-			        .getPropertyValue( value, uniqueKeyPropertyName, session.getEntityMode() );
++			EntityPersister entityPersister = session.getFactory()
++					.getEntityPersister( getAssociatedEntityName() );
++			Object propertyValue = entityPersister
++					.getPropertyValue( value, uniqueKeyPropertyName, session.getEntityMode() );
++			Type type = entityPersister.getPropertyType( uniqueKeyPropertyName );
++			if ( type.isEntityType() ) {
++				propertyValue = ( (EntityType) type).getIdentifier( propertyValue, session );
++				//TODO we can face an infinite loop if the associated element points back to the same owner property
++				//but this is a user error anyway
++			}
++
++			return propertyValue;
+ 		}
+ 	}
+ 
+@@ -236,7 +245,12 @@
+ 			return getIdentifierType(factory);
+ 		}
+ 		else {
+-			return factory.getReferencedPropertyType( getAssociatedEntityName(), uniqueKeyPropertyName );
++			Type type = factory.getReferencedPropertyType( getAssociatedEntityName(), uniqueKeyPropertyName );
++			if ( type.isEntityType() ) {
++				type = ( (EntityType) type).getIdentifierOrUniqueKeyType( factory );
++				//TODO infinote loop if both side reference each other
++			}
++			return type;
+ 		}
+ 	}
+ 
+Index: test/org/hibernate/test/ops/Betreuer.hbm.xml
+===================================================================
+--- test/org/hibernate/test/ops/Betreuer.hbm.xml	(revision 0)
++++ test/org/hibernate/test/ops/Betreuer.hbm.xml	(revision 0)
+@@ -0,0 +1,31 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC
++        "-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++        "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!--
++  
++-->
++
++<hibernate-mapping package="org.hibernate.test.ops">
++
++    <class name="Betreuer">
++        <id name="id" column="id">
++            <generator class="native"/>
++        </id>
++        <property name="name"/>
++        <many-to-one name="kunde"
++                     column="addressId"
++                     unique="true"/>
++    </class>
++
++    <class name="Kunde">
++        <id name="id">
++            <generator class="native"/>
++        </id>
++        <property name="name"/>
++        <one-to-one name="betreuer"
++                    property-ref="kunde"/>
++    </class>
++</hibernate-mapping>
++
+Index: test/org/hibernate/test/ops/Betreuer.java
+===================================================================
+--- test/org/hibernate/test/ops/Betreuer.java	(revision 0)
++++ test/org/hibernate/test/ops/Betreuer.java	(revision 0)
+@@ -0,0 +1,60 @@
++//$Id: $
++package org.hibernate.test.ops;
++
++import java.io.Serializable;
++
++/**
++ * @author Emmanuel Bernard
++ */
++public class Betreuer implements Serializable {
++	private static final long serialVersionUID = -4090693388150752068L;
++	static final Long KEINE_ID = Long.valueOf(-1);
++	static final int ERSTE_VERSION = 0;
++
++	private Long id; // = KEINE_ID;
++
++	protected String name = "";
++
++	private Kunde kunde = null;
++
++	public Betreuer() {
++		super();
++	}
++
++	public Long getId() {
++		return id;
++	}
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Kunde getKunde() {
++		return kunde;
++	}
++	public void setKunde(Kunde kunde) {
++		this.kunde = kunde;
++	}
++
++	public String toString() {
++		return "{id=" + id + ", name=" + name + '}';
++	}
++	public boolean equals(Object other) {
++		if (this == other) return true;
++		if (other instanceof Betreuer == false) return false;
++
++		final Betreuer b = (Betreuer) other;
++		return id.equals(b.id);
++	}
++
++	public int hashCode() {
++		return 37 ^ id.intValue();          // Bit-weise XOR
++	}
++}
+\ No newline at end of file
+Index: test/org/hibernate/test/ops/Kunde.java
+===================================================================
+--- test/org/hibernate/test/ops/Kunde.java	(revision 0)
++++ test/org/hibernate/test/ops/Kunde.java	(revision 0)
+@@ -0,0 +1,60 @@
++//$Id: $
++package org.hibernate.test.ops;
++
++/**
++ * @author Emmanuel Bernard
++ */
++public class Kunde implements java.io.Serializable {
++	private static final long serialVersionUID = -9145991012326136804L;
++
++
++	protected Long id; // = KEINE_ID;
++
++	protected String name = "";
++
++	protected Betreuer betreuer;
++
++	public Kunde() {
++		super();
++	}
++
++	public Long getId() {
++		return id;
++	}
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++	public void setName(String nachname) {
++		this.name = nachname;
++	}
++
++	public Betreuer getBetreuer() {
++		return betreuer;
++	}
++
++	public void setBetreuer(Betreuer betreuer) {
++		this.betreuer = betreuer;
++	}
++
++	public String toString() {
++		return "{id=" + id + ", name=" + name + '}';
++	}
++
++	@Override
++	public boolean equals(Object other) {
++		if (this == other) return true;
++		if (other instanceof Kunde == false) return false;
++
++		final Kunde k = (Kunde) other;
++		return id.equals(k.id) && name.equals(k.name);
++	}
++
++	public int hashCode() {
++		return 37 ^ id.intValue();          // Bit-weise XOR
++	}
++}
++
+Index: test/org/hibernate/test/ops/MergeTest.java
+===================================================================
+--- test/org/hibernate/test/ops/MergeTest.java	(revision 10552)
++++ test/org/hibernate/test/ops/MergeTest.java	(working copy)
+@@ -2,15 +2,13 @@
+ package org.hibernate.test.ops;
+ 
+ import java.util.ArrayList;
+-import java.util.Date;
+ 
+ import junit.framework.Test;
+ import junit.framework.TestSuite;
+-
+ import org.hibernate.Hibernate;
++import org.hibernate.NonUniqueObjectException;
+ import org.hibernate.Session;
+ import org.hibernate.Transaction;
+-import org.hibernate.NonUniqueObjectException;
+ import org.hibernate.cfg.Configuration;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.criterion.Projections;
+@@ -363,6 +361,36 @@
+ 		s.getTransaction().commit();
+ 		s.close();
+ 	}
++
++	public void testMergeOneToOneProeprtyRef() throws Exception {
++		Session s = openSession( );
++		Transaction tx = s.beginTransaction();
++		Betreuer b = new Betreuer();
++		b.setName( "Betreuer");
++		Kunde k = new Kunde();
++		k.setName( "Kunde");
++		s.persist( b );
++		s.persist( k );
++		b.setKunde( k );
++		k.setBetreuer( b );
++		tx.commit();
++		s.close();
++
++		s = openSession( );
++		tx = s.beginTransaction();
++		k.setName( "new name" );
++		//b.setName( "new name");
++		s.merge( k );
++		tx.commit();
++		s.close();
++
++		s = openSession( );
++		tx = s.beginTransaction();
++		s.delete( s.get(Kunde.class, k.getId() ) );
++		s.delete( s.get(Betreuer.class, b.getId() ) );
++		tx.commit();
++		s.close();
++	}
+ 	
+ 	private void clearCounts() {
+ 		getSessions().getStatistics().clear();
+@@ -384,7 +412,11 @@
+ 	}
+ 	
+ 	protected String[] getMappings() {
+-		return new String[] { "ops/Node.hbm.xml", "ops/Employer.hbm.xml", "ops/OptLockEntity.hbm.xml" };
++		return new String[] {
++				"ops/Node.hbm.xml",
++				"ops/Employer.hbm.xml",
++				"ops/OptLockEntity.hbm.xml",
++				"ops/Betreuer.hbm.xml" };
+ 	}
+ 
+ 	public static Test suite() {

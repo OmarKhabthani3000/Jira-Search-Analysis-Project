@@ -1,0 +1,65 @@
+diff --git a/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/schemagen/JpaSchemaGeneratorTest.java b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/schemagen/JpaSchemaGeneratorTest.java
+index 304410c..b38ef72 100644
+--- a/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/schemagen/JpaSchemaGeneratorTest.java
++++ b/hibernate-entitymanager/src/test/java/org/hibernate/jpa/test/schemagen/JpaSchemaGeneratorTest.java
+@@ -50,6 +50,8 @@
+ 	private static final String LOAD_SQL = "org/hibernate/jpa/test/schemagen/load-script-source.sql";
+ 	private static final String CREATE_SQL = "org/hibernate/jpa/test/schemagen/create-script-source.sql";
+ 	private static final String DROP_SQL = "org/hibernate/jpa/test/schemagen/drop-script-source.sql";
++        
++        private static final String CONNECTION_URL = "hibernate.connection.url";
+ 
+ 	private static int schemagenNumber = 0;
+ 
+@@ -132,22 +134,37 @@
+ 		doTest( settings );
+ 	}
+ 
+-	@SuppressWarnings("unchecked")
+-	private void doTest(Map settings) {
+-		// We want a fresh db after emf close
+-		// Unfortunately we have to use this dirty hack because the db seems not to be closed otherwise
+-		settings.put( "hibernate.connection.url", "jdbc:h2:mem:db-schemagen" + schemagenNumber++
+-				+ ";MVCC=TRUE;LOCK_TIMEOUT=10000" );
+-		EntityManagerFactoryBuilder emfb = Bootstrap.getEntityManagerFactoryBuilder( buildPersistenceUnitDescriptor(),
+-																					 settings );
++        @SuppressWarnings("unchecked")
++        @Test
++        @TestForIssue(jiraKey = "HHH-9323")
++        public void testSqlCreateFromMetadataClasspath() throws Exception {
++            Map settings = buildSettings();
++            settings.put(AvailableSettings.SCHEMA_GEN_DATABASE_ACTION, "create");
++            settings.put(AvailableSettings.SCHEMA_GEN_CREATE_SOURCE, "metadata");
++            settings.put(CONNECTION_URL, "jdbc:h2:mem:db-schemagen-9323;DB_CLOSE_DELAY=-1");
+ 
+-		EntityManagerFactory emf = emfb.build();
++            doTest(settings, false);
++            doTest(settings, false);
++        }
++        
++        @SuppressWarnings("unchecked")
++        private void doTest(Map settings) {
++            doTest(settings, true);
++        }
+ 
+-		Assert.assertNotNull( emf.createEntityManager().find( Item.class, "schemagen-test" ) );
+-
+-		emf.close();
+-		emfb.cancel();
+-	}
++        @SuppressWarnings("unchecked")
++        private void doTest(Map settings, boolean test) {
++            if(!settings.containsKey(CONNECTION_URL)) {
++                settings.put(CONNECTION_URL, "jdbc:h2:mem:db-schemagen" + schemagenNumber++);
++            }
++            EntityManagerFactoryBuilder emfb = Bootstrap.getEntityManagerFactoryBuilder(buildPersistenceUnitDescriptor(), settings);
++            EntityManagerFactory emf = emfb.build();
++            if(test) {
++                Assert.assertNotNull(emf.createEntityManager().find(Item.class, "schemagen-test"));
++            }
++            emf.close();
++            emfb.cancel();
++        }
+ 
+ 	private PersistenceUnitDescriptor buildPersistenceUnitDescriptor() {
+ 		return new TestingPersistenceUnitDescriptorImpl( getClass().getSimpleName() );

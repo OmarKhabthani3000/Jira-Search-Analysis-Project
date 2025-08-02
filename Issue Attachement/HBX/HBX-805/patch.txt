@@ -1,0 +1,294 @@
+Index: tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	(revision 10687)
++++ tools/src/java/org/hibernate/tool/hbm2x/doc/DocHelper.java	(working copy)
+@@ -521,14 +521,44 @@
+     
+     public List getOrderedProperties(POJOClass pojoClass)
+     {
+-    	List orderedProperties = new ArrayList();
++    	List orderedProperties = getAllProperties(pojoClass);
++
++    	Collections.sort(orderedProperties, PROPERTY_COMPARATOR);
+     	
+-    	for (Iterator iterator = pojoClass.getAllPropertiesIterator(); iterator.hasNext(); )
+-    		orderedProperties.add(iterator.next());
++    	return orderedProperties;
++    }
++    
++    public List getSimpleProperties(POJOClass pojoClass)
++    {
++    	List properties = getAllProperties(pojoClass);
+     	
++    	if (pojoClass.hasIdentifierProperty())
++    		properties.remove(pojoClass.getIdentifierProperty());
++    	
++    	// TODO: do we need to also remove component id properties?
++    	
++    	if (pojoClass.hasVersionProperty())
++    		properties.remove(pojoClass.getVersionProperty());
++    	
++    	return properties;
++    }
++    
++    public List getOrderedSimpleProperties(POJOClass pojoClass)
++    {
++    	List orderedProperties = getSimpleProperties(pojoClass);
++
+     	Collections.sort(orderedProperties, PROPERTY_COMPARATOR);
+     	
+     	return orderedProperties;
+     }
+-
+-}
+\ No newline at end of file
++    
++    private List getAllProperties(POJOClass pojoClass)
++    {
++    	List properties = new ArrayList();
++    	
++    	for (Iterator iterator = pojoClass.getAllPropertiesIterator(); iterator.hasNext(); )
++    		properties.add(iterator.next());
++    	
++    	return properties;
++    }
++}
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java	(revision 10687)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/ComponentPOJOClass.java	(working copy)
+@@ -163,5 +163,12 @@
+    public boolean hasVersionProperty() {
+ 	   return false;
+    }
+-	
++   
++	/*
++	 * @see org.hibernate.tool.hbm2x.pojo.POJOClass#getVersionProperty()
++	 */
++	public Property getVersionProperty()
++	{
++		return null;
++	}
+ }
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(revision 10687)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(working copy)
+@@ -150,7 +150,7 @@
+ 
+ 
+ 	public boolean hasIdentifierProperty() {
+-		return clazz.hasIdentifierProperty();
++		return clazz.hasIdentifierProperty() && clazz instanceof RootClass;
+ 	}
+ 	
+ 	public Property getIdentifierProperty() {
+@@ -799,4 +799,12 @@
+ 	public boolean hasVersionProperty() {
+ 		return clazz.isVersioned() && clazz instanceof RootClass;
+ 	}
++	
++	/*
++	 * @see org.hibernate.tool.hbm2x.pojo.POJOClass#getVersionProperty()
++	 */
++	public Property getVersionProperty()
++	{
++		return clazz.getVersion();
++	}
+ }
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java	(revision 10687)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/POJOClass.java	(working copy)
+@@ -107,5 +107,6 @@
+ 	public Property getIdentifierProperty();
+ 	
+ 	public boolean hasVersionProperty();
++	public Property getVersionProperty();
+ 		
+ }
+Index: tools/src/templates/doc/entities/entity.ftl
+===================================================================
+--- tools/src/templates/doc/entities/entity.ftl	(revision 10687)
++++ tools/src/templates/doc/entities/entity.ftl	(working copy)
+@@ -156,9 +156,104 @@
+ 					</#if>
+ 				</tbody>
+ 			</table>
++		<#else>
++			<#list superClasses as superClass>
++				<#if superClass.hasIdentifierProperty()>
++					<#assign identifier = superClass.identifierProperty>
++					<#assign superClassRef = docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(superClass))>
++					<p id="identifier_summary" class="MainTableHeading">
++						Identifier Summary
++					</p>
++					<table id="identifier_inherited_from_entity_${superClass.shortName}">
++						<tr>
++							<th>
++								Identifier inherited from entity <a href="${superClassRef}">${superClass.shortName}</a>
++							</th>
++						</tr>
++						<tr>
++							<td>
++								<a href="${superClassRef}#identifier_detail_${identifier.name}">${identifier.name}</a>
++							</td>
++						</tr>
++					</table>
++				</#if>
++			</#list>
+ 		</#if>
++		
++		<#if class.hasVersionProperty()>
++			<#assign version = class.versionProperty>
++			
++			<table id="version_summary">
++				<thead>
++					<tr>
++						<th class="MainTableHeading" colspan="4">
++							Version Summary
++						</th>
++					</tr>
++					<tr>
++						<th style="width: 14%">
++							Name
++						</th>
++						<th style="width: 14%">
++							Column
++						</th>
++						<th style="width: 14%">
++							Type
++						</th>
++						<th style="width: 58%">
++							Description
++						</th>
++					</tr>
++				</thead>
+ 
+-		<#assign properties = dochelper.getOrderedProperties(class)>
++				<tbody>
++					<tr>
++						<td>
++							<a href="#version_detail_${version.name}">
++								${version.name}
++							</a>
++						</td>
++						<td>
++							Column
++						</td>
++						<td>
++							${class.getJavaTypeName(version, jdk5)?html?default("&nbsp;")}
++						</td>
++						<td>
++							<#if class.hasFieldJavaDoc(version)>
++								${class.getFieldDescription(version)?default("&nbsp;")}
++							<#else>
++								&nbsp;
++							</#if>
++						</td>			
++					</tr>
++				</tbody>
++			</table>
++		<#else>
++			<#list superClasses as superClass>
++				<#if superClass.hasVersionProperty()>
++					<#assign version = superClass.versionProperty>
++					<#assign superClassRef = docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(superClass))>
++					<p id="version_summary" class="MainTableHeading">
++						Version Summary
++					</p>
++					<table id="version_inherited_from_entity_${superClass.shortName}">
++						<tr>
++							<th>
++								Version inherited from entity <a href="${superClassRef}">${superClass.shortName}</a>
++							</th>
++						</tr>
++						<tr>
++							<td>
++								<a href="${superClassRef}#version_detail_${version.name}">${version.name}</a>
++							</td>
++						</tr>
++					</table>
++				</#if>
++			</#list>
++		</#if>
++
++		<#assign properties = dochelper.getOrderedSimpleProperties(class)>
+ 		<#if !properties.empty>
+ 			<table id="property_summary">
+ 				<thead>
+@@ -255,10 +350,17 @@
+ 			</table>
+ 		</#if>
+ 
++		<#assign propertyHeader = properties.empty>
+ 		<#list superClasses as superClass>
+-			<#assign properties = dochelper.getOrderedProperties(superClass)>
+-			<#if !properties.empty>
++			<#assign superProperties = dochelper.getOrderedSimpleProperties(superClass)>
++			<#if !superProperties.empty>
+ 				<#assign superClassRef = docFileManager.getRef(docFile, docFileManager.getEntityDocFileByDeclarationName(superClass))>
++				<#if propertyHeader>
++					<#assign propertyHeader = false>
++					<p id="properties_summary" class="MainTableHeading">
++						Property Summary
++					</p>
++				</#if>
+ 				<table id="properties_inherited_from_entity_${superClass.shortName}">
+ 					<tr>
+ 						<th>
+@@ -267,7 +369,7 @@
+ 					</tr>
+ 					<tr>
+ 						<td>
+-							<#list properties as property>
++							<#list superProperties as property>
+ 								<a href="${superClassRef}#property_detail_${property.name}">${property.name}</a><#if property_has_next>, </#if>
+ 							</#list>
+ 						</td>
+@@ -277,7 +379,7 @@
+ 		</#list>
+ 
+ 		<#if class.hasIdentifierProperty()>
+-			<#assign identifier = class.getIdentifierProperty()>
++			<#assign identifier = class.identifierProperty>
+ 			<p id="identifier_detail" class="MainTableHeading">
+ 				Identifier Detail
+ 			</p>
+@@ -291,8 +393,17 @@
+ 			</#if>
+ 		</#if>
+ 
+-		<#assign properties = class.allPropertiesIterator>
+-		<#if properties.hasNext()>
++		<#if class.hasVersionProperty()>
++			<#assign version = class.versionProperty>
++			<p id="version_detail" class="MainTableHeading">
++				Version Detail
++			</p>
++			<#assign version = class.versionProperty>
++			<h3 id="version_detail_${version.name}">${version.name}</h3>
++		</#if>
++
++		<#assign properties = dochelper.getSimpleProperties(class)>
++		<#if !properties.empty>
+ 			<p id="property_detail" class="MainTableHeading">
+ 				Property Detail
+ 			</p>
+Index: tools/src/templates/doc/doc-style.css
+===================================================================
+--- tools/src/templates/doc/doc-style.css	(revision 10687)
++++ tools/src/templates/doc/doc-style.css	(working copy)
+@@ -24,9 +24,9 @@
+     color: #888888;
+ }
+ 
+-p, ul
++p, ul, hr
+ {
+-	margin: 1em 0;
++	margin: 0.5em 0;
+ }
+ 
+ h1

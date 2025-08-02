@@ -1,0 +1,143 @@
+Index: search/ivy.xml
+===================================================================
+--- search/ivy.xml	(revision 15134)
++++ search/ivy.xml	Mon Sep 01 17:08:01 CEST 2008
+@@ -22,7 +22,7 @@
+         <dependency org="org.apache.lucene" name="lucene-core" rev="2.3.2" conf="default->default"/>
+         <dependency org="javax.jms" name="jms" rev="1.1" conf="default->default"/> <!-- optional -->
+         <dependency org="javax.annotation" name="jsr250-api" rev="1.0" conf="default->default"/> <!-- optional -->
+-        <dependency org="org.hibernate.apache.lucene.solr" name="apache-solr-analyzer" rev="1.2.0" conf="default->default"/> <!-- optional -->
++        <dependency org="org.hibernate.apache.lucene.solr" name="apache-solr-analyzer" rev="1.3.0.RC1-SNAPSHOT" conf="default->default"/> <!-- optional -->
+ 
+         <!-- transitive dependencies -->
+         <dependency org="antlr" name="antlr" rev="2.7.6" conf="test->default"/>
+Index: search/src/java/org/hibernate/search/util/HibernateSearchResourceLoader.java
+===================================================================
+--- search/src/java/org/hibernate/search/util/HibernateSearchResourceLoader.java	Mon Sep 01 17:46:02 CEST 2008
++++ search/src/java/org/hibernate/search/util/HibernateSearchResourceLoader.java	Mon Sep 01 17:46:02 CEST 2008
+@@ -0,0 +1,76 @@
++package org.hibernate.search.util;
++
++import java.io.InputStream;
++import java.io.IOException;
++import java.io.InputStreamReader;
++import java.io.BufferedReader;
++import java.io.Reader;
++import java.util.List;
++import java.util.ArrayList;
++import java.util.Collections;
++
++import org.apache.solr.common.ResourceLoader;
++import org.apache.solr.util.plugin.ResourceLoaderAware;
++
++import org.hibernate.annotations.common.util.ReflectHelper;
++import org.hibernate.search.SearchException;
++
++/**
++ * @author Emmanuel Bernard
++ */
++public class HibernateSearchResourceLoader implements ResourceLoader {
++	public InputStream openResource(String resource) throws IOException {
++		return Thread.currentThread().getContextClassLoader().getResourceAsStream( resource );
++	}
++
++	public List<String> getLines(String resource) throws IOException {
++		BufferedReader reader = null;
++		try {
++			reader = new BufferedReader( new InputStreamReader( openResource( resource ) ) );
++			List<String> results = new ArrayList<String>();
++			String line = reader.readLine();
++			while ( line != null ) {
++				//comment or empty line
++				if ( line.length() != 0 && !line.startsWith( "#" ) ) {
++					results.add( line );
++				}
++				line = reader.readLine();
++			}
++			return Collections.unmodifiableList( results );
++		}
++		finally {
++			try {
++				if (reader != null) reader.close();
++			}
++			catch ( Exception e ) {
++				//we don't really care if we can't close
++			}
++		}
++	}
++
++	public Object newInstance(String cname, String... subpackages) {
++		if (subpackages != null && subpackages.length > 0)
++			throw new UnsupportedOperationException( "newInstance(classname, packages) not implemented" );
++
++		final Class<?> clazz;
++		try {
++			clazz = ReflectHelper.classForName( cname );
++		}
++		catch ( ClassNotFoundException e ) {
++			throw new SearchException("Unable to find class " + cname, e);
++		}
++		try {
++			final Object instance = clazz.newInstance();
++			if (instance instanceof ResourceLoaderAware) {
++				( ( ResourceLoaderAware) instance ).inform( this );
++			}
++			return instance;
++		}
++		catch ( InstantiationException e ) {
++			throw new SearchException("Unable to instanciate class with no-arg constructor: " + cname, e);
++		}
++		catch ( IllegalAccessException e ) {
++			throw new SearchException("Unable to instanciate class with no-arg constructor: " + cname, e);
++		}
++	}
++}
+Index: search/src/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java
+===================================================================
+--- search/src/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java	(revision 15134)
++++ search/src/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java	Mon Sep 01 17:44:43 CEST 2008
+@@ -8,12 +8,16 @@
+ import org.apache.solr.analysis.TokenizerChain;
+ import org.apache.solr.analysis.TokenFilterFactory;
+ import org.apache.solr.analysis.TokenizerFactory;
++import org.apache.solr.common.ResourceLoader;
++import org.apache.solr.core.SolrResourceLoader;
++import org.apache.solr.util.plugin.ResourceLoaderAware;
+ 
+ import org.hibernate.search.annotations.AnalyzerDef;
+ import org.hibernate.search.annotations.TokenizerDef;
+ import org.hibernate.search.annotations.TokenFilterDef;
+ import org.hibernate.search.annotations.Parameter;
+ import org.hibernate.search.SearchException;
++import org.hibernate.search.util.HibernateSearchResourceLoader;
+ 
+ /**
+  * This class has a direct dependency on Solr classes
+@@ -24,9 +28,15 @@
+ 	private SolrAnalyzerBuilder() {}
+ 
+ 	public static Analyzer buildAnalyzer(AnalyzerDef analyzerDef) {
++		//TODO write a Custom ResourceLoader
++		ResourceLoader resourceLoader = new HibernateSearchResourceLoader();
++		
+ 		TokenizerDef token = analyzerDef.tokenizer();
+ 		TokenizerFactory tokenFactory = ( TokenizerFactory ) instantiate( token.factory() );
+ 		tokenFactory.init( getMapOfParameters( token.params() ) );
++		if ( tokenFactory instanceof ResourceLoaderAware ) {
++			( ( ResourceLoaderAware ) tokenFactory ).inform( resourceLoader );
++		}
+ 
+ 		final int length = analyzerDef.filters().length;
+ 		TokenFilterFactory[] filters = new TokenFilterFactory[length];
+@@ -34,7 +44,10 @@
+ 			TokenFilterDef filterDef = analyzerDef.filters()[index];
+ 			filters[index] = (TokenFilterFactory) instantiate( filterDef.factory() );
+ 			filters[index].init( getMapOfParameters( filterDef.params() ) );
++			if ( filters[index] instanceof ResourceLoaderAware ) {
++				( ( ResourceLoaderAware ) filters[index] ).inform( resourceLoader );
+-		}
++			}
++		}
+ 		return new TokenizerChain(tokenFactory, filters);
+ 	}
+ 

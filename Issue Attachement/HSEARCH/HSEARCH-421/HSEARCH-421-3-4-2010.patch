@@ -1,0 +1,833 @@
+Index: hibernate-search/src/main/java/org/hibernate/search/Environment.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/Environment.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/Environment.java	(working copy)
+@@ -115,5 +115,13 @@
+ 	 *
+ 	 */
+ 	public static final String MODEL_MAPPING = "hibernate.search.model_mapping";
++
++	
++	/**
++	 * Set to a fully qualified classname of a type implementing org.hibernate.search.exception.ErrorHandler
++	 * to override the error strategy used during processing of the Lucene updates.
++	 * Default is to log errors.
++	 */
++	public static final String ERROR_HANDLER = "hibernate.search.error_handler";
+ 	
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java	(working copy)
+@@ -34,6 +34,8 @@
+ import org.hibernate.search.store.IndexShardingStrategy;
+ import org.hibernate.search.util.LoggerFactory;
+ import org.slf4j.Logger;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.impl.ErrorContextBuilder;
+ 
+ /**
+  * Apply the operations to Lucene directories.
+@@ -49,6 +51,7 @@
+ 	private final SearchFactoryImplementor searchFactoryImplementor;
+ 	private final Map<DirectoryProvider,PerDPResources> resourcesMap;
+ 	private final boolean sync;
++	private final ErrorHandler errorHandler;
+ 	
+ 	private static final DpSelectionVisitor providerSelectionVisitor = new DpSelectionVisitor();
+ 	private static final Logger log = LoggerFactory.make();
+@@ -61,6 +64,7 @@
+ 		this.queue = queue;
+ 		this.searchFactoryImplementor = searchFactoryImplementor;
+ 		this.resourcesMap = resourcesMap;
++		this.errorHandler = searchFactoryImplementor.getErrorHandler();
+ 	}
+ 
+ 	public void run() {
+@@ -75,8 +79,10 @@
+ 			}
+ 			//this Runnable splits tasks in more runnables and then runs them:
+ 			processors.runAll( sync );
+-		} catch (InterruptedException e) {
+-			log.error( "Index update task has been interrupted", e );
++		} catch ( Exception e ) {
++			ErrorContextBuilder builder = new ErrorContextBuilder();
++			builder.errorThatOccurred( e ).addAllWorkThatFailed ( queue );
++			errorHandler.handle( builder.createErrorContext() );
+ 		}
+ 	}
+ 	
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java	(working copy)
+@@ -27,7 +27,6 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.concurrent.ExecutorService;
+-
+ import org.apache.lucene.index.IndexWriter;
+ import org.slf4j.Logger;
+ 
+@@ -36,10 +35,19 @@
+ import org.hibernate.search.backend.impl.lucene.works.LuceneWorkVisitor;
+ import org.hibernate.search.util.LoggerFactory;
+ 
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.ErrorContext;
++import org.hibernate.search.exception.impl.ErrorContextBuilder;
++
+ /**
+  * A Runnable containing a unit of changes to be applied to a specific index.
+  * After creation, use addWork(LuceneWork) to fill the changes queue and then
+  * run it to apply all changes. After run() this object should be discarded.
++ * 
++ * A new PerDPQueueProcessor is created for each unit of work, expensive resources
++ * to be shared across multiple transactions should be created once in
++ * PerDPResources.
++ * 
+  * @see Runnable
+  * @see #addWork(LuceneWork)
+  * @author Sanne Grinovero
+@@ -47,11 +55,13 @@
+ class PerDPQueueProcessor implements Runnable {
+ 	
+ 	private static final Logger log = LoggerFactory.make();
++	
+ 	private final Workspace workspace;
+ 	private final LuceneWorkVisitor worker;
+ 	private final ExecutorService executor;
+ 	private final boolean exclusiveIndexUsage;
+ 	private final List<LuceneWork> workOnWriter = new ArrayList<LuceneWork>();
++	private final ErrorHandler handler;
+ 	
+ 	// if any work needs batchmode, set corresponding flag to true:
+ 	private boolean batchmode = false;
+@@ -65,6 +75,7 @@
+ 		this.workspace = resources.getWorkspace();
+ 		this.executor = resources.getExecutor();
+ 		this.exclusiveIndexUsage = resources.isExclusiveIndexUsageEnabled();
++		this.handler = resources.getErrorHandler();
+ 	}
+ 
+ 	/**
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	(working copy)
+@@ -28,6 +28,7 @@
+ import org.hibernate.search.backend.impl.lucene.works.LuceneWorkVisitor;
+ import org.hibernate.search.batchindexing.Executors;
+ import org.hibernate.search.engine.SearchFactoryImplementor;
++import org.hibernate.search.exception.ErrorHandler;
+ import org.hibernate.search.store.DirectoryProvider;
+ 
+ import java.util.concurrent.ExecutorService;
+@@ -44,12 +45,14 @@
+ 	private final LuceneWorkVisitor visitor;
+ 	private final Workspace workspace;
+ 	private final boolean exclusiveIndexUsage;
++	private final ErrorHandler errorHandler;
+ 	
+ 	PerDPResources(SearchFactoryImplementor searchFactoryImp, DirectoryProvider<?> dp) {
+ 		workspace = new Workspace( searchFactoryImp, dp );
+ 		visitor = new LuceneWorkVisitor( workspace );
+ 		executor = Executors.newFixedThreadPool( 1, "Directory writer" );
+ 		exclusiveIndexUsage = searchFactoryImp.isExclusiveIndexUsageEnabled( dp );
++		errorHandler = searchFactoryImp.getErrorHandler();
+ 	}
+ 
+ 	public ExecutorService getExecutor() {
+@@ -75,5 +78,9 @@
+ 		}
+ 		executor.shutdown();
+ 	}
++
++	public ErrorHandler getErrorHandler() {
++		return errorHandler;
++	}
+ 	
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	(working copy)
+@@ -38,6 +38,7 @@
+ import org.hibernate.search.filter.FilterCachingStrategy;
+ import org.hibernate.search.store.DirectoryProvider;
+ import org.hibernate.search.store.optimization.OptimizerStrategy;
++import org.hibernate.search.exception.ErrorHandler;
+ 
+ /**
+  * Interface which gives access to the different directory providers and their configuration.
+@@ -93,4 +94,6 @@
+ 	Similarity getSimilarity(DirectoryProvider<?> directoryProvider);
+ 
+ 	boolean isExclusiveIndexUsageEnabled(DirectoryProvider<?> provider);
++
++	ErrorHandler getErrorHandler();
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	(revision 0)
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	(revision 0)
+@@ -0,0 +1,45 @@
++/* $Id: SearchFactoryImplementor.java 19002 2010-03-16 01:28:07Z hardy.ferentschik $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.exception;
++
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++
++/**
++ * @author Amin Mohammed-Coleman
++ * @since 3.2
++ */
++public interface ErrorContext {
++
++	List<LuceneWork> getFailingOperations();
++
++	LuceneWork getOperationAtFault();
++
++	Throwable getThrowable();
++
++	boolean hasErrors();
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	(revision 0)
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	(revision 0)
+@@ -0,0 +1,35 @@
++/* $Id: SearchFactoryImplementor.java 19002 2010-03-16 01:28:07Z hardy.ferentschik $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.exception;
++
++/**
++ * @author Amin Mohammed-Coleman
++ * @since 3.2
++ */
++public interface ErrorHandler {
++
++    void handle( ErrorContext context );
++    
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	(revision 0)
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	(revision 0)
+@@ -0,0 +1,75 @@
++/* $Id: SearchFactoryImplementor.java 19002 2010-03-16 01:28:07Z hardy.ferentschik $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.exception.impl;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.exception.ErrorContext;
++
++/**
++ * @author Amin Mohammed-Coleman
++ * @since 3.2
++ */
++public class ErrorContextBuilder {
++
++	private LuceneWork operationAtFault;
++	private Throwable th;
++	private List<LuceneWork> failingOperations = new ArrayList<LuceneWork>();
++
++	public ErrorContextBuilder primaryFailure(LuceneWork operationAtFault) {
++		this.operationAtFault = operationAtFault;
++		return this;
++	}
++
++	public ErrorContextBuilder errorThatOccurred(Throwable th) {
++		this.th = th;
++		return this;
++	}
++
++	public ErrorContextBuilder subsequentFailure(LuceneWork operation) {
++		failingOperations.add( operation );
++		return this;
++	}
++
++	public ErrorContextBuilder addAllWorkThatFailed(List<LuceneWork> worksThatFailed) {
++		failingOperations.addAll( worksThatFailed );
++		return this;
++	}
++
++	public boolean containsPrimaryFailure() {
++		return operationAtFault != null;
++	}
++
++	public ErrorContext createErrorContext() {
++		ErrorContextImpl context = new ErrorContextImpl();
++		context.setOperationAtFault( operationAtFault );
++		context.setThrowable( th );
++		context.setFailingOperations( failingOperations );
++		return context;
++	}
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	(revision 0)
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	(revision 0)
+@@ -0,0 +1,77 @@
++/* $Id: SearchFactoryImplementor.java 19002 2010-03-16 01:28:07Z hardy.ferentschik $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.exception.impl;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.exception.ErrorContext;
++
++/**
++ * @author Amin Mohammed-Coleman
++ * @since 3.2
++ */
++class ErrorContextImpl implements ErrorContext {
++
++	private List<LuceneWork> failingOperations;
++
++	private LuceneWork operationAtFault;
++
++	private Throwable throwable;
++
++	public List<LuceneWork> getFailingOperations() {
++		if ( failingOperations == null ) {
++			failingOperations = new ArrayList<LuceneWork>();
++		}
++		return Collections.unmodifiableList( failingOperations );
++	}
++
++	public LuceneWork getOperationAtFault() {
++		return this.operationAtFault;
++	}
++
++	public Throwable getThrowable() {
++		return this.throwable;
++	}
++
++	public void setFailingOperations(List<LuceneWork> failingOperations) {
++		this.failingOperations = failingOperations;
++	}
++
++	public void setThrowable(Throwable th) {
++		this.throwable = th;
++	}
++
++	public void setOperationAtFault(LuceneWork operationAtFault) {
++		this.operationAtFault = operationAtFault;
++	}
++
++	public boolean hasErrors() {
++		return failingOperations != null || failingOperations.size() > 0;
++	}
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/LogErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/LogErrorHandler.java	(revision 0)
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/LogErrorHandler.java	(revision 0)
+@@ -0,0 +1,86 @@
++/* $Id: SearchFactoryImplementor.java 19002 2010-03-16 01:28:07Z hardy.ferentschik $
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.exception.impl;
++
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.exception.ErrorContext;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.util.LoggerFactory;
++import org.slf4j.Logger;
++
++/**
++ * @author Amin Mohammed-Coleman
++ * @author Sanne Grinovero
++ * @since 3.2
++ */
++public class LogErrorHandler implements ErrorHandler {
++
++    private static final Logger log = LoggerFactory.make();
++
++	public void handle(ErrorContext context) {
++
++		final List<LuceneWork> failingOperations = context.getFailingOperations();
++		final LuceneWork primaryFailure = context.getOperationAtFault();
++		final Throwable exceptionThatOccurred = context.getThrowable();
++
++		final StringBuilder errorMsg = new StringBuilder();
++		
++		if ( exceptionThatOccurred != null ) {
++			errorMsg.append( "Exception occurred " )
++				.append( exceptionThatOccurred )
++				.append( "\n" );
++		}
++		if ( primaryFailure != null ) {
++			errorMsg.append( "Primary Failure:\n" );
++			appendFailureMessage( errorMsg, primaryFailure );
++		}
++
++		if ( ! failingOperations.isEmpty() ) {
++			errorMsg.append( "Subsequent failures:\n" );
++			for ( LuceneWork workThatFailed : failingOperations ) {
++				appendFailureMessage( errorMsg, workThatFailed );
++			}
++		}
++		
++		logError( errorMsg.toString(), exceptionThatOccurred );
++	}
++
++	private static final void appendFailureMessage(StringBuilder message, LuceneWork workThatFailed) {
++		message.append( "\tEntity " )
++			.append( workThatFailed.getEntityClass().getName() )
++			.append( " " )
++			.append( " Id " ).append( workThatFailed.getIdInString() )
++			.append( " " ).append( " Work Type " )
++			.append( " " ).append( workThatFailed.getClass().getName() )
++			.append( "\n" );
++    }
++	
++	protected void logError(String errorMsg, Throwable exceptionThatOccurred) {
++		log.error( errorMsg, exceptionThatOccurred );
++	}
++    
++}
+\ No newline at end of file
+Index: hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	(revision 19163)
++++ hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	(working copy)
+@@ -89,6 +89,8 @@
+ import org.hibernate.search.util.PluginLoader;
+ import org.hibernate.util.StringHelper;
+ import org.slf4j.Logger;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.impl.LogErrorHandler;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -114,6 +116,7 @@
+ 	private final AtomicBoolean stopped = new AtomicBoolean( false );
+ 	private final int cacheBitResultsSize;
+ 	private final Properties configurationProperties;
++	private final ErrorHandler errorHandler;
+ 
+ 	private final PolymorphicIndexHierarchy indexHierarchy = new PolymorphicIndexHierarchy();
+ 
+@@ -148,6 +151,8 @@
+ 	}
+ 
+ 	public SearchFactoryImpl(SearchConfiguration cfg) {
++		this.configurationProperties = cfg.getProperties();
++		this.errorHandler = createErrorHandler( configurationProperties );
+ 		ReflectionManager reflectionManager = getReflectionManager(cfg);
+ 		final SearchMapping mapping = SearchMappingBuilder.getSearchMapping(cfg);
+ 		if ( mapping != null) {
+@@ -179,12 +184,9 @@
+ 		this.cacheBitResultsSize = ConfigurationParseHelper.getIntValue(
+ 				cfg.getProperties(), Environment.CACHE_DOCIDRESULTS_SIZE, CachingWrapperFilter.DEFAULT_SIZE
+ 		);
+-		this.configurationProperties = cfg.getProperties();
+ 		this.barrier = 1; //write barrier
+ 	}
+ 
+-
+-
+ 	private void fillSimilarityMapping() {
+ 		for ( DirectoryProviderData directoryConfiguration : dirProviderData.values() ) {
+ 			for (Class<?> indexedType : directoryConfiguration.classes) {
+@@ -689,4 +691,17 @@
+ 		return dirProviderData.get( provider ).exclusiveIndexUsage;
+ 	}
+ 
++	private static ErrorHandler createErrorHandler(Properties configuration) {
++		String errorHandlerClassName = configuration.getProperty( Environment.ERROR_HANDLER );
++		if ( StringHelper.isEmpty( errorHandlerClassName ) ) {
++			return new LogErrorHandler();
++		}
++		return PluginLoader.instanceFromName( ErrorHandler.class, errorHandlerClassName,
++				SearchFactoryImpl.class, "Error Handler" );
++	}
++
++	public ErrorHandler getErrorHandler() {
++		return errorHandler;
++	}
++
+ }
+Index: hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/LuceneErrorHandlingTest.java
+===================================================================
+--- hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/LuceneErrorHandlingTest.java	(revision 0)
++++ hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/LuceneErrorHandlingTest.java	(revision 0)
+@@ -0,0 +1,191 @@
++/* $Id$
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.errorhandling;
++
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.List;
++import java.util.concurrent.atomic.AtomicInteger;
++
++import junit.framework.Assert;
++
++import org.apache.lucene.index.IndexWriter;
++import org.hibernate.search.Environment;
++import org.hibernate.search.FullTextSession;
++import org.hibernate.search.Search;
++import org.hibernate.search.SearchException;
++import org.hibernate.search.SearchFactory;
++import org.hibernate.search.backend.BackendQueueProcessorFactory;
++import org.hibernate.search.backend.DeleteLuceneWork;
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.backend.WorkVisitor;
++import org.hibernate.search.backend.impl.lucene.DpSelectionVisitor;
++import org.hibernate.search.backend.impl.lucene.works.LuceneWorkDelegate;
++import org.hibernate.search.batchindexing.MassIndexerProgressMonitor;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.impl.SearchFactoryImpl;
++import org.hibernate.search.test.Document;
++import org.hibernate.search.test.SearchTestCase;
++
++/**
++ * Test to verify the configured ErrorHandler is used in the Lucene
++ * backend, and the backend exceptions are logged as expected.
++ * 
++ * @see Environment#ERROR_HANDLER
++ * 
++ * @author Sanne Grinovero
++ * @since 3.2
++ */
++public class LuceneErrorHandlingTest extends SearchTestCase {
++	
++	private static final AtomicInteger workcounter = new AtomicInteger();
++	
++	public void testErrorHandling() {
++		SearchFactoryImpl searchFactoryImpl = getSearchFactoryImpl();
++		ErrorHandler errorHandler = searchFactoryImpl.getErrorHandler();
++		Assert.assertTrue( errorHandler instanceof MockErrorHandler );
++		MockErrorHandler mockErrorHandler = (MockErrorHandler)errorHandler;
++		BackendQueueProcessorFactory queueProcessorFactory = searchFactoryImpl.getBackendQueueProcessorFactory();
++		List<LuceneWork> queue = new ArrayList<LuceneWork>();
++		queue.add( new HarmlessWork( "firstWork" ) );
++		queue.add( new HarmlessWork( "secondWork" ) );
++		Runnable processor = queueProcessorFactory.getProcessor( queue );
++		processor.run();
++		Assert.assertEquals( 2, workcounter.get() );
++		
++		workcounter.set( 0 ); // reset work counter
++		queue.add( new FailingWork( "firstFailure" ) );
++		queue.add( new HarmlessWork( "thirdWork" ) );
++		queue.add( new HarmlessWork( "fourthWork" ) );
++		processor = queueProcessorFactory.getProcessor( queue );
++		processor.run();
++//		Assert.assertEquals( 2, workcounter.get() );
++//		String errorMessage = mockErrorHandler.getErrorMessage();
++//		Assert.assertEquals( "??", errorMessage );
++		// should verify the errorHandler logs the work which was not processed (third and fourth)
++		// and which work was failing
++		Throwable exception = mockErrorHandler.getLastException();
++		Assert.assertTrue( exception instanceof SearchException );
++		Assert.assertEquals( "failed work message", exception.getMessage() );
++	}
++	
++	protected Class<?>[] getMappings() {
++		return new Class[] { Document.class };
++	}
++	
++	protected void configure(org.hibernate.cfg.Configuration cfg) {
++		super.configure( cfg );
++		cfg.setProperty( Environment.ERROR_HANDLER, MockErrorHandler.class.getName() );
++	}
++	
++	protected SearchFactoryImpl getSearchFactoryImpl() {
++		FullTextSession s = Search.getFullTextSession( openSession() );
++		s.close();
++		SearchFactory searchFactory = s.getSearchFactory();
++		return (SearchFactoryImpl) searchFactory;
++	}
++	
++	/**
++	 * A LuceneWork which doesn't fail and delegates to a NoOp
++	 * operation on the index.
++	 */
++	private static class HarmlessWork extends DeleteLuceneWork {
++
++		public HarmlessWork(String workIdentifier) {
++			super( workIdentifier, workIdentifier, Document.class );
++		}
++
++		@Override
++		public <T> T getWorkDelegate(WorkVisitor<T> visitor) {
++			if ( visitor instanceof DpSelectionVisitor ) {
++				//during shard-selection visitiro this work is applied to
++				//all DirectoryProviders as this extends DeleteLuceneWork
++				return visitor.getDelegate( this );
++			}
++			else {
++				return (T) new NoOpLuceneWorkDelegate();
++			}
++		}
++		
++		@Override
++		public String toString() {
++			return "HarmlessWork: " + this.getIdInString();
++		}
++		
++	}
++	
++	private static class NoOpLuceneWorkDelegate implements LuceneWorkDelegate {
++
++		public void logWorkDone(LuceneWork work, MassIndexerProgressMonitor monitor) {
++		}
++
++		public void performWork(LuceneWork work, IndexWriter writer) {
++			workcounter.incrementAndGet();
++		}
++		
++	}
++	
++	/**
++	 * A LuceneWork which will throw a SearchException when applied to
++	 * the index, which is the type thrown to wrap real IOExceptions.
++	 */
++	private static class FailingWork extends DeleteLuceneWork {
++
++		public FailingWork(String workIdentifier) {
++			super( workIdentifier, workIdentifier, Document.class );
++		}
++
++		@Override
++		public <T> T getWorkDelegate(WorkVisitor<T> visitor) {
++			if ( visitor instanceof DpSelectionVisitor ) {
++				//during shard-selection visitiro this work is applied to
++				//all DirectoryProviders as this extends DeleteLuceneWork
++				return visitor.getDelegate( this );
++			}
++			else {
++				return (T) new FailingLuceneWorkDelegate();
++			}
++		}
++		
++		@Override
++		public String toString() {
++			return "FailingWork: " + this.getIdInString();
++		}
++		
++	}
++	
++	private static class FailingLuceneWorkDelegate implements LuceneWorkDelegate {
++
++		public void logWorkDone(LuceneWork work, MassIndexerProgressMonitor monitor) {
++		}
++
++		public void performWork(LuceneWork work, IndexWriter writer) {
++			throw new SearchException( "failed work message" );
++		}
++		
++	}
++
++}
++
+Index: hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/MockErrorHandler.java
+===================================================================
+--- hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/MockErrorHandler.java	(revision 0)
++++ hibernate-search/src/test/java/org/hibernate/search/test/errorhandling/MockErrorHandler.java	(revision 0)
+@@ -0,0 +1,57 @@
++/* $Id$
++ * 
++ * Hibernate, Relational Persistence for Idiomatic Java
++ * 
++ * Copyright (c) 2009, Red Hat, Inc. and/or its affiliates or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat, Inc.
++ * 
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ * 
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ * 
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.search.test.errorhandling;
++
++import org.hibernate.search.exception.impl.LogErrorHandler;
++
++/**
++ * This is a LogErrorHandler used for testing only,
++ * NOT to be used as a template or example for a real
++ * error handler.
++ * 
++ * @author Sanne Grinovero
++ * @since 3.2
++ */
++public class MockErrorHandler extends LogErrorHandler {
++	
++	private volatile String errorMessage;
++	private volatile Throwable lastException;
++
++	@Override
++	protected void logError(String errorMsg, Throwable exceptionThatOccurred) {
++		errorMessage = errorMsg;
++		lastException = exceptionThatOccurred;
++	}
++
++	public String getErrorMessage() {
++		return errorMessage;
++	}
++	
++	public Throwable getLastException() {
++		return lastException;
++	}
++
++}
++

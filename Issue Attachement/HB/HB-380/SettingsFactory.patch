@@ -1,0 +1,55 @@
+Index: SettingsFactory.java
+===================================================================
+RCS file: /home/cvs/plumcreek/hibernate/src/net/sf/hibernate/cfg/SettingsFactory.java,v
+retrieving revision 1.1
+diff -u -r1.1 SettingsFactory.java
+--- SettingsFactory.java	3 Oct 2003 19:28:54 -0000	1.1
++++ SettingsFactory.java	4 Oct 2003 14:37:05 -0000
+@@ -7,6 +7,7 @@
+ import java.sql.SQLException;
+ import java.util.Map;
+ import java.util.Properties;
++import java.lang.reflect.Method;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -89,6 +90,31 @@
+ 		log.info("Use scrollable result sets: " + useScrollableResultSets);
+ 		if (batchSize>0) log.info("JDBC 2 max batch size: " + batchSize);
+ 		
++		boolean metaSupportsGetGeneratedKeys = false;
++		try {
++			Connection conn = connections.getConnection();
++			try {
++				DatabaseMetaData meta = conn.getMetaData();
++				Method supportsGetGeneratedKeys;
++				supportsGetGeneratedKeys = meta.getClass().getMethod("supportsGetGeneratedKeys",  new Class[0]);
++				metaSupportsGetGeneratedKeys = ((Boolean) supportsGetGeneratedKeys.invoke(meta, new Object[0])).booleanValue();
++			}
++			catch (Exception e) {
++				log.info("JDBC driver does not appear to be a JDBC 3.0 driver that supports ResultSet.getGeneratedKeys.", e);
++			}
++			finally {
++				connections.closeConnection(conn);
++			}
++		}
++		catch (SQLException sqle) {
++			log.warn("Could not obtain connection metadata", sqle);
++		}
++		catch (UnsupportedOperationException uoe) {
++			// user supplied JDBC connections
++		}
++		boolean useGetGeneratedKeys = PropertiesHelper.getBoolean(Environment.USE_GET_GENERATED_KEYS, properties, metaSupportsGetGeneratedKeys);
++		log.info("Use result set get generated keys: " + useGetGeneratedKeys);
++		
+ 		String defaultSchema = properties.getProperty(Environment.DEFAULT_SCHEMA);
+ 		if (defaultSchema!=null) log.info("Default schema set to: " + defaultSchema);
+ 		
+@@ -121,6 +147,7 @@
+ 		
+ 		settings.setStatementFetchSize(statementFetchSize);
+ 		settings.setScrollableResultSetsEnabled(useScrollableResultSets);
++		settings.setGetGeneratedKeysEnabled(useGetGeneratedKeys);
+ 		settings.setJdbcBatchSize(batchSize);
+ 		settings.setDefaultSchemaName(defaultSchema);
+ 		settings.setShowSqlEnabled(showSql);

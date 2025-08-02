@@ -1,0 +1,100 @@
+From 8cfc93b4ad374506e990c6ac05ca9bd7a819479b Mon Sep 17 00:00:00 2001
+From: Antoine Reilles <qaw@3ds.com>
+Date: Mon, 26 Sep 2022 10:47:27 +0200
+Subject: [PATCH] try to do the same in jpa
+
+---
+ .../org/hibernate/bugs/JPAUnitTestCase.java   | 44 ++++++++++++++++---
+ .../org/hibernate/bugs/ORMUnitTestCase.java   |  1 +
+ 2 files changed, 40 insertions(+), 5 deletions(-)
+
+diff --git a/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/JPAUnitTestCase.java b/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/JPAUnitTestCase.java
+index f36c69e..cc3ddb1 100644
+--- a/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/JPAUnitTestCase.java
++++ b/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/JPAUnitTestCase.java
+@@ -1,23 +1,31 @@
+ package org.hibernate.bugs;
+ 
++import static org.junit.Assert.assertEquals;
++
+ import javax.persistence.EntityManager;
+ import javax.persistence.EntityManagerFactory;
+ import javax.persistence.Persistence;
+ 
++import org.hibernate.test.Department;
++import org.hibernate.test.Employee;
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ /**
+- * This template demonstrates how to develop a test case for Hibernate ORM, using the Java Persistence API.
++ * This template demonstrates how to develop a test case for Hibernate ORM,
++ * using the Java Persistence API.
+  */
+ public class JPAUnitTestCase {
+ 
++	static Logger logger = LoggerFactory.getLogger(ORMUnitTestCase.class);
+ 	private EntityManagerFactory entityManagerFactory;
+ 
+ 	@Before
+ 	public void init() {
+-		entityManagerFactory = Persistence.createEntityManagerFactory( "templatePU" );
++		entityManagerFactory = Persistence.createEntityManagerFactory("templatePU");
+ 	}
+ 
+ 	@After
+@@ -30,9 +38,35 @@ public class JPAUnitTestCase {
+ 	@Test
+ 	public void hhh123Test() throws Exception {
+ 		EntityManager entityManager = entityManagerFactory.createEntityManager();
+-		entityManager.getTransaction().begin();
+-		// Do stuff...
+-		entityManager.getTransaction().commit();
++
++		{
++			entityManager.getTransaction().begin();
++			Department department = new Department();
++			department.setDepartmentId(1);
++			entityManager.persist(department);
++			entityManager.getTransaction().commit();
++		}
++		{
++			entityManager.getTransaction().begin();
++			Department dept = entityManager.find(Department.class, 1);
++			Employee emp1 = new Employee();
++			emp1.setEmployeeId(1);
++			emp1.setName("empl1");
++			dept.addEmployee(emp1);
++			entityManager.merge(dept);
++			entityManager.getTransaction().commit();
++		}
++		{
++			entityManager.getTransaction().begin();
++			Department loadDept = entityManager.find(Department.class, 1);
++			loadDept.getEmployees().forEach(e -> {
++				logger.info(e.getRank() + "-" + e.getName());
++			});
++			Employee emp = entityManager.find(Employee.class, 1);
++			int generatedRank = emp.getRank();
++			assertEquals("rank start at 0", 0, generatedRank);
++			entityManager.getTransaction().commit();
++		}
+ 		entityManager.close();
+ 	}
+ }
+diff --git a/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/ORMUnitTestCase.java b/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/ORMUnitTestCase.java
+index 1615e3b..ed452e5 100644
+--- a/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/ORMUnitTestCase.java
++++ b/orm/hibernate-orm-5/src/test/java/org/hibernate/bugs/ORMUnitTestCase.java
+@@ -135,4 +135,5 @@ public class ORMUnitTestCase extends BaseCoreFunctionalTestCase {
+ 		int generatedRank = employees.get(0).getRank();
+ 		assertEquals("Rank must start with 0", 0, generatedRank);
+ 	}
++
+ }
+-- 
+2.37.3.windows.1
+

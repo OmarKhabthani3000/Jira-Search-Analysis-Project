@@ -1,0 +1,52 @@
+Index: src/java/org/hibernate/ejb/Ejb3Configuration.java
+===================================================================
+--- src/java/org/hibernate/ejb/Ejb3Configuration.java	(revision 16312)
++++ src/java/org/hibernate/ejb/Ejb3Configuration.java	Tue Apr 14 14:29:29 CEST 2009
+@@ -10,6 +10,7 @@
+ import java.io.ObjectOutputStream;
+ import java.io.Serializable;
+ import java.net.URL;
++import java.net.MalformedURLException;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -246,8 +247,10 @@
+ 							if (visitor == null) visitor = getMainJarVisitor( url, metadata, integration );
+ 							addMetadataFromVisitor( visitor, metadata );
+ 							Filter[] otherXmlFilter = getFilters( metadata, integration, false );
+-							for ( String jarFile : metadata.getJarFiles() ) {
++                            for ( String jarFile : metadata.getJarFiles() ) {
+-								visitor = JarVisitorFactory.getVisitor( jarFile, otherXmlFilter );
++//								visitor = JarVisitorFactory.getVisitor( jarFile, otherXmlFilter );
++                                visitor = getJarFileVisitor( url, jarFile, otherXmlFilter );
++                                if (visitor == null) continue;
+ 								addMetadataFromVisitor( visitor, metadata );
+ 							}
+ 							return configure( metadata, integration );
+@@ -267,6 +270,26 @@
+ 		}
+ 	}
+ 
++    // gets visitor for jar-file jars relative from persistence unit root
++    private JarVisitor getJarFileVisitor(URL url, String jar, Filter[] xmlFilter) {
++        URL parentURL = JarVisitorFactory.getJarURLFromURLEntry( url, "/META-INF/persistence.xml" );
++        File parentFile = new File(parentURL.getFile()).getParentFile();
++        File jarFile = new File(parentFile, jar);
++        if (!jarFile.exists()) {
++            log.warn("Unable to find jar { }", jarFile.getAbsolutePath());
++            return null;
++        }
++
++        URL jarURL = null;
++        try {
++            jarURL = jarFile.toURL();
++        } catch (MalformedURLException ee) {
++            throw new IllegalArgumentException( "Unable to find jar:" + jarURL, ee );
++        }
++
++        return JarVisitorFactory.getVisitor(jarURL, xmlFilter);
++    }
++
+ 	//method used in a non managed environment
+ 	private JarVisitor getMainJarVisitor(URL url, PersistenceMetadata metadata, Map integration) {
+ 		URL jarURL = JarVisitorFactory.getJarURLFromURLEntry( url, "/META-INF/persistence.xml" );

@@ -1,0 +1,227 @@
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaExceptionListener.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaExceptionListener.java	(revision 9b061083006ce86b37f588e70d548e0f7f9b6247)
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaExceptionListener.java	(revision )
+@@ -24,7 +24,9 @@
+ package org.hibernate.envers.test.integration.jta;
+ 
+ import javax.persistence.EntityManager;
++import javax.transaction.TransactionManager;
+ 
++import org.hibernate.envers.test.EnversTestingJtaBootstrap;
+ import org.testng.annotations.Test;
+ 
+ import org.hibernate.ejb.Ejb3Configuration;
+@@ -39,16 +41,18 @@
+  * @author Adam Warski (adam at warski dot org)
+  */
+ public class JtaExceptionListener extends AbstractEntityTest {
++    private TransactionManager tm;
++
+     public void configure(Ejb3Configuration cfg) {
+         cfg.addAnnotatedClass(StrTestEntity.class);
+         cfg.addAnnotatedClass(ExceptionListenerRevEntity.class);
+ 
+-        addJTAConfig(cfg);
++        tm = addJTAConfig(cfg);
+     }
+ 
+     @Test(expectedExceptions = RuntimeException.class)
+     public void testTransactionRollback() throws Exception {
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().begin();
++        tm.begin();
+ 
+         // Trying to persist an entity - however the listener should throw an exception, so the entity
+ 		// shouldn't be persisted
+@@ -58,12 +62,12 @@
+         StrTestEntity te = new StrTestEntity("x");
+         em.persist(te);
+ 
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().commit();
++        tm.commit();
+     }
+ 
+     @Test(dependsOnMethods = "testTransactionRollback")
+     public void testDataNotPersisted() throws Exception {
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().begin();
++        tm.begin();
+ 
+ 		// Checking if the entity became persisted
+         newEntityManager();
+@@ -71,6 +75,6 @@
+         Long count = (Long) em.createQuery("select count(s) from StrTestEntity s where s.str = 'x'").getSingleResult();
+ 		assert count == 0l;
+ 
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().commit();
++        tm.commit();
+     }
+ }
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaTransaction.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaTransaction.java	(revision 9b061083006ce86b37f588e70d548e0f7f9b6247)
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/integration/jta/JtaTransaction.java	(revision )
+@@ -1,8 +1,10 @@
+ package org.hibernate.envers.test.integration.jta;
+ 
+ import javax.persistence.EntityManager;
++import javax.transaction.TransactionManager;
+ import java.util.Arrays;
+ 
++import org.hibernate.envers.test.EnversTestingJtaBootstrap;
+ import org.testng.annotations.Test;
+ 
+ import org.hibernate.ejb.Ejb3Configuration;
+@@ -16,17 +18,18 @@
+  * @author Adam Warski (adam at warski dot org)
+  */
+ public class JtaTransaction extends AbstractEntityTest {
++    private TransactionManager tm;
+     private Integer id1;
+ 
+     public void configure(Ejb3Configuration cfg) {
+         cfg.addAnnotatedClass(IntTestEntity.class);
+ 
+-        addJTAConfig(cfg);
++        tm = addJTAConfig(cfg);
+     }
+ 
+     @Test
+     public void initData() throws Exception {
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().begin();
++        tm.begin();
+ 
+         newEntityManager();
+         EntityManager em = getEntityManager();
+@@ -35,18 +38,18 @@
+         em.persist(ite);
+         id1 = ite.getId();
+ 
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().commit();
++        tm.commit();
+ 
+         //
+ 
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().begin();
++        tm.begin();
+ 
+         newEntityManager();
+         em = getEntityManager();
+         ite = em.find(IntTestEntity.class, id1);
+         ite.setNumber(20);
+ 
+-        TestingJtaBootstrap.INSTANCE.getTransactionManager().commit();
++        tm.commit();
+     }
+ 
+     @Test(dependsOnMethods = "initData")
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/AbstractEntityTest.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/AbstractEntityTest.java	(revision 9b061083006ce86b37f588e70d548e0f7f9b6247)
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/AbstractEntityTest.java	(revision )
+@@ -25,8 +25,11 @@
+ 
+ import javax.persistence.EntityManager;
+ import javax.persistence.EntityManagerFactory;
++import javax.transaction.TransactionManager;
+ import java.io.IOException;
+ 
++import org.hibernate.ejb.AvailableSettings;
++import org.hibernate.engine.transaction.internal.jta.JtaTransactionFactory;
+ import org.testng.annotations.AfterClass;
+ import org.testng.annotations.BeforeClass;
+ import org.testng.annotations.BeforeMethod;
+@@ -34,8 +37,6 @@
+ import org.testng.annotations.Parameters;
+ 
+ import org.hibernate.cfg.Environment;
+-import org.hibernate.dialect.H2Dialect;
+-import org.hibernate.ejb.AvailableSettings;
+ import org.hibernate.ejb.Ejb3Configuration;
+ import org.hibernate.envers.AuditReader;
+ import org.hibernate.envers.AuditReaderFactory;
+@@ -48,8 +49,6 @@
+ import org.hibernate.event.PreCollectionUpdateEventListener;
+ import org.hibernate.service.internal.ServiceRegistryImpl;
+ 
+-import org.hibernate.testing.jta.TestingJtaBootstrap;
+-
+ /**
+  * @author Adam Warski (adam at warski dot org)
+  */
+@@ -144,10 +143,9 @@
+         return cfg;
+     }
+ 
+-    protected void addJTAConfig(Ejb3Configuration cfg) {
+-		TestingJtaBootstrap.prepare( cfg.getProperties() );
+-		cfg.getProperties().remove( Environment.USER );
+-		cfg.getProperties().remove( Environment.PASS );
+-		cfg.setProperty( AvailableSettings.TRANSACTION_TYPE, "JTA" );
++    protected TransactionManager addJTAConfig(Ejb3Configuration cfg) {
++        cfg.getProperties().put( AvailableSettings.TRANSACTION_TYPE, "JTA" );
++        //cfg.getProperties().put( Environment.TRANSACTION_STRATEGY, JtaTransactionFactory.class.getName() );
++        return EnversTestingJtaBootstrap.updateConfigAndCreateTM(cfg.getProperties());
+     }
+ }
+Index: hibernate-envers/src/test/java/org/hibernate/envers/test/EnversTestingJtaBootstrap.java
+===================================================================
+--- hibernate-envers/src/test/java/org/hibernate/envers/test/EnversTestingJtaBootstrap.java	(revision )
++++ hibernate-envers/src/test/java/org/hibernate/envers/test/EnversTestingJtaBootstrap.java	(revision )
+@@ -0,0 +1,57 @@
++package org.hibernate.envers.test;
++
++import com.arjuna.ats.arjuna.common.ObjectStoreEnvironmentBean;
++import com.arjuna.ats.internal.arjuna.objectstore.VolatileStore;
++import com.arjuna.common.internal.util.propertyservice.BeanPopulator;
++import org.enhydra.jdbc.standard.StandardXADataSource;
++import org.hibernate.cfg.Environment;
++import org.hibernate.service.jdbc.connections.internal.DatasourceConnectionProviderImpl;
++import org.hibernate.service.jta.platform.internal.JBossStandAloneJtaPlatform;
++import org.hibernate.service.jta.platform.internal.JtaPlatformInitiator;
++
++import javax.sql.DataSource;
++import javax.transaction.TransactionManager;
++import javax.transaction.UserTransaction;
++import java.sql.SQLException;
++import java.util.Map;
++import java.util.Properties;
++
++/**
++ * Copied from {@link org.hibernate.testing.jta.TestingJtaBootstrap}, as Envers tests use a different URL for
++ * testing databases.
++ * @author Adam Warski (adam at warski dot org)
++ */
++public class EnversTestingJtaBootstrap {
++	public static TransactionManager updateConfigAndCreateTM(Map configValues) {
++        BeanPopulator
++				.getDefaultInstance(ObjectStoreEnvironmentBean.class)
++				.setObjectStoreType( VolatileStore.class.getName() );
++
++		BeanPopulator
++				.getNamedInstance( ObjectStoreEnvironmentBean.class, "communicationStore" )
++				.setObjectStoreType( VolatileStore.class.getName() );
++
++		BeanPopulator
++				.getNamedInstance( ObjectStoreEnvironmentBean.class, "stateStore" )
++				.setObjectStoreType( VolatileStore.class.getName() );
++
++		TransactionManager transactionManager = com.arjuna.ats.jta.TransactionManager.transactionManager();
++
++		StandardXADataSource dataSource = new StandardXADataSource();
++		dataSource.setTransactionManager( com.arjuna.ats.jta.TransactionManager.transactionManager() );
++		try {
++			dataSource.setDriverName( configValues.get(Environment.DRIVER).toString() );
++		}
++		catch (SQLException e) {
++			throw new RuntimeException( "Unable to set DataSource JDBC driver name", e );
++		}
++		dataSource.setUrl(configValues.get(Environment.URL).toString());
++		dataSource.setUser(configValues.get(Environment.USER).toString());
++
++		configValues.put( JtaPlatformInitiator.JTA_PLATFORM, new JBossStandAloneJtaPlatform() );
++		configValues.put( Environment.CONNECTION_PROVIDER, DatasourceConnectionProviderImpl.class.getName() );
++		configValues.put( Environment.DATASOURCE, dataSource );
++
++        return transactionManager;
++	}
++}

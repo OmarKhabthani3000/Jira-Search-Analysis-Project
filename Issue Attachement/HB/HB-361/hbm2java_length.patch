@@ -1,0 +1,160 @@
+Index: tools/src/java/net/sf/hibernate/tool/hbm2java/ClassMapping.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/ClassMapping.java,v
+retrieving revision 1.8
+diff -u -r1.8 ClassMapping.java
+--- tools/src/java/net/sf/hibernate/tool/hbm2java/ClassMapping.java	25 Aug 2003 17:16:19 -0000	1.8
++++ tools/src/java/net/sf/hibernate/tool/hbm2java/ClassMapping.java	25 Sep 2003 09:29:38 -0000
+@@ -25,6 +25,7 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.jdom.Attribute;
++import org.jdom.DataConversionException;
+ import org.jdom.Element;
+ 
+ 
+@@ -75,6 +76,22 @@
+    public ClassMapping(Element classElement, boolean component, MultiMap inheritedMeta)  {
+       initWith(null, classElement, component, inheritedMeta);
+    }
++   
++   /**
++	* @param cmpid
++	* @return
++	*/
++   private int getFieldLength( Element cmpid ) {
++	 Attribute length = cmpid.getAttribute("length");
++	 try {
++	   return length.getIntValue();
++	 }
++	 catch (DataConversionException e) {
++	   log.error("Length attribute contained invalid value: ", e);
++	 }
++	 return Field.UNKNOWN_LENGTH;
++   }
++   
+ 
+ protected void initWith(ClassName superClass, Element classElement, boolean component, MultiMap inheritedMeta) {
+     
+@@ -147,13 +164,17 @@
+             classType.setFullyQualifiedName(cmpclass);
+             // add an import and field for this property
+             addImport(classType);
+-            Field cmpidfield =  new Field(cmpname, classType, false, true, false, metaForCompositeid);
++			Field cmpidfield = new Field(cmpname, classType, false, true, false, metaForCompositeid);
++			int length = getFieldLength( cmpid );
++			cmpidfield.setLength(length);
++			
+             fields.add(cmpidfield);
+             components.put( mapping.getCanonicalName(), mapping);
+          }
+       }
+     
+-      // derive the class imports and fields from the properties
++
++// derive the class imports and fields from the properties
+       for (Iterator properties = propertyList.iterator(); properties.hasNext();) {
+          Element property = (Element) properties.next();
+          
+@@ -192,6 +213,8 @@
+             boolean needObject = ( unsavedValue != null && unsavedValue.equals("null") );
+             boolean generated = !generator.getAttributeValue("class").equals("assigned");
+             Field idField = new Field( name, getFieldType(type, needObject), false, true, generated, metaForProperty);
++			int length = getFieldLength( property );
++			idField.setLength(length);
+             fields.add(idField);
+          } 
+          else {
+@@ -206,6 +229,8 @@
+             boolean nullable = ( notnull == null || notnull.equals("false") );
+          	boolean key = property.getName().startsWith("key-"); //a composite id property
+             Field stdField =new Field(name, getFieldType(type), nullable && !key, key, false, metaForProperty);
++			int length = getFieldLength( property );
++			stdField.setLength(length);
+             fields.add(stdField );
+             
+          }
+@@ -226,6 +251,8 @@
+                 continue;
+             }
+             Field fm =  new Field(name, getFieldType(clazz), true, metaForOneToOne);
++		    int length = getFieldLength( onetoone );
++		    fm.setLength(length);
+             fields.add(fm);
+             
+       }
+@@ -254,6 +281,8 @@
+          // add an import and field for this property
+          addImport(classType);
+          Field f = new Field( name, classType, nullable && !key, key, false, metaForManyToOne);
++		 int length = getFieldLength( manyToOne );
++		 f.setLength(length);
+          fields.add(f);
+       }
+     
+@@ -286,6 +315,8 @@
+          // add an import and field for this property
+          addImport(classType);
+          Field ff =  new Field(cmpname, classType, false, metaForComponent);
++		 int length = getFieldLength( cmpe );
++		 ff.setLength(length);
+          fields.add(ff);
+          components.put( mapping.getCanonicalName(), mapping );
+       }
+@@ -538,6 +569,8 @@
+             addImport(foreignClass);
+          }
+          Field cf = new Field(name, interfaceClassName, "new " + implementingClassName.getName() + "()", false, foreignClass, foreignKeys, metaForCollection);
++		 int length = getFieldLength( collection );
++		 cf.setLength(length);
+          fields.add(cf);
+          if (collection.getChildren("composite-element") != null) {
+            for (Iterator compositeElements = collection.getChildren("composite-element").iterator(); compositeElements.hasNext(); ) {
+@@ -580,6 +613,8 @@
+          ClassName cn = getFieldType(elementClass);
+          cn.setFullyQualifiedName(cn.getFullyQualifiedName() + "[]");
+          Field af = new Field( role, cn, false, metaForArray);
++		 int length = getFieldLength( array );
++		 af.setLength(length);
+          fields.add(af);
+       }
+    }
+Index: tools/src/java/net/sf/hibernate/tool/hbm2java/Field.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/Field.java,v
+retrieving revision 1.2
+diff -u -r1.2 Field.java
+--- tools/src/java/net/sf/hibernate/tool/hbm2java/Field.java	2 Aug 2003 11:06:03 -0000	1.2
++++ tools/src/java/net/sf/hibernate/tool/hbm2java/Field.java	25 Sep 2003 09:29:38 -0000
+@@ -9,7 +9,11 @@
+ 
+ 
+ public class Field {
++	
++	final public static int UNKNOWN_LENGTH = -1; 
++	
+ 	private String name = null;
++	private int length = UNKNOWN_LENGTH;
+ 	// private String type = null;
+ 	private String initialisation = null;
+ 	private String asSuffix = null;
+@@ -169,5 +173,19 @@
+ 
+ 	public boolean isGeneratedAsProperty() {
+ 		return getMetaAsBool("gen-property", true);
++	}
++	/**
++	 * @return
++	 */
++	public int getLength() {
++		return length;
++	}
++
++	/**
++	 * @param iLength
++	 */
++	public void setLength(int iLength) {
++		// TODO Auto-generated method stub
++		
+ 	}
+ }

@@ -1,0 +1,437 @@
+Index: core/src/main/java/org/hibernate/transform/PassThroughTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/PassThroughTransformer.java	(revision 0)
++++ core/src/main/java/org/hibernate/transform/PassThroughTransformer.java	(revision 0)
+@@ -0,0 +1,26 @@
++/**
++ * 
++ */
++package org.hibernate.transform;
++
++import java.util.HashMap;
++import java.util.Map;
++
++/**
++ * Pass through transformer for convenience.
++ * 
++ * @author Antony Stubbs <antony.stubbs@gmail.com>
++ */
++public class PassThroughTransformer implements ResultElementTransformer {
++
++	/*
++	 * (non-Javadoc)
++	 * @see org.hibernate.transform.ResultElementTransformer#generateMap(java.lang.Object, java.lang.Object, java.lang.Object[])
++	 */
++	public Map generateMap(Object key, Object value, Object[] entireResult) {
++		Map m = new HashMap();
++		m.put(key, value);
++		return m;
++	}
++
++}
+Index: core/src/main/java/org/hibernate/transform/ResultElementTransformer.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/ResultElementTransformer.java	(revision 0)
++++ core/src/main/java/org/hibernate/transform/ResultElementTransformer.java	(revision 0)
+@@ -0,0 +1,20 @@
++package org.hibernate.transform;
++
++import java.util.Map;
++
++/**
++ * Used to enable generic creation of objects from value. For example, it can be
++ * used to construct an 'enum' object from a given String value which uniquely
++ * identifies the enum.
++ * 
++ * @author Antony Stubbs <antony.stubbs@gmail.com>
++ * @see PassThroughTransformer
++ */
++public interface ResultElementTransformer {
++	/**
++	 * Generates custom Map which instead of simply generating a String->String
++	 * map as in {@link PassThroughTransformer}, it could generate any types of
++	 * object to object mapping as per the Map interface.
++	 */
++	public Map generateMap(Object key, Object value, Object[] entireResult);
++}
+\ No newline at end of file
+Index: core/src/main/java/org/hibernate/transform/ResultToMap.java
+===================================================================
+--- core/src/main/java/org/hibernate/transform/ResultToMap.java	(revision 0)
++++ core/src/main/java/org/hibernate/transform/ResultToMap.java	(revision 0)
+@@ -0,0 +1,183 @@
++package org.hibernate.transform;
++
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
++import org.hibernate.HibernateException;
++import org.hibernate.transform.ResultTransformer;
++
++/**
++ * A Result Transformer which generates a map of the results. Useful for use
++ * with lookup tables or simple key value pair tables. For example, with a
++ * country codes to names table you could use the result like this:
++ * result.get("nz") would return "New Zealand".
++ * 
++ * @author Antony Stubbs <antony.stubbs@gmail.com>
++ */
++public class ResultToMap implements ResultTransformer {
++
++	private static final int DEFAULT_VALUE_INDEX = 1;
++
++	private static final int DEFAULT_KEY_INDEX = 0;
++
++	private static final long serialVersionUID = -7357573521718725291L;
++
++	private String keyAlias;
++
++	private String valueAlias;
++
++	private int keyIndex = -1;
++
++	private int valueIndex = -1;
++
++	/**
++	 * Default result transformer is the simple pass through transformer as
++	 * that's the common case.
++	 */
++	private ResultElementTransformer keyTranslator = new PassThroughTransformer();
++
++	/**
++	 * Uses the pass in Strings to look up the key value pairs from the
++	 * applicable column in the result set.
++	 * 
++	 * @param key
++	 * @param value
++	 */
++	public ResultToMap(String key, String value) {
++		super();
++		keyAlias = key;
++		valueAlias = value;
++	}
++
++	/**
++	 * Uses the pass in int's as indexes to look up the key value pairs from the
++	 * applicable column in the result set.
++	 * 
++	 * @param keyIndex
++	 * @param valueIndex
++	 */
++	public ResultToMap(int keyIndex, int valueIndex) {
++		super();
++		this.keyIndex = keyIndex;
++		this.valueIndex = valueIndex;
++	}
++
++	/**
++	 * Uses the default indexes to look up the key value pairs from the
++	 * applicable column in the result set.
++	 */
++	public ResultToMap() {
++		super();
++	}
++
++	/*
++	 * (non-Javadoc)
++	 * 
++	 * @see
++	 * org.hibernate.transform.ResultTransformer#transformList(java.util.List)
++	 */
++	public List transformList(List collection) {
++		// create one unique big map
++		List result = new ArrayList(1);
++		Map map = new HashMap();
++		Iterator i = collection.iterator();
++		while (i.hasNext()) {
++			Object o = i.next();
++			Map element = (Map) o;
++			map.putAll(element);
++		}
++		result.add(map);
++		return result;
++	}
++
++	/*
++	 * (non-Javadoc)
++	 * 
++	 * @see
++	 * org.hibernate.transform.ResultTransformer#transformTuple(java.lang.Object
++	 * [], java.lang.String[])
++	 */
++	public Object transformTuple(Object[] tuple, String[] aliases) {
++		// search for key and value index
++		cacheKeyAndValueIndex(tuple, aliases);
++		Object key;
++		Object value;
++		try {
++			key = tuple[keyIndex];
++			value = tuple[valueIndex];
++		} catch (IndexOutOfBoundsException e) {
++			throw new HibernateException("Error with key (" + keyIndex
++					+ ") or value (" + valueIndex
++					+ ") index. Index is out of result range (" + tuple.length
++					+ " results)");
++		}
++		// return map
++		Map map = this.keyTranslator.generateMap(key, value, tuple);
++		return map;
++	}
++
++	/**
++	 * Decides on / discovers the indexes to use for the key and value if not
++	 * provided.
++	 * 
++	 * @param tuple
++	 * @param aliases
++	 */
++	private void cacheKeyAndValueIndex(Object[] tuple, String[] aliases) {
++		if (keyIndex == -1 || valueIndex == -1) {
++			if (keyAlias == null) {
++				// default
++				keyIndex = DEFAULT_KEY_INDEX;
++			} else {
++				keyIndex = findIndex(keyAlias, aliases);
++			}
++			if (valueAlias == null) {
++				// default
++				valueIndex = DEFAULT_VALUE_INDEX;
++			} else {
++				valueIndex = findIndex(valueAlias, aliases);
++			}
++		} else {
++			return;
++		}
++	}
++
++	/**
++	 * Finds the index of the needle in the array of Strings. Implementation is
++	 * a bit slow but it's worth the convenience as it's a one time operation.
++	 * <p/>
++	 * Feel free to improve!
++	 * 
++	 * @param needle
++	 * @param aliases
++	 * @return
++	 */
++	private int findIndex(String needle, String[] aliases) {
++		List aliasesList = Arrays.asList(aliases);
++		return aliasesList.indexOf(needle);
++	}
++
++	/**
++	 * @return the keyTranslator
++	 */
++	public ResultElementTransformer getKeyTranslator() {
++		return keyTranslator;
++	}
++
++	/**
++	 * Used to override the default key translator.
++	 * 
++	 * @see ResultToMap#keyTranslator
++	 * @param keyTranslator
++	 *            the keyTranslator to set
++	 */
++	public ResultToMap setKeyTranslator(ResultElementTransformer keyTranslator) {
++		this.keyTranslator = keyTranslator;
++		return this;
++	}
++
++}
+\ No newline at end of file
+Index: testsuite/src/test/java/org/hibernate/test/criteria/ResultToMapTestJava.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/ResultToMapTestJava.java	(revision 0)
++++ testsuite/src/test/java/org/hibernate/test/criteria/ResultToMapTestJava.java	(revision 0)
+@@ -0,0 +1,169 @@
++/**
++ * 
++ */
++package org.hibernate.test.criteria;
++
++import java.util.ArrayList;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++
++import org.hibernate.transform.PassThroughTransformer;
++import org.hibernate.transform.ResultElementTransformer;
++import org.hibernate.transform.ResultToMap;
++
++import junit.framework.TestCase;
++
++/**
++ * @author Antony Stubbs <antony.stubbs@gmail.com>
++ */
++public class ResultToMapTestJava extends TestCase {
++
++	/**
++	 * Test method for
++	 * {@link org.hibernate.transform.ResultToMap#ResultToMap(java.lang.String, java.lang.String)}
++	 * .
++	 */
++	public void testResultToMapStringString() {
++		ResultToMap rtp = new ResultToMap("key", "value");
++		checkTransformationTuple(rtp);
++	}
++
++	/**
++	 * Test method for
++	 * {@link org.hibernate.transform.ResultToMap#ResultToMap(int, int)}.
++	 */
++	public void testResultToMapIntInt() {
++		ResultToMap rtp = new ResultToMap(0, 1);
++		checkTransformationTuple(rtp);
++	}
++
++	/**
++	 * Test method for {@link org.hibernate.transform.ResultToMap#ResultToMap()}
++	 * .
++	 */
++	public void testResultToMap() {
++		ResultToMap rtp = new ResultToMap();
++		checkTransformationTuple(rtp);
++	}
++
++	/**
++	 * Test method for
++	 * {@link org.hibernate.transform.ResultToMap#transformList(java.util.List)}
++	 * .
++	 */
++	public void testTransformList() {
++		ResultToMap rtp = new ResultToMap();
++		List l = new ArrayList();
++		Map m1 = new HashMap();
++		m1.put("1", "2");
++		Map m2 = new HashMap();
++		m2.put("3", "4");
++		l.add(m1);
++		l.add(m2);
++		List result = rtp.transformList(l);
++		assertTrue("single element list", result.size() == 1);
++		Map mapResult = (Map) result.get(0);
++		assertTrue("number of mappings", mapResult.size() == 2);
++		assertTrue("entries", mapResult.get("1") == "2");
++		assertTrue("entries", mapResult.get("3") == "4");
++	}
++
++	/**
++	 * Test method for
++	 * {@link org.hibernate.transform.ResultToMap#transformTuple(java.lang.Object[], java.lang.String[])}
++	 * .
++	 */
++	public void testTransformTuple() {
++		ResultToMap rtp = new ResultToMap("key", "value");
++		checkTransformationTuple(rtp);
++	}
++
++	private void checkTransformationTuple(ResultToMap rtp) {
++		String[] aliases = new String[] { "key", "value" };
++		Object[] tuple = new Object[] { "k1", "v1", "other" };
++		Object result = rtp.transformTuple(tuple, aliases);
++		Map m = (Map) result;
++		assertEquals("v1", m.get("k1"));
++	}
++
++	/**
++	 * Test method for {@link PassThroughTransformer}
++	 */
++	public void testPassThroughTransfomer() {
++		ResultElementTransformer p = new PassThroughTransformer();
++		Map m = p.generateMap("pet", "dog", new String[] { "pet", "dog" });
++		assertEquals("dog", m.get("pet"));
++	}
++
++	/**
++	 * Test method for {@link ResultElementTransformer}
++	 */
++	public void testResultElementTransformer() {
++		ResultToMap rtp = new ResultToMap("key", "value");
++		checkTransformationTuple(rtp);
++		ResultElementTransformer p = new ResultElementTransformer() {
++
++			/**
++			 * Custom map generator which instead of simply generating a
++			 * String->String map, it generates a String->Pet map. Any types of
++			 * objects can be used of course.
++			 */
++			public Map generateMap(Object key, Object value,
++					Object[] entireResult) {
++				Map m = new HashMap();
++				m.put(key, new Pet((String) value));
++				return m;
++			}
++		};
++		Map m = p.generateMap("pet", "dog", new String[] { "pet", "dog" });
++		assertEquals(new Pet("dog"), m.get("pet"));
++	}
++
++	/**
++	 * Test class {@link ResultToMapTestJava#testResultElementTransformer()}.
++	 * 
++	 * @author astubbs
++	 * 
++	 */
++	class Pet {
++		String animalName;
++
++		public Pet(String animalName) {
++			super();
++			this.animalName = animalName;
++		}
++
++		public int hashCode() {
++			final int prime = 31;
++			int result = 1;
++			result = prime * result + getOuterType().hashCode();
++			result = prime * result
++					+ ((animalName == null) ? 0 : animalName.hashCode());
++			return result;
++		}
++
++		public boolean equals(Object obj) {
++			if (this == obj)
++				return true;
++			if (obj == null)
++				return false;
++			if (!(obj instanceof Pet))
++				return false;
++			Pet other = (Pet) obj;
++			if (!getOuterType().equals(other.getOuterType()))
++				return false;
++			if (animalName == null) {
++				if (other.animalName != null)
++					return false;
++			} else if (!animalName.equals(other.animalName))
++				return false;
++			return true;
++		}
++
++		private ResultToMapTestJava getOuterType() {
++			return ResultToMapTestJava.this;
++		}
++	}
++
++}
+Index: testsuite/src/test/java/org/hibernate/test/criteria/Student.java
+===================================================================
+--- testsuite/src/test/java/org/hibernate/test/criteria/Student.java	(revision 14969)
++++ testsuite/src/test/java/org/hibernate/test/criteria/Student.java	(working copy)
+@@ -5,6 +5,12 @@
+ import java.util.Set;
+ 
+ /**
++ * A Student has a:<br/>
++ * studentNumber,<br/>
++ * name,<br/>
++ * preferredCourse,<br/>
++ * and enrolements.<br/>
++ * 
+  * @author Gavin King
+  */
+ public class Student {

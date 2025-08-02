@@ -1,0 +1,1102 @@
+HiRDB support patch for Hibernate
+Copyright (C) 2008, Hitachi, Ltd.
+Author(s): Tomoto Shimizu Washio <tomoto.shimizu.vt@hitachi.com>
+
+
+1. Overview
+
+This patch adds support for HiRDB, Hitachi's database
+(http://www.hitachi.co.jp/Prod/comp/soft1/global/prod/hirdb/).
+
+This patch adds org.hibernate.dialect.HiRDBDialect class and some 
+other supporting classes.  Also it adds slight modifications on two
+of existing Hibernate classes.  Those modifications are limited under
+the dialect package and totally backward-compatible, so they should
+give no impact on any other existing things.
+
+This patch was created and tested on Hibernate 3.2.5 GA.  I believe it
+will work fine on later versions also (maybe with some adjustments) if
+there has not been much changes around the dialect interface.
+
+This patch may be relatively large as merely a dialect because it
+includes user-defined stored function support.  HiRDB requires '?'
+parameters to be qualified by 'as <type>' when invoking user-defined
+stored functions.  This dialect allows the user to declare the
+parameter types of his own functions in properties file, and renders
+appropriate type qualifiers when building SQL.  About a half of this
+patch is for the parser and renderer for this feature.
+
+
+2. What is added/changed
+
+(1) org.hibernate.dialect package
+
+(1.1) HiRDBDialect class (added)
+
+  The dialect class for HiRDB itself.  See javadoc for the usage.
+
+(1.2) UserFuncDeclParser (added)
+
+  Parser of the user-defined function declaration.  HiRDBDialect uses
+  this class to know the parameter types of the functions user
+  specified in the properties file.  See the javadoc for the
+  declaration syntax.
+
+(1.3) DialectFactory (modified)
+
+  I just added one line to map the database name to the dialect class
+  for HiRDB.
+
+(2) org.hibernate.dialect.function package
+
+(2.1) AnsiTrimEmulationFunction (modified)
+
+  I just changed the static final constants of SQLFunction into
+  protected instance variables in order to allow subclasses to use
+  different SQL functions to emulate the ANSI trim.
+
+(2.2) AnsiTrimEmulationFunctionWithTrimstrs (added)
+
+  A subclass of (2.1) that uses 'ltrimstr' and 'rtrimstr' instead of
+  using 'replace' and '${space}$' for emulation.
+
+(2.3) TypeQualifiedSQLFunction (added)
+
+  This is a decorator of SQLFunction that appends type qualifier
+  ('as <type>') as specified by the constructor when rendering '?'
+  parameters.  It is used to render user-defined functions.
+
+
+########## End of documentation ##########
+
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/DialectFactory.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/DialectFactory.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/DialectFactory.java	Fri Jun 08 12:56:06 2007
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/DialectFactory.java	Fri Aug 15 23:13:54 2008
+@@ -118,16 +119,17 @@ public class DialectFactory {
+ 		MAPPERS.put( "MySQL", new VersionInsensitiveMapper( "org.hibernate.dialect.MySQLDialect" ) );
+ 		MAPPERS.put( "PostgreSQL", new VersionInsensitiveMapper( "org.hibernate.dialect.PostgreSQLDialect" ) );
+ 		MAPPERS.put( "Microsoft SQL Server Database", new VersionInsensitiveMapper( "org.hibernate.dialect.SQLServerDialect" ) );
+ 		MAPPERS.put( "Microsoft SQL Server", new VersionInsensitiveMapper( "org.hibernate.dialect.SQLServerDialect" ) );
+ 		MAPPERS.put( "Sybase SQL Server", new VersionInsensitiveMapper( "org.hibernate.dialect.SybaseDialect" ) );
+ 		MAPPERS.put( "Adaptive Server Enterprise", new VersionInsensitiveMapper( "org.hibernate.dialect.SybaseDialect" ) );
+ 		MAPPERS.put( "Informix Dynamic Server", new VersionInsensitiveMapper( "org.hibernate.dialect.InformixDialect" ) );
+ 		MAPPERS.put( "Apache Derby", new VersionInsensitiveMapper( "org.hibernate.dialect.DerbyDialect" ) );
++		MAPPERS.put( "HiRDB", new VersionInsensitiveMapper( "org.hibernate.dialect.HiRDBDialect" ) );
+ 
+ 		MAPPERS.put(
+ 		        "Oracle",
+ 		        new DatabaseDialectMapper() {
+ 			        public String getDialectClass(int majorVersion) {
+ 						switch ( majorVersion ) {
+ 							case 8: return Oracle8iDialect.class.getName();
+ 							case 9: return Oracle9iDialect.class.getName();
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/HiRDBDialect.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/HiRDBDialect.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/HiRDBDialect.java	Thu Jan 01 09:00:00 1970
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/HiRDBDialect.java	Fri Aug 15 22:03:39 2008
+@@ -0,0 +1,438 @@
++package org.hibernate.dialect;
++
++import java.sql.SQLException;
++import java.sql.Types;
++import java.util.Properties;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.Hibernate;
++import org.hibernate.HibernateException;
++import org.hibernate.JDBCException;
++import org.hibernate.cfg.Environment;
++import org.hibernate.dialect.function.AnsiTrimEmulationFunctionWithTrimstrs;
++import org.hibernate.dialect.function.NoArgSQLFunction;
++import org.hibernate.dialect.function.SQLFunctionTemplate;
++import org.hibernate.dialect.function.StandardSQLFunction;
++import org.hibernate.dialect.function.VarArgsSQLFunction;
++import org.hibernate.exception.ConstraintViolationException;
++import org.hibernate.exception.GenericJDBCException;
++import org.hibernate.exception.LockAcquisitionException;
++import org.hibernate.exception.SQLExceptionConverter;
++import org.hibernate.type.Type;
++import org.hibernate.util.PropertiesHelper;
++
++/**
++ * <p>
++ * Dialect class for HiRDB (Hitachi relational database management system).
++ * Tested on HiRDB V8 + Type 4 JDBC driver.
++ * </p>
++ * <p>
++ * This dialect users the following properties.
++ * <ul>
++ *   <li>
++ *     <tt>hibernate.dialect.hirdb.user_functions</tt></li> -
++ *     Declares the signatures of the stored functions and procedures.
++ *     HiRDB requires ? parameters to be followed by type specifications
++ *     ('as <i>type</i>') when invoking stored functions and procedures.
++ *     The dialect adds those specifications as declared by this property.
++ *     For more information and examples, see {@link UserFuncDeclParser}.
++ *   </li>
++ *   <li>
++ *     <tt>hibernate.dialect.hirdb.enable_experimental_temporary_table</tt> -
++ *     If set to 'true', the dialect emulates temporary tables with normal tables.
++ *     This is only an experimental feature, but should not be useful in the real
++ *     use cases.
++ *   </li>
++ * </ul>
++ * </p>
++ * 
++ * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
++ */
++public class HiRDBDialect extends Dialect {
++
++	private static final Log log = LogFactory.getLog( HiRDBDialect.class );
++	
++	private static final String PROPERTY_PREFIX = "hibernate.dialect.hirdb";
++
++	private static final String PROPERTY_ENABLE_TEMPORARY_TABLE = PROPERTY_PREFIX
++			+ ".enable_experimental_temporary_table";
++
++	private static final String PROPERTY_USER_FUNCTIONS = PROPERTY_PREFIX
++			+ ".user_functions";
++	
++	protected static String getProperty(String name, String defaultValue) {
++		return Environment.getProperties().getProperty(PROPERTY_PREFIX + name, defaultValue);
++	}
++	
++	private Properties customProperties;
++	private boolean enableExperimentalTemporaryTable;
++	
++	public HiRDBDialect() {
++		customProperties = Environment.getProperties();
++		
++		enableExperimentalTemporaryTable =
++			PropertiesHelper.getBoolean(PROPERTY_ENABLE_TEMPORARY_TABLE, customProperties, false);
++		log.info(PROPERTY_ENABLE_TEMPORARY_TABLE + "=" + enableExperimentalTemporaryTable);
++		
++		// Mappings from JDBC types to native column types
++		
++		registerColumnType(Types.BIGINT, "decimal(19)");
++		registerColumnType(Types.BINARY, "binary($l)");
++		registerColumnType(Types.BIT, "smallint");
++		registerColumnType(Types.CHAR, "char(1)");
++		registerColumnType(Types.DATE, "date");
++		registerColumnType(Types.DECIMAL, "decimal($p,$s)");
++		registerColumnType(Types.DOUBLE, "float");
++		registerColumnType(Types.FLOAT, "real");
++		registerColumnType(Types.INTEGER, "integer");
++		registerColumnType(Types.LONGVARBINARY, "binary($l)");
++		registerColumnType(Types.LONGVARCHAR, "varchar($l)");
++		registerColumnType(Types.NUMERIC, "decimal($p,$s)");
++		registerColumnType(Types.REAL, "real");
++		registerColumnType(Types.SMALLINT, "smallint");
++		registerColumnType(Types.TIME, "time");
++		registerColumnType(Types.TIMESTAMP, "timestamp(6)");
++		registerColumnType(Types.TINYINT, "smallint");
++		registerColumnType(Types.VARBINARY, "binary($l)");
++		registerColumnType(Types.VARCHAR, "varchar($l)");
++		registerColumnType(Types.BLOB, "binary($l)");
++		registerColumnType(Types.CLOB, "varchar($l)");
++		
++		// Mappings from JDBC types to hibernate types
++		
++		registerHibernateType(Types.LONGVARBINARY, Hibernate.BINARY.getName());
++		registerHibernateType(Types.FLOAT, Hibernate.DOUBLE.getName());
++		
++		//
++		// EJBQL functions
++		//
++		
++		registerStandardSQLFunction( "second", Hibernate.INTEGER);
++		registerStandardSQLFunction( "minute", Hibernate.INTEGER);
++		registerStandardSQLFunction( "hour", Hibernate.INTEGER);
++		registerStandardSQLFunction( "day", Hibernate.INTEGER);
++		registerStandardSQLFunction( "month", Hibernate.INTEGER);
++		registerStandardSQLFunction( "year", Hibernate.INTEGER);
++		
++		registerFunction("current_date", new NoArgSQLFunction("current_date", Hibernate.DATE, false) );
++		registerFunction("current_time", new NoArgSQLFunction("current_time", Hibernate.TIME, false) );
++		registerFunction("current_timestamp", new NoArgSQLFunction("current_timestamp(6)", Hibernate.TIMESTAMP, false) );
++		registerFunction( "str", new SQLFunctionTemplate(Hibernate.STRING, "cast(?1 as varchar(255))") );
++		registerFunction( "extract", new SQLFunctionTemplate(Hibernate.INTEGER, "?1(?3)") );
++		registerFunction( "concat", new VarArgsSQLFunction(Hibernate.STRING, "", "||", "") );
++		registerFunction( "substring", new StandardSQLFunction("substr", Hibernate.STRING));
++		registerFunction( "locate", new SQLFunctionTemplate(Hibernate.INTEGER, "position(?1 in ?2 from ?3)") );
++		registerFunction( "trim", new AnsiTrimEmulationFunctionWithTrimstrs() );
++		
++		// bit_length is not supported because I have not found any perfect way to emulate it.
++		// Note that length(?1)*8 returns a wrong value for N(VAR)CHAR and M(VAR)CHAR.   
++		
++		//
++		// Built-in functions
++		//
++		
++		registerStandardSQLFunction( "char", Hibernate.STRING);
++		registerStandardSQLFunction( "character", Hibernate.STRING);
++		registerStandardSQLFunction( "date", Hibernate.DATE);
++		registerStandardSQLFunction( "days", Hibernate.INTEGER);
++		registerStandardSQLFunction( "decimal", Hibernate.BIG_DECIMAL);
++		registerStandardSQLFunction( "digits", Hibernate.STRING);
++		registerStandardSQLFunction( "float", Hibernate.DOUBLE);
++		registerStandardSQLFunction( "hex", Hibernate.STRING);
++		registerStandardSQLFunction( "int", Hibernate.INTEGER);
++		registerStandardSQLFunction( "integer", Hibernate.INTEGER);
++		registerStandardSQLFunction( "substr", Hibernate.STRING);
++		registerStandardSQLFunction( "time", Hibernate.TIME);
++		registerStandardSQLFunction( "timestamp", Hibernate.TIMESTAMP);
++		registerStandardSQLFunction( "timestamp_format", Hibernate.TIMESTAMP);
++		registerStandardSQLFunction( "varchar_format", Hibernate.STRING);
++		
++		// boolean results are not supported.
++		// registerStandardSQLFunction( "bit_and_test", Hibernate.BOOLEAN);
++		// registerStandardSQLFunction( "is_user_contained_in_hds_group", Hibernate.BOOLEAN);
++		
++		//
++		// Predefined stored functions
++		//
++		
++		registerStandardSQLFunction("acos", Hibernate.DOUBLE);
++		registerStandardSQLFunction("add_interval", Hibernate.STRING);
++		registerStandardSQLFunction("ascii", Hibernate.INTEGER);
++		registerStandardSQLFunction("asin", Hibernate.DOUBLE);
++		registerStandardSQLFunction("atan", Hibernate.DOUBLE);
++		registerStandardSQLFunction("atan2", Hibernate.DOUBLE);
++		registerStandardSQLFunction("ceil", null);
++		registerStandardSQLFunction("century", Hibernate.INTEGER);
++		registerStandardSQLFunction("chr", Hibernate.CHARACTER);
++		registerStandardSQLFunction("cos", Hibernate.DOUBLE);
++		registerStandardSQLFunction("cosh", Hibernate.DOUBLE);
++		registerStandardSQLFunction("date_time", Hibernate.STRING);
++		registerStandardSQLFunction("dayname", Hibernate.STRING);
++		registerStandardSQLFunction("dayofweek", Hibernate.INTEGER);
++		registerStandardSQLFunction("dayofyear", Hibernate.INTEGER);
++		registerStandardSQLFunction("degrees", Hibernate.DOUBLE);
++		registerStandardSQLFunction("exp", Hibernate.DOUBLE);
++		registerStandardSQLFunction("floor", null);
++		registerStandardSQLFunction("greatest", null);
++		registerStandardSQLFunction("half", Hibernate.INTEGER);
++		registerStandardSQLFunction("insertstr", Hibernate.STRING);
++		registerStandardSQLFunction("insertstr_long", Hibernate.STRING);
++		registerStandardSQLFunction("interval_datetimes", Hibernate.BIG_DECIMAL);
++		registerStandardSQLFunction("last_day", Hibernate.DATE);
++		registerStandardSQLFunction("least", null);
++		registerStandardSQLFunction("leftstr", Hibernate.STRING);
++		registerStandardSQLFunction("ln", Hibernate.DOUBLE);
++		registerStandardSQLFunction("log10", Hibernate.DOUBLE);
++		registerStandardSQLFunction("ltrim", Hibernate.STRING);
++		registerStandardSQLFunction("ltrimstr", Hibernate.STRING);
++		registerStandardSQLFunction("midnightseconds", Hibernate.INTEGER);
++		registerStandardSQLFunction("monthname", Hibernate.STRING);
++		registerStandardSQLFunction("months_between", Hibernate.DOUBLE);
++		registerStandardSQLFunction("next_day", Hibernate.DATE);
++		registerStandardSQLFunction("numedit", Hibernate.STRING);
++		registerStandardSQLFunction("pi", Hibernate.DOUBLE);
++		registerStandardSQLFunction("posstr", Hibernate.INTEGER);
++		registerStandardSQLFunction("power", Hibernate.DOUBLE);
++		registerStandardSQLFunction("quarter", Hibernate.INTEGER);
++		registerStandardSQLFunction("radians", Hibernate.DOUBLE);
++		registerStandardSQLFunction("replace", Hibernate.STRING);
++		registerStandardSQLFunction("replace_long", Hibernate.STRING);
++		registerStandardSQLFunction("reversestr", Hibernate.STRING);
++		registerStandardSQLFunction("rightstr", Hibernate.STRING);
++		registerStandardSQLFunction("round", null);
++		registerStandardSQLFunction("roundmonth", Hibernate.DATE);
++		registerStandardSQLFunction("rtrim", Hibernate.STRING);
++		registerStandardSQLFunction("rtrimstr", Hibernate.STRING);
++		registerStandardSQLFunction("sign", null);
++		registerStandardSQLFunction("sin", Hibernate.DOUBLE);
++		registerStandardSQLFunction("sinh", Hibernate.DOUBLE);
++		registerStandardSQLFunction("strtonum", Hibernate.BIG_DECIMAL);
++		registerStandardSQLFunction("tan", Hibernate.DOUBLE);
++		registerStandardSQLFunction("tanh", Hibernate.DOUBLE);
++		registerStandardSQLFunction("transl", Hibernate.STRING);
++		registerStandardSQLFunction("transl_long", Hibernate.STRING);
++		registerStandardSQLFunction("trunc", null);
++		registerStandardSQLFunction("truncyear", Hibernate.DATE);
++		registerStandardSQLFunction("week", Hibernate.INTEGER);
++		registerStandardSQLFunction("weekofmonth", Hibernate.INTEGER);
++		registerStandardSQLFunction("years_between", Hibernate.INTEGER);
++		
++		// boolean results are not supported
++		// registerStandardSQLFunction("isdigits", Hibernate.BOOLEAN);
++		// registerStandardSQLFunction("is_dblbytes", Hibernate.BOOLEAN);
++		// registerStandardSQLFunction("is_snglbytes", Hibernate.BOOLEAN);
++		
++		// User-defined stored functions
++		String userFuncDecl = customProperties.getProperty(PROPERTY_USER_FUNCTIONS);
++		if (userFuncDecl != null) {
++			log.info(PROPERTY_USER_FUNCTIONS + "=" + userFuncDecl);
++			try {
++				UserFuncDeclParser userFuncDeclParser = UserFuncDeclParser.getDefault(this);
++				userFuncDeclParser.parse(userFuncDecl);
++			} catch (HibernateException e) {
++				throw new HibernateException("Error in property " + PROPERTY_USER_FUNCTIONS);
++			}
++		}
++	}
++	
++	protected void registerStandardSQLFunction(String name, Type type) {
++		registerFunction(name, new StandardSQLFunction(name, type));
++	}
++	
++	// lock acquisition support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	public String getForUpdateNowaitString() {
++		return " with exclusive lock no wait";
++	}
++
++	public String getForUpdateString() {
++		return " with exclusive lock";
++	}
++	
++	public String getForUpdateNowaitString(String aliases) {
++		return getForUpdateNowaitString();
++	}
++
++	public String getForUpdateString(String aliases) {
++		return getForUpdateString();
++	}
++	
++	// limit/offset support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++	public boolean supportsLimit() {
++		return true;
++	}
++	
++	public String getLimitString(String sql, boolean hasOffset) {
++		return new StringBuilder( sql.length()+20 )
++		.append(sql)
++		.append( hasOffset ? " limit ?, ?" : " limit ?")
++		.toString();
++	}
++
++	// current timestamp support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++	public boolean supportsCurrentTimestampSelection() {
++		return true;
++	}
++	
++	public boolean isCurrentTimestampSelectStringCallable() {
++		return false;
++	}
++	
++	public String getCurrentTimestampSelectString() {
++		return "select current_timestamp(6) from master.sql_rdareas limit 1 without lock nowait";
++	}
++	
++	// SQLException support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	/**
++	 * Exception mapping is implemented only for a little part of the HiRDB errors.
++	 */
++	public SQLExceptionConverter buildSQLExceptionConverter() {
++		return new HiRDBSQLExceptionConverter();
++	}
++	
++	private static class HiRDBSQLExceptionConverter implements SQLExceptionConverter {
++		public JDBCException convert(SQLException sqlException, String message, String sql) {
++			int sqlCode = sqlException.getErrorCode();
++			
++			switch (sqlCode) {
++			case -210:
++			case -451:
++			case -803:
++			case -810:
++				return new ConstraintViolationException(message, sqlException, sql);
++			case -770:
++			case -911:
++				return new LockAcquisitionException(message, sqlException, sql);
++			default:
++				return new GenericJDBCException(message, sqlException, sql);
++			}
++		}
++	}
++
++	// union subclass support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++
++	public String getSelectClauseNullString(int sqlType) {
++		switch (sqlType) {
++		case Types.BIT:
++		case Types.TINYINT:
++		case Types.SMALLINT:
++		case Types.INTEGER:
++		case Types.BIGINT:
++		case Types.FLOAT:
++		case Types.REAL:
++		case Types.DOUBLE:
++		case Types.NUMERIC:
++		case Types.DECIMAL:
++			return "cast(null as integer)";
++		case Types.CHAR:
++		case Types.VARCHAR:
++		case Types.LONGVARCHAR:
++			return "cast(null as varchar(1))";
++		case Types.DATE:
++			return "cast(null as date)";
++		case Types.TIME:
++			return "cast(null as time)";
++		case Types.TIMESTAMP:
++			return "cast(null as timestamp)";
++		case Types.BINARY:
++		case Types.VARBINARY:
++		case Types.LONGVARBINARY:
++			return "cast(null as binary)";
++		case Types.BLOB:
++			return "cast(null as blob)";
++		case Types.CLOB:
++			return "cast(null as varchar(1))";
++		default:
++			return "cast(null as varchar(1))"; // perhaps this will work in most cases.
++		}
++	}
++	
++	public boolean supportsUnionAll() {
++		return true;
++	}
++	
++	// miscellaneous support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	// nothing to override
++	
++	// DDL support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	public boolean hasAlterTable() {
++		// Even though HiRDB supports 'alter table', we choose false because
++		// Hibernate tries to add foreign key constraints which HiRDB does
++		// not support.
++		return false; // modifies the default
++	}
++	
++	public boolean dropConstraints() {
++		return false; // modifies the default
++	}
++	
++	public boolean supportsUnique() {
++		return false; // modifies the default
++	}
++	
++	public boolean supportsUniqueConstraintInCreateAlterTable() {
++		return false; // modifies the default
++	}
++	
++	public boolean supportsNotNullUnique() {
++		return false; // modifies the default
++	}
++
++	// Informational metadata ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	public boolean supportsEmptyInList() {
++		return false; // modifies the default
++	}
++	
++	public boolean supportsParametersInInsertSelect() {
++		return false; // modifies the default
++	}
++	
++	public boolean supportsCircularCascadeDeleteConstraints() {
++		return false;
++	}
++	
++	public boolean supportsExpectedLobUsagePattern() {
++		return super.supportsExpectedLobUsagePattern();
++	}
++	
++	public boolean supportsLobValueChangePropogation() {
++		return false;
++	}
++	
++	public boolean supportsExistsInSelect() {
++		return false; // modifies the default
++	}
++	
++	public boolean doesReadCommittedCauseWritersToBlockReaders() {
++		return true;
++	}
++	
++	public boolean doesRepeatableReadCauseReadersToBlockWriters() {
++		return true;
++	}
++
++	// temporary table support ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
++	
++	/**
++	 * ONLY EXPERIMENTAL
++	 */
++	public boolean supportsTemporaryTables() {
++		return enableExperimentalTemporaryTable;
++	}
++	
++	/**
++	 * ONLY EXPERIMENTAL
++	 */
++	public boolean dropTemporaryTableAfterUse() {
++		// HiRDB does not allow DROP TABLE before COMMIT.
++		return false;
++	}
++
++}
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/UserFuncDeclParser.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/UserFuncDeclParser.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/UserFuncDeclParser.java	Thu Jan 01 09:00:00 1970
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/UserFuncDeclParser.java	Fri Aug 15 22:03:42 2008
+@@ -0,0 +1,344 @@
++package org.hibernate.dialect;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.StringTokenizer;
++
++import org.hibernate.HibernateException;
++import org.hibernate.dialect.function.SQLFunction;
++import org.hibernate.dialect.function.StandardSQLFunction;
++import org.hibernate.dialect.function.TypeQualifiedSQLFunction;
++import org.hibernate.type.Type;
++import org.hibernate.type.TypeFactory;
++
++/**
++ * <p>
++ * User function declaration parser.
++ * </p>
++ * <p>
++ * Some databases require that ? parameters to be explicitly qualified by type
++ * specifications ('as <i>type</i>') when invoking user-defined functions, so
++ * the dialects for those databases need to know the signatures of the functions.
++ * But how?
++ * This class provides a simple string format to declare user-defined function
++ * signatures, and provides a parser-handler pair for a dialect to process the
++ * declaration.  A dialect can read the declaration string given by the user
++ * via the properties or something else, then parse it and create SQL function
++ * objects to render appropriate function invocations. 
++ * </p>
++ * <h2>Declaration examples</h2>
++ * <p>
++ * <ul>
++ *   <li>
++ *     Here <tt>my_function</tt> is a user-defined SQL function.
++ *     I has two parameters of SQL type integer and varchar(32).<br>
++ *     <tt>my_function=(integer,varchar(32))</tt>
++ *   </li>
++ *   <li>
++ *     You can optionally declare the return type explicitly.
++ *     Note the return type is a Hibernate type name but not an SQL type name:<br>
++ *     <tt>my_function=(integer,varchar(32)):string</tt>
++ *   </li>
++ *   <li>
++ *     Also you can name the function in HQL differently from the real SQL function name.<br>
++ *     <tt>my_hql_function=my_function(integer,varchar(32)):string</tt>
++ *   </li>
++ *   <li>
++ *     Multiple declarations are allowed by separating them with comma.<br>
++ *     <tt>f1=(integer,varchar(32)),f2=f3(decimal(11,0)):timestamp</tt>
++ *   </li>
++ *   <li>
++ *     Spaces are allowed.<br>
++ *     <tt>f1 = (integer, varchar(32)), f2 = f3(decimal(11,0)) : timestamp</tt> 
++ *   </li>
++ * </ul>
++ * </p>
++ * <h2>Class usage examples</h2>
++ * <p>
++ * This is the generic form:
++ * <pre>
++ * UserFuncDeclParser parser = new UserFuncDeclParser(new UserFuncDeclParser.Handler() {
++ *   public void userFuncDecl(String hqlFuncName, String sqlFuncName, Type returnType, List sqlArgTypes) {
++ *     ...
++ *   }
++ * });
++ * parser.parse(userFuncDeclString);
++ * </pre>
++ * In a dialect, you can use a shortcut form to parse the declaration string and
++ * register SQL function objects with the dialect itself.
++ * For a real example, see the implementation of {@link HiRDBDialect}. 
++ * <pre>
++ * UserFuncDeclParser parser = UserFuncDeclParser.getDefault(this);
++ * parser.parse(userFuncDeclarationString);
++ * </pre>
++ * </p>
++ * <h2>Detail syntax</h2>
++ * <pre>
++ * userFuncDecls  ::= userFuncDecl (',' userFuncDecls)?
++ * userFuncDecl   ::= HqlFuncName ('=' SqlFuncName? sqlArgsDecl? returnTypeDecl?)?
++ * sqlArgDecl     ::= '(' sqlTypeNames ')'
++ * sqlTypeNames   ::= SqlTypeName (',' sqlTypeNames)? 
++ * returnTypeDecl ::= ':' HibernateTypeName
++ * 
++ * HqlFuncName: Function name in HQL
++ * SqlFuncName: Function name in SQL (equals to HqlFuncName by default)
++ * SqlTypeName: SQL type name (integer, varchar(n), etc.)
++ * HibernateTypeName: Hibernate type name (integer, string, etc.)
++ * </pre>
++ * </p>
++ * 
++ * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
++ */
++public class UserFuncDeclParser {
++	private static final String DELIMS = " \t\n\r\f()=,:";
++	
++	private Handler m_handler;
++	
++	private StringTokenizer m_tokenizer;
++	private String m_token;
++	private char m_tokenChar;
++	private boolean m_isTokenWS;
++	private boolean m_isTokenID;
++	private StringBuffer m_sqlArgTypeBuffer;
++	
++	private String m_hqlFuncName;
++	private String m_sqlFuncName;
++	private Type m_returnType;
++	private ArrayList m_sqlArgTypes;
++	
++	/**
++	 * Construct an instance of parser with the specified handler.
++	 * 
++	 * @param handler The handler to invoke.
++	 */
++	public UserFuncDeclParser(Handler handler) {
++		m_handler = handler;
++	}
++	
++	/**
++	 * Parse the given string and invoke the handler for each time when
++	 * a valid function declaration is found.
++	 * 
++	 * @param userFuncDecl The string to parse.
++	 */
++	public void parse(String userFuncDecl) {
++		m_tokenizer = new StringTokenizer(userFuncDecl, DELIMS, true);
++		nextAndSkipWS();
++		parseUserFuncDecls();
++	}
++	
++	private void parseError(String message) {
++		throw new HibernateException("Error in user function declaration: " + message);
++	}
++	
++	private void parseUserFuncDecls() {
++		parseUserFuncDecl();
++		if (m_tokenChar == ',') {
++			nextAndSkipWS();
++			parseUserFuncDecls();
++		}
++		if (m_token != null) {
++			parseError("Unexpected token '" + m_token + "' found after the end of the declaration.");
++		}
++	}
++	
++	private void parseUserFuncDecl() {
++		parseHQLFuncName();
++		if (m_tokenChar == '=') {
++			nextAndSkipWS();
++			parseSQLFuncNameOpt();
++			parseSQLArgsDeclOpt();
++			parseReturnTypeDeclOpt();
++		}
++		m_handler.userFuncDecl(m_hqlFuncName, m_sqlFuncName, m_returnType,
++				m_sqlArgTypes);
++	}
++
++	private void parseHQLFuncName() {
++		if (!m_isTokenID) {
++			parseError("HQL function name expected but got '" + m_token + "'.");
++		}
++		
++		m_hqlFuncName = m_token;
++		m_sqlFuncName = m_token;
++		m_returnType = null;
++		m_sqlArgTypes = new ArrayList();
++		nextAndSkipWS();
++	}
++
++	private void parseSQLFuncNameOpt() {
++		if (m_isTokenID) {
++			m_sqlFuncName = m_token;
++			nextAndSkipWS();
++		}
++	}
++	
++	private void parseSQLArgsDeclOpt() {
++		if (m_tokenChar == '(') {
++			nextAndSkipWS();
++			if (m_tokenChar != ')') {
++				parseSQLTypeDecls();
++			}
++			consumeAndSkipWS(')');
++		}
++	}
++	
++	private void parseSQLTypeDecls() {
++		parseSQLTypeName();
++		if (m_tokenChar == ',') {
++			nextAndSkipWS();
++			parseSQLTypeDecls();
++		}
++	}
++
++	private void parseSQLTypeName() {
++		m_sqlArgTypeBuffer = new StringBuffer();
++		parseSQLTypeNameOuter();
++		m_sqlArgTypes.add(m_sqlArgTypeBuffer.toString().trim());
++	}
++	
++	private void parseSQLTypeNameOuter() {
++		while (m_isTokenID || m_isTokenWS) {
++			m_sqlArgTypeBuffer.append(m_token);
++			next();
++		}
++		if (m_tokenChar == '(') {
++			parseSQLTypeNameInner();
++			parseSQLTypeNameOuter();
++		}
++	}
++	
++	private void parseSQLTypeNameInner() {
++		m_sqlArgTypeBuffer.append(m_token);
++		consume('(');
++		while (m_tokenChar != ')' && m_token != null) {
++			m_sqlArgTypeBuffer.append(m_token);
++			next();
++		}
++		m_sqlArgTypeBuffer.append(m_token);
++		consume(')');
++	}
++
++	private void parseReturnTypeDeclOpt() {
++		if (m_tokenChar == ':') {
++			nextAndSkipWS();
++			Type type = TypeFactory.heuristicType(m_token);
++			if (type == null) {
++				parseError("Cannot find Hibernate type '" + m_token + "'.");
++			}
++			m_returnType = type;
++			nextAndSkipWS();
++		}
++	}
++	
++	private void consumeAndSkipWS(char c) {
++		consume(c);
++		skipWS();
++	}
++
++	private void consume(char c) {
++		if (m_tokenChar != c) {
++			parseError("Token '" + c + "' expected bot got '" + m_token + "'.");
++		}
++		next();
++	}
++	
++	private void nextAndSkipWS() {
++		next();
++		skipWS();
++	}
++	
++	private void next() {
++		if (!m_tokenizer.hasMoreTokens()) {
++			m_token = null;
++			m_tokenChar = 0;
++			m_isTokenWS = false;
++			m_isTokenID = false;
++			return;
++		}
++		
++		m_token = m_tokenizer.nextToken();
++		if (m_token.length() == 1) {
++			m_tokenChar = m_token.charAt(0);
++			m_isTokenWS = Character.isWhitespace(m_tokenChar);
++			m_isTokenID = !DELIMS.contains(m_token); 
++		} else {
++			m_tokenChar = 0;
++			m_isTokenWS = false;
++			m_isTokenID = true;
++		}
++	}
++	
++	private void skipWS() {
++		while (m_isTokenWS) {
++			next();
++		}
++	}
++	
++	/**
++	 * Handler interface of the user function declaration parser. 
++	 * 
++	 * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
++	 */
++	public interface Handler {
++		/**
++		 * Invoked for each valid function declaration. 
++		 * 
++		 * @param hqlFuncName The HQL function name.  Always non-null.
++		 * @param sqlFuncName The SQL function name.  Always non-null.
++		 * @param returnType The return type.  Null if not specified.
++		 * @param sqlArgTypes The list of SQL type names.  Always non-null, but may be empty.
++		 */
++		public void userFuncDecl(String hqlFuncName, String sqlFuncName, Type returnType, List sqlArgTypes);
++	}
++	
++	/**
++	 * Handler implementation of the user function declaration parser that configures a
++	 * dialect in a default way. 
++	 * 
++	 * This handler registers an SQL function object with the dialect for each declaration.
++	 * The SQL function object will be an instance of {@link StandardSQLFunction} with
++	 * the declared name and return type, and decorated by {@link TypeQualifiedSQLFunction}
++	 * to insert declared type specifications after each ? parameter when being rendered. 
++	 *    
++	 * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
++	 */
++	public static class DefaultHandler implements Handler {
++		private Dialect dialect;
++
++		/**
++		 * Construct a handler to configure the specified dialect.
++		 *  
++		 * @param dialect The dialect to configure.
++		 */
++		public DefaultHandler(Dialect dialect) {
++			this.dialect = dialect;
++		}
++		
++		/**
++		 * {@inheritDoc}
++		 */
++		public void userFuncDecl(String hqlFuncName, String sqlFuncName, Type returnType, List sqlArgTypes) {
++			SQLFunction function = new StandardSQLFunction(sqlFuncName, returnType); 
++			dialect.registerFunction(hqlFuncName, new TypeQualifiedSQLFunction(function, sqlArgTypes));
++		}
++	}
++	
++	/**
++	 * Construct a parser to configure the specified dialect in the default way.
++	 * 
++	 * This parser registers an SQL function object with the dialect for each declaration.
++	 * The SQL function object will be an instance of {@link StandardSQLFunction} with
++	 * the declared name and return type, and decorated by {@link TypeQualifiedSQLFunction}
++	 * to insert declared type specifications after each ? parameter when being rendered. 
++	 * 
++	 * @param dialect The dialect to configure.
++	 * @return The newly created parser.
++	 * 
++	 * @see DefaultHandler
++	 */
++	public static UserFuncDeclParser getDefault(Dialect dialect) {
++		return new UserFuncDeclParser(new DefaultHandler(dialect)); 
++	}
++	
++}
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/function/AnsiTrimEmulationFunction.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/AnsiTrimEmulationFunction.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/function/AnsiTrimEmulationFunction.java	Fri Aug 11 14:38:26 2006
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/AnsiTrimEmulationFunction.java	Fri Aug 15 23:17:37 2008
+@@ -12,27 +12,29 @@ import java.util.ArrayList;
+ /**
+  * A {@link SQLFunction} implementation that emulates the ANSI SQL trim function
+  * on dialects which do not support the full definition.  However, this function
+  * definition does assume the availability of ltrim, rtrim, and replace functions
+  * which it uses in various combinations to emulate the desired ANSI trim()
+  * functionality.
+  *
+  * @author Steve Ebersole
++ * @author Modified by Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
+  */
+ public class AnsiTrimEmulationFunction implements SQLFunction {
+ 
+-	private static final SQLFunction LEADING_SPACE_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( ?1 )");
+-	private static final SQLFunction TRAILING_SPACE_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "rtrim( ?1 )");
+-	private static final SQLFunction BOTH_SPACE_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( rtrim( ?1 ) )");
+-	private static final SQLFunction BOTH_SPACE_TRIM_FROM = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( rtrim( ?2 ) )");
+-
+-	private static final SQLFunction LEADING_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( rtrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ), ' ', ?2 ), '${space}$', ' ' )" );
+-	private static final SQLFunction TRAILING_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( ltrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ), ' ', ?2 ), '${space}$', ' ' )" );
+-	private static final SQLFunction BOTH_TRIM = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( ltrim( rtrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ) ), ' ', ?2 ), '${space}$', ' ' )" );
++	// Functions to emulate various trimming behaviors.  Subclasses can override them if necessary.
++	protected SQLFunction leadingSpaceTrim = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( ?1 )");
++	protected SQLFunction trailingSpaceTrim = new SQLFunctionTemplate( Hibernate.STRING, "rtrim( ?1 )");
++	protected SQLFunction bothSpaceTrim = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( rtrim( ?1 ) )");
++	protected SQLFunction bothSpaceTrimFrom = new SQLFunctionTemplate( Hibernate.STRING, "ltrim( rtrim( ?2 ) )");
++
++	protected SQLFunction leadingTrim = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( rtrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ), ' ', ?2 ), '${space}$', ' ' )" );
++	protected SQLFunction trailingTrim = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( ltrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ), ' ', ?2 ), '${space}$', ' ' )" );
++	protected SQLFunction bothTrim = new SQLFunctionTemplate( Hibernate.STRING, "replace( replace( ltrim( rtrim( replace( replace( ?1, ' ', '${space}$' ), ?2, ' ' ) ) ), ' ', ?2 ), '${space}$', ' ' )" );
+ 
+ 	public Type getReturnType(Type columnType, Mapping mapping) throws QueryException {
+ 		return Hibernate.STRING;
+ 	}
+ 
+ 	public boolean hasArguments() {
+ 		return true;
+ 	}
+@@ -57,22 +59,22 @@ public class AnsiTrimEmulationFunction i
+ 		//      | TRAILING
+ 		//      | BOTH
+ 		//
+ 		// If only <trim specification> is omitted, BOTH is assumed;
+ 		// if <trim character> is omitted, space is assumed
+ 		if ( args.size() == 1 ) {
+ 			// we have the form: trim(trimSource)
+ 			//      so we trim leading and trailing spaces
+-			return BOTH_SPACE_TRIM.render( args, factory );
++			return bothSpaceTrim.render( args, factory );
+ 		}
+ 		else if ( "from".equalsIgnoreCase( ( String ) args.get( 0 ) ) ) {
+ 			// we have the form: trim(from trimSource).
+ 			//      This is functionally equivalent to trim(trimSource)
+-			return BOTH_SPACE_TRIM_FROM.render( args, factory );
++			return bothSpaceTrimFrom.render( args, factory );
+ 		}
+ 		else {
+ 			// otherwise, a trim-specification and/or a trim-character
+ 			// have been specified;  we need to decide which options
+ 			// are present and "do the right thing"
+ 			boolean leading = true;         // should leading trim-characters be trimmed?
+ 			boolean trailing = true;        // should trailing trim-characters be trimmed?
+ 			String trimCharacter = null;    // the trim-character
+@@ -116,31 +118,31 @@ public class AnsiTrimEmulationFunction i
+ 
+ 			List argsToUse = null;
+ 			argsToUse = new ArrayList();
+ 			argsToUse.add( trimSource );
+ 			argsToUse.add( trimCharacter );
+ 
+ 			if ( trimCharacter.equals( "' '" ) ) {
+ 				if ( leading && trailing ) {
+-					return BOTH_SPACE_TRIM.render( argsToUse, factory );
++					return bothSpaceTrim.render( argsToUse, factory );
+ 				}
+ 				else if ( leading ) {
+-					return LEADING_SPACE_TRIM.render( argsToUse, factory );
++					return leadingSpaceTrim.render( argsToUse, factory );
+ 				}
+ 				else {
+-					return TRAILING_SPACE_TRIM.render( argsToUse, factory );
++					return trailingSpaceTrim.render( argsToUse, factory );
+ 				}
+ 			}
+ 			else {
+ 				if ( leading && trailing ) {
+-					return BOTH_TRIM.render( argsToUse, factory );
++					return bothTrim.render( argsToUse, factory );
+ 				}
+ 				else if ( leading ) {
+-					return LEADING_TRIM.render( argsToUse, factory );
++					return leadingTrim.render( argsToUse, factory );
+ 				}
+ 				else {
+-					return TRAILING_TRIM.render( argsToUse, factory );
++					return trailingTrim.render( argsToUse, factory );
+ 				}
+ 			}
+ 		}
+ 	}
+ }
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/function/AnsiTrimEmulationFunctionWithTrimstrs.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/AnsiTrimEmulationFunctionWithTrimstrs.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/function/AnsiTrimEmulationFunctionWithTrimstrs.java	Thu Jan 01 09:00:00 1970
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/AnsiTrimEmulationFunctionWithTrimstrs.java	Fri Aug 15 22:03:23 2008
+@@ -0,0 +1,17 @@
++package org.hibernate.dialect.function;
++
++import org.hibernate.Hibernate;
++
++/**
++ * A variation of {@link AnsiTrimEmulationFunction}, which uses <tt>ltrimstr</tt>
++ * and <tt>rtrimstr</tt> to avoid replacing "$ and space" wrongly.
++ *
++ * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hicathi.com</tt>
++ */
++public class AnsiTrimEmulationFunctionWithTrimstrs extends AnsiTrimEmulationFunction {
++	public AnsiTrimEmulationFunctionWithTrimstrs() {
++		this.leadingTrim = new SQLFunctionTemplate(Hibernate.STRING, "ltrimstr( ?1, ?2 )");
++		this.trailingTrim = new SQLFunctionTemplate(Hibernate.STRING, "rtrimstr( ?1, ?2 )");
++		this.bothTrim = new SQLFunctionTemplate(Hibernate.STRING, "ltrimstr( rtrimstr( ?1, ?2 ), ?2 )");
++	}
++}
+diff -ru8pN hibernate-3.2.5.ga/src/org/hibernate/dialect/function/TypeQualifiedSQLFunction.java hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/TypeQualifiedSQLFunction.java
+--- hibernate-3.2.5.ga/src/org/hibernate/dialect/function/TypeQualifiedSQLFunction.java	Thu Jan 01 09:00:00 1970
++++ hibernate-3.2.5.ga-hirdb/src/org/hibernate/dialect/function/TypeQualifiedSQLFunction.java	Fri Aug 15 22:03:28 2008
+@@ -0,0 +1,91 @@
++package org.hibernate.dialect.function;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.QueryException;
++import org.hibernate.engine.Mapping;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.type.Type;
++
++/**
++ * <p>
++ * A decorator of {@link SQLFunction} that inserts type specifications
++ * ('as <tt>type</tt>') after ? parameters.  Some databases require that
++ * ? parameters to be explicitly qualified by type specifications when
++ * invoking functions, so it is the place where this class comes into.   
++ * </p>
++ * <p>
++ * Example ({...} represents a List):
++ * <pre>
++ * 
++ * SQLFunction f1 = new StandardSQLFunction("f")
++ * SQLFunction f2 = new TypeQualifiedSQLFunction(f1, {"integer", "varchar(255)"});
++ * 
++ * f1.render({"?", "?"}, ...) -> f(?, ?) 
++ * f2.render({"?", "?"}, ...) -> f(? as integer, ? as varchar(255))
++ * f2.render({"123", "?"}, ...) -> f(123, ? as varchar(255)) (Non-? parameters are not qualified) 
++ * </pre>
++ * </p>
++ * 
++ * @author Tomoto Shimizu Washio <tt>tomoto.shimizu.vt@hitachi.com</tt>
++ */
++public class TypeQualifiedSQLFunction implements SQLFunction {
++	private SQLFunction m_decoratee;
++	private List m_argTypes;
++	
++	/**
++	 * Construct a decorator to insert type specification for another SQL function. 
++	 * 
++	 * @param decoratee Another SQL function to be decorated.
++	 * @param argTypes The list of SQL type names to be inserted. 
++	 */
++	public TypeQualifiedSQLFunction(SQLFunction decoratee, List argTypes) {
++		m_decoratee = decoratee;
++		m_argTypes = argTypes;
++	}
++
++	/**
++	 * Delegate to the decoratee's {@link SQLFunction#getReturnType(Type, Mapping)}.
++	 */
++	public Type getReturnType(Type columnType, Mapping mapping)
++			throws QueryException {
++		return m_decoratee.getReturnType(columnType, mapping);
++	}
++
++	/**
++	 * Delegate to the decoratee's {@link SQLFunction#hasArguments()}. 
++	 */
++	public boolean hasArguments() {
++		return m_decoratee.hasArguments();
++	}
++
++	/**
++	 * Delegate to the decoratee's {@link SQLFunction#hasParenthesesIfNoArguments()}.
++	 */
++	public boolean hasParenthesesIfNoArguments() {
++		return m_decoratee.hasParenthesesIfNoArguments();
++	}
++
++	/**
++	 * Delegate to the decoratee's {@link SQLFunction#render(List, SessionFactoryImplementor)}
++	 * after appending 'as' and the corresponding type name to each ? parameter.
++	 */
++	public String render(List args, SessionFactoryImplementor factory)
++			throws QueryException {
++		List newArgs = new ArrayList(args.size());
++		for (int i = 0; i < args.size(); i++) {
++			Object param = args.get(i);
++			if (param.equals("?") && i < m_argTypes.size()) {
++				// if the arg is '?', append the type specification.
++				newArgs.add("? as " + m_argTypes.get(i));
++			} else {
++				// if the arg is not '?' or the type is unknown, use it as it is.
++				newArgs.add(param);
++			}
++		}
++		
++		return m_decoratee.render(newArgs, factory);
++	}
++
++}

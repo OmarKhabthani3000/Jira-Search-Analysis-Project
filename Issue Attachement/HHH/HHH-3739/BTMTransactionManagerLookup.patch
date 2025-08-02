@@ -1,0 +1,38 @@
+Index: core/src/main/java/org/hibernate/transaction/BTMTransactionManagerLookup.java
+===================================================================
+--- core/src/main/java/org/hibernate/transaction/BTMTransactionManagerLookup.java	(revision 15184)
++++ core/src/main/java/org/hibernate/transaction/BTMTransactionManagerLookup.java	(working copy)
+@@ -24,6 +24,7 @@
+  */
+ package org.hibernate.transaction;
+ 
++import java.lang.reflect.Method;
+ import java.util.Properties;
+ 
+ import javax.transaction.TransactionManager;
+@@ -55,7 +56,24 @@
+ 	 * {@inheritDoc}
+ 	 */
+ 	public String getUserTransactionName() {
+-		return "java:comp/UserTransaction";
++		try	{
++			Class transactionManagerServiceClass = Class.forName("bitronix.tm.TransactionManagerServices");
++			Method getConfigurationMethod = transactionManagerServiceClass.getMethod("getConfiguration", null);
++			Object configurationInstance = getConfigurationMethod.invoke(null, null);
++
++			Class bitronixConfigurationClass = configurationInstance.getClass();
++			Method getJndiUserTransactionNameMethod = bitronixConfigurationClass
++					.getMethod("getJndiUserTransactionName", null);
++			String configuredJndiUserTransactionName = (String) getJndiUserTransactionNameMethod.invoke(
++					configurationInstance, null);
++			if (configuredJndiUserTransactionName != null && configuredJndiUserTransactionName.trim().length() >= 0) {
++				return configuredJndiUserTransactionName;
++			}
++			return "java:comp/UserTransaction";
++		}
++		catch (Exception e)	{
++			throw new HibernateException("Could not obtain BTM UserTransactionName", e);
++		}
+ 	}
+ 
+ 	/**

@@ -1,0 +1,89 @@
+Index: dialect/Dialect.java
+===================================================================
+--- dialect/Dialect.java	(revision 15808)
++++ dialect/Dialect.java	(working copy)
+@@ -1390,6 +1390,15 @@
+ 	    return true;
+ 	}
+ 
++    /**
++     * Does this dialect support adding Unique constraints via create and alter table 
++     * for the primary key ?
++     * @return boolean
++     */
++	public boolean supportsUniqueConstraintInCreateAlterTableForPrimaryKey() {
++	    return true;
++	}
++
+ 	/**
+ 	 * The syntax used to add a column to a table (optional).
+ 	 *
+Index: dialect/Oracle10gDialect.java
+===================================================================
+--- dialect/Oracle10gDialect.java	(revision 15808)
++++ dialect/Oracle10gDialect.java	(working copy)
+@@ -23,4 +23,7 @@
+ 		return new ANSIJoinFragment();
+ 	}
+ 
+-}
+\ No newline at end of file
++	public boolean supportsUniqueConstraintInCreateAlterTableForPrimaryKey() {
++	    return false;
++	}
++}
+Index: mapping/Table.java
+===================================================================
+--- mapping/Table.java	(revision 15808)
++++ mapping/Table.java	(working copy)
+@@ -307,7 +307,8 @@
+ 
+ 				boolean useUniqueConstraint = column.isUnique() &&
+ 						dialect.supportsUnique() &&
+-						( !column.isNullable() || dialect.supportsNotNullUnique() );
++						( !column.isNullable() || dialect.supportsNotNullUnique() ) &&
++						( isNotColumnPrimaryKey(column) || dialect.supportsUniqueConstraintInCreateAlterTableForPrimaryKey() );
+ 				if ( useUniqueConstraint ) {
+ 					alter.append( " unique" );
+ 				}
+@@ -408,7 +409,8 @@
+ 			}
+ 
+ 			boolean useUniqueConstraint = col.isUnique() &&
+-					( !col.isNullable() || dialect.supportsNotNullUnique() );
++					( !col.isNullable() || dialect.supportsNotNullUnique() ) &&
++					( isNotColumnPrimaryKey(col) || dialect.supportsUniqueConstraintInCreateAlterTableForPrimaryKey() );
+ 			if ( useUniqueConstraint ) {
+ 				if ( dialect.supportsUnique() ) {
+ 					buf.append( " unique" );
+@@ -445,7 +447,9 @@
+ 			while ( ukiter.hasNext() ) {
+ 				UniqueKey uk = (UniqueKey) ukiter.next();
+ 				String constraint = uk.sqlConstraintString( dialect );
+-				if ( constraint != null ) {
++				if ( constraint != null && ( 
++					isNotUniqueKeyPrimaryKey(uk) || 
++					dialect.supportsUniqueConstraintInCreateAlterTableForPrimaryKey() )  ) {
+ 					buf.append( ", " ).append( constraint );
+ 				}
+ 			}
+@@ -765,4 +769,19 @@
+ 		return comments.iterator();
+ 	}
+ 
++	private boolean isNotUniqueKeyPrimaryKey(UniqueKey uk){
++		List ukcolumns = uk.getColumns();
++		List pkcolumns = getPrimaryKey().getColumns();
++		// does the uniquekey and primarykey have the same columns?
++		return ! ukcolumns.equals(pkcolumns);
++	}
++	
++	private boolean isNotColumnPrimaryKey(Column column){
++		List pkcolumns = getPrimaryKey().getColumns();
++		boolean result = true;
++		if (pkcolumns.size() == 1){
++			result = ! pkcolumns.get(0).equals(column);
++		}
++		return result;
++	}
+ }

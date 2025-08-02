@@ -1,0 +1,281 @@
+Only in hibernate-3.2/src/org/hibernate/hql/ast/util: SessionFactoryHelper.java~
+diff -ur hibernate-3.2.orig/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java hibernate-3.2/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+--- hibernate-3.2.orig/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	2007-11-28 20:36:04.000000000 -0500
++++ hibernate-3.2/src/org/hibernate/loader/criteria/CriteriaJoinWalker.java	2008-12-11 16:18:30.000000000 -0500
+@@ -22,6 +22,9 @@
+ import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
+ /**
+  * A <tt>JoinWalker</tt> for <tt>Criteria</tt> queries.
+  *
+@@ -29,6 +32,7 @@
+  * @author Gavin King
+  */
+ public class CriteriaJoinWalker extends AbstractEntityJoinWalker {
++	private static final Log logger = LogFactory.getLog(CriteriaJoinWalker.class);
+ 
+ 	//TODO: add a CriteriaImplementor interface
+ 	//      this class depends directly upon CriteriaImpl in the impl package...
+@@ -153,7 +157,8 @@
+ 	}
+ 	
+ 	protected String generateTableAlias(int n, String path, Joinable joinable) {
+-		if ( joinable.consumesEntityAlias() ) {
++		logger.debug("generateTableAlias n="+n+" path="+path+" joinable="+joinable);
++		if ( true || joinable.consumesEntityAlias() ) {
+ 			final Criteria subcriteria = translator.getCriteria(path);
+ 			String sqlAlias = subcriteria==null ? null : translator.getSQLAlias(subcriteria);
+ 			if (sqlAlias!=null) {
+Only in hibernate-3.2/src/org/hibernate/loader/criteria: CriteriaJoinWalker.java~
+diff -ur hibernate-3.2.orig/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java hibernate-3.2/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+--- hibernate-3.2.orig/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	2006-03-16 09:14:48.000000000 -0500
++++ hibernate-3.2/src/org/hibernate/loader/criteria/CriteriaQueryTranslator.java	2008-12-11 17:32:50.000000000 -0500
+@@ -10,6 +10,7 @@
+ import java.util.Map;
+ import java.util.Set;
+ import java.util.StringTokenizer;
++import java.io.Serializable;
+ 
+ import org.apache.commons.collections.SequencedHashMap;
+ import org.hibernate.Criteria;
+@@ -30,15 +31,22 @@
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.CollectionType;
++import org.hibernate.type.ComponentType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.NullableType;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.StringHelper;
++import org.hibernate.hql.ast.util.SessionFactoryHelper;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ 
+ /**
+  * @author Gavin King
+  */
+ public class CriteriaQueryTranslator implements CriteriaQuery {
++	private static final Log logger = LogFactory.getLog(CriteriaQueryTranslator.class);
+ 
+ 	public static final String ROOT_SQL_ALIAS = Criteria.ROOT_ALIAS + '_';
+ 
+@@ -49,13 +57,18 @@
+ 	private final String rootSQLAlias;
+ 	private int aliasCount = 0;
+ 
++	// note: not ALL of these are actual entities, some are collection roles, see
++	// the collectionRoleCriteriaMap map below.
+ 	private final Map criteriaEntityNames = new SequencedHashMap();
+ 	private final Map criteriaSQLAliasMap = new HashMap();
+ 	private final Map aliasCriteriaMap = new HashMap();
+ 	private final Map associationPathCriteriaMap = new SequencedHashMap();
+ 	private final Map associationPathJoinTypesMap = new SequencedHashMap();
++	// a subset of the criteriaEntityNames which are in fact persistent collections of components.
++	private final Map /* <String, Criteria> */  collectionRoleCriteriaMap = new HashMap();
+ 
+ 	private final SessionFactoryImplementor sessionFactory;
++	private final SessionFactoryHelper helper;
+ 
+ 	public CriteriaQueryTranslator(
+ 			final SessionFactoryImplementor factory,
+@@ -76,6 +89,7 @@
+ 		this.rootEntityName = rootEntityName;
+ 		this.sessionFactory = factory;
+ 		this.rootSQLAlias = rootSQLAlias;
++		this.helper = new SessionFactoryHelper(factory);
+ 		createAliasCriteriaMap();
+ 		createAssociationPathCriteriaMap();
+ 		createCriteriaEntityNameMap();
+@@ -104,7 +118,9 @@
+ 	}
+ 
+ 	public Criteria getCriteria(String path) {
+-		return ( Criteria ) associationPathCriteriaMap.get( path );
++		Criteria crit = ( Criteria ) associationPathCriteriaMap.get( path );
++		logger.debug("getCriteria for path="+path+" crit="+crit);
++		return crit;
+ 	}
+ 
+ 	public Set getQuerySpaces() {
+@@ -112,7 +128,14 @@
+ 		Iterator iter = criteriaEntityNames.values().iterator();
+ 		while ( iter.hasNext() ) {
+ 			String entityName = ( String ) iter.next();
+-			result.addAll( Arrays.asList( getFactory().getEntityPersister( entityName ).getQuerySpaces() ) );
++			Serializable[] spaces;
++			if (collectionRoleCriteriaMap.containsKey(entityName)) {
++				spaces = helper.getCollectionPersister(entityName).getCollectionSpaces();
++			} else {
++				spaces = getFactory().getEntityPersister( entityName ).getQuerySpaces();
++			}
++
++			result.addAll( Arrays.asList( spaces ) );
+ 		}
+ 		return result;
+ 	}
+@@ -183,30 +206,98 @@
+ 		}
+ 	}
+ 
++	interface PathInfo {
++		String getName();
++		boolean isRole();
++	}
++
+ 	private void createCriteriaEntityNameMap() {
+ 		criteriaEntityNames.put( rootCriteria, rootEntityName );
+ 		Iterator iter = associationPathCriteriaMap.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) iter.next();
++			PathInfo info = getPathInfo((String)me.getKey());
++
+ 			criteriaEntityNames.put(
+ 					me.getValue(), //the criteria instance
+-			        getPathEntityName( ( String ) me.getKey() )
++					info.getName()
+ 			);
++
++			if (info.isRole()) {
++				// this will throw an exception if the role isn't set up correctly
++				// also initializes some info in the helper that's required later.
++				helper.requireQueryableCollection(info.getName());
++
++				// this Map is name => criteria, not criteria => name
++				collectionRoleCriteriaMap.put(
++					info.getName(),
++					me.getValue()  //as above, the criteria instance
++				);
++			}
+ 		}
+ 	}
+ 
+-	private String getPathEntityName(String path) {
+-		Queryable persister = ( Queryable ) sessionFactory.getEntityPersister( rootEntityName );
++	/**
++	 * returns the name of the Entity or Collection role for a given association path
++	 */
++	private PathInfo getPathInfo(String path) {
+ 		StringTokenizer tokens = new StringTokenizer( path, "." );
+ 		String componentPath = "";
++
++		abstract class PathInfoProvider implements PathInfo {
++			abstract Type getType(String componentPath);
++			abstract public String getName();
++			abstract public boolean isRole();
++		}
++
++		class EntityPathInfoProvider extends PathInfoProvider {
++			Queryable persister;
++			EntityPathInfoProvider(Queryable persister) { this.persister = persister; }
++		        Type getType(String componentPath) {
++				return persister.toType(componentPath);
++			}
++			public String getName() {
++				return persister.getEntityName();
++			}
++			public boolean isRole() { return false; }
++		}
++		// despite the name, ONLY for collection of non-entity (i.e collection of component or collection of value)
++		class CollectionPathInfoProvider extends PathInfoProvider  {
++			CollectionType ctype;
++			CollectionPathInfoProvider(Type type) { this.ctype = (CollectionType)type; }
++			Type getType(String componentPath) {
++				ComponentType cmtype = (ComponentType)ctype.getElementType(sessionFactory);
++				String[] propertyNames = cmtype.getPropertyNames();
++				for (int i = 0; i < propertyNames.length; i++) {
++					if (propertyNames[i].equals(componentPath)) {
++						return cmtype.getSubtypes()[i];
++					}
++				}
++				throw new IllegalArgumentException("property "+componentPath+" not found in component of collection "+getName());
++			}
++			public String getName() {
++				return ctype.getRole();
++			}
++			public boolean isRole() { return true; }
++		}
++		
++		PathInfoProvider provider = new EntityPathInfoProvider(( Queryable ) sessionFactory.getEntityPersister( rootEntityName ));
++
+ 		while ( tokens.hasMoreTokens() ) {
+ 			componentPath += tokens.nextToken();
+-			Type type = persister.toType( componentPath );
++			logger.debug("searching for "+componentPath);
++			Type type = provider.getType( componentPath );
+ 			if ( type.isAssociationType() ) {
+ 				AssociationType atype = ( AssociationType ) type;
+-				persister = ( Queryable ) sessionFactory.getEntityPersister(
++				// is the association a collection of components or value-types? (i.e a colloction of valued types?)
++				if ( type.isCollectionType() && (( CollectionType )type).getElementType( sessionFactory ).isComponentType() ) {
++					provider = new CollectionPathInfoProvider(type);
++				}
++				else {
++					provider = new EntityPathInfoProvider(( Queryable ) sessionFactory.getEntityPersister(
+ 						atype.getAssociatedEntityName( sessionFactory )
+-				);
++										      ));
++				}
+ 				componentPath = "";
+ 			}
+ 			else if ( type.isComponentType() ) {
+@@ -216,7 +307,9 @@
+ 				throw new QueryException( "not an association: " + componentPath );
+ 			}
+ 		}
+-		return persister.getEntityName();
++
++		logger.debug("returning entity name="+provider.getName()+" for path="+path+" role="+provider.isRole());
++		return provider;
+ 	}
+ 
+ 	public int getSQLAliasCount() {
+@@ -234,6 +327,7 @@
+ 				alias = ( String ) me.getValue(); // the entity name
+ 			}
+ 			criteriaSQLAliasMap.put( crit, StringHelper.generateAlias( alias, i++ ) );
++			logger.debug("put criteria="+crit+" alias="+((String)criteriaSQLAliasMap.get(crit)));
+ 		}
+ 		criteriaSQLAliasMap.put( rootCriteria, rootSQLAlias );
+ 	}
+@@ -358,7 +452,9 @@
+ 	}
+ 
+ 	public String getSQLAlias(Criteria criteria) {
+-		return ( String ) criteriaSQLAliasMap.get( criteria );
++		String alias = ( String )criteriaSQLAliasMap.get( criteria );
++		logger.debug("returning alias="+alias+" for criteria="+criteria);
++		return alias;
+ 	}
+ 
+ 	public String getEntityName(Criteria criteria) {
+@@ -515,7 +611,12 @@
+ 
+ 	private PropertyMapping getPropertyMapping(String entityName)
+ 			throws MappingException {
+-		return ( PropertyMapping ) sessionFactory.getEntityPersister( entityName );
++		logger.debug("getPropertyMapping for "+entityName);
++		if (collectionRoleCriteriaMap.containsKey(entityName)) {
++			return ( PropertyMapping ) helper.getCollectionPersister( entityName );
++		} else {
++			return ( PropertyMapping ) sessionFactory.getEntityPersister( entityName );
++		}
+ 	}
+ 
+ 	//TODO: use these in methods above
+@@ -532,6 +633,7 @@
+ 	}
+ 
+ 	public String getSQLAlias(Criteria criteria, String propertyName) {
++		logger.debug("getSQLAlias for criteria="+criteria+" propertyName="+propertyName);
+ 		if ( propertyName.indexOf( '.' ) > 0 ) {
+ 			String root = StringHelper.root( propertyName );
+ 			Criteria subcriteria = getAliasedCriteria( root );
+Only in hibernate-3.2/src/org/hibernate/loader/criteria: CriteriaQueryTranslator.java~
+Only in hibernate-3.2/src/org/hibernate/loader/criteria: CriteriaQueryTranslator.java.1
+Only in hibernate-3.2/src/org/hibernate/type: CollectionType.java~

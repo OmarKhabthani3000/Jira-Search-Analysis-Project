@@ -1,0 +1,137 @@
+Index: project/core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java
+===================================================================
+--- project/core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java	(revision 2)
++++ project/core/src/main/java/org/hibernate/action/BulkOperationCleanupAction.java	(revision )
+@@ -55,7 +55,7 @@
+  * @author Steve Ebersole
+  */
+ public class BulkOperationCleanupAction implements Executable, Serializable {
+-	private final Serializable[] affectedTableSpaces;
++	private final String[] affectedTableSpaces;
+ 
+ 	private final Set entityCleanups = new HashSet();
+ 	private final Set collectionCleanups = new HashSet();
+@@ -91,7 +91,7 @@
+ 			}
+ 		}
+ 
+-		this.affectedTableSpaces = ( Serializable[] ) tmpSpaces.toArray( new Serializable[ tmpSpaces.size() ] );
++		this.affectedTableSpaces = ( String[] ) tmpSpaces.toArray( new String[ tmpSpaces.size() ] );
+ 	}
+ 
+ 	/**
+@@ -137,7 +137,7 @@
+ 			}
+ 		}
+ 
+-		this.affectedTableSpaces = ( Serializable[] ) tmpSpaces.toArray( new Serializable[ tmpSpaces.size() ] );
++		this.affectedTableSpaces = ( String[] ) tmpSpaces.toArray( new String[ tmpSpaces.size() ] );
+ 	}
+ 
+ 
+Index: project/core/src/main/java/org/hibernate/engine/ActionQueue.java
+===================================================================
+--- project/core/src/main/java/org/hibernate/engine/ActionQueue.java	(revision 2)
++++ project/core/src/main/java/org/hibernate/engine/ActionQueue.java	(revision )
+@@ -84,6 +84,7 @@
+ 	private ArrayList collectionCreations;
+ 	private ArrayList collectionUpdates;
+ 	private ArrayList collectionRemovals;
++    private ArrayList bulkOperationCleanups;
+ 
+ 	private AfterTransactionCompletionProcessQueue afterTransactionProcesses;
+ 	private BeforeTransactionCompletionProcessQueue beforeTransactionProcesses;
+@@ -106,7 +107,9 @@
+ 		collectionCreations = new ArrayList( INIT_QUEUE_LIST_SIZE );
+ 		collectionRemovals = new ArrayList( INIT_QUEUE_LIST_SIZE );
+ 		collectionUpdates = new ArrayList( INIT_QUEUE_LIST_SIZE );
+-
++        
++        bulkOperationCleanups = new ArrayList( INIT_QUEUE_LIST_SIZE ); 
++
+ 		afterTransactionProcesses = new AfterTransactionCompletionProcessQueue( session );
+ 		beforeTransactionProcesses = new BeforeTransactionCompletionProcessQueue( session );
+ 	}
+@@ -119,6 +122,8 @@
+ 		collectionCreations.clear();
+ 		collectionRemovals.clear();
+ 		collectionUpdates.clear();
++        
++        bulkOperationCleanups.clear();
+ 	}
+ 
+ 	public void addAction(EntityInsertAction action) {
+@@ -150,6 +155,7 @@
+ 	}
+ 
+ 	public void addAction(BulkOperationCleanupAction cleanupAction) {
++        bulkOperationCleanups.add( cleanupAction );
+ 		registerProcess( cleanupAction.getAfterTransactionCompletionProcess() );
+ 	}
+ 
+@@ -182,6 +188,7 @@
+ 		executeActions( collectionUpdates );
+ 		executeActions( collectionCreations );
+ 		executeActions( deletions );
++        executeActions( bulkOperationCleanups );
+ 	}
+ 
+ 	/**
+@@ -226,7 +233,8 @@
+ 				areTablesToUpdated( deletions, tables ) ||
+ 				areTablesToUpdated( collectionUpdates, tables ) ||
+ 				areTablesToUpdated( collectionCreations, tables ) ||
+-				areTablesToUpdated( collectionRemovals, tables );
++				areTablesToUpdated( collectionRemovals, tables ) ||
++                areTablesToUpdated( bulkOperationCleanups, tables );
+ 	}
+ 
+ 	/**
+@@ -299,6 +307,7 @@
+ 				.append( " collectionCreations=" ).append( collectionCreations )
+ 				.append( " collectionRemovals=" ).append( collectionRemovals )
+ 				.append( " collectionUpdates=" ).append( collectionUpdates )
++				.append( " bulkOperationCleanups=" ).append( bulkOperationCleanups )
+ 				.append( "]" )
+ 				.toString();
+ 	}
+@@ -388,7 +397,8 @@
+ 				deletions.size() > 0 ||
+ 				collectionUpdates.size() > 0 ||
+ 				collectionRemovals.size() > 0 ||
+-				collectionCreations.size() > 0;
++				collectionCreations.size() > 0 ||
++                bulkOperationCleanups.size() > 0;
+ 	}
+ 
+ 	/**
+@@ -443,7 +453,14 @@
+ 		for ( int i = 0; i < queueSize; i++ ) {
+ 			oos.writeObject( collectionCreations.get( i ) );
+ 		}
++
++		queueSize = bulkOperationCleanups.size();
++		log.trace( "starting serialization of [" + queueSize + "] bulkOperationCleanups entries" );
++		oos.writeInt( queueSize );
++		for ( int i = 0; i < queueSize; i++ ) {
++			oos.writeObject( bulkOperationCleanups.get( i ) );
+-	}
++		}
++	}
+ 
+ 	/**
+ 	 * Used by the owning session to explicitly control deserialization of the
+@@ -504,6 +521,13 @@
+ 		for ( int i = 0; i < queueSize; i++ ) {
+ 			rtn.collectionCreations.add( ois.readObject() );
+ 		}
++
++		queueSize = ois.readInt();
++		log.trace( "starting deserialization of [" + queueSize + "] bulkOperationCleanups entries" );
++		rtn.bulkOperationCleanups = new ArrayList( queueSize );
++		for ( int i = 0; i < queueSize; i++ ) {
++			rtn.bulkOperationCleanups.add( ois.readObject() );
++		}
+ 		return rtn;
+ 	}
+ 

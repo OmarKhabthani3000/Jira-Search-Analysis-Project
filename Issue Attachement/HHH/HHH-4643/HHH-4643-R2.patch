@@ -1,0 +1,187 @@
+### Eclipse Workspace Patch 1.0
+#P hibernate-core
+Index: src/main/java/org/hibernate/cfg/Environment.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Environment.java	(revision 18147)
++++ src/main/java/org/hibernate/cfg/Environment.java	(working copy)
+@@ -513,6 +513,22 @@
+ 
+ 	public static final String JPAQL_STRICT_COMPLIANCE= "hibernate.query.jpaql_strict_compliance";
+ 
++	/**
++	 * A default database schema (owner) name to use for unqualified tablenames
++	 * regarding entity auditing (Envers).
++	 * 
++	 * @since Hibernate 3.5
++	 */
++	public static final String AUDIT_DEFAULT_SCHEMA = "org.hibernate.envers.default_schema";
++
++	/**
++	 * A default database catalog name to use for unqualified audit tablenames 
++	 * regarding entity auditing (Envers).
++	 * 
++	 * @since Hibernate 3.5
++	 */
++	public static final String AUDIT_DEFAULT_CATALOG = "org.hibernate.envers.default_catalog";
++	
+ 	private static final BytecodeProvider BYTECODE_PROVIDER_INSTANCE;
+ 	private static final boolean ENABLE_BINARY_STREAMS;
+ 	private static final boolean ENABLE_REFLECTION_OPTIMIZER;
+Index: src/main/java/org/hibernate/cfg/SettingsFactory.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/SettingsFactory.java	(revision 18147)
++++ src/main/java/org/hibernate/cfg/SettingsFactory.java	(working copy)
+@@ -224,6 +224,13 @@
+ 		settings.setDefaultSchemaName(defaultSchema);
+ 		settings.setDefaultCatalogName(defaultCatalog);
+ 
++		String auditDefaultSchema = properties.getProperty(Environment.AUDIT_DEFAULT_SCHEMA);
++		String auditDefaultCatalog = properties.getProperty(Environment.AUDIT_DEFAULT_CATALOG);
++		if (auditDefaultSchema!=null) log.info("Audit default schema: " + auditDefaultSchema);
++		if (auditDefaultCatalog!=null) log.info("Audit default catalog: " + auditDefaultCatalog);
++		settings.setAuditDefaultSchemaName(auditDefaultSchema);
++		settings.setAuditDefaultCatalogName(auditDefaultCatalog);
++
+ 		Integer maxFetchDepth = PropertiesHelper.getInteger(Environment.MAX_FETCH_DEPTH, properties);
+ 		if (maxFetchDepth!=null) log.info("Maximum outer join fetch depth: " + maxFetchDepth);
+ 		settings.setMaximumFetchDepth(maxFetchDepth);
+Index: src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java
+===================================================================
+--- src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java	(revision 18147)
++++ src/main/java/org/hibernate/loader/custom/sql/SQLQueryParser.java	(working copy)
+@@ -25,6 +25,7 @@
+ package org.hibernate.loader.custom.sql;
+ 
+ import org.hibernate.QueryException;
++import org.hibernate.cfg.Settings;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.query.ParameterParser;
+ import org.hibernate.persister.collection.SQLLoadableCollection;
+@@ -43,6 +44,9 @@
+  */
+ public class SQLQueryParser {
+ 	private static final String HIBERNATE_PLACEHOLDER_PREFIX = "h-";
++    private static final String AUDIT_DOMAIN_PLACEHOLDER = "h-audit-domain";
++    private static final String AUDIT_CATALOG_PLACEHOLDER = "h-audit-catalog";
++    private static final String AUDIT_SCHEMA_PLACEHOLDER = "h-audit-schema";
+ 	private static final String DOMAIN_PLACEHOLDER = "h-domain";
+ 	private static final String CATALOG_PLACEHOLDER = "h-catalog";
+ 	private static final String SCHEMA_PLACEHOLDER = "h-schema";
+@@ -111,35 +115,27 @@
+ 			boolean isPlaceholder = aliasPath.startsWith( HIBERNATE_PLACEHOLDER_PREFIX );
+ 
+ 			if ( isPlaceholder ) {
+-				// Domain replacement
++				Settings settings = factory.getSettings();
+ 				if ( DOMAIN_PLACEHOLDER.equals( aliasPath ) ) {
+-					final String catalogName = factory.getSettings().getDefaultCatalogName();
+-					if ( catalogName != null ) {
+-						result.append( catalogName );
+-						result.append( "." );
+-					}
+-					final String schemaName = factory.getSettings().getDefaultSchemaName();
+-					if ( schemaName != null ) {
+-						result.append( schemaName );
+-						result.append( "." );
+-					}
++					appendQualifiedObjectName(result, settings.getDefaultCatalogName());
++					appendQualifiedObjectName(result, settings.getDefaultSchemaName());
+ 				}
+-				// Schema replacement
+ 				else if ( SCHEMA_PLACEHOLDER.equals( aliasPath ) ) {
+-					final String schemaName = factory.getSettings().getDefaultSchemaName();
+-					if ( schemaName != null ) {
+-						result.append(schemaName);
+-						result.append(".");
+-					}
++					appendQualifiedObjectName(result, settings.getDefaultSchemaName());
+ 				} 
+-				// Catalog replacement
+ 				else if ( CATALOG_PLACEHOLDER.equals( aliasPath ) ) {
+-					final String catalogName = factory.getSettings().getDefaultCatalogName();
+-					if ( catalogName != null ) {
+-						result.append( catalogName );
+-						result.append( "." );
+-					}
++					appendQualifiedObjectName(result, settings.getDefaultCatalogName());
+ 				}
++				else if ( AUDIT_DOMAIN_PLACEHOLDER.equals( aliasPath ) ) {
++					appendQualifiedObjectName(result, settings.getAuditDefaultCatalogName());
++					appendQualifiedObjectName(result, settings.getAuditDefaultSchemaName());
++				}
++				else if ( AUDIT_SCHEMA_PLACEHOLDER.equals( aliasPath ) ) {
++					appendQualifiedObjectName(result, settings.getAuditDefaultSchemaName());
++				} 
++				else if ( AUDIT_CATALOG_PLACEHOLDER.equals( aliasPath ) ) {
++					appendQualifiedObjectName(result, settings.getAuditDefaultCatalogName());
++				}
+ 				else {
+ 					throw new QueryException( "Unknown placeholder ", aliasPath );
+ 				}
+@@ -338,4 +334,12 @@
+ 			}
+ 		}
+ 	}
++	
++	private void appendQualifiedObjectName(StringBuffer buf, String name) {
++		if ( name != null ) {
++			buf.append( name );
++			buf.append( "." );
++		}
++	}
++	
+ }
+Index: src/main/java/org/hibernate/cfg/Settings.java
+===================================================================
+--- src/main/java/org/hibernate/cfg/Settings.java	(revision 18147)
++++ src/main/java/org/hibernate/cfg/Settings.java	(working copy)
+@@ -100,6 +100,8 @@
+ //	private ComponentTuplizerFactory componentTuplizerFactory; todo : HHH-3517 and HHH-1907
+ //	private BytecodeProvider bytecodeProvider;
+ 	private JdbcSupport jdbcSupport;
++	private String auditDefaultSchemaName;
++	private String auditDefaultCatalogName;
+ 
+ 	/**
+ 	 * Package protected constructor
+@@ -221,6 +223,20 @@
+ 		return queryCacheFactory;
+ 	}
+ 
++	/**
++	 * @since Hibernate 3.5
++	 */
++	public String getAuditDefaultSchemaName() {
++		return auditDefaultSchemaName;
++	}
++
++	/**
++	 * @since Hibernate 3.5
++	 */
++	public String getAuditDefaultCatalogName() {
++		return auditDefaultCatalogName;
++	}
++
+ 	public boolean isStatisticsEnabled() {
+ 		return statisticsEnabled;
+ 	}
+@@ -519,4 +535,19 @@
+ //	void setBytecodeProvider(BytecodeProvider bytecodeProvider) {
+ //		this.bytecodeProvider = bytecodeProvider;
+ //	}
++
++	/**
++	 * @since Hibernate 3.5
++	 */
++	void setAuditDefaultSchemaName(String string) {
++		auditDefaultSchemaName = string;
++	}
++
++	/**
++	 * @since Hibernate 3.5
++	 */
++	void setAuditDefaultCatalogName(String string) {
++		auditDefaultCatalogName = string;
++	}
++
+ }

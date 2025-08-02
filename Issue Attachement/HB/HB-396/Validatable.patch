@@ -1,0 +1,365 @@
+Index: BasicRenderer.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/BasicRenderer.java,v
+retrieving revision 1.7
+diff -u -r1.7 BasicRenderer.java
+--- BasicRenderer.java	27 Sep 2003 11:17:10 -0000	1.7
++++ BasicRenderer.java	13 Oct 2003 21:43:08 -0000
+@@ -4,6 +4,7 @@
+ import java.io.PrintWriter;
+ import java.io.Serializable;
+ import java.io.StringWriter;
++import java.util.Collection;
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
+@@ -118,6 +119,26 @@
+         	doToString(classMapping, propWriter);
+         
+ 	       	doEqualsAndHashCode(savedToClass,classMapping, propWriter);
++
++         boolean implementsValidatable = false;
++         Collection impls = classMapping.getMeta("implements");
++         if (impls != null)
++         {
++            Iterator it = impls.iterator();
++            while(it.hasNext())
++            {
++               MetaAttributeHelper.MetaAttribute ma = (MetaAttributeHelper.MetaAttribute) it.next(); 
++               if ("net.sf.hibernate.Validatable".equals(ma.toString()))
++               {
++                  implementsValidatable = true;
++               }
++            }
++         }
++         if (implementsValidatable)
++         {
++            doValidatable(classMapping, propWriter);
++         }
++
+      	}
+      		
+         propWriter.println("}");
+@@ -309,6 +330,9 @@
+             if(field.getMeta("default-value")!=null) {
+                 writer.print(" = " + field.getMetaAsString("default-value"));
+             }
++            else if(field.getInitialisation() !=null) {
++                   writer.print(" = " + field.getInitialisation());
++            }
+             writer.println(';');
+ 		    }
+ 			writer.println();
+@@ -524,4 +548,42 @@
+ 				return (prependThis?"this.":"")+field.getName(); 
+ 		}
+ 
++   private void doValidatable(ClassMapping classMapping, PrintWriter writer) {
++      classMapping.getImports().add("net.sf.hibernate.ValidationFailure");
++      classMapping.getImports().add("java.util.ResourceBundle");
++      
++      writer.println();
++      writer.println("   public void validate()");
++      writer.println("      throws ValidationFailure");
++      writer.println("   {");
++      writer.println("      final ResourceBundle RESOURCE_BUNDLE = ResourceBundle.getBundle(\"" + classMapping.getName() + "\");");
++
++      for (Iterator fields = classMapping.getFields().iterator();
++           fields.hasNext();) {
++         Field field = (Field) fields.next();
++
++         if (field.isNullable() == false && 
++             field.isIdentifier() == false &&
++             field.getClassType().isPrimitive() == false) {
++            writer.println("      if (" + field.getGetterSignature() + " == null)");
++            writer.println("      {");
++            writer.println("         throw new ValidationFailure("); 
++            writer.println("            RESOURCE_BUNDLE.getString(\"" + classMapping.getName() + 
++               "." + field.getName() + ".cannot_be_null\"));"); 
++            writer.println("      }");
++         }
++         if (field.getType().equals("String") && 
++             field.getLength() != null) {
++            writer.println("      if (" + field.getGetterSignature() + " != null &&");
++            writer.println("          " + field.getGetterSignature() + ".length() > " + 
++               field.getLength() + ")");
++            writer.println("      {");
++            writer.println("         throw new ValidationFailure("); 
++            writer.println("            RESOURCE_BUNDLE.getString(\"" + classMapping.getName() + 
++               "." + field.getName() + ".is_too_long\"));"); 
++            writer.println("      }");
++         }
++      }
++      writer.println("    }");
++   }
+ }
+Index: ClassMapping.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/ClassMapping.java,v
+retrieving revision 1.9
+diff -u -r1.9 ClassMapping.java
+--- ClassMapping.java	27 Sep 2003 11:17:10 -0000	1.9
++++ ClassMapping.java	13 Oct 2003 21:43:08 -0000
+@@ -180,7 +180,10 @@
+             log.warn("property \"" + name + "\" in class " + getName() + " is missing a type attribute");
+             continue;
+          }
+-         
++
++         Integer length = (property.getAttributeValue("length") != null) ? 
++            new Integer(property.getAttributeValue("length")) : null;
++
+          
+          // handle in a different way id and properties...
+          // ids may be generated and may need to be of object type in order to support
+@@ -193,7 +196,7 @@
+             boolean generated = !generator.getAttributeValue("class").equals("assigned");
+             ClassName rtype = getFieldType(type, needObject);
+             addImport(rtype);
+-            Field idField = new Field( name, rtype, false, true, generated, metaForProperty);
++            Field idField = new Field( name, rtype, false, true, generated, length, metaForProperty);
+             fields.add(idField);
+          } 
+          else {
+@@ -209,7 +212,7 @@
+          	boolean key = property.getName().startsWith("key-"); //a composite id property
+             ClassName t = getFieldType(type);
+             addImport(t);
+-            Field stdField =new Field(name, t, nullable && !key, key, false, metaForProperty);
++            Field stdField =new Field(name, t, nullable && !key, key, false, length, metaForProperty);
+             fields.add(stdField );
+             
+          }
+@@ -513,11 +516,7 @@
+          
+          // add an import and field for this collection
+          addImport(interfaceClassName);
+-          // import implementingClassName should only be 
+-          // added if the initialisaiton code of the field 
+-          // is actually used - and currently it isn't!
+-         //addImport(implementingClassName);
+-         
++         addImport(implementingClassName);
+           
+          ClassName foreignClass = null;
+          Set foreignKeys = null;
+Index: Field.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/Field.java,v
+retrieving revision 1.4
+diff -u -r1.4 Field.java
+--- Field.java	27 Sep 2003 11:17:10 -0000	1.4
++++ Field.java	13 Oct 2003 21:43:09 -0000
+@@ -15,6 +15,7 @@
+ 	private boolean id = false;
+ 	private boolean generated = false;
+ 	private boolean nullable = true;
++   private Integer length = null;
+ 	private ClassName classType;
+     private MultiMap metaattribs = null;
+     private ClassName foreignClass;
+@@ -22,24 +23,29 @@
+         
+     
+     public Field(String name, ClassName type, boolean nullable, MultiMap metaattribs) {
+-        initWith(name, type, name, nullable, id, generated, null, null, metaattribs);
++        initWith(name, type, name, nullable, id, generated, null, null, null, metaattribs);
+     }
+     
+-    public Field(String name, ClassName type, boolean nullable, boolean id, boolean generated, MultiMap metaattribs) {
+-        initWith(name, type, initialisation, nullable, id, generated, null, null, metaattribs);
++    public Field(String name, ClassName type, boolean nullable, boolean id, boolean generated, Integer len, MultiMap metaattribs) {
++        initWith(name, type, initialisation, nullable, id, generated, len, null, null, metaattribs);
+     }
+     
++    public Field(String name, ClassName type, boolean nullable, boolean id, boolean generated, MultiMap metaattribs) {
++        initWith(name, type, initialisation, nullable, id, generated, null, null, null, metaattribs);
++    }
++
+     public Field(String name, ClassName type, String initialisation, boolean nullable, ClassName foreignClass, Set foreignKeys, MultiMap metaattribs) {
+-        initWith(name, type, initialisation, nullable, id, generated, foreignClass, foreignKeys, metaattribs);
++        initWith(name, type, initialisation, nullable, id, generated, null, foreignClass, foreignKeys, metaattribs);
+     }
+     
+-    protected void initWith(String name, ClassName type, String initialisation, boolean nullable, boolean id, boolean generated, ClassName foreignClass, Set foreignKeys, MultiMap metaattribs) {
++    protected void initWith(String name, ClassName type, String initialisation, boolean nullable, boolean id, boolean generated, Integer length, ClassName foreignClass, Set foreignKeys, MultiMap metaattribs) {
+         this.name = name;
+         setType(type);
+         this.initialisation = initialisation;
+         this.nullable = nullable;
+         this.id = id;
+         this.generated = generated;
++        this.length = length;
+         //this.asSuffix = name.substring(0, 1).toUpperCase() + name.substring(1);
+         this.asSuffix = beancapitalize(name);
+         this.foreignClass = foreignClass;
+@@ -120,7 +126,16 @@
+ 	public ClassName getClassType() {
+ 		return classType;
+ 	}
+-	
++   
++    public Integer getLength() {
++       return length;
++    }
++    
++    public void setLength(Integer integer) {
++       length = integer;
++    }
++
++
+     private void setType(ClassName type) {
+         this.classType = type;
+     }
+Index: ValidatableMessageRenderer.java
+===================================================================
+RCS file: ValidatableMessageRenderer.java
+diff -N ValidatableMessageRenderer.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ ValidatableMessageRenderer.java	13 Oct 2003 21:43:09 -0000
+@@ -0,0 +1,130 @@
++package net.sf.hibernate.tool.hbm2java;
++
++import java.io.PrintWriter;
++import java.io.StringWriter;
++import java.util.Collection;
++import java.util.Iterator;
++import java.util.Map;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
++
++/**
++ * DOCUMENT ME!
++ *
++ * @author Rob Stokes
++ * @version 0.1
++ */
++public class ValidatableMessageRenderer extends AbstractRenderer
++{
++   static private Log log = LogFactory.getLog(ValidatableMessageRenderer.class);
++
++   /**
++    * DOCUMENT ME!
++    *
++    * @param savedToPackage DOCUMENT ME!
++    * @param savedToClass DOCUMENT ME!
++    * @param classMapping DOCUMENT ME!
++    * @param class2classmap DOCUMENT ME!
++    * @param mainwriter DOCUMENT ME!
++    *
++    * @throws Exception DOCUMENT ME!
++    */
++   public void render(String savedToPackage, String savedToClass,
++      ClassMapping classMapping, Map class2classmap, PrintWriter mainwriter)
++      throws Exception
++   {
++      // switch to another writer to be able to insert the actually
++      // used imports when whole class has been rendered. 
++      StringWriter strWriter = new StringWriter();
++      PrintWriter writer     = new PrintWriter(strWriter);
++
++      if (!classMapping.isInterface())
++      {
++         Collection impls = classMapping.getMeta("implements");
++         if (impls != null)
++         {
++            Iterator it = impls.iterator();
++            while (it.hasNext())
++            {
++               MetaAttributeHelper.MetaAttribute ma = (MetaAttributeHelper.MetaAttribute) it.next();
++
++               if (ma.toString().equals("net.sf.hibernate.Validatable"))
++               {
++                  doValidatableStringProperties(classMapping, writer);
++               }
++            }
++         }
++      }
++
++      mainwriter.print(strWriter.toString());
++   }
++
++   private void doValidatable(ClassMapping classMapping, PrintWriter writer)
++   {
++      classMapping.getImports().add("net.sf.hibernate.ValidationFailure");
++      writer.println("   public void validate()");
++      writer.println("      throws ValidationFailure");
++      writer.println("   {");
++
++      for (Iterator fields = classMapping.getFields().iterator();
++            fields.hasNext();)
++      {
++         Field field = (Field) fields.next();
++
++         if (field.isNullable() == false)
++         {
++            writer.println("      if (" + field.getGetterSignature() +
++               " == null)");
++            writer.println("      {");
++            writer.println("         throw new ValidationFailure(");
++            writer.println("            Messages.getString(\"" +
++               classMapping.getName() + "." + field.getName() +
++               ".cannot_be_null\"));");
++            writer.println("      }");
++         }
++
++         if (field.getType().equals("String") && (field.getLength() != null))
++         {
++            writer.println("      if (" + field.getGetterSignature() +
++               " != null &&");
++            writer.println("          " + field.getGetterSignature() +
++               ".length() > " + field.getLength() + ")");
++            writer.println("      {");
++            writer.println("         throw new ValidationFailure(");
++            writer.println("            Messages.getString(\"" +
++               classMapping.getName() + "." + field.getName() +
++               ".is_too_long\"));");
++            writer.println("      }");
++         }
++      }
++
++      writer.println("    }");
++      writer.println();
++   }
++
++   private void doValidatableStringProperties(ClassMapping classMapping,
++      PrintWriter writer)
++   {
++      for (Iterator fields = classMapping.getFields().iterator();
++            fields.hasNext();)
++      {
++         Field field = (Field) fields.next();
++
++         if (field.isNullable() == false)
++         {
++            writer.println(classMapping.getName() + "." + field.getName() +
++               ".cannot_be_null=" + field.getName() + " cannot be null!");
++         }
++
++         if (field.getType().equals("String") && (field.getLength() != null))
++         {
++            writer.println(classMapping.getName() + "." + field.getName() +
++               ".is_too_long=" + field.getName() +
++               " length greater than the maximum of " + field.getLength() +
++               "!");
++         }
++      }
++   }
++}
+Index: test/config.xml
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/net/sf/hibernate/tool/hbm2java/test/config.xml,v
+retrieving revision 1.2
+diff -u -r1.2 config.xml
+--- test/config.xml	10 Aug 2003 16:57:54 -0000	1.2
++++ test/config.xml	13 Oct 2003 21:43:09 -0000
+@@ -11,5 +11,6 @@
+ <!--	<meta attribute="implements">codegen.test.IAuditable</meta>-->
+ 	<generate renderer="net.sf.hibernate.tool.hbm2java.BasicRenderer"/>
+ 	<generate package="autofinders.only" suffix="Finder" renderer="net.sf.hibernate.tool.hbm2java.FinderRenderer"/>
+-    <generate suffix="QL" renderer="net.sf.hibernate.tool.hbm2java.QLConstantRenderer"/>
++<!--  <generate suffix="QL" renderer="net.sf.hibernate.tool.hbm2java.QLConstantRenderer"/> -->
++	<generate suffix="_en_US" extension="properties" renderer="net.sf.hibernate.tool.hbm2java.ValidatableRenderer"/>
+ </codegen>

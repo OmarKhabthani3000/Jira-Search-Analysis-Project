@@ -1,0 +1,80 @@
+diff --git a/hibernate-core/src/main/java/org/hibernate/collection/internal/AbstractPersistentCollection.java b/hibernate-core/src/main/java/org/hibernate/collection/internal/AbstractPersistentCollection.java
+index 80db62e..d90ab51 100644
+--- a/hibernate-core/src/main/java/org/hibernate/collection/internal/AbstractPersistentCollection.java
++++ b/hibernate-core/src/main/java/org/hibernate/collection/internal/AbstractPersistentCollection.java
+@@ -65,6 +65,8 @@ import org.hibernate.type.Type;
+ public abstract class AbstractPersistentCollection implements Serializable, PersistentCollection {
+ 	private static final Logger log = Logger.getLogger( AbstractPersistentCollection.class );
+ 
++	private static final boolean useModifiedFlag = !Boolean.getBoolean("geneinsight.hibernate.disable-modified-flag");
++	
+ 	private transient SessionImplementor session;
+ 	private boolean initialized;
+ 	private transient List<DelayedOperation> operationQueue;
+@@ -78,6 +80,10 @@ public abstract class AbstractPersistentCollection implements Serializable, Pers
+ 	// collections detect changes made via their public interface and mark
+ 	// themselves as dirty as a performance optimization
+ 	private boolean dirty;
++	// track if any change happens to this collection
++	// set when dirty is set, but wont be cleared 
++	private boolean modified = false;
++	
+ 	private Serializable storedSnapshot;
+ 
+ 	private String sessionFactoryUuid;
+@@ -105,8 +111,17 @@ public abstract class AbstractPersistentCollection implements Serializable, Pers
+ 
+ 	public final void dirty() {
+ 		dirty = true;
++		modified = true;
+ 	}
+ 
++	public final boolean isModified() {
++	    if (useModifiedFlag) {
++	        return modified;
++	    } else {
++	        return false; 
++	    }  
++	}
++	
+ 	public final Serializable getStoredSnapshot() {
+ 		return storedSnapshot;
+ 	}
+@@ -424,7 +439,7 @@ public abstract class AbstractPersistentCollection implements Serializable, Pers
+ 			operationQueue = new ArrayList<DelayedOperation>( 10 );
+ 		}
+ 		operationQueue.add( operation );
+-		dirty = true; //needed so that we remove this collection from the second-level cache
++		dirty(); //needed so that we remove this collection from the second-level cache
+ 	}
+ 
+ 	/**
+diff --git a/hibernate-core/src/main/java/org/hibernate/engine/loading/internal/CollectionLoadContext.java b/hibernate-core/src/main/java/org/hibernate/engine/loading/internal/CollectionLoadContext.java
+index 72a5e68..83596f2 100644
+--- a/hibernate-core/src/main/java/org/hibernate/engine/loading/internal/CollectionLoadContext.java
++++ b/hibernate-core/src/main/java/org/hibernate/engine/loading/internal/CollectionLoadContext.java
+@@ -38,6 +38,7 @@ import org.hibernate.EntityMode;
+ import org.hibernate.HibernateException;
+ import org.hibernate.cache.spi.CacheKey;
+ import org.hibernate.cache.spi.entry.CollectionCacheEntry;
++import org.hibernate.collection.internal.AbstractPersistentCollection;
+ import org.hibernate.collection.spi.PersistentCollection;
+ import org.hibernate.engine.spi.CollectionEntry;
+ import org.hibernate.engine.spi.CollectionKey;
+@@ -258,7 +259,15 @@ public class CollectionLoadContext {
+ 				persister.hasCache() &&             // and the role has a cache
+ 				session.getCacheMode().isPutEnabled() &&
+ 				!ce.isDoremove();                   // and this is not a forced initialization during flush
+-		if ( addToCache ) {
++		
++		boolean isModified = false;
++		PersistentCollection pc = lce.getCollection();
++		if (pc instanceof AbstractPersistentCollection)
++		{
++		    isModified = ((AbstractPersistentCollection)pc).isModified();
++		}
++		
++		if ( addToCache && !isModified) {
+ 			addCollectionToCache( lce, persister );
+ 		}
+ 

@@ -1,0 +1,229 @@
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
+index d221014..21973f2 100644
+--- a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/EnhancerTest.java
+@@ -20,6 +20,7 @@
+ import org.hibernate.test.bytecode.enhancement.join.HHH3949TestTask2;
+ import org.hibernate.test.bytecode.enhancement.join.HHH3949TestTask3;
+ import org.hibernate.test.bytecode.enhancement.join.HHH3949TestTask4;
++import org.hibernate.test.bytecode.enhancement.lazy.EagerCollectionLoadingTestTask;
+ import org.hibernate.test.bytecode.enhancement.lazy.LazyBasicFieldNotInitializedTestTask;
+ import org.hibernate.test.bytecode.enhancement.lazy.LazyCollectionLoadingTestTask;
+ import org.hibernate.test.bytecode.enhancement.lazy.LazyLoadingIntegrationTestTask;
+@@ -122,4 +123,9 @@
+ 	public void testLazyBasicFieldNotInitialized() {
+ 		EnhancerTestUtils.runEnhancerTestTask( LazyBasicFieldNotInitializedTestTask.class );
+ 	}
++
++	@Test
++	public void testEagerCollectionHandling() {
++		EnhancerTestUtils.runEnhancerTestTask( EagerCollectionLoadingTestTask.class );
++	}
+ }
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Child2.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Child2.java
+new file mode 100644
+index 0000000..7b8e6bf
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Child2.java
+@@ -0,0 +1,61 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.test.bytecode.enhancement.lazy;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.ManyToOne;
++
++import org.hibernate.annotations.LazyToOne;
++import org.hibernate.annotations.LazyToOneOption;
++
++/**
++ * @author Luis Barreiro
++ */
++
++@Entity
++public class Child2 {
++
++	@Id
++	@GeneratedValue(strategy = GenerationType.AUTO)
++	Long id;
++
++	String name;
++
++	@ManyToOne(cascade = CascadeType.ALL, fetch = FetchType.LAZY)
++	@LazyToOne(LazyToOneOption.NO_PROXY)
++	Parent2 parent;
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	public String getName() {
++		return name;
++	}
++
++	public void setName(String name) {
++		this.name = name;
++	}
++
++	public Parent2 getParent() {
++		return parent;
++	}
++
++	public void setParent(Parent2 parent) {
++		this.parent = parent;
++	}
++
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/EagerCollectionLoadingTestTask.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/EagerCollectionLoadingTestTask.java
+new file mode 100644
+index 0000000..9ac2c32
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/EagerCollectionLoadingTestTask.java
+@@ -0,0 +1,80 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.test.bytecode.enhancement.lazy;
++
++import static org.hamcrest.CoreMatchers.equalTo;
++import static org.hamcrest.CoreMatchers.notNullValue;
++import static org.hamcrest.CoreMatchers.sameInstance;
++import static org.hamcrest.MatcherAssert.assertThat;
++import static org.junit.Assert.assertTrue;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.Hibernate;
++import org.hibernate.Session;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.cfg.Environment;
++import org.hibernate.test.bytecode.enhancement.AbstractEnhancerTestTask;
++import org.hibernate.test.bytecode.enhancement.EnhancerTestUtils;
++
++/**
++ * @author Luis Barreiro
++ */
++public class EagerCollectionLoadingTestTask extends AbstractEnhancerTestTask {
++	private static final int CHILDREN_SIZE = 10;
++	private Long parentID;
++
++	public Class<?>[] getAnnotatedClasses() {
++		return new Class<?>[] {Parent2.class, Child2.class};
++	}
++
++	public void prepare() {
++		Configuration cfg = new Configuration();
++		cfg.setProperty( Environment.ENABLE_LAZY_LOAD_NO_TRANS, "false" );
++		cfg.setProperty( Environment.USE_SECOND_LEVEL_CACHE, "false" );
++		super.prepare( cfg );
++
++		Session s = getFactory().openSession();
++		s.beginTransaction();
++
++		Parent2 parent = new Parent2();
++		parent.setChildren( new ArrayList<Child2>() );
++		for ( int i = 0; i < CHILDREN_SIZE; i++ ) {
++			final Child2 child = new Child2();
++			child.setParent( parent );
++			s.persist( child );
++		}
++		s.persist( parent );
++		parentID = parent.getId();
++
++		s.getTransaction().commit();
++		s.close();
++	}
++
++	public void execute() {
++		Session s = getFactory().openSession();
++		s.beginTransaction();
++
++		Parent2 parent = s.load( Parent2.class, parentID );
++		assertThat( parent, notNullValue() );
++		assertTrue( Hibernate.isPropertyInitialized( parent, "children" ) );
++		List<Child2> children1 = parent.getChildren();
++		List<Child2> children2 = parent.getChildren();
++
++		EnhancerTestUtils.checkDirtyTracking( parent );
++
++		assertThat( children1, sameInstance( children2 ) );
++		assertThat( children1.size(), equalTo( CHILDREN_SIZE ) );
++
++		s.getTransaction().commit();
++		s.close();
++	}
++
++	protected void cleanup() {
++	}
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Parent2.java b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Parent2.java
+new file mode 100644
+index 0000000..b6ba8eb
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/bytecode/enhancement/lazy/Parent2.java
+@@ -0,0 +1,48 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * License: GNU Lesser General Public License (LGPL), version 2.1 or later.
++ * See the lgpl.txt file in the root directory or <http://www.gnu.org/licenses/lgpl-2.1.html>.
++ */
++package org.hibernate.test.bytecode.enhancement.lazy;
++
++import java.util.List;
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++import javax.persistence.OneToMany;
++
++/**
++ * @author Luis Barreiro
++ */
++
++@Entity
++public class Parent2 {
++
++	Long id;
++
++	List<Child2> children;
++
++	@Id
++	@GeneratedValue(strategy = GenerationType.AUTO)
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	@OneToMany(mappedBy = "parent", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
++	public List<Child2> getChildren() {
++		return children;
++	}
++
++	public void setChildren(List<Child2> children) {
++		this.children = children;
++	}
++
++}

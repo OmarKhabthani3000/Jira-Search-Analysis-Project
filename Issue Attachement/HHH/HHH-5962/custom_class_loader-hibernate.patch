@@ -1,0 +1,45 @@
+diff -u -r hibernate-3.6.1-final-orig/core/src/main/java/org/hibernate/proxy/pojo/cglib/CGLIBLazyInitializer.java hibernate-3.6.1-final/core/src/main/java/org/hibernate/proxy/pojo/cglib/CGLIBLazyInitializer.java
+--- hibernate-3.6.1-final-orig/core/src/main/java/org/hibernate/proxy/pojo/cglib/CGLIBLazyInitializer.java	Wed Feb  2 19:00:18 2011
++++ hibernate-3.6.1-final/core/src/main/java/org/hibernate/proxy/pojo/cglib/CGLIBLazyInitializer.java	Fri Feb 25 14:38:02 2011
+@@ -158,6 +158,14 @@
+   		e.setCallbackFilter(FINALIZE_FILTER);
+   		e.setUseFactory(false);
+ 		e.setInterceptDuringConstruction( false );
++		e.setClassLoader(new ClassLoader(persistentClass.getClassLoader()) {
++			private final ClassLoader platformClassLoader = getClass().getClassLoader();
++
++			@Override
++			protected Class<?> findClass(String name) throws ClassNotFoundException {
++				return platformClassLoader.loadClass(name);
++			}
++		});
+ 		return e.createClass();
+ 	}
+ 
+diff -u -r hibernate-3.6.1-final-orig/core/src/main/java/org/hibernate/proxy/pojo/javassist/JavassistLazyInitializer.java hibernate-3.6.1-final/core/src/main/java/org/hibernate/proxy/pojo/javassist/JavassistLazyInitializer.java
+--- hibernate-3.6.1-final-orig/core/src/main/java/org/hibernate/proxy/pojo/javassist/JavassistLazyInitializer.java	Wed Feb  2 19:00:18 2011
++++ hibernate-3.6.1-final/core/src/main/java/org/hibernate/proxy/pojo/javassist/JavassistLazyInitializer.java	Fri Feb 25 14:39:54 2011
+@@ -155,7 +155,22 @@
+ 		// note: interfaces is assumed to already contain HibernateProxy.class
+ 
+ 		try {
+-			ProxyFactory factory = new ProxyFactory();
++			final ClassLoader platformDelegatingClassLoader = new ClassLoader(persistentClass.getClassLoader()) {
++                		private final ClassLoader platformClassLoader = getClass().getClassLoader();
++
++                		@Override
++                		protected Class<?> findClass(String name) throws ClassNotFoundException {
++                    			return platformClassLoader.loadClass(name);
++                		}
++            		};
++
++            		ProxyFactory factory = new ProxyFactory() {
++                		@Override
++                		protected ClassLoader getClassLoader() {
++                    			return platformDelegatingClassLoader;
++                		}
++            		};
++
+ 			factory.setSuperclass( interfaces.length == 1 ? persistentClass : null );
+ 			factory.setInterfaces( interfaces );
+ 			factory.setFilter( FINALIZE_FILTER );

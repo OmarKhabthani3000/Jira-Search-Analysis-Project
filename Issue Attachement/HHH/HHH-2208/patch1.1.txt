@@ -1,0 +1,151 @@
+Index: C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.java
+===================================================================
+--- C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.java	(revision 0)
++++ C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.java	(revision 0)
+@@ -0,0 +1,20 @@
++package org.hibernate.test.tool;
++
++
++public class Team {
++	private Long id;
++	private String name;
++	public Long getId() {
++		return id;
++	}
++	public void setId(Long id) {
++		this.id = id;
++	}
++	public String getName() {
++		return name;
++	}
++	public void setName(String name) {
++		this.name = name;
++	}
++		
++}
+Index: C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.hbm.xml
+===================================================================
+--- C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.hbm.xml	(revision 0)
++++ C:/anthony/Hibernate3/test/org/hibernate/test/tool/Team.hbm.xml	(revision 0)
+@@ -0,0 +1,18 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++  
++<hibernate-mapping package="org.hibernate.test.tool">
++	<class name="Team">
++	  	<id name="id">
++		  <generator class="native">
++		  <param name="sequence">TEAM_SEQ</param>
++		  </generator>
++	  	</id>
++	  	<property name="name"/>
++	</class>
++<database-object>
++<create>CREATE TABLE "SA"."TEAM" (test VARCHAR2(40))</create>
++<drop>DROP TABLE "SA"."TEAM"</drop>
++</database-object>
++</hibernate-mapping>
+Index: C:/anthony/Hibernate3/test/org/hibernate/test/tool/TestSchemaValidation.java
+===================================================================
+--- C:/anthony/Hibernate3/test/org/hibernate/test/tool/TestSchemaValidation.java	(revision 0)
++++ C:/anthony/Hibernate3/test/org/hibernate/test/tool/TestSchemaValidation.java	(revision 0)
+@@ -0,0 +1,43 @@
++package org.hibernate.test.tool;
++
++import junit.framework.Test;
++import junit.framework.TestSuite;
++import junit.textui.TestRunner;
++
++import org.hibernate.test.TestCase;
++import org.hibernate.tool.hbm2ddl.SchemaExport;
++import org.hibernate.tool.hbm2ddl.SchemaValidator;
++
++/**
++ * @author Anthony
++ * WARNING, if you want this test to be efficient, you need to define a default schema = SB
++ * in hibernate global configuration.
++ * This schema should not be the same at the default db user schema and should come after the users schema alphabetically.
++ *
++ */
++public class TestSchemaValidation extends TestCase{
++	
++	public void testSchemaValidator() {
++		SchemaValidator sv = new SchemaValidator(getCfg());
++		sv.validate();
++	}
++	
++	public TestSchemaValidation(String arg0) {
++		super(arg0);
++	}
++	
++	public String[] getMappings() {
++		return new String[] {"tool/Team.hbm.xml"};
++	}
++
++	public static Test suite() {
++		return new TestSuite(TestSchemaValidation.class);
++	}
++	
++	public static void main(String[] args) throws Exception {
++		TestRunner.run( suite() );
++	}
++
++
++
++}
+Index: C:/anthony/Hibernate3/src/org/hibernate/cfg/Configuration.java
+===================================================================
+--- C:/anthony/Hibernate3/src/org/hibernate/cfg/Configuration.java	(revision 10539)
++++ C:/anthony/Hibernate3/src/org/hibernate/cfg/Configuration.java	(working copy)
+@@ -874,11 +874,12 @@
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
+-
++				Settings settings = buildSettings();
+ 				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+ 						table.getName(),
+-						table.getSchema(),
+-						table.getCatalog()
++						( table.getSchema() == null ) ? settings.getDefaultSchemaName() : table.getSchema(),
++						( table.getCatalog() == null ) ? settings.getDefaultCatalogName() : table.getCatalog()
++
+ 					);
+ 				if ( tableInfo == null ) {
+ 					script.add(
+@@ -993,13 +994,12 @@
+ 		while ( iter.hasNext() ) {
+ 			Table table = (Table) iter.next();
+ 			if ( table.isPhysicalTable() ) {
++				Settings settings = buildSettings();
+ 
+ 				TableMetadata tableInfo = databaseMetadata.getTableMetadata(
+ 						table.getName(),
+-						table.getSchema(),
+-						table.getCatalog()
+-					);
+-
++						( table.getSchema() == null ) ? settings.getDefaultSchemaName() : table.getSchema(),
++						( table.getCatalog() == null ) ? settings.getDefaultCatalogName() : table.getCatalog());
+ 				if ( tableInfo == null ) {
+ 					throw new HibernateException( "Missing table: " + table.getName() );
+ 				}
+Index: C:/anthony/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java
+===================================================================
+--- C:/anthony/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java	(revision 10539)
++++ C:/anthony/Hibernate3/src/org/hibernate/tool/hbm2ddl/DatabaseMetadata.java	(working copy)
+@@ -132,7 +132,11 @@
+ 	}
+ 
+ 	public boolean isSequence(Object key) {
+-		return key instanceof String && sequences.contains( ( (String) key ).toLowerCase() );
++		if (key instanceof String){
++			String[] strings = StringHelper.split(".", (String) key);
++			return sequences.contains( ( (String) strings[strings.length-1] ).toLowerCase());
++		}
++		return false;
+ 	}
+ 
+ 	public boolean isTable(Object key) throws HibernateException {
+

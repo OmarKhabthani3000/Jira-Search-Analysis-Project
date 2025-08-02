@@ -1,0 +1,41 @@
+diff --git a/tooling/hibernate-gradle-plugin/src/main/java/org/hibernate/orm/tooling/gradle/HibernateOrmPlugin.java b/tooling/hibernate-gradle-plugin/src/main/java/org/hibernate/orm/tooling/gradle/HibernateOrmPlugin.java
+index c5f68dac7d..2219dca190 100644
+--- a/tooling/hibernate-gradle-plugin/src/main/java/org/hibernate/orm/tooling/gradle/HibernateOrmPlugin.java
++++ b/tooling/hibernate-gradle-plugin/src/main/java/org/hibernate/orm/tooling/gradle/HibernateOrmPlugin.java
+@@ -6,6 +6,7 @@
+  */
+ package org.hibernate.orm.tooling.gradle;
+ 
++import java.lang.reflect.Method;
+ import java.util.Set;
+ 
+ import org.gradle.api.Action;
+@@ -69,7 +70,7 @@ public class HibernateOrmPlugin implements Plugin<Project> {
+ 
+ 			for ( String language : languages ) {
+ 				final String languageCompileTaskName = sourceSet.getCompileTaskName( language );
+-				final AbstractCompile languageCompileTask = (AbstractCompile) project.getTasks().findByName( languageCompileTaskName );
++				final Task languageCompileTask = project.getTasks().findByName( languageCompileTaskName );
+ 				if ( languageCompileTask == null ) {
+ 					continue;
+ 				}
+@@ -78,10 +79,15 @@ public class HibernateOrmPlugin implements Plugin<Project> {
+ 				languageCompileTask.doLast( new Action<>() {
+ 					@Override
+ 					public void execute(Task t) {
+-						final DirectoryProperty classesDirectory = languageCompileTask.getDestinationDirectory();
+-						final ClassLoader classLoader = Helper.toClassLoader( sourceSet, project );
+-
+-						EnhancementHelper.enhance( classesDirectory, classLoader, ormDsl, project );
++						try {
++							final Method getDestinationDirectory = languageCompileTask.getClass().getMethod("getDestinationDirectory");
++							final DirectoryProperty classesDirectory = (DirectoryProperty) getDestinationDirectory.invoke(languageCompileTask);
++							final ClassLoader classLoader = Helper.toClassLoader( sourceSet, project );
++							
++							EnhancementHelper.enhance( classesDirectory, classLoader, ormDsl, project );
++						} catch (Exception e) {
++						  throw new RuntimeException(e);
++						}
+ 					}
+ 				} );
+ 			}

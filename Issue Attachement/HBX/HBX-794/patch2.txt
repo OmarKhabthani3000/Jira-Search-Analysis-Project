@@ -1,0 +1,117 @@
+Index: tools/src/test/org/hibernate/tool/hbm2x/Hbm2JavaTest.java
+===================================================================
+--- tools/src/test/org/hibernate/tool/hbm2x/Hbm2JavaTest.java	(revision 10657)
++++ tools/src/test/org/hibernate/tool/hbm2x/Hbm2JavaTest.java	(working copy)
+@@ -380,11 +380,19 @@
+ 		assertEquals("Entity", context.importType("org.test.Entity"));
+ 		assertEquals("org.other.test.Entity", context.importType("org.other.test.Entity"));
+ 		
++		assertEquals("Outer.Entity", context.importType("org.test.Outer$Entity"));
++		assertEquals("org.other.test.Outer.Entity", context.importType("org.other.test.Outer$Entity"));
++		
+ 		assertEquals("Collection<org.marvel.Hulk>", context.importType("java.util.Collection<org.marvel.Hulk>"));
+ 		assertEquals("Map<java.lang.String, org.marvel.Hulk>", context.importType("java.util.Map<java.lang.String, org.marvel.Hulk>"));
+ 		assertEquals("Collection<org.marvel.Hulk>[]", context.importType("java.util.Collection<org.marvel.Hulk>[]"));
+ 		assertEquals("Map<java.lang.String, org.marvel.Hulk>", context.importType("java.util.Map<java.lang.String, org.marvel.Hulk>"));
+ 		
++		assertEquals("Collection<org.marvel.Outer.Hulk>", context.importType("java.util.Collection<org.marvel.Outer$Hulk>"));
++		assertEquals("Map<java.lang.String, org.marvel.Outer.Hulk>", context.importType("java.util.Map<java.lang.String, org.marvel.Outer$Hulk>"));
++		assertEquals("Collection<org.marvel.Outer.Hulk>[]", context.importType("java.util.Collection<org.marvel.Outer$Hulk>[]"));
++		assertEquals("Map<java.lang.String, org.marvel.Outer.Hulk>", context.importType("java.util.Map<java.lang.String, org.marvel.Outer$Hulk>"));
++		
+ 		String string = context.generateImports();
+ 		assertTrue(string.indexOf("import org.hibernate.Session;")<0);
+ 		assertTrue(string.indexOf("import org.test.Entity;")>0);
+Index: tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	(revision 10657)
++++ tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	(working copy)
+@@ -178,9 +178,6 @@
+ 		}
+ 		else {
+ 			String rawType = getRawTypeName( p, useGenerics, true, importContext );
+-			if(rawType!=null) {
+-				rawType = rawType.replace( '$', '.' );
+-			}
+ 			if(rawType==null) {
+ 					throw new IllegalStateException("getJavaTypeName *must* return a value");				
+ 			}
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(revision 10657)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/BasicPOJOClass.java	(working copy)
+@@ -74,25 +74,16 @@
+ 
+ 	/** Return package name. Note: Does not handle inner classes */ 
+ 	public String getPackageName() {
+-		String generatedClass = getMetaAsString(MetaAttributeConstants.GENERATED_CLASS).trim();
+-		if(StringHelper.isEmpty(generatedClass) ) {
+-			generatedClass = getMappedClassName();
+-		}
+-		if(generatedClass==null) return ""; // will occur for <dynamic-component>
++		String generatedClass = getGeneratedClassName();
+ 		return StringHelper.qualifier(generatedClass.trim());
+ 	}
+ 	
+ 	public String getShortName() {
+-		return StringHelper.unqualify(getMappedClassName());
++		return qualifyInnerClass(StringHelper.unqualify(getMappedClassName()));
+ 	}
+ 	
+ 	public String getQualifiedDeclarationName() {
+-		String generatedName = getMetaAsString( MetaAttributeConstants.GENERATED_CLASS );
+-		if ( generatedName == null || generatedName.trim().length() == 0 ) {
+-			generatedName = getMappedClassName();
+-		}
+-
+-		generatedName = generatedName.replace( '$', '.' ).trim();
++		String generatedName = qualifyInnerClass(getGeneratedClassName());
+ 		String qualifier = StringHelper.qualifier( getMappedClassName() );
+ 		if ( "".equals( qualifier ) ) {
+ 			return qualifier + "." + generatedName;
+@@ -106,9 +97,24 @@
+ 	 * @return unqualified classname for this class (can be changed by meta attribute "generated-class")
+ 	 */
+ 	public String getDeclarationName() {
+-		return StringHelper.unqualify( getQualifiedDeclarationName() );
++		return qualifyInnerClass(StringHelper.unqualify( getGeneratedClassName() ));
+ 	}
+ 	
++	protected String getGeneratedClassName()
++	{
++		String generatedClass = getMetaAsString(MetaAttributeConstants.GENERATED_CLASS).trim();
++		if(StringHelper.isEmpty(generatedClass) ) {
++			generatedClass = getMappedClassName();
++		}
++		if(generatedClass==null) return ""; // will occur for <dynamic-component>
++		return generatedClass;
++	}
++	
++	protected String qualifyInnerClass(String className)
++	{
++		return className.replace('$', '.');
++	}
++	
+ 	protected abstract String getMappedClassName();
+ 
+ 	public String getMetaAsString(String attribute) {
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java	(revision 10657)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/ImportContextImpl.java	(working copy)
+@@ -88,10 +88,12 @@
+ 		}
+ 
+ 		if(additionalTypePart!=null) {
+-			return result + additionalTypePart;
+-		} else {
+-			return result;
++			result += additionalTypePart;
+ 		}
++		
++		result = result.replace('$', '.');
++
++		return result;
+ 	}
+ 	
+ 	public String staticImport(String fqcn, String member) {

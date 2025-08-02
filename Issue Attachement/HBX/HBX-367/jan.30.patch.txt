@@ -1,0 +1,2153 @@
+Index: src/java/org/hibernate/tool/ant/HibernateToolTask.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/ant/HibernateToolTask.java,v
+retrieving revision 1.16
+diff -u -r1.16 HibernateToolTask.java
+--- src/java/org/hibernate/tool/ant/HibernateToolTask.java	1 Dec 2005 10:53:36 -0000	1.16
++++ src/java/org/hibernate/tool/ant/HibernateToolTask.java	31 Jan 2006 05:03:55 -0000
+@@ -93,11 +93,11 @@
+         return generator;
+     }
+ 	
+-	/*public ExporterTask createHbm2Jsf(){
++	public ExporterTask createHbm2Jsf(){
+         ExporterTask generator= new Hbm2JsfGeneratorTask(this);
+         generators.add(generator);
+         return generator;
+-	}*/
++	}
+ 	
+ 	public ExporterTask createHbm2DAO(){
+         ExporterTask generator= new Hbm2DAOExporterTask(this);
+Index: src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java,v
+retrieving revision 1.55
+diff -u -r1.55 Cfg2JavaTool.java
+--- src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	25 Jan 2006 15:59:28 -0000	1.55
++++ src/java/org/hibernate/tool/hbm2x/Cfg2JavaTool.java	31 Jan 2006 05:03:56 -0000
+@@ -161,6 +161,10 @@
+ 		return getJavaTypeName(p, useGenerics, new NoopImportContext());
+ 	}
+ 
++	public String getJavaTypeName(Property p) {
++		return getJavaTypeName(p, false);
++	}
++	
+ 	public String getJavaTypeName(Property p, boolean useGenerics, ImportContext importContext) {
+ 		String overrideType = getMetaAsString( p, "property-type" );
+ 		if ( !StringHelper.isEmpty( overrideType ) ) {
+@@ -439,5 +443,9 @@
+ 		
+ 	}
+ 
++	public boolean isSetOrCollection(Property property) {
++		String typeName = getJavaTypeName(property, false);
++		return typeName.equals("java.util.Collection") || typeName.equals("java.util.Set");
++	}
+ 	
+ }
+Index: src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java,v
+retrieving revision 1.20
+diff -u -r1.20 EntityPOJOClass.java
+--- src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	20 Jan 2006 23:30:11 -0000	1.20
++++ src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	31 Jan 2006 05:04:00 -0000
+@@ -28,6 +28,7 @@
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.tool.hbm2x.Cfg2JavaTool;
++import org.hibernate.type.StringType;
+ import org.hibernate.util.JoinedIterator;
+ import org.hibernate.util.StringHelper;
+ import org.hibernate.cfg.Configuration;
+@@ -752,6 +753,11 @@
+ 		return new EntityPOJOClass(clazz.getSuperclass(),c2j);
+ 	}
+ 	
++	public boolean hasStringTypeIdentifier(){
++		Property property = clazz.getIdentifierProperty();
++		return property.getType() instanceof StringType;
++	}	
++	
+ 	public String toString() {
+ 		return getClass().getName() + "(" + (clazz==null?"<none>":clazz.getEntityName()) + ")";
+ 	}
+Index: src/java/org/hibernate/tool/ant/Hbm2JsfGeneratorTask.java
+===================================================================
+RCS file: src/java/org/hibernate/tool/ant/Hbm2JsfGeneratorTask.java
+diff -N src/java/org/hibernate/tool/ant/Hbm2JsfGeneratorTask.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/java/org/hibernate/tool/ant/Hbm2JsfGeneratorTask.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,54 @@
++package org.hibernate.tool.ant;
++
++import org.hibernate.tool.hbm2x.Exporter;
++import org.hibernate.tool.hbm2x.JsfExporter;
++
++/**
++ * @author Dennis C. Byrne
++ */
++
++public class Hbm2JsfGeneratorTask extends ExporterTask {
++
++	// the default is the default
++	private String supportPackage = ".";
++	
++	// use Patricio's trick - SchemaExport in HibernateFilter.init()
++	private boolean exportSchema ; 
++	
++	public Hbm2JsfGeneratorTask(HibernateToolTask parent) {
++		super(parent);
++	}
++
++	public String getSupportPackage() {
++		return supportPackage;
++	}
++
++	public void setSupportPackage(String supportPackage) {
++		this.supportPackage = supportPackage;
++	}	
++	
++	public boolean isExportSchema() {
++		return exportSchema;
++	}
++
++	public void setExportSchema(boolean exportSchema) {
++		this.exportSchema = exportSchema;
++	}
++
++	protected Exporter configureExporter(Exporter exp) {
++		JsfExporter exporter = (JsfExporter) exp;
++		exporter.setSupportPackage(supportPackage);
++		exporter.setExportSchema(exportSchema);
++		super.configureExporter(exp);
++		return exporter;
++	}
++	
++	protected Exporter createExporter() {
++		return new JsfExporter();
++	}
++
++	public String getName() {
++		return "hbm2jsf ( Generates a web application )";
++	}
++
++}
+Index: src/java/org/hibernate/tool/hbm2x/Hbm2JsfTool.java
+===================================================================
+RCS file: src/java/org/hibernate/tool/hbm2x/Hbm2JsfTool.java
+diff -N src/java/org/hibernate/tool/hbm2x/Hbm2JsfTool.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/java/org/hibernate/tool/hbm2x/Hbm2JsfTool.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,175 @@
++package org.hibernate.tool.hbm2x;
++
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.Collection;
++import org.hibernate.mapping.Column;
++import org.hibernate.mapping.OneToMany;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
++import org.hibernate.mapping.Value;
++
++/**
++ * Helper methods for templates.
++ * 
++ * @author Dennis C. Byrne
++ */
++
++public class Hbm2JsfTool {
++	
++	private static final Log log = LogFactory.getLog(Hbm2JsfTool.class);
++	
++	// easy to generate CRUD for
++	private static List simpleTypes = new ArrayList();
++	
++	static{
++		simpleTypes.add("java.math.BigDecimal");
++		simpleTypes.add("java.lang.Integer");
++		simpleTypes.add("java.math.BigInteger");
++		simpleTypes.add("java.lang.Byte");
++		simpleTypes.add("java.lang.Double");
++		simpleTypes.add("java.lang.Float");
++		simpleTypes.add("java.lang.Long");
++		simpleTypes.add("java.lang.Short");
++		simpleTypes.add("java.lang.String");
++		simpleTypes.add("java.lang.Character");
++		simpleTypes.add("int");
++		simpleTypes.add("double");
++		simpleTypes.add("long");
++		simpleTypes.add("short");
++		simpleTypes.add("byte");
++		simpleTypes.add("char");		
++		simpleTypes.add("float");
++	}
++	
++	public boolean isSimpleCrudField(String javaTypeName){
++		
++		if(javaTypeName == null)
++			throw new NullPointerException("javaTypeName");
++			
++		return simpleTypes.contains(javaTypeName.trim());
++	}
++	
++	public boolean isDate(String javaTypeName){ 
++		// TODO what about Calendar ?
++		return "java.util.Date".equals(javaTypeName);
++	}
++	
++	public boolean isBoolean(String javaTypeName){
++		return "java.lang.Boolean".equals(javaTypeName) || "boolean".equals(javaTypeName);
++	}
++	
++	public String propertyCapitalize(Property property){
++		
++		if(property == null)
++			throw new NullPointerException("Property property");
++		
++		return StringUtils.capitalise(property.getName());
++	}
++	
++	/**
++	 * Returns the identifier name of the Entity type that is found in the Collection
++	 */
++	
++	public String getIdOfCollectedClass(Property property, Configuration conf){
++		scutinizeCollection(property);
++		PersistentClass pc = getCollectedPersistentClass(property, conf);
++		
++		if(pc == null)
++			throw new NullPointerException("PersistentClass pc");
++		
++		Property identifier = pc.getIdentifierProperty();
++		
++		if(identifier == null)
++			throw new NullPointerException("Property identifier, is an entity missing an identifier?");
++			
++		return identifier.getName();
++	}
++	
++	/**
++	 * Returns the class name of the Entity type that is found in the Collection
++	 */
++	
++	public String getNameOfCollectedClass(Property property, Configuration conf){
++		scutinizeCollection(property);
++		PersistentClass pc = getCollectedPersistentClass(property, conf);
++		
++		if(pc == null)
++			throw new NullPointerException("PersistentClass pc");
++		
++		return pc.getClassName();
++	}
++	
++	private PersistentClass getCollectedPersistentClass(Property property, Configuration conf){
++		
++		if(property == null)
++			throw new NullPointerException("Property property");
++		
++		Value element = ((Collection)property.getValue()).getElement();
++		
++		if(element instanceof OneToMany){
++			
++			if(element == null)
++				throw new NullPointerException("Value element");
++			
++			OneToMany oneToMany = (OneToMany) element;
++			String className = oneToMany.getAssociatedClass().getClassName();
++			
++			if(conf == null)
++				throw new NullPointerException("Configuration conf");
++			
++			PersistentClass pc = conf.getClassMapping(className);
++			return pc;
++		}
++		
++		throw new IllegalStateException(
++				" Could not determine the class type collected by the set " 
++				+ " property " + property.getName() 
++				+ " of " + property.getPersistentClass().toString() );
++	}
++	
++	private void scutinizeCollection(Property property){
++		
++		if(property == null)
++			throw new NullPointerException("Property property");
++		
++		if (!property.getType().isCollectionType())
++			throw new IllegalStateException(" Property " + property.getName() 
++					+ " of " + property.getPersistentClass().toString() 
++					+ " is not a collection.");		
++	}
++
++	public int getDeterminedLength(Property property){
++		
++		if(property == null)
++			throw new NullPointerException("Property property");
++		
++		int length = 0;
++		int columnCount = 0;
++		
++		Iterator columns = property.getColumnIterator();
++		
++		while(columns.hasNext()){
++			
++			Column column = (Column) columns.next();
++			columnCount++;
++			length += column.getLength();
++			
++		}
++		
++		if(columnCount != 1){
++			log.warn("Cowardly returning -1 for length of Property " 
++					+ property.getName() + " because " + columnCount 
++					+ " columns were discovered - a validator will not be generated");
++			return -1;
++		}
++		
++		return length;
++	}	
++	
++}
+Index: src/java/org/hibernate/tool/hbm2x/JsfExporter.java
+===================================================================
+RCS file: src/java/org/hibernate/tool/hbm2x/JsfExporter.java
+diff -N src/java/org/hibernate/tool/hbm2x/JsfExporter.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/java/org/hibernate/tool/hbm2x/JsfExporter.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,233 @@
++package org.hibernate.tool.hbm2x;
++
++import java.io.File;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.Map;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.cfg.Configuration;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.tool.hbm2x.pojo.EntityPOJOClass;
++import org.hibernate.util.StringHelper;
++
++/**
++ * Generates a JSF web application from ORM meta data.
++ * 
++ * @author Dennis C. Byrne
++ */
++
++public class JsfExporter extends AbstractExporter {
++	
++	private static final Log log = LogFactory.getLog(JsfExporter.class);
++	
++	public static final String ROOT_DIR    = "/hbm2jsf";
++	public static final String NAME        = "Hbm2Jsf";
++	public static final String VM_PATH     = "jsf";
++	public static final String DD_DIR      = "/WEB-INF/";
++	public static final String LIB_DIR     = DD_DIR + "lib/";
++	public static final String CLASSES_DIR = DD_DIR + "classes/";
++	public static final String CRUD_DIR    = "/crud";
++	public static final String LAYOUT_DIR  = DD_DIR + "tags";
++	
++	// FILE EXTENSIONS
++	public static final String JAVA = "java";
++	public static final String JSP  = "jsp";
++	public static final String TAG  = "tag";
++	public static final String XML  = "xml";
++	public static final String VM   = "vm";
++	public static final String CSS  = "css";
++	
++	// FILE NAMES
++	public static final String DD               = "web";
++	public static final String INDEX            = "index";
++	public static final String HOME             = "home";
++	public static final String FACES_CONFIG     = "faces-config";
++	public static final String NAVIGATION       = "navigation";
++	public static final String CRUD_FORM        = "crudForm";
++	public static final String CRUD_BEAN        = "genericManagedCrudBean";
++	public static final String CRUD_CONVERTER   = "genericConverter";
++	public static final String LISTER_FORM      = "listerForm";
++	public static final String LISTER_BEAN      = "genericLister";
++	public static final String LAYOUT           = "layout";
++	public static final String HIB_UTIL         = "hibernateUtil";
++	public static final String HIB_FILTER       = "hibernateFilter";
++	
++	protected String supportPackage; // package for HibUtil, HibFilter, etc.
++	private boolean exportSchema ;
++
++    public JsfExporter(Configuration cfg, File outputdir, String supportPackage) {
++    	super(cfg, outputdir);
++    	this.supportPackage = supportPackage;
++    }
++    
++	public JsfExporter() { 	}
++	
++	public boolean isExportSchema() {
++		return exportSchema;
++	}
++
++	public void setExportSchema(boolean exportSchema) {
++		this.exportSchema = exportSchema;
++	}	
++	
++	public String getSupportPackage() {
++		return supportPackage;
++	}
++
++	public void setSupportPackage(String supportPackage) {
++		this.supportPackage = supportPackage;
++	}
++
++	protected String getSupportDir(){
++		return "/" + StringHelper.replace(supportPackage, ".","/") + "/";
++	}
++	
++	protected void doTemplate(String templateName, String dirs, String fileName, String fileType, Map map){
++		
++		if(templateName == null)
++			throw new IllegalStateException("String templateName");
++		
++		if(dirs == null)
++			throw new IllegalStateException("String dirs");
++		
++		if(fileName == null)
++			throw new IllegalStateException("String fileName");
++		
++		if(fileType == null)
++			throw new IllegalStateException("String fileType");
++		
++		String fullTemplatePath = VM_PATH + "/" + templateName + "." + VM;
++		
++		if(log.isDebugEnabled())
++			log.debug("Running template : " + fullTemplatePath + " to " + dirs + " for " + fileName );
++		
++		VelocityProducer vProducer = new VelocityProducer(getTemplateHelper(),getArtifactCollector());
++		File genFile = new File(getOutputDirectory().getAbsolutePath() + dirs + "/" + fileName);
++		vProducer.produce(map, fullTemplatePath, genFile, genFile.getAbsolutePath(), fileType);
++		
++	}	
++	
++	protected void doTemplate(String templateName, String dirs, String fileName, String fileType){
++		doTemplate(templateName, dirs, fileName, fileType, new HashMap());
++	}
++	
++	/**
++	 * Exports the following ...
++	 * <ol>
++	 * <li> deployment descriptor </li>
++	 * <li> HibernateUtil </li>
++	 * <li> HibernateFilter </li>
++	 * <li> a tag file (layout) </li>
++	 * <li> a constants class </li>
++	 * <li> a generic crud bean</li>
++	 * <li> a generic lister bean</li>
++	 * <li> a generic Converter</li>
++	 * </ol>
++	 * 
++	 * Exports the following ( for each class ) ...
++	 * <ol>
++	 * <li> the actual crud form</li>
++	 * <li> a lister form</li>
++	 * </ol>
++	 * 
++	 * Exports the following ...
++	 * <ol>
++	 * <li> an index file to redirect requests to the FC </li>
++	 * <li> a home page to orient first-timers </li>
++	 * <li> faces-config.xml </li>
++	 * <li> lib dir </li>
++	 * <li> classes dir </li>
++	 * <li> two CSS files </li>
++	 * </ol>
++	 * 
++	 */
++	
++	public void doStart()  {
++		
++		doTemplate(DD + "." + XML, ROOT_DIR + DD_DIR, DD + "." + XML, XML);
++		
++		doTemplate(HIB_UTIL + "." + JAVA, getSupportDir(), "HibernateUtil." + JAVA, JAVA);
++		
++		doTemplate(HIB_FILTER + "." + JAVA, getSupportDir(), "HibernateFilter." + JAVA, JAVA);
++		
++		doTemplate(LAYOUT + "." + TAG, ROOT_DIR + LAYOUT_DIR, LAYOUT + "." + TAG, TAG);
++        
++		doTemplate(NAVIGATION + "." + JAVA, getSupportDir(), "Navigation." + JAVA, JAVA);
++		
++		doTemplate(CRUD_BEAN + "." + JAVA, getSupportDir(), "GenericManagedCrudBean." + JAVA, JAVA);
++		
++		doTemplate(LISTER_BEAN + "." + JAVA, getSupportDir(), "GenericLister." + JAVA, JAVA);
++		
++		doTemplate(CRUD_CONVERTER + "." + JAVA, getSupportDir(), "GenericConverter." + JAVA, JAVA);
++		
++		Iterator classes = getConfiguration().getClassMappings();
++		
++        for ( ; classes.hasNext() ; ) {
++	        PersistentClass clazz = (PersistentClass) classes.next();
++	        EntityPOJOClass pc = new EntityPOJOClass(clazz, new Cfg2JavaTool());
++	        Map additionalContext = new HashMap();
++	        additionalContext.put("pojo", pc);
++	        additionalContext.put("clazz", clazz);
++	        
++	        doTemplate(CRUD_FORM + "." + JSP, 
++	        		ROOT_DIR + CRUD_DIR + "/", 
++	        		pc.getDeclarationName() + "." + JSP, 
++	        		JSP, 
++	        		additionalContext);
++	        
++	        doTemplate(LISTER_FORM + "." + JSP, 
++	        		ROOT_DIR + CRUD_DIR + "/", 
++	        		pc.getDeclarationName() + "Lister." + JSP, 
++	        		JSP, 
++	        		additionalContext);
++        }
++         	
++        doTemplate(INDEX + "." + JSP, ROOT_DIR, INDEX + "." + JSP, JSP);
++ 
++        doTemplate(HOME + "." + JSP, ROOT_DIR, HOME + "." + JSP, JSP);
++         
++        doTemplate(FACES_CONFIG + "." + XML, ROOT_DIR + DD_DIR, FACES_CONFIG + "." + XML, XML);
++        
++        makeLib();
++        
++        makeClasses();
++        
++        doTemplate("myFaces." + CSS, ROOT_DIR, "myFaces." + CSS, CSS);
++        
++        doTemplate("hibernate." + CSS, ROOT_DIR, "hibernate." + CSS, CSS);
++        
++	}
++
++	/**
++	 * Creates /WEB-INF/lib .  In the future, it could copy deps to it.
++	 */
++	
++	protected void makeLib(){
++		File dir = new File(getOutputDirectory().getPath() + ROOT_DIR + LIB_DIR);
++		if(!dir.exists() && ! dir.mkdir()){
++			throw new ExporterException("Could not create the dir:" + dir.getAbsolutePath());
++		}
++	}
++	
++	/**
++	 * Creates /WEB-INF/classes.  In the future it might
++	 * copy generated/compiled POJOS and/or HBM files to the /WEB-INF/classes dir.
++	 */	
++	protected void makeClasses(){
++		File dir = new File(getOutputDirectory().getPath() + ROOT_DIR +  CLASSES_DIR);
++		if(!dir.exists() && ! dir.mkdir()){
++			throw new ExporterException("Could not create the dir:" + dir.getAbsolutePath());
++		}
++	}
++
++	protected void setupContext() {
++		super.setupContext();
++		getTemplateHelper().putInContext("jsf", new Hbm2JsfTool() );
++		getTemplateHelper().putInContext("supportDir", supportPackage);
++		getTemplateHelper().putInContext("name", NAME);
++		getTemplateHelper().putInContext("exportSchema", Boolean.valueOf(exportSchema) );
++	}
++	
++}
+Index: src/test/org/hibernate/tool/hbm2jsf/Game.hbm.xml
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/Game.hbm.xml
+diff -N src/test/org/hibernate/tool/hbm2jsf/Game.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/Game.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,24 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++			"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- This file is meant for testing purposes only -->
++
++<hibernate-mapping package="cours4.model">
++  <class name="Game" table="GAME" lazy="true">
++	    <id name="id" column="GAME_ID" type="integer">
++      <generator class="assigned"/>
++    </id>
++    <property name="awayTeamScore" column="AWAY_TEAM_SCORE" type="integer"/>
++    <property name="homeTeamScore" column="HOME_TEAM_SCORE" type="integer"/>
++    <property name="gameDate" column="GAME_DATE" type="date"/>
++    <many-to-one cascade="none" name="mostValuablePlayer" 
++      class="Player" column="PLAYER_ID" />	
++    <many-to-one cascade="none" name="homeTeam" class="Team" 
++      column="HOME_TEAM_ID" />	
++    <many-to-one cascade="none" name="awayTeam" class="Team" 
++      column="AWAY_TEAM_ID" />	
++  </class>
++</hibernate-mapping>
++
++
+Index: src/test/org/hibernate/tool/hbm2jsf/Hbm2JsfTest.java
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/Hbm2JsfTest.java
+diff -N src/test/org/hibernate/tool/hbm2jsf/Hbm2JsfTest.java
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/Hbm2JsfTest.java	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,99 @@
++package org.hibernate.tool.hbm2jsf;
++
++import java.io.File;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.hibernate.tool.NonReflectiveTestCase;
++import org.hibernate.tool.hbm2x.Exporter;
++import org.hibernate.tool.hbm2x.JsfExporter;
++import org.hibernate.tool.hbm2x.POJOExporter;
++import org.hibernate.tool.test.TestHelper;
++
++/**
++ * This class is used to scrutinize the output of Hbm2JsfExporter
++ * 
++ * @author Dennis Byrne
++ */
++
++public class Hbm2JsfTest extends NonReflectiveTestCase {
++
++	private static final String OUTPUT_DIR = "hbm2jsfoutput";
++	private static final String COMPILE_DIR = "compilableJsf";
++	private static final Log log = LogFactory.getLog(Hbm2JsfTest.class);
++	
++	public Hbm2JsfTest(String name){
++		super(name, OUTPUT_DIR);
++	}
++	
++	protected void setUp() throws Exception {
++		Exporter exporter ;
++		
++		super.setUp();
++		
++		exporter = new POJOExporter(getCfg(), getOutputDir());
++		exporter.start();
++		exporter = new JsfExporter(getCfg(), getOutputDir(), "org.test.jsf");
++		exporter.start();
++	}
++	
++	protected void tearDown() throws Exception {
++		
++		super.tearDown();
++	}
++	
++	public void testCompilable() {
++		File file = new File(COMPILE_DIR);
++		List jars = new ArrayList();
++		jars.add("myfaces-api.jar");
++		jars.add("commons-logging-1.0.4.jar");
++		jars.add("hibernate3.jar");
++		jars.add("servlet-api.jar");
++		String classPath = TestHelper.buildClasspath(jars);
++		List files = TestHelper.visitAllFiles(getOutputDir(), new ArrayList() );
++		file.mkdir();
++		
++		TestHelper.compile(getOutputDir(), file, files, "1.4", classPath);
++		
++		TestHelper.deleteDir(file);
++	}
++	
++	/**
++	 * Make sure all .xml, .jsp and .tag files are well-formed.
++	 */
++	
++	public void testWellFormedness() {
++		
++		List dox = TestHelper.visitAllFiles(getOutputDir(), new ArrayList(), ".xml");
++		dox = TestHelper.visitAllFiles(getOutputDir(), dox, ".tag");
++		dox = TestHelper.visitAllFiles(getOutputDir(), dox, ".jsp");
++		
++		for(Iterator iterator = dox.iterator(); iterator.hasNext();){
++			String path = (String)iterator.next();
++			
++			log.info("Making sure file is well-formed : " + path);
++			
++			assertTrue(TestHelper.isWellFormed(path));
++		}
++	}
++	
++	
++	
++	protected String[] getMappings() {
++		return new String[] {
++			"Game.hbm.xml",
++			"PersonDiscriminator.hbm.xml",
++			"Season.hbm.xml",
++			"Sponsor.hbm.xml",
++			"Team.hbm.xml"
++		};
++	}
++	
++	protected String getBaseForMappings() {
++		return "org/hibernate/tool/hbm2jsf/";
++	}
++	
++}
+Index: src/test/org/hibernate/tool/hbm2jsf/PersonDiscriminator.hbm.xml
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/PersonDiscriminator.hbm.xml
+diff -N src/test/org/hibernate/tool/hbm2jsf/PersonDiscriminator.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/PersonDiscriminator.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,32 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++			"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- This file is meant for testing purposes only -->			
++			
++<hibernate-mapping package="cours4.model">
++	<class name="Person" table="PERSON">
++		<id name="id" column="PERSON_ID" type="integer">
++			<generator class="native" />
++		</id>
++		<discriminator column="PERSON_TYPE" type="string" />
++		<property name="name" column="PERSON_NAME" type="string"/>
++		<property name="birthday" column="BIRTHDAY" type="date"/>
++		<property name="height" column="HEIGHT" type="integer" />
++		<property name="weight" column="WEIGHT" type="integer"/>
++		<subclass name="Player" discriminator-value="PLAYER">
++			<property name="number" column="PLAYER_NUMBER" type="integer" />
++			<many-to-one name="team" class="Team" column="TEAM_ID" />
++			<subclass name="Rookie" discriminator-value="ROOKIE">
++			</subclass>
++			<subclass name="SuperStar"
++				discriminator-value="SUPERSTAR">
++				<many-to-one name="sponsor" class="Sponsor"
++					column="SPONSOR_ID" />
++			</subclass>
++		</subclass>
++		<subclass name="Coach" discriminator-value="COACH">
++			<many-to-one name="team" class="Team" column="TEAM_ID" />
++		</subclass>
++	</class>
++</hibernate-mapping>
+Index: src/test/org/hibernate/tool/hbm2jsf/Season.hbm.xml
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/Season.hbm.xml
+diff -N src/test/org/hibernate/tool/hbm2jsf/Season.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/Season.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,15 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- This file is meant for testing purposes only -->  
++  
++<hibernate-mapping package="cours4.model">
++	<class name="Season" table="SEASON">
++		<id name="id" column="SEASON_ID" type="integer">
++			<generator class="native"/>
++		</id>
++		<property name="startDate" column="START_DATE" type="date"/>
++		<property name="endDate" column="END_DATE" type="date"/>
++	</class>
++</hibernate-mapping>
+Index: src/test/org/hibernate/tool/hbm2jsf/Sponsor.hbm.xml
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/Sponsor.hbm.xml
+diff -N src/test/org/hibernate/tool/hbm2jsf/Sponsor.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/Sponsor.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,13 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++			"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- This file is meant for testing purposes only -->
++
++<hibernate-mapping package="cours4.model">
++	<class name="Sponsor" table="SPONSOR" lazy="true">
++		<id name="id" column="SPONSOR_ID" type="integer">
++			<generator class="assigned"/>
++		</id>
++	</class>
++</hibernate-mapping>
+Index: src/test/org/hibernate/tool/hbm2jsf/Team.hbm.xml
+===================================================================
+RCS file: src/test/org/hibernate/tool/hbm2jsf/Team.hbm.xml
+diff -N src/test/org/hibernate/tool/hbm2jsf/Team.hbm.xml
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/test/org/hibernate/tool/hbm2jsf/Team.hbm.xml	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,35 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM
++  "http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++
++<!-- This file is meant for testing purposes only -->
++
++<hibernate-mapping package="cours4.model">
++	<class name="Team" table="TEAM" lazy="true">
++		<id name="id" column="TEAM_ID" type="integer">
++			<generator class="native" />
++		</id>
++		<property name="name" column="TEAM_NAME" type="string" />
++		<property name="nbWon" column="NB_WON" type="integer" />
++		<property name="nbLost" column="NB_LOST" type="integer" />
++		<property name="nbPlayed" column="NB_PLAYED" type="integer" />
++		<many-to-one name="coach" class="Coach" column="COACH_ID"
++			unique="true" cascade="save-update" />
++		<set name="players" cascade="save-update" inverse="true">
++			<key column="TEAM_ID" />
++			<one-to-many class="Player" />
++		</set>
++		<map name="homeGames" cascade="save-update" inverse="true"
++			lazy="true">
++			<key column="HOME_TEAM_ID" />
++			<index column="GAME_DATE" type="date" />
++			<one-to-many class="Game" />
++		</map>
++		<map name="awayGames" cascade="save-update" inverse="true"
++			lazy="true">
++			<key column="AWAY_TEAM_ID" />
++			<index column="GAME_DATE" type="date" />
++			<one-to-many class="Game" />
++		</map>
++	</class>
++</hibernate-mapping>
+Index: src/velocity/jsf/crudBoolean.vm
+===================================================================
+RCS file: src/velocity/jsf/crudBoolean.vm
+diff -N src/velocity/jsf/crudBoolean.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudBoolean.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,16 @@
++	 <h:outputText styleClass="outputLabel" value="$field.getName()" />
++	 <h:panelGroup styleClass="panelGroup">
++	   <h:panelGroup styleClass="panelGroup">
++	  	<h:selectBooleanCheckbox styleClass="selectBooleanCheckbox"
++			value="#{${decName}Crud.unit.${field.getName()}}"
++			id="$field.getName()"
++			rendered="#{not ${decName}Crud.retrieveState}"/>
++		</h:panelGroup>
++		<h:panelGroup styleClass="panelGroup">
++			<h:outputText
++				rendered="#{${decName}Crud.retrieveState}"
++				value="#{${decName}Crud.unit.${field.getName()}}"/>
++		</h:panelGroup>
++	  </h:panelGroup>	
++	 <h:message styleClass="message" for="$field.getName()" />	
++	 
+Index: src/velocity/jsf/crudCommands.vm
+===================================================================
+RCS file: src/velocity/jsf/crudCommands.vm
+diff -N src/velocity/jsf/crudCommands.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudCommands.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,12 @@
++     
++     <div id="commandButtons"> 
++	  <h:commandButton styleClass="commandButton" 
++		value="Create"    
++		action="#{${decName}Crud.create}"   
++		disabled="#{not ${decName}Crud.createState}" />
++	  <h:commandButton styleClass="commandButton" 
++		value="Update" 
++		action="#{${decName}Crud.update}"   
++		disabled="#{not ${decName}Crud.updateState}" />
++     </div>
++     
+Index: src/velocity/jsf/crudDate.vm
+===================================================================
+RCS file: src/velocity/jsf/crudDate.vm
+diff -N src/velocity/jsf/crudDate.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudDate.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,16 @@
++	 <h:outputText styleClass="outputLabel" value="$field.getName()" />
++	 <t:inputCalendar 
++	 	value="#{${decName}Crud.unit.${field.getName()}}"
++	 	id="$field.getName()"
++	 	renderAsPopup="true"
++#if( ! $field.isOptional() )
++		required="true"	
++#end	
++		rendered="#{not ${decName}Crud.retrieveState}" />
++	 <h:outputText styleClass="outputText"
++	 		value="#{${decName}Crud.unit.${field.getName()}}"
++	 		rendered="#{${decName}Crud.retrieveState}" />
++	 <h:message styleClass="message" for="$field.getName()" />
++
++
++	
+Index: src/velocity/jsf/crudForm.jsp.vm
+===================================================================
+RCS file: src/velocity/jsf/crudForm.jsp.vm
+diff -N src/velocity/jsf/crudForm.jsp.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudForm.jsp.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,62 @@
++<?xml version="1.0" encoding="iso-8859-1"?>
++<jsp:root version="2.0" 
++	xmlns:jsp="http://java.sun.com/JSP/Page"
++	xmlns:tools="urn:jsptagdir:/WEB-INF/tags"
++	xmlns:f="http://java.sun.com/jsf/core"
++	xmlns:h="http://java.sun.com/jsf/html"
++	xmlns:t="http://myfaces.apache.org/tomahawk" >
++
++<tools:layout>
++#set( $decName = ${pojo.getDeclarationName()})
++
++ <h:form styleClass="crudForm">
++ <t:saveState value="#{${decName}Crud.state}" />
++ <t:saveState value="#{${decName}Crud.unit}" />
++ 
++<h:panelGrid columns="3" styleClass="panelGrid" columnClasses="labelColumn"> 
++
++#foreach( $field in $pojo.getAllPropertiesIterator() )
++#if($field.equals($clazz.getIdentifierProperty()))
++#parse("jsf/crudIdentifier.vm")
++
++#elseif($jsf.isSimpleCrudField(${c2j.getJavaTypeName($field)}))
++#parse("jsf/crudSimple.vm")  
++   
++#elseif($jsf.isBoolean(${c2j.getJavaTypeName($field)}))	 	
++#parse("jsf/crudBoolean.vm")  
++	
++#elseif($jsf.isDate(${c2j.getJavaTypeName($field)}))
++#parse("jsf/crudDate.vm")
++
++#elseif($c2h.isManyToOne($field))
++#parse("jsf/crudManyToOne.vm")
++
++#else
++#if(! $c2j.isSetOrCollection($field))
++	  <h:outputText styleClass="outputLabel" value="$field.getName()" />
++	  <h:outputText styleClass="outputText"
++	  		value="$c2j.getJavaTypeName($field) not supported"
++	  		id="$field.getName()" />
++	  <h:message styleClass="message" for="$field.getName()" />
++#end
++#end
++#end
++
++</h:panelGrid>
++
++<h:panelGrid columns="2" styleClass="panelGrid" 
++	columnClasses="labelColumn"
++	rendered="#{${decName}Crud.retrieveState}"> 
++#foreach( $field in $pojo.getAllPropertiesIterator() )
++#if($c2j.isSetOrCollection($field))
++#parse("jsf/crudSetOrCollection.vm")
++#end
++#end
++</h:panelGrid>
++
++#parse("jsf/crudCommands.vm")
++
++ </h:form>
++</tools:layout>
++
++</jsp:root>
+Index: src/velocity/jsf/crudIdentifier.vm
+===================================================================
+RCS file: src/velocity/jsf/crudIdentifier.vm
+diff -N src/velocity/jsf/crudIdentifier.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudIdentifier.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,35 @@
++#set( $isAssigned = $field.Value.identifierGeneratorStrategy == "assigned" )
++
++#if( $isAssigned )
++	 <h:outputText styleClass="outputLabel" value="$field.getName()" />	
++	 <h:panelGroup styleClass="panelGroup">
++	 	 <h:inputText styleClass="inputText"
++	 		value="#{${decName}Crud.unit.${field.getName()}}"
++			required="true"	
++			rendered="#{${decName}Crud.createState}"
++	 		id="$field.getName()" />
++		 <h:outputText
++		 	value="#{${decName}Crud.unit.${field.getName()}}"
++			rendered="#{not ${decName}Crud.createState}" />
++		 <h:inputHidden
++		 	value="#{${decName}Crud.unit.${field.getName()}}"
++			rendered="#{not ${decName}Crud.createState}" />			
++	 </h:panelGroup>
++#else
++     <h:panelGroup>
++		 <h:outputText styleClass="outputLabel" value="$field.getName()" 
++		 	rendered="#{not ${decName}Crud.createState}" />	
++	 </h:panelGroup>
++     <h:panelGroup styleClass="panelGroup">
++		<h:inputHidden 
++			value="#{${decName}Crud.unit.${field.getName()}}"
++			id="$field.getName()"
++			rendered="#{not ${decName}Crud.createState}" />		 
++		<h:outputText
++			value="#{${decName}Crud.unit.${field.getName()}}"
++			rendered="#{not ${decName}Crud.createState}" />
++	 </h:panelGroup>
++#end
++	  <h:message styleClass="message" for="$field.getName()" />
++
++	  
+Index: src/velocity/jsf/crudManyToOne.vm
+===================================================================
+RCS file: src/velocity/jsf/crudManyToOne.vm
+diff -N src/velocity/jsf/crudManyToOne.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudManyToOne.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,21 @@
++#set( $propType = $c2j.unqualify(${field.getType().getName()}) )
++#set( $theOnePc = $cfg.getClassMapping($field.getType().getName()) )
++#set( $idName = ${theOnePc.getIdentifierProperty().getName()} )
++	 <h:outputText styleClass="outputLabel" value="$field.getName()" />
++	 <h:selectOneMenu styleClass="selectOneInput"
++	  	  value="#{${decName}Crud.unit.${field.getName()}}"
++	 	  id="$field.getName()"
++	 	  rendered="#{not ${decName}Crud.retrieveState}"
++	 	  converter="#{${propType}Converter}" >
++	 	  <f:selectItems value="#{${propType}Lister.selectItems}" />
++	   </h:selectOneMenu>
++	 	<h:commandLink rendered="#{${decName}Crud.retrieveState}"  
++			action="#{${propType}Crud.retrieve}" >
++			<h:outputText value="" rendered="#{${decName}Crud.unit.${field.getName()} == null}"/>
++			<h:outputText value="${propType} #{${decName}Crud.unit.${field.getName()}.${idName}}"
++				rendered="#{${decName}Crud.unit.${field.getName()} != null}"/>
++        	<t:updateActionListener property="#{${propType}Crud.id}" 
++        		value="#{${decName}Crud.unit.${field.getName()}.${idName}}" />
++	 	</h:commandLink>
++	 <h:message styleClass="message" for="$field.getName()" />
++
+Index: src/velocity/jsf/crudSetOrCollection.vm
+===================================================================
+RCS file: src/velocity/jsf/crudSetOrCollection.vm
+diff -N src/velocity/jsf/crudSetOrCollection.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudSetOrCollection.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,12 @@
++#set( $propType = $c2j.unqualify(${jsf.getNameOfCollectedClass($field, $cfg)}) )
++	  <h:outputText styleClass="outputLabel" value="$field.getName()" />
++	  <t:dataTable styleClass="dataTable" var="item" value="#{${decName}Crud.unit.${field.getName()}}" >
++   		<h:column>
++	  		<h:commandLink immediate="true" value="${propType} #{item.${jsf.getIdOfCollectedClass($field, $cfg)}}" 
++	  			action="#{${propType}Crud.retrieve}" >
++        		<t:updateActionListener property="#{${propType}Crud.id}" 
++        			value="#{item.${jsf.getIdOfCollectedClass($field, $cfg)}}" />
++	  		</h:commandLink>
++   		</h:column>
++	  </t:dataTable>
++
+Index: src/velocity/jsf/crudSimple.vm
+===================================================================
+RCS file: src/velocity/jsf/crudSimple.vm
+diff -N src/velocity/jsf/crudSimple.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/crudSimple.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,31 @@
++	 <h:outputText styleClass="outputLabel" value="$field.getName()" />
++     <h:panelGroup styleClass="panelGroup">
++	 	<h:inputText styleClass="inputText"
++	 		value="#{${decName}Crud.unit.${field.getName()}}"
++#if( ! $field.isOptional() )
++			required="true"	
++#end 
++#if( $field.isUpdateable() )
++			rendered="#{not ${decName}Crud.retrieveState}"
++#else
++	 		rendered="#{${decName}Crud.createState}"	
++#end
++			id="$field.getName()" >
++#if( $jsf.getDeterminedLength($field) > 0 )
++			<f:validateLength minimum="0"
++							  maximum="${jsf.getDeterminedLength($field)}" />
++#end			
++		</h:inputText>
++	 	<h:outputText styleClass="outputText"
++#if( $field.isUpdateable() )
++	 		rendered="#{${decName}Crud.retrieveState}" 
++#else
++	 		rendered="#{not ${decName}Crud.createState}"
++#end
++			value="#{${decName}Crud.unit.${field.getName()}}" />
++#if( ! $field.isUpdateable() )
++		<h:inputHidden value="#{${decName}Crud.unit.${field.getName()}}" 
++	 		rendered="#{${decName}Crud.updateState}"/>
++#end
++	 </h:panelGroup>
++	 <h:message styleClass="message" for="$field.getName()" />
+Index: src/velocity/jsf/faces-config.xml.vm
+===================================================================
+RCS file: src/velocity/jsf/faces-config.xml.vm
+diff -N src/velocity/jsf/faces-config.xml.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/faces-config.xml.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,141 @@
++<?xml version='1.0' encoding='UTF-8'?>
++
++<!DOCTYPE faces-config PUBLIC
++  "-//Sun Microsystems, Inc.//DTD JavaServer Faces Config 1.1//EN"
++  "http://java.sun.com/dtd/web-facesconfig_1_1.dtd">
++
++<faces-config> <!-- generated by hbm2jsf , all managed beans are in request scope -->
++
++  <navigation-rule> 
++    <from-view-id>/*</from-view-id> 
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})    
++    <navigation-case> 
++      <from-action>#{${decName}Lister.load}</from-action>
++      <from-outcome>SUCCESS</from-outcome> 
++      <to-view-id>/crud/${decName}Lister.jsp</to-view-id>
++    </navigation-case> 
++    <navigation-case> 
++      <from-action>#{${decName}Crud.retrieve}</from-action>
++      <from-outcome>SUCCESS</from-outcome> 
++      <to-view-id>/crud/${decName}.jsp</to-view-id>
++    </navigation-case>
++#end         
++  </navigation-rule>
++
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})
++
++    <!-- navigation rules for the ${decName} lister index -->
++	<navigation-rule>
++		<from-view-id>/crud/${decName}Lister.jsp</from-view-id>
++		<navigation-case>
++			<from-action>#{${decName}Crud.delete}</from-action>		
++			<from-outcome>SUCCESS</from-outcome>
++			<to-view-id>/crud/${decName}Lister.jsp</to-view-id>
++		</navigation-case>
++		<navigation-case>
++			<from-action>#{${decName}Crud.createPrepare}</from-action>				
++			<from-outcome>SUCCESS</from-outcome>
++			<to-view-id>/crud/${decName}.jsp</to-view-id>
++		</navigation-case>
++		<navigation-case>
++			<from-action>#{${decName}Crud.updatePrepare}</from-action>				
++			<from-outcome>SUCCESS</from-outcome>
++			<to-view-id>/crud/${decName}.jsp</to-view-id>
++		</navigation-case>		
++	</navigation-rule>
++	
++	<!-- navigation rules for the ${decName} crud form -->
++	<navigation-rule>
++		<from-view-id>/crud/${decName}.jsp</from-view-id>
++		<navigation-case>
++			<from-action>#{${decName}Crud.update}</from-action>		
++			<from-outcome>SUCCESS</from-outcome>
++			<to-view-id>/crud/${decName}.jsp</to-view-id>
++		</navigation-case>	
++		<navigation-case>
++			<from-action>#{${decName}Crud.create}</from-action>
++			<from-outcome>SUCCESS</from-outcome>
++			<to-view-id>/crud/${decName}.jsp</to-view-id>
++		</navigation-case>
++	</navigation-rule>
++#end
++
++    <!-- managing all business objects -->
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})
++    <managed-bean>
++        <managed-bean-name>${decName}</managed-bean-name>
++        <managed-bean-class>${mapping.getPackageName()}.${decName}</managed-bean-class>
++        <managed-bean-scope>request</managed-bean-scope>
++    </managed-bean>
++#end
++
++    <!-- configure GenericManagedCrudBean for each business object -->
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})
++    <managed-bean>
++        <managed-bean-name>${decName}Crud</managed-bean-name>
++        <managed-bean-class>${supportDir}.GenericManagedCrudBean</managed-bean-class>
++        <managed-bean-scope>request</managed-bean-scope>
++		<managed-property>
++            <property-name>unit</property-name>
++            <value>#{${decName}}</value>
++        </managed-property>
++		<managed-property>
++            <property-name>lister</property-name>
++            <value>#{${decName}Lister}</value>
++        </managed-property>
++    </managed-bean>
++#end
++
++    <!-- configure GenericLister for each business object -->
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})
++    <managed-bean>
++        <managed-bean-name>${decName}Lister</managed-bean-name>
++        <managed-bean-class>${supportDir}.GenericLister</managed-bean-class>
++        <managed-bean-scope>request</managed-bean-scope>
++		<managed-property>
++            <property-name>example</property-name>
++            <value>#{${decName}.class}</value>
++        </managed-property>
++    </managed-bean>
++#end
++
++    <!-- configure GenericConverter for each business object -->
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++#set( $decName = ${mapping.getDeclarationName()})
++    <managed-bean>
++        <managed-bean-name>${decName}Converter</managed-bean-name>
++        <managed-bean-class>${supportDir}.GenericConverter</managed-bean-class>
++        <managed-bean-scope>request</managed-bean-scope>
++		<managed-property>
++            <property-name>example</property-name>
++            <value>#{${decName}.class}</value>
++        </managed-property>
++		<managed-property>
++            <property-name>stringType</property-name>
++#if($mapping.hasStringTypeIdentifier())  
++            <value>true</value>
++#else
++            <value>false</value>
++#end
++        </managed-property>	
++    </managed-bean>
++#end
++
++    <managed-bean>
++        <managed-bean-name>css</managed-bean-name>
++        <managed-bean-class>java.util.HashMap</managed-bean-class>
++        <managed-bean-scope>session</managed-bean-scope>
++        <map-entries>
++        	<map-entry>
++        		<key>value</key>
++        		<value>h</value> <!-- default CSS is hibernate -->
++        	</map-entry>
++        </map-entries>
++    </managed-bean>
++
++</faces-config>
+Index: src/velocity/jsf/genericConverter.java.vm
+===================================================================
+RCS file: src/velocity/jsf/genericConverter.java.vm
+diff -N src/velocity/jsf/genericConverter.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/genericConverter.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,49 @@
++package ${supportDir};
++
++import javax.faces.convert.*;
++import javax.faces.context.FacesContext;
++import javax.faces.component.UIComponent;
++
++/**
++ * @see GenericLister
++ * @see GenericManagedCrudBean
++ * @author hbm2jsf
++ */
++
++public class GenericConverter implements Converter {
++	private Class example;
++    private boolean stringType;  // hint about identifier type, injected by FC
++
++	public Class getExample() {
++		return example;
++	}
++
++	public void setExample(Class example) {
++		this.example = example;
++	}
++	
++	public boolean isStringType(){
++		return this.stringType;
++	}
++	
++	public void setStringType(boolean stringType){
++		this.stringType = stringType;
++	}
++	
++	public Object getAsObject(FacesContext ctx, UIComponent ui, String id)
++			throws ConverterException {
++		if(id == null || "".equals(id)){ return null; }
++		String tick = stringType ? "'" : "";
++		String hql = "FROM " + example.getName() + " AS foo WHERE foo.id = " + tick + id + tick;
++		return HibernateUtil.getSession().createQuery(hql).uniqueResult();
++	}
++
++	public String getAsString(FacesContext ctx, UIComponent ui, Object object)
++			throws ConverterException {
++		return object == null ? "" :
++			HibernateUtil.getSession().getIdentifier(object).toString();
++	}
++	
++}
++
++
+Index: src/velocity/jsf/genericLister.java.vm
+===================================================================
+RCS file: src/velocity/jsf/genericLister.java.vm
+diff -N src/velocity/jsf/genericLister.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/genericLister.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,89 @@
++package ${supportDir};
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Iterator;
++
++import javax.faces.model.DataModel;
++import javax.faces.model.ListDataModel;
++import javax.faces.model.SelectItem;
++import javax.faces.context.FacesContext;
++import javax.faces.application.FacesMessage;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++
++/**
++ * This bean serves lists of business objects to the view .  It relies on the
++ * FC to know which type of business object.
++ *
++ * @see GenericConverter
++ * @see GenericManagedCrudBean
++ * @author hbm2jsf
++ */
++
++public class GenericLister {
++	private static final Log log = LogFactory.getLog(GenericLister.class);
++	protected DataModel dataModel = new ListDataModel(new ArrayList());
++    private Class example;
++	// protected GenericDAO dao ;
++	
++	public Class getExample() {
++		return example;
++	}
++
++	public void setExample(Class example) {
++		this.example = example;
++	}
++	
++	public DataModel getDataModel() {
++		return dataModel;
++	}
++
++	public void setDataModel(DataModel dataModel) {
++		this.dataModel = dataModel;
++	}
++
++	public boolean isPopulated() {
++		return ((List)dataModel.getWrappedData()).size() > 0;
++	}
++	
++	public List getSelectItems(){
++		List list = new ArrayList();
++		if(! isPopulated())
++			load();
++		Iterator iterator = ((List)dataModel.getWrappedData()).iterator();
++		for( ;iterator.hasNext(); ){
++			Object object = iterator.next();
++			String id = HibernateUtil.getSession().getIdentifier(object).toString();
++			list.add(new SelectItem(object, id + " -> " + object.toString()));
++		}
++		return list;
++	}
++	
++	/**
++	 * This method can be bound to a user event.
++	 */
++	
++	public String load(){
++		String outcome = Navigation.FAILURE;
++		FacesMessage facesMessage ;
++		String message = " failed to pull a list of " + example;
++		
++		dataModel = new ListDataModel(new ArrayList());
++		try{
++			// list = dao.findAll();
++			List list = HibernateUtil.getSession().createCriteria(example).list();
++			dataModel.setWrappedData(list);
++			outcome = Navigation.SUCCESS;
++			message = " retrieved " + list.size() + " of " + example ; 
++			log.info(message);
++		}catch(RuntimeException e){
++			log.error(message, e);
++		}
++		facesMessage = new FacesMessage( FacesMessage.SEVERITY_INFO, message, message);
++		FacesContext.getCurrentInstance().addMessage(null, facesMessage);
++		return outcome;
++	}
++	
++}
+Index: src/velocity/jsf/genericManagedCrudBean.java.vm
+===================================================================
+RCS file: src/velocity/jsf/genericManagedCrudBean.java.vm
+diff -N src/velocity/jsf/genericManagedCrudBean.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/genericManagedCrudBean.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,216 @@
++package ${supportDir};
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import javax.faces.application.FacesMessage;
++import javax.faces.context.FacesContext;
++import java.io.Serializable;
++
++/**
++ * This bean depends on user events in the view to know what to do: create, retrieve, 
++ * update or delete.  It depends on the controller to know what business objects these
++ * actions should be performed on. 
++ *
++ * @see GenericLister
++ * @see GenericConverter
++ * @author hbm2jsf
++ */
++
++public class GenericManagedCrudBean {
++	private static Log log = LogFactory.getLog(GenericManagedCrudBean.class);
++	protected Object unit ;      // business object
++    private Object id ;
++	private GenericLister lister;
++	boolean createState;
++	boolean updateState;
++	// protected GenericDAO dao;
++	
++	public Object getUnit(){
++		return this.unit;
++	}
++
++	public void setUnit(Object unit){
++		log.info(unit.toString() + " dep. injected by controller ");
++		this.unit = unit;
++	}
++
++	public Object getId() {
++		return id;
++	}
++
++	public void setId(Object id) {
++		this.id = id;
++	}
++	
++	public GenericLister getLister(){
++		return this.lister;
++	}
++	
++	public void setLister(GenericLister lister){
++		log.info(lister.toString() + " dep. injected by controller ");	
++		this.lister = lister;
++	}
++
++	/**
++	 * This method is bound to an end user action
++	 */
++
++	public String createPrepare() {
++		setCreateState(true);
++		return Navigation.SUCCESS;
++	}
++
++	/**
++	 * This method is bound to an end user action
++	 */
++
++	public String updatePrepare(){
++		String outcome = Navigation.FAILURE;
++		if(retrieve().equals(Navigation.SUCCESS)){
++			setUpdateState(true);
++			outcome = Navigation.SUCCESS;
++		}
++		return outcome;
++	}	
++
++	/**
++	 * This method is bound to an end user action
++	 */
++
++	public String retrieve(){
++		String outcome = Navigation.FAILURE;
++		FacesMessage facesMessage ;	
++		String message = " failed to retrieve a " + unit.getClass(); 
++		
++		try {
++			// unit = dao.findById(, false);
++			unit = HibernateUtil.getSession().load(unit.getClass(), (Serializable)id);
++			message = " retrieved " + unit.toString(); 
++			log.info(message);
++			outcome = Navigation.SUCCESS;
++			setRetrieveState(true);
++		} catch (RuntimeException e) {
++			log.error(message, e);
++		}
++		
++		facesMessage = new FacesMessage( FacesMessage.SEVERITY_INFO, message, message);
++		FacesContext.getCurrentInstance().addMessage(null, facesMessage);
++		
++		return outcome;
++	}
++
++	/**
++	 * This method is bound to an end user action
++	 */
++	
++	public String update(){
++		return save();
++	}
++
++	/**
++	 * This method is bound to an end user action
++	 */
++	
++	public String create(){
++		return save();
++	}
++	
++	private String save(){
++		String outcome = Navigation.FAILURE;
++		FacesMessage facesMessage ;	
++		String message = " failed to save a " + unit.getClass();
++		
++		try {
++			//dao.makePersistent(unit);
++			HibernateUtil.beginTransaction();
++			HibernateUtil.getSession().saveOrUpdate(unit);
++			HibernateUtil.commitTransaction();
++			message = " successfully saved " + unit.toString();
++			log.info(message);
++			outcome = Navigation.SUCCESS;
++			setRetrieveState(true);
++		} catch (RuntimeException e) {
++			log.error(message, e);
++		}
++		
++		facesMessage = new FacesMessage( FacesMessage.SEVERITY_INFO, message, message);
++		FacesContext.getCurrentInstance().addMessage(null, facesMessage);		
++		
++		return outcome;
++	}
++
++	/**
++	 * This method is bound to an end user action
++	 */
++	
++	public String delete() {
++		String outcome = Navigation.FAILURE;
++		FacesMessage facesMessage ;	
++		String message = "failed to delete a " + unit.getClass();
++
++		try {
++			HibernateUtil.beginTransaction();				
++			unit = HibernateUtil.getSession().load(unit.getClass(), (Serializable)id);
++			HibernateUtil.getSession().delete(unit);
++			HibernateUtil.commitTransaction();
++			message = " successfully deleted " + unit.toString();
++			log.info(message);
++			if(Navigation.SUCCESS.equals(getLister().load())){
++				outcome = Navigation.SUCCESS;
++			}
++		} catch (RuntimeException e) {
++			log.error(message, e);
++		}
++		
++		facesMessage = new FacesMessage( FacesMessage.SEVERITY_INFO, message, message);
++		FacesContext.getCurrentInstance().addMessage(null, facesMessage);	
++		
++		return outcome;
++	}	
++
++	public boolean isCreateState() {
++		return createState;
++	}
++
++	public void setCreateState(boolean createState) {
++		this.createState = createState;
++		if(createState)
++			updateState = false;
++	}
++
++	public boolean isRetrieveState() {
++		return (! updateState && ! createState);
++	}
++
++	public void setRetrieveState(boolean retrieveState) {
++		if(retrieveState){
++			createState = false;
++			updateState = false;
++		}
++	}
++
++	public boolean isUpdateState() {
++		return updateState;
++	}
++
++	public void setUpdateState(boolean updateState) {
++		this.updateState = updateState;
++		if(updateState)
++			createState = false;
++	}
++	
++	public void setState(String state){
++		setUpdateState(Navigation.UPDATE.equals(state));
++		setCreateState(Navigation.CREATE.equals(state));
++	}
++	
++	public String getState(){
++		String state = Navigation.RETRIEVE;
++		if(updateState)
++			state = Navigation.UPDATE;
++		else if(createState)
++			state = Navigation.CREATE;
++		return state;
++	}	
++	
++}
+Index: src/velocity/jsf/hibernate.css.vm
+===================================================================
+RCS file: src/velocity/jsf/hibernate.css.vm
+diff -N src/velocity/jsf/hibernate.css.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/hibernate.css.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,10 @@
++.outputLabel{ color : #BCAE79; width: 150; font: bold 11pt verdana; }
++.menu{ padding: 10; background-color : #b2b2b2 }
++.header{ background-color: #BCAE79 }
++a { color : #256b87;text-decoration: none;  ;font-size: 15px; }
++body { font: 11px Helvetica, Arial, sans-serif; }
++.messages{ color: #FF9900 }
++#messages{ padding : 0 0 10 0 }
++.message{ color: #FF9900 }
++.labelColumn{ width: 150 }
++.footer{ height: 13 ; background-color : #BCAE79 }	
+Index: src/velocity/jsf/hibernateFilter.java.vm
+===================================================================
+RCS file: src/velocity/jsf/hibernateFilter.java.vm
+diff -N src/velocity/jsf/hibernateFilter.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/hibernateFilter.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,59 @@
++package ${supportDir};
++
++import org.apache.commons.logging.*;
++import javax.servlet.*;
++import java.io.IOException;
++#if($exportSchema)
++import org.hibernate.tool.hbm2ddl.SchemaExport;
++#end
++
++/**
++ * A servlet filter that opens and closes a Hibernate Session for each request.
++ * <p>
++ * This filter guarantees a sane state, committing any pending database
++ * transaction once all other filters (and servlets) have executed. It also
++ * guarantees that the Hibernate <tt>Session</tt> of the current thread will
++ * be closed before the response is send to the client.
++ * <p>
++ * Use this filter for the <b>session-per-request</b> pattern and if you are
++ * using <i>Detached Objects</i>.
++ *
++ * @see HibernateUtil
++ * @author Christian Bauer <christian@hibernate.org>
++ */
++public class HibernateFilter implements Filter {
++
++    private static Log log = LogFactory.getLog(HibernateFilter.class);
++
++    public void init(FilterConfig filterConfig) throws ServletException {
++        log.info("Servlet filter init, now opening/closing a Session for each request.");
++#if($exportSchema)
++		SchemaExport schemaExport = new SchemaExport(HibernateUtil.getConfiguration());
++		schemaExport.create(true, true);
++#end    
++    }
++
++    public void doFilter(ServletRequest request,
++                         ServletResponse response,
++                         FilterChain chain)
++            throws IOException, ServletException {
++
++        try {
++             // We don't start the database transaction here, but when first needed
++            
++              chain.doFilter(request, response);
++
++            // Roll back any pending database transaction.
++            HibernateUtil.rollbackTransaction();
++
++        } finally {
++
++            // No matter what happens, close the Session.
++            HibernateUtil.closeSession();
++
++        }
++    }
++
++    public void destroy() {}
++
++}
+Index: src/velocity/jsf/hibernateUtil.java.vm
+===================================================================
+RCS file: src/velocity/jsf/hibernateUtil.java.vm
+diff -N src/velocity/jsf/hibernateUtil.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/hibernateUtil.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,144 @@
++package ${supportDir};
++
++import org.hibernate.*;
++import org.hibernate.cfg.*;
++import org.apache.commons.logging.*;
++//import javax.naming.*;
++
++/**
++ * Basic Hibernate helper class, handles SessionFactory, Session and Transaction.
++ * <p>
++ * Uses a static initializer for the initial SessionFactory creation
++ * and holds Session and Transactions in thread local variables.
++ *
++ * @author christian@hibernate.org
++ */
++public class HibernateUtil {
++
++    private static Log log = LogFactory.getLog(HibernateUtil.class);
++
++    private static Configuration configuration;
++    private static SessionFactory sessionFactory;
++    private static final ThreadLocal threadSession = new ThreadLocal();
++    private static final ThreadLocal threadTransaction = new ThreadLocal();
++
++    // Create the initial SessionFactory from the default configuration files
++    static {
++        try {
++              configuration = new Configuration();
++            sessionFactory = configuration.configure().buildSessionFactory();
++            // We could also let Hibernate bind it to JNDI:
++            // configuration.configure().buildSessionFactory()
++        } catch (Throwable ex) {
++            // We have to catch Throwable, otherwise we will miss
++            // NoClassDefFoundError and other subclasses of Error
++            log.error("Building SessionFactory failed.", ex);
++            throw new ExceptionInInitializerError(ex);
++        }
++    }
++
++	public static Configuration getConfiguration(){
++		return configuration;
++	}
++
++    /**
++     * Returns the SessionFactory used for this static class.
++     *
++     * @return SessionFactory
++     */
++    public static SessionFactory getSessionFactory() {
++        /* Instead of a static variable, use JNDI:
++        SessionFactory sessions = null;
++        try {
++            Context ctx = new InitialContext();
++            String jndiName = "java:hibernate/HibernateFactory";
++            sessions = (SessionFactory)ctx.lookup(jndiName);
++        } catch (NamingException ex) {
++            throw new RuntimeException(ex);
++        }
++        return sessions;
++        */
++        return sessionFactory;
++    }
++
++    /**
++     * Retrieves the current Session local to the thread.
++     * <p/>
++     * If no Session is open, opens a new Session for the running thread.
++     *
++     * @return Session
++     */
++    public static Session getSession() {
++         // With CMT, this should return getSessionFactory().getCurrentSession() and do nothing else
++        Session s = (Session) threadSession.get();
++        if (s == null) {
++            log.debug("Opening new Session for this thread.");
++            s = getSessionFactory().openSession();
++            threadSession.set(s);
++        }
++        return s;
++    }
++
++    /**
++     * Closes the Session local to the thread.
++     */
++    public static void closeSession() {
++              // Would be written as a no-op in an EJB container with CMT
++            Session s = (Session) threadSession.get();
++            threadSession.set(null);
++            if (s != null && s.isOpen()) {
++                log.debug("Closing Session of this thread.");
++                s.close();
++            }
++    }
++
++    /**
++     * Start a new database transaction.
++     */
++    public static void beginTransaction() {
++          // Would be written as a no-op in an EJB container with CMT
++        Transaction tx = (Transaction) threadTransaction.get();
++            if (tx == null) {
++                log.debug("Starting new database transaction in this thread.");
++                tx = getSession().beginTransaction();
++                threadTransaction.set(tx);
++            }
++    }
++
++    /**
++     * Commit the database transaction.
++     */
++    public static void commitTransaction() {
++          // Would be written as a no-op in an EJB container with CMT
++        Transaction tx = (Transaction) threadTransaction.get();
++        try {
++            if ( tx != null && !tx.wasCommitted()
++                            && !tx.wasRolledBack() ) {
++                log.debug("Committing database transaction of this thread.");
++                tx.commit();
++            }
++            threadTransaction.set(null);
++        } catch (HibernateException ex) {
++            rollbackTransaction();
++            throw ex;
++        }
++    }
++
++    /**
++     * Rollback the database transaction.
++     */
++    public static void rollbackTransaction() {
++          // Would be written as a no-op in an EJB container with CMT (maybe setRollBackOnly...)
++        Transaction tx = (Transaction) threadTransaction.get();
++        try {
++            threadTransaction.set(null);
++            if ( tx != null && !tx.wasCommitted() && !tx.wasRolledBack() ) {
++                log.debug("Tyring to rollback database transaction of this thread.");
++                tx.rollback();
++            }
++        } finally {
++            closeSession();
++        }
++    }
++
++}
+Index: src/velocity/jsf/home.jsp.vm
+===================================================================
+RCS file: src/velocity/jsf/home.jsp.vm
+diff -N src/velocity/jsf/home.jsp.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/home.jsp.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,35 @@
++<?xml version="1.0" encoding="iso-8859-1"?>
++<jsp:root version="2.0" 
++	xmlns:jsp="http://java.sun.com/JSP/Page"
++	xmlns:tools="urn:jsptagdir:/WEB-INF/tags"
++	xmlns:f="http://java.sun.com/jsf/core"
++	xmlns:h="http://java.sun.com/jsf/html" >
++
++<tools:layout>
++	
++	<table>
++	  <tr>
++	   <td width="150">
++
++		<h:graphicImage rendered="#{css.value eq 'm'}" 
++			value="http://myfaces.apache.org/images/logo.png" />
++		<h:graphicImage rendered="#{css.value eq 'h'}" 
++			value="http://hibernate.org/tpl/hibernate3/img/hibernate_icon.gif" />
++
++	   </td>
++	   <td>
++	   		<p>
++	   		This application requires <a href="http://www.hibernate.org/6.html">Hibernate 3.X</a> and
++	   		 <a href="http://myfaces.apache.org/binary.cgi">MyFaces 1.1.1 </a>.
++	   		</p>
++			<p>
++			Suggestions welcome at the 
++			<a href="http://forums.hibernate.org/viewtopic.php?t=945552&amp;start=105&amp;sid=64f573611dc23b525ba963ac0e016ac2">forum</a>.
++			</p>
++	   </td>
++     </tr>
++    </table>
++	
++</tools:layout>
++
++</jsp:root>
+Index: src/velocity/jsf/index.jsp.vm
+===================================================================
+RCS file: src/velocity/jsf/index.jsp.vm
+diff -N src/velocity/jsf/index.jsp.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/index.jsp.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="iso-8859-1"?>
++<jsp:root version="2.0" xmlns:jsp="http://java.sun.com/JSP/Page" >
++	<!-- this is here merely to redirect them to a URL pattern that the FC will see -->
++	<jsp:forward page="home.jsf" /> 
++</jsp:root>
+Index: src/velocity/jsf/layout.tag.vm
+===================================================================
+RCS file: src/velocity/jsf/layout.tag.vm
+diff -N src/velocity/jsf/layout.tag.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/layout.tag.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,84 @@
++<?xml version="1.0" encoding="iso-8859-1"?>
++<jsp:root version="2.0" 
++	xmlns:jsp="http://java.sun.com/JSP/Page"
++	xmlns:tools="urn:jsptagdir:/WEB-INF/tags"
++	xmlns:f="http://java.sun.com/jsf/core"
++	xmlns:h="http://java.sun.com/jsf/html"
++	xmlns:t="http://myfaces.apache.org/tomahawk" >
++
++<jsp:scriptlet>response.setContentType("text/html; charset=utf-8");</jsp:scriptlet> 
++
++<html>
++ <head>
++ 	<style>
++ 		.commandButton{ width: 70 }
++		table{ border-collapse: collapse } 		
++ 		#commandButtons{ float:right ; margin: 10 0 0 0 }
++ 		.dataTable td{ padding: 0 10 0 0 ; vertical-align: top}
++ 		.dataTableLister{ margin: 10 0 0 0; }
++ 		.panelGrid td{ vertical-align: top }
++		.selectOneInput{ width: 150; } 
++ 		FORM { display:inline }
++		#layoutBody{ padding: 10 ;height: 450 }
++		.heading{ font: bold 11pt verdana; }	
++ 	</style>
++ </head>
++ <body>
++  <f:view>
++  
++  <t:stylesheet rendered="#{css.value eq 'h'}" 
++  	path="#{request.contextPath}/hibernate.css" />
++  <t:stylesheet rendered="#{css.value eq 'm'}" 
++  	path="#{request.contextPath}/myFaces.css" />  
++  
++  <table width="780" border="0">  
++   <tr><td  class="header" align="center"><h1>Welcome to Hbm2Jsf</h1></td></tr>
++  </table>
++  <table width="780" border="0">
++   <tr>
++   	<td width="150" valign="top" class="menu">
++   		
++   		<h:outputText styleClass="heading" value="Entities" /><br/>   
++   		
++		<f:subview id="leftMenu">
++#foreach( $mapping in $c2j.getPOJOIterator($cfg.getClassMappings()) )
++			<h:commandLink action="#{${mapping.getDeclarationName()}Lister.load}" value="$mapping.getDeclarationName()" /><br/> 
++#end
++		</f:subview>
++   		
++   	</td>
++   	<td valign="top" id="layoutBody">
++		<div id="messages">
++			<h:messages layout="table" styleClass="messages" globalOnly="true" />
++		</div>   	
++   		<jsp:doBody/>
++   	</td>
++   	<td width="150" valign="top" class="menu">
++		<h:form id="cssForm">
++		<h:outputText styleClass="heading" value="CSS" />
++   		<t:selectOneRadio onclick="submit()" 
++			layout="pageDirection"
++			value="#{css.value}" immediate="true">
++   			<f:selectItem itemValue="h" itemLabel="Hibernate" />
++   			<f:selectItem itemValue="m" itemLabel="MyFaces" />
++   		</t:selectOneRadio>
++		</h:form>
++
++		<br/>
++
++	   	<a href="/hbm2jsf/index.jsf">Home</a><br/>
++   		<a href="http://www.hibernate.org/255.html">Hibernate Tools</a><br/>
++   		<a href="http://forums.hibernate.org/viewtopic.php?t=945552&amp;start=120&amp;sid=dcd8084db0cdb810dade3aeedadf76ee">Forum</a><br/>
++   		<a href="http://myfaces.apache.org/">MyFaces</a><br/>
++   		<a href="http://www.jboss.com/">JBoss</a><br/>
++   	</td>
++    </tr>
++   <tr>
++   	<td colspan="3" class="footer" align="center"></td>
++   </tr>    
++  </table>
++  </f:view>
++ </body>
++</html>
++
++</jsp:root>
+Index: src/velocity/jsf/listerForm.jsp.vm
+===================================================================
+RCS file: src/velocity/jsf/listerForm.jsp.vm
+diff -N src/velocity/jsf/listerForm.jsp.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/listerForm.jsp.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,41 @@
++<?xml version="1.0" encoding="iso-8859-1"?>
++<jsp:root version="2.0" 
++	xmlns:jsp="http://java.sun.com/JSP/Page"
++	xmlns:tools="urn:jsptagdir:/WEB-INF/tags"
++	xmlns:f="http://java.sun.com/jsf/core"
++	xmlns:h="http://java.sun.com/jsf/html"
++	xmlns:t="http://myfaces.apache.org/tomahawk" >
++	
++#set( $decName = ${pojo.getDeclarationName()})
++<tools:layout>
++
++ <t:saveState value="#{${decName}Lister.dataModel.wrappedData}" />
++ <h:commandLink value="New ${decName}" action="#{${decName}Crud.createPrepare}" />
++ 
++ <h:panelGroup>
++ <h:dataTable styleClass="dataTable dataTableLister" var="item" value="#{${decName}Lister.dataModel.wrappedData}" >
++   <h:column>
++    <h:commandLink value="Edit" action="#{${decName}Crud.updatePrepare}" >
++        <t:updateActionListener property="#{${decName}Crud.id}" value="#{item.${clazz.getIdentifierProperty().getName()}}" />
++    </h:commandLink>
++   </h:column>
++   <h:column>
++    <h:commandLink value="Delete" action="#{${decName}Crud.delete}"
++        onclick="if (!confirm('Please confirm that you wish to delete this record?')) return" >
++        <t:updateActionListener property="#{${decName}Crud.id}" value="#{item.${clazz.getIdentifierProperty().getName()}}" />
++    </h:commandLink>
++   </h:column>   
++   <h:column> 
++	<h:outputText value="#{item.${clazz.getIdentifierProperty().getName()}}" />
++   </h:column>
++   <h:column>
++	<h:commandLink value="#{item}" action="#{${decName}Crud.retrieve}" >
++        <t:updateActionListener property="#{${decName}Crud.id}" value="#{item.${clazz.getIdentifierProperty().getName()}}" />
++	</h:commandLink>
++   </h:column> 
++ </h:dataTable>
++ </h:panelGroup>
++
++</tools:layout>
++
++</jsp:root>
+Index: src/velocity/jsf/myFaces.css.vm
+===================================================================
+RCS file: src/velocity/jsf/myFaces.css.vm
+diff -N src/velocity/jsf/myFaces.css.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/myFaces.css.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,10 @@
++.outputLabel{ color : #7099C5; width: 150; font: bold 11pt verdana; }
++.menu{ padding: 10; background-color : #7099C5}
++.header{ background-color: #4C6C8F; }
++a { color: #0F3660; font-size: 15px; }
++body { font: 11px Helvetica, Arial, sans-serif; }
++.messages{ color: red }
++#messages{ padding : 0 0 10 0 }
++.message{ color: red }
++.labelColumn{ width: 150 }
++.footer{ height: 13 ; background-color: #4C6C8F; }	
+Index: src/velocity/jsf/navigation.java.vm
+===================================================================
+RCS file: src/velocity/jsf/navigation.java.vm
+diff -N src/velocity/jsf/navigation.java.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/navigation.java.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,16 @@
++package ${supportDir};
++
++/**
++ *  @author hbm2jsf
++ */
++
++public class Navigation{
++
++	public static final String SUCCESS = "SUCCESS";
++	public static final String FAILURE = "FAILURE";
++
++	public static final String UPDATE = "UPDATE";
++	public static final String CREATE = "CREATE";
++	public static final String RETRIEVE = "RETRIEVE";
++
++}
+Index: src/velocity/jsf/web.xml.vm
+===================================================================
+RCS file: src/velocity/jsf/web.xml.vm
+diff -N src/velocity/jsf/web.xml.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ src/velocity/jsf/web.xml.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,76 @@
++<?xml version="1.0" encoding="UTF-8"?> 
++<web-app version="2.4" xmlns="http://java.sun.com/xml/ns/j2ee" 
++	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
++	xsi:schemaLocation="http://java.sun.com/xml/ns/j2ee http://java.sun.com/xml/ns/j2ee/web-app_2_4.xsd">
++
++  <display-name>${name}</display-name>
++  <welcome-file-list>  
++	    <welcome-file>index.jsf</welcome-file>
++		<welcome-file>index.jsp</welcome-file>
++  </welcome-file-list>
++
++   	<context-param>
++        <param-name>javax.faces.STATE_SAVING_METHOD</param-name>
++        <param-value>client</param-value>
++   	</context-param>
++   	<context-param>
++        <param-name>org.apache.myfaces.ALLOW_JAVASCRIPT</param-name>
++        <param-value>true</param-value>
++   	</context-param>
++   	<context-param>
++        <param-name>org.apache.myfaces.DETECT_JAVASCRIPT</param-name>
++        <param-value>false</param-value>
++   	</context-param>
++    <context-param>
++        <param-name>org.apache.myfaces.PRETTY_HTML</param-name>
++        <param-value>true</param-value>
++    </context-param>  
++    <context-param>
++        <param-name>org.apache.myfaces.AUTO_SCROLL</param-name>
++        <param-value>true</param-value>
++    </context-param>  
++     
++    <filter>
++        <filter-name>extensionsFilter</filter-name>
++        <filter-class>org.apache.myfaces.component.html.util.ExtensionsFilter</filter-class>
++    </filter>
++
++    <filter>
++        <filter-name>HibernateFilter</filter-name>
++        <filter-class>${supportDir}.HibernateFilter</filter-class>
++    </filter>
++
++    <filter-mapping>
++        <filter-name>HibernateFilter</filter-name>
++        <url-pattern>/*</url-pattern>
++    </filter-mapping>
++
++	<filter-mapping>
++  		<filter-name>extensionsFilter</filter-name> 
++  		<url-pattern>*.jsf</url-pattern> 
++  	</filter-mapping>
++ 	<filter-mapping>
++  		<filter-name>extensionsFilter</filter-name> 
++  		<url-pattern>/faces/*</url-pattern> 
++  	</filter-mapping>
++
++  	<listener>
++  		<listener-class>org.apache.myfaces.webapp.StartupServletContextListener</listener-class>
++	</listener>
++
++    <servlet>
++        <servlet-name>Faces Servlet</servlet-name>
++        <servlet-class>javax.faces.webapp.FacesServlet</servlet-class>
++        <load-on-startup>1</load-on-startup>
++    </servlet> 
++  
++    <servlet-mapping>
++        <servlet-name>Faces Servlet</servlet-name>
++        <url-pattern>*.jsf</url-pattern>
++    </servlet-mapping>
++    <servlet-mapping>
++        <servlet-name>Faces Servlet</servlet-name>
++        <url-pattern>/faces/*</url-pattern>
++    </servlet-mapping>
++ 
++</web-app>

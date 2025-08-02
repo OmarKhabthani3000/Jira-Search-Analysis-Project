@@ -1,0 +1,310 @@
+Index: src/test/org/hibernate/search/test/engine/BusLine.java
+===================================================================
+--- src/test/org/hibernate/search/test/engine/BusLine.java	(revision 0)
++++ src/test/org/hibernate/search/test/engine/BusLine.java	(revision 0)
+@@ -0,0 +1,84 @@
++// $Id$
++package org.hibernate.search.test.engine;
++
++import java.util.HashSet;
++import java.util.Set;
++
++import javax.persistence.CascadeType;
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToMany;
++
++import org.hibernate.search.annotations.Field;
++import org.hibernate.search.annotations.Index;
++import org.hibernate.search.annotations.Indexed;
++import org.hibernate.search.annotations.IndexedEmbedded;
++import org.hibernate.search.annotations.Store;
++
++/**
++ * @author Sanne Grinovero
++ */
++@Entity
++@Indexed
++public class BusLine {
++	
++	private Long id;
++	private String busLineName;
++	private Set<BusStop> stops = new HashSet<BusStop>();
++
++	@Id
++	@GeneratedValue 
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	@Field(index=Index.NO,store=Store.YES)
++	public String getBusLineName() {
++		return busLineName;
++	}
++
++	public void setBusLineName(String busLine) {
++		this.busLineName = busLine;
++	}
++
++	@ManyToMany(cascade=CascadeType.PERSIST)
++	@IndexedEmbedded
++	public Set<BusStop> getStops() {
++		return stops;
++	}
++	
++	public void setStops(Set<BusStop> stops) {
++		this.stops = stops;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result + ((busLineName == null) ? 0 : busLineName.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		BusLine other = (BusLine) obj;
++		if (busLineName == null) {
++			if (other.busLineName != null)
++				return false;
++		} else if (!busLineName.equals(other.busLineName))
++			return false;
++		return true;
++	}
++	
++}
+Index: src/test/org/hibernate/search/test/engine/BusStop.java
+===================================================================
+--- src/test/org/hibernate/search/test/engine/BusStop.java	(revision 0)
++++ src/test/org/hibernate/search/test/engine/BusStop.java	(revision 0)
+@@ -0,0 +1,80 @@
++// $Id$
++package org.hibernate.search.test.engine;
++
++import java.util.HashSet;
++import java.util.Set;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.ManyToMany;
++
++import org.hibernate.search.annotations.ContainedIn;
++import org.hibernate.search.annotations.Field;
++
++/**
++ * @author Sanne Grinovero
++ */
++@Entity
++public class BusStop {
++	
++	private Long id;
++	private String roadName;
++	private Set<BusLine> busses = new HashSet<BusLine>();
++
++	@Id
++	@GeneratedValue
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++
++	@Field
++	public String getRoadName() {
++		return roadName;
++	}
++
++	public void setRoadName(String roadName) {
++		this.roadName = roadName;
++	}
++
++	@ManyToMany(mappedBy="stops")
++	@ContainedIn
++	public Set<BusLine> getBusses() {
++		return busses;
++	}
++
++	public void setBusses(Set<BusLine> busses) {
++		this.busses = busses;
++	}
++
++	@Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result
++				+ ((roadName == null) ? 0 : roadName.hashCode());
++		return result;
++	}
++
++	@Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		BusStop other = (BusStop) obj;
++		if (roadName == null) {
++			if (other.roadName != null)
++				return false;
++		} else if (!roadName.equals(other.roadName))
++			return false;
++		return true;
++	}
++	
++}
+Index: src/test/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java
+===================================================================
+--- src/test/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java	(revision 0)
++++ src/test/org/hibernate/search/test/engine/LazyCollectionsUpdatingTest.java	(revision 0)
+@@ -0,0 +1,131 @@
++// $Id$
++package org.hibernate.search.test.engine;
++
++import java.util.List;
++
++import org.apache.lucene.analysis.SimpleAnalyzer;
++import org.apache.lucene.index.Term;
++import org.apache.lucene.search.TermQuery;
++import org.hibernate.Transaction;
++import org.hibernate.classic.Session;
++import org.hibernate.search.Environment;
++import org.hibernate.search.FullTextQuery;
++import org.hibernate.search.FullTextSession;
++import org.hibernate.search.Search;
++import org.hibernate.search.store.RAMDirectoryProvider;
++import org.hibernate.search.test.SearchTestCase;
++
++/**
++ * TestCase for HSEARCH-178 (Search hitting HHH-2763)
++ *
++ * @author Sanne Grinovero
++ */
++public class LazyCollectionsUpdatingTest extends SearchTestCase {
++	
++	public void testUpdatingInTransaction() {
++		assertProjectionFindsByRoadName( "buonarroti" );
++		FullTextSession fullTextSession = Search.getFullTextSession( sessions.openSession() );
++		try {
++			Transaction tx = fullTextSession.beginTransaction();
++			doSomeUpdate( fullTextSession );
++			tx.commit();
++		}
++		catch (org.hibernate.AssertionFailure ass) {
++			fail( ass.getMessage() );
++		}
++		finally {
++			fullTextSession.close();
++		}
++		assertProjectionFindsByRoadName( "new" );
++	}
++	
++	// currently failing:
++	public void testUpdatingOutOfTransaction() {
++		assertProjectionFindsByRoadName( "buonarroti" );
++		FullTextSession fullTextSession = Search.getFullTextSession( sessions.openSession() );
++		try {
++			doSomeUpdate( fullTextSession );
++			fullTextSession.flush();
++		}
++		catch (org.hibernate.AssertionFailure ass) {
++			fail( ass.getMessage() );
++		}
++		finally {
++			fullTextSession.close();
++		}
++		assertProjectionFindsByRoadName( "new" );
++	}
++	
++	// helper method to change the road name of one of the roadnames @ContainedIn
++	// the @Indexes Bus
++	private void doSomeUpdate(FullTextSession fullTextSession) {
++		BusStop busStop = (BusStop) fullTextSession.get(BusStop.class, 1L);
++		busStop.setRoadName( "new road" );
++	}
++	
++	public void assertProjectionFindsByRoadName(String analyzedRoadname) {
++		FullTextSession fullTextSession = Search.getFullTextSession( sessions.openSession() );
++		Transaction tx = fullTextSession.beginTransaction();
++		TermQuery ftQuery = new TermQuery( new Term( "stops.roadName",analyzedRoadname ) );
++		FullTextQuery query = fullTextSession.createFullTextQuery( ftQuery, BusLine.class );
++		query.setProjection("busLineName");
++		assertEquals( 1, query.list().size() );
++		List results = query.list();
++		String resultName = (String) ((Object[])results.get(0))[0];
++		assertEquals( "Linea 244", resultName );
++		tx.commit();
++		fullTextSession.close();
++	}
++	
++	@Override
++	public void setUp() throws Exception {
++		super.setUp();
++		Session session = sessions.openSession();
++		Transaction tx = null;
++		try {
++			tx = session.beginTransaction();
++			persistTestCaseData( session );
++			tx.commit();
++		} catch (Throwable t) {
++			if ( tx != null )
++				tx.rollback();
++		} finally {
++			session.close();
++		}
++	}
++	
++	private void persistTestCaseData(Session s) {
++		saveBusStop( s, "Linea 244", "Vigevanese", "Romolo", "via M.Buonarroti" );
++	}
++
++	private void saveBusStop(Session s, String lineName, String... roadNames) {
++		BusLine bus = new BusLine();
++		bus.setBusLineName( lineName );
++		for ( String roadName : roadNames ) {
++			addBusStop( bus, roadName );
++		}
++		s.persist( bus );
++	}
++
++	private void addBusStop(BusLine bus, String roadName) {
++		BusStop stop = new BusStop();
++		stop.setRoadName( roadName );
++		bus.getStops().add( stop );
++		stop.getBusses().add( bus );
++	}
++
++	// Test setup options - Entities
++	@Override
++	protected Class[] getMappings() {
++		return new Class[] { BusLine.class, BusStop.class };
++	}
++	
++	// Test setup options - SessionFactory Properties
++	@Override
++	protected void configure(org.hibernate.cfg.Configuration cfg) {
++		cfg.setProperty( "hibernate.search.default.directory_provider", RAMDirectoryProvider.class.getName() );
++		cfg.setProperty( "hibernate.search.default.locking_strategy", "none" );
++		cfg.setProperty( Environment.ANALYZER_CLASS, SimpleAnalyzer.class.getName() );
++	}
++
++}

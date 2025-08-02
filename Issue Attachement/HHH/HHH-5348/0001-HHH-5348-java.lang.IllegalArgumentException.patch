@@ -1,0 +1,1077 @@
+From 13c6205f24e34f3450bdbf14d5a38d761f507e4a Mon Sep 17 00:00:00 2001
+From: Vladimir Klyushnikov <vladimir.klyushnikov@gmail.com>
+Date: Thu, 11 Nov 2010 15:23:50 +0300
+Subject: [PATCH] HHH-5348 java.lang.IllegalArgumentException
+
+---
+ core/src/main/java/org/hibernate/Query.java        |   20 ++--
+ .../engine/SessionFactoryImplementor.java          |   62 +++++-----
+ .../org/hibernate/engine/query/HQLQueryPlan.java   |    4 +-
+ .../org/hibernate/engine/query/ReturnMetadata.java |   10 ++-
+ .../java/org/hibernate/hql/QueryTranslator.java    |    8 ++
+ .../org/hibernate/hql/ast/QueryTranslatorImpl.java |    7 +-
+ .../hql/ast/tree/AggregatedSelectExpression.java   |   12 ++-
+ .../hibernate/hql/ast/tree/ConstructorNode.java    |   21 ++--
+ .../org/hibernate/hql/ast/tree/MapEntryNode.java   |   25 +++--
+ .../hibernate/hql/classic/QueryTranslatorImpl.java |   38 +++----
+ .../java/org/hibernate/impl/AbstractQueryImpl.java |   39 ++-----
+ .../org/hibernate/impl/SessionFactoryImpl.java     |   77 ++++---------
+ .../java/org/hibernate/loader/hql/QueryLoader.java |   47 +++++----
+ .../hibernate/ejb/AbstractEntityManagerImpl.java   |  116 +++++++------------
+ .../test/java/org/hibernate/ejb/test/ItemDto.java  |   22 ++++
+ .../hibernate/ejb/test/query/TypedQueryTest.java   |   87 +++++++++++++++
+ 16 files changed, 327 insertions(+), 268 deletions(-)
+ create mode 100644 entitymanager/src/test/java/org/hibernate/ejb/test/ItemDto.java
+ create mode 100644 entitymanager/src/test/java/org/hibernate/ejb/test/query/TypedQueryTest.java
+
+diff --git a/core/src/main/java/org/hibernate/Query.java b/core/src/main/java/org/hibernate/Query.java
+index 9c5d72f..3942ee0 100644
+--- a/core/src/main/java/org/hibernate/Query.java
++++ b/core/src/main/java/org/hibernate/Query.java
+@@ -24,19 +24,13 @@
+  */
+ package org.hibernate;
+ 
++import org.hibernate.transform.ResultTransformer;
++import org.hibernate.type.Type;
++
+ import java.io.Serializable;
+ import java.math.BigDecimal;
+ import java.math.BigInteger;
+-import java.util.Calendar;
+-import java.util.Collection;
+-import java.util.Date;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Locale;
+-import java.util.Map;
+-
+-import org.hibernate.transform.ResultTransformer;
+-import org.hibernate.type.Type;
++import java.util.*;
+ 
+ /**
+  * An object-oriented representation of a Hibernate query. A <tt>Query</tt>
+@@ -94,6 +88,12 @@ public interface Query {
+ 	 * @return an array of aliases as strings
+ 	 */
+ 	public String[] getReturnAliases() throws HibernateException;
++
++    /**
++     * Return the HQL query view object class (when using 'select new ...')
++     * @return query view object class
++     */
++    public Class getQueryViewObject();
+ 	/**
+ 	 * Return the names of all named parameters of the query.
+ 	 * @return the parameter names, in no particular order
+diff --git a/core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java b/core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java
+index 23e2470..ae0a625 100644
+--- a/core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java
++++ b/core/src/main/java/org/hibernate/engine/SessionFactoryImplementor.java
+@@ -24,36 +24,31 @@
+  */
+ package org.hibernate.engine;
+ 
+-import java.util.Map;
+-import java.util.Properties;
+-import java.util.Set;
+-import java.sql.Connection;
+-
+-import javax.transaction.TransactionManager;
+-
+-import org.hibernate.HibernateException;
+-import org.hibernate.Interceptor;
+-import org.hibernate.MappingException;
+-import org.hibernate.SessionFactory;
+-import org.hibernate.ConnectionReleaseMode;
+-import org.hibernate.proxy.EntityNotFoundDelegate;
+-import org.hibernate.engine.query.QueryPlanCache;
+-import org.hibernate.engine.profile.FetchProfile;
+-import org.hibernate.persister.collection.CollectionPersister;
+-import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.*;
+ import org.hibernate.cache.QueryCache;
+-import org.hibernate.cache.UpdateTimestampsCache;
+ import org.hibernate.cache.Region;
++import org.hibernate.cache.UpdateTimestampsCache;
+ import org.hibernate.cfg.Settings;
+ import org.hibernate.connection.ConnectionProvider;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.dialect.function.SQLFunctionRegistry;
++import org.hibernate.engine.profile.FetchProfile;
++import org.hibernate.engine.query.QueryPlanCache;
+ import org.hibernate.exception.SQLExceptionConverter;
+ import org.hibernate.id.IdentifierGenerator;
++import org.hibernate.persister.collection.CollectionPersister;
++import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.proxy.EntityNotFoundDelegate;
+ import org.hibernate.stat.StatisticsImplementor;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeResolver;
+ 
++import javax.transaction.TransactionManager;
++import java.sql.Connection;
++import java.util.Map;
++import java.util.Properties;
++import java.util.Set;
++
+ /**
+  * Defines the internal contract between the <tt>SessionFactory</tt> and other parts of
+  * Hibernate such as implementors of <tt>Type</tt>.
+@@ -124,14 +119,21 @@ public interface SessionFactoryImplementor extends Mapping, SessionFactory {
+ 	 */
+ 	public String[] getReturnAliases(String queryString) throws HibernateException;
+ 
+-	/**
++    /**
++     *
++      * Get the query view object
++     */
++    public Class getQueryViewObject(String queryString);
++    /**
+ 	 * Get the connection provider
+ 	 */
+ 	public ConnectionProvider getConnectionProvider();
+-	/**
++    /**
+ 	 * Get the names of all persistent classes that implement/extend the given interface/class
+ 	 */
+ 	public String[] getImplementors(String className) throws MappingException;
++
++
+ 	/**
+ 	 * Get a class name, using query language imports
+ 	 */
+@@ -142,37 +144,36 @@ public interface SessionFactoryImplementor extends Mapping, SessionFactory {
+ 	 * Get the JTA transaction manager
+ 	 */
+ 	public TransactionManager getTransactionManager();
+-
+-
+-	/**
++    /**
+ 	 * Get the default query cache
+ 	 */
+ 	public QueryCache getQueryCache();
++
+ 	/**
+ 	 * Get a particular named query cache, or the default cache
+ 	 * @param regionName the name of the cache region, or null for the default query cache
+ 	 * @return the existing cache, or a newly created cache if none by that region name
+ 	 */
+ 	public QueryCache getQueryCache(String regionName) throws HibernateException;
+-	
+-	/**
++    /**
+ 	 * Get the cache of table update timestamps
+ 	 */
+ 	public UpdateTimestampsCache getUpdateTimestampsCache();
++
+ 	/**
+ 	 * Statistics SPI
+ 	 */
+ 	public StatisticsImplementor getStatisticsImplementor();
+-	
+-	public NamedQueryDefinition getNamedQuery(String queryName);
+-	public NamedSQLQueryDefinition getNamedSQLQuery(String queryName);
++    public NamedQueryDefinition getNamedQuery(String queryName);
++    public NamedSQLQueryDefinition getNamedSQLQuery(String queryName);
++
+ 	public ResultSetMappingDefinition getResultSetMapping(String name);
+ 
+ 	/**
+ 	 * Get the identifier generator for the hierarchy
+ 	 */
+ 	public IdentifierGenerator getIdentifierGenerator(String rootEntityName);
+-	
++
+ 	/**
+ 	 * Get a named second-level cache region
+ 	 *
+@@ -189,7 +190,7 @@ public interface SessionFactoryImplementor extends Mapping, SessionFactory {
+ 	 * @return The map of regions
+ 	 */
+ 	public Map getAllSecondLevelCacheRegions();
+-	
++
+ 	/**
+ 	 * Retrieves the SQLExceptionConverter in effect for this SessionFactory.
+ 	 *
+@@ -243,5 +244,4 @@ public interface SessionFactoryImplementor extends Mapping, SessionFactory {
+ 	 * @return The profile definition
+ 	 */
+ 	public FetchProfile getFetchProfile(String name);
+-
+ }
+diff --git a/core/src/main/java/org/hibernate/engine/query/HQLQueryPlan.java b/core/src/main/java/org/hibernate/engine/query/HQLQueryPlan.java
+index cd65749..8ecb815 100644
+--- a/core/src/main/java/org/hibernate/engine/query/HQLQueryPlan.java
++++ b/core/src/main/java/org/hibernate/engine/query/HQLQueryPlan.java
+@@ -125,10 +125,10 @@ public class HQLQueryPlan implements Serializable {
+ 			else {
+ 				if ( length > 1 ) {
+ 					final int returns = translators[0].getReturnTypes().length;
+-					returnMetadata = new ReturnMetadata( translators[0].getReturnAliases(), new Type[returns] );
++					returnMetadata = new ReturnMetadata( translators[0].getReturnAliases(), new Type[returns], translators[0].getQueryViewObject());
+ 				}
+ 				else {
+-					returnMetadata = new ReturnMetadata( translators[0].getReturnAliases(), translators[0].getReturnTypes() );
++					returnMetadata = new ReturnMetadata( translators[0].getReturnAliases(), translators[0].getReturnTypes(), translators[0].getQueryViewObject());
+ 				}
+ 			}
+ 		}
+diff --git a/core/src/main/java/org/hibernate/engine/query/ReturnMetadata.java b/core/src/main/java/org/hibernate/engine/query/ReturnMetadata.java
+index 6126c0b..1959211 100644
+--- a/core/src/main/java/org/hibernate/engine/query/ReturnMetadata.java
++++ b/core/src/main/java/org/hibernate/engine/query/ReturnMetadata.java
+@@ -34,11 +34,13 @@ import java.io.Serializable;
+ public class ReturnMetadata implements Serializable {
+ 	private final String[] returnAliases;
+ 	private final Type[] returnTypes;
++    private Class queryViewObject;
+ 
+-	public ReturnMetadata(String[] returnAliases, Type[] returnTypes) {
++	public ReturnMetadata(String[] returnAliases, Type[] returnTypes, Class queryViewObject) {
+ 		this.returnAliases = returnAliases;
+ 		this.returnTypes = returnTypes;
+-	}
++        this.queryViewObject = queryViewObject;
++    }
+ 
+ 	public String[] getReturnAliases() {
+ 		return returnAliases;
+@@ -47,4 +49,8 @@ public class ReturnMetadata implements Serializable {
+ 	public Type[] getReturnTypes() {
+ 		return returnTypes;
+ 	}
++
++    public Class getQueryViewObject() {
++        return queryViewObject;
++    }
+ }
+diff --git a/core/src/main/java/org/hibernate/hql/QueryTranslator.java b/core/src/main/java/org/hibernate/hql/QueryTranslator.java
+index b6c268f..f6c150a 100644
+--- a/core/src/main/java/org/hibernate/hql/QueryTranslator.java
++++ b/core/src/main/java/org/hibernate/hql/QueryTranslator.java
+@@ -163,6 +163,14 @@ public interface QueryTranslator {
+ 	 */
+ 	String[][] getColumnNames();
+ 
++    /**
++     * Returns query view object
++     *
++     * @return query view object
++     */
++    Class getQueryViewObject();
++    
++
+ 	/**
+ 	 * Return information about any parameters encountered during
+ 	 * translation.
+diff --git a/core/src/main/java/org/hibernate/hql/ast/QueryTranslatorImpl.java b/core/src/main/java/org/hibernate/hql/ast/QueryTranslatorImpl.java
+index edf4746..1553e26 100644
+--- a/core/src/main/java/org/hibernate/hql/ast/QueryTranslatorImpl.java
++++ b/core/src/main/java/org/hibernate/hql/ast/QueryTranslatorImpl.java
+@@ -336,10 +336,15 @@ public class QueryTranslatorImpl implements FilterTranslator {
+ 		return getWalker().getSelectClause().getColumnNames();
+ 	}
+ 
+-	public Set getQuerySpaces() {
++    public Class getQueryViewObject() {
++        return queryLoader.getQueryViewObject();
++    }
++
++    public Set getQuerySpaces() {
+ 		return getWalker().getQuerySpaces();
+ 	}
+ 
++
+ 	public List list(SessionImplementor session, QueryParameters queryParameters)
+ 			throws HibernateException {
+ 		// Delegate to the QueryLoader...
+diff --git a/core/src/main/java/org/hibernate/hql/ast/tree/AggregatedSelectExpression.java b/core/src/main/java/org/hibernate/hql/ast/tree/AggregatedSelectExpression.java
+index 8ce21f9..da40514 100644
+--- a/core/src/main/java/org/hibernate/hql/ast/tree/AggregatedSelectExpression.java
++++ b/core/src/main/java/org/hibernate/hql/ast/tree/AggregatedSelectExpression.java
+@@ -21,10 +21,10 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
+-import java.util.List;
+-
+ import org.hibernate.transform.ResultTransformer;
+ 
++import java.util.List;
++
+ /**
+  * Contract for a select expression which aggregates other select expressions together into a single return
+  *
+@@ -52,4 +52,12 @@ public interface AggregatedSelectExpression extends SelectExpression {
+ 	 * @return The appropriate transformer
+ 	 */
+ 	public ResultTransformer getResultTransformer();
++
++    /**
++     * Retrieve the result class associated with  {@link ResultTransformer}.
++     * Works only for {@link org.hibernate.transform.AliasToBeanConstructorResultTransformer}
++     *
++     * @return The result class
++     */
++    public Class getResultClass();
+ }
+diff --git a/core/src/main/java/org/hibernate/hql/ast/tree/ConstructorNode.java b/core/src/main/java/org/hibernate/hql/ast/tree/ConstructorNode.java
+index e1e5942..3a460ef 100644
+--- a/core/src/main/java/org/hibernate/hql/ast/tree/ConstructorNode.java
++++ b/core/src/main/java/org/hibernate/hql/ast/tree/ConstructorNode.java
+@@ -24,22 +24,21 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
+-import java.lang.reflect.Constructor;
+-import java.util.Arrays;
+-import java.util.List;
+-
++import antlr.SemanticException;
++import antlr.collections.AST;
+ import org.hibernate.PropertyNotFoundException;
+ import org.hibernate.QueryException;
+-import org.hibernate.transform.ResultTransformer;
++import org.hibernate.hql.ast.DetailedSemanticException;
+ import org.hibernate.transform.AliasToBeanConstructorResultTransformer;
++import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.transform.Transformers;
+-import org.hibernate.hql.ast.DetailedSemanticException;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+ 
+-import antlr.SemanticException;
+-import antlr.collections.AST;
++import java.lang.reflect.Constructor;
++import java.util.Arrays;
++import java.util.List;
+ 
+ /**
+  * Represents a constructor (new) in a SELECT.
+@@ -66,7 +65,11 @@ public class ConstructorNode extends SelectExpressionList implements AggregatedS
+ 		throw new QueryException( "Unable to determine proper dynamic-instantiation tranformer to use." );
+ 	}
+ 
+-	public boolean isMap() {
++    public Class getResultClass() {
++        return constructor != null ? constructor.getDeclaringClass() : null ;
++    }
++
++    public boolean isMap() {
+ 		return isMap;
+ 	}
+ 	
+diff --git a/core/src/main/java/org/hibernate/hql/ast/tree/MapEntryNode.java b/core/src/main/java/org/hibernate/hql/ast/tree/MapEntryNode.java
+index bb41c86..11255ea 100644
+--- a/core/src/main/java/org/hibernate/hql/ast/tree/MapEntryNode.java
++++ b/core/src/main/java/org/hibernate/hql/ast/tree/MapEntryNode.java
+@@ -21,25 +21,24 @@
+  */
+ package org.hibernate.hql.ast.tree;
+ 
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Iterator;
+-
+ import antlr.SemanticException;
+-
+ import org.hibernate.HibernateException;
+-import org.hibernate.sql.SelectExpression;
+-import org.hibernate.sql.AliasGenerator;
+-import org.hibernate.sql.SelectFragment;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.hql.NameGenerator;
+ import org.hibernate.persister.collection.QueryableCollection;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.sql.AliasGenerator;
++import org.hibernate.sql.SelectExpression;
++import org.hibernate.sql.SelectFragment;
+ import org.hibernate.transform.BasicTransformerAdapter;
+ import org.hibernate.transform.ResultTransformer;
+-import org.hibernate.type.Type;
+ import org.hibernate.type.EntityType;
++import org.hibernate.type.Type;
++
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
+ 
+ /**
+  * TODO : javadoc
+@@ -226,7 +225,11 @@ public class MapEntryNode extends AbstractMapComponentNode implements Aggregated
+ 		return mapEntryBuilder;
+ 	}
+ 
+-	private static class MapEntryBuilder extends BasicTransformerAdapter {
++    public Class getResultClass() {
++        return null;
++    }
++
++    private static class MapEntryBuilder extends BasicTransformerAdapter {
+ 		public Object transformTuple(Object[] tuple, String[] aliases) {
+ 			if ( tuple.length != 2 ) {
+ 				throw new HibernateException( "Expecting exactly 2 tuples to transform into Map.Entry" );
+diff --git a/core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java b/core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java
+index 78915ef..2b09cf2 100644
+--- a/core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java
++++ b/core/src/main/java/org/hibernate/hql/classic/QueryTranslatorImpl.java
+@@ -24,29 +24,7 @@
+  */
+ package org.hibernate.hql.classic;
+ 
+-import java.io.Serializable;
+-import java.lang.reflect.Constructor;
+-import java.sql.PreparedStatement;
+-import java.sql.ResultSet;
+-import java.sql.SQLException;
+-import java.util.ArrayList;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.LinkedHashMap;
+-import java.util.List;
+-import java.util.Map;
+-import java.util.Set;
+-
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-import org.hibernate.HibernateException;
+-import org.hibernate.LockMode;
+-import org.hibernate.MappingException;
+-import org.hibernate.QueryException;
+-import org.hibernate.ScrollableResults;
+-import org.hibernate.LockOptions;
++import org.hibernate.*;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.engine.JoinSequence;
+ import org.hibernate.engine.QueryParameters;
+@@ -71,10 +49,18 @@ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.Type;
+-import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import java.io.Serializable;
++import java.lang.reflect.Constructor;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.*;
+ 
+ /**
+  * An instance of <tt>QueryTranslator</tt> translates a Hibernate
+@@ -299,6 +285,10 @@ public class QueryTranslatorImpl extends BasicLoader implements FilterTranslator
+ 		return NO_RETURN_ALIASES;
+ 	}
+ 
++    public Class getQueryViewObject() {
++        return null;
++    }
++
+ 	public String[][] getColumnNames() {
+ 		return scalarColumnNames;
+ 	}
+diff --git a/core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java b/core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
+index c46d208..13270a7 100644
+--- a/core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
++++ b/core/src/main/java/org/hibernate/impl/AbstractQueryImpl.java
+@@ -24,32 +24,7 @@
+  */
+ package org.hibernate.impl;
+ 
+-import java.io.Serializable;
+-import java.math.BigDecimal;
+-import java.math.BigInteger;
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.Calendar;
+-import java.util.Collection;
+-import java.util.Date;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Locale;
+-import java.util.Map;
+-import java.util.Set;
+-
+-import org.hibernate.CacheMode;
+-import org.hibernate.FlushMode;
+-import org.hibernate.Hibernate;
+-import org.hibernate.HibernateException;
+-import org.hibernate.MappingException;
+-import org.hibernate.NonUniqueResultException;
+-import org.hibernate.PropertyNotFoundException;
+-import org.hibernate.Query;
+-import org.hibernate.QueryException;
+-import org.hibernate.LockOptions;
++import org.hibernate.*;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.RowSelection;
+ import org.hibernate.engine.SessionImplementor;
+@@ -61,12 +36,16 @@ import org.hibernate.proxy.HibernateProxyHelper;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.SerializableType;
+ import org.hibernate.type.Type;
+-import org.hibernate.type.TypeFactory;
+ import org.hibernate.util.ArrayHelper;
+ import org.hibernate.util.MarkerObject;
+ import org.hibernate.util.ReflectHelper;
+ import org.hibernate.util.StringHelper;
+ 
++import java.io.Serializable;
++import java.math.BigDecimal;
++import java.math.BigInteger;
++import java.util.*;
++
+ /**
+  * Abstract implementation of the Query interface.
+  *
+@@ -197,7 +176,11 @@ public abstract class AbstractQueryImpl implements Query {
+ 		return session.getFactory().getReturnAliases( queryString );
+ 	}
+ 
+-	public Query setCollectionKey(Serializable collectionKey) {
++    public Class getQueryViewObject() {
++        return session.getFactory().getQueryViewObject( queryString );
++    }
++
++    public Query setCollectionKey(Serializable collectionKey) {
+ 		this.collectionKey = collectionKey;
+ 		return this;
+ 	}
+diff --git a/core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java b/core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+index fbda191..2a21227 100644
+--- a/core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java
++++ b/core/src/main/java/org/hibernate/impl/SessionFactoryImpl.java
+@@ -23,50 +23,9 @@
+  */
+ package org.hibernate.impl;
+ 
+-import java.io.IOException;
+-import java.io.InvalidObjectException;
+-import java.io.ObjectInputStream;
+-import java.io.ObjectOutputStream;
+-import java.io.ObjectStreamException;
+-import java.io.Serializable;
+-import java.sql.Connection;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.LinkedHashSet;
+-import java.util.Map;
+-import java.util.Properties;
+-import java.util.Set;
+-import javax.naming.NamingException;
+-import javax.naming.Reference;
+-import javax.naming.StringRefAddr;
+-import javax.transaction.TransactionManager;
+-
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-import org.hibernate.AssertionFailure;
++import org.hibernate.*;
+ import org.hibernate.Cache;
+-import org.hibernate.ConnectionReleaseMode;
+-import org.hibernate.EntityMode;
+-import org.hibernate.EntityNameResolver;
+-import org.hibernate.HibernateException;
+-import org.hibernate.Interceptor;
+-import org.hibernate.MappingException;
+-import org.hibernate.ObjectNotFoundException;
+-import org.hibernate.QueryException;
+-import org.hibernate.SessionFactory;
+-import org.hibernate.SessionFactoryObserver;
+-import org.hibernate.StatelessSession;
+-import org.hibernate.TypeHelper;
+-import org.hibernate.cache.CacheKey;
+-import org.hibernate.cache.CollectionRegion;
+-import org.hibernate.cache.EntityRegion;
+-import org.hibernate.cache.QueryCache;
+-import org.hibernate.cache.Region;
+-import org.hibernate.cache.UpdateTimestampsCache;
++import org.hibernate.cache.*;
+ import org.hibernate.cache.access.AccessType;
+ import org.hibernate.cache.access.CollectionRegionAccessStrategy;
+ import org.hibernate.cache.access.EntityRegionAccessStrategy;
+@@ -81,12 +40,7 @@ import org.hibernate.context.ManagedSessionContext;
+ import org.hibernate.context.ThreadLocalSessionContext;
+ import org.hibernate.dialect.Dialect;
+ import org.hibernate.dialect.function.SQLFunctionRegistry;
+-import org.hibernate.engine.FilterDefinition;
+-import org.hibernate.engine.Mapping;
+-import org.hibernate.engine.NamedQueryDefinition;
+-import org.hibernate.engine.NamedSQLQueryDefinition;
+-import org.hibernate.engine.ResultSetMappingDefinition;
+-import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.engine.*;
+ import org.hibernate.engine.profile.Association;
+ import org.hibernate.engine.profile.Fetch;
+ import org.hibernate.engine.profile.FetchProfile;
+@@ -124,6 +78,17 @@ import org.hibernate.type.TypeResolver;
+ import org.hibernate.util.CollectionHelper;
+ import org.hibernate.util.EmptyIterator;
+ import org.hibernate.util.ReflectHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import javax.naming.NamingException;
++import javax.naming.Reference;
++import javax.naming.StringRefAddr;
++import javax.transaction.TransactionManager;
++import java.io.*;
++import java.sql.Connection;
++import java.util.*;
++import java.util.Collections;
+ 
+ 
+ /**
+@@ -801,6 +766,10 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 		return queryPlanCache.getHQLQueryPlan( queryString, false, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getReturnAliases();
+ 	}
+ 
++    public Class getQueryViewObject(String queryString) {
++        return queryPlanCache.getHQLQueryPlan( queryString, false, CollectionHelper.EMPTY_MAP ).getReturnMetadata().getQueryViewObject();
++    }
++
+ 	public ClassMetadata getClassMetadata(Class persistentClass) throws HibernateException {
+ 		return getClassMetadata( persistentClass.getName() );
+ 	}
+@@ -969,8 +938,8 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 		observer.sessionFactoryClosed( this );
+ 		eventListeners.destroyListeners();
+ 	}
++    private class CacheImpl implements Cache {
+ 
+-	private class CacheImpl implements Cache {
+ 		public boolean containsEntity(Class entityClass, Serializable identifier) {
+ 			return containsEntity( entityClass.getName(), identifier );
+ 		}
+@@ -989,7 +958,7 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 			EntityPersister p = getEntityPersister( entityName );
+ 			if ( p.hasCache() ) {
+ 				if ( log.isDebugEnabled() ) {
+-					log.debug( 
++					log.debug(
+ 							"evicting second-level cache: " +
+ 									MessageHelper.infoString( p, identifier, SessionFactoryImpl.this )
+ 					);
+@@ -1104,8 +1073,7 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 				}
+ 			}
+ 		}
+-
+-		public void evictQueryRegions() {
++        public void evictQueryRegions() {
+ 			synchronized ( allCacheRegions ) {
+ 				Iterator regions = queryCaches.values().iterator();
+ 				while ( regions.hasNext() ) {
+@@ -1115,6 +1083,7 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 				}
+ 			}
+ 		}
++
+ 	}
+ 
+ 	public Cache getCache() {
+@@ -1284,7 +1253,7 @@ public final class SessionFactoryImpl implements SessionFactory, SessionFactoryI
+ 		return ( FetchProfile ) fetchProfiles.get( name );
+ 	}
+ 
+-	public TypeHelper getTypeHelper() {
++    public TypeHelper getTypeHelper() {
+ 		return typeHelper;
+ 	}
+ 
+diff --git a/core/src/main/java/org/hibernate/loader/hql/QueryLoader.java b/core/src/main/java/org/hibernate/loader/hql/QueryLoader.java
+index 2916a62..30a06b7 100644
+--- a/core/src/main/java/org/hibernate/loader/hql/QueryLoader.java
++++ b/core/src/main/java/org/hibernate/loader/hql/QueryLoader.java
+@@ -24,22 +24,8 @@
+  */
+ package org.hibernate.loader.hql;
+ 
+-import java.sql.PreparedStatement;
+-import java.sql.ResultSet;
+-import java.sql.SQLException;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.Iterator;
+-import java.util.List;
+-import java.util.Map;
+-
+-import org.hibernate.HibernateException;
+-import org.hibernate.LockMode;
+-import org.hibernate.QueryException;
+-import org.hibernate.ScrollableResults;
+-import org.hibernate.LockOptions;
++import org.hibernate.*;
+ import org.hibernate.dialect.Dialect;
+-import org.hibernate.engine.EntityEntry;
+ import org.hibernate.engine.QueryParameters;
+ import org.hibernate.engine.SessionFactoryImplementor;
+ import org.hibernate.engine.SessionImplementor;
+@@ -47,23 +33,31 @@ import org.hibernate.event.EventSource;
+ import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.hql.HolderInstantiator;
+ import org.hibernate.hql.ast.QueryTranslatorImpl;
++import org.hibernate.hql.ast.tree.AggregatedSelectExpression;
+ import org.hibernate.hql.ast.tree.FromElement;
+-import org.hibernate.hql.ast.tree.SelectClause;
+ import org.hibernate.hql.ast.tree.QueryNode;
+-import org.hibernate.hql.ast.tree.AggregatedSelectExpression;
++import org.hibernate.hql.ast.tree.SelectClause;
+ import org.hibernate.impl.IteratorImpl;
+ import org.hibernate.loader.BasicLoader;
+ import org.hibernate.param.ParameterSpecification;
+ import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.persister.collection.QueryableCollection;
+ import org.hibernate.persister.entity.Loadable;
+-import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.persister.entity.Lockable;
++import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.transform.ResultTransformer;
+ import org.hibernate.type.EntityType;
+ import org.hibernate.type.Type;
+ import org.hibernate.util.ArrayHelper;
+ 
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.HashMap;
++import java.util.Iterator;
++import java.util.List;
++import java.util.Map;
++
+ /**
+  * A delegate that implements the Loader part of QueryTranslator.
+  *
+@@ -102,6 +96,7 @@ public class QueryLoader extends BasicLoader {
+ 
+ 	private ResultTransformer implicitResultTransformer;
+ 	private String[] queryReturnAliases;
++    private Class<?> queryViewObject;
+ 
+ 	private LockMode[] defaultLockModes;
+ 
+@@ -133,9 +128,15 @@ public class QueryLoader extends BasicLoader {
+ 		queryReturnTypes = selectClause.getQueryReturnTypes();
+ 
+ 		AggregatedSelectExpression aggregatedSelectExpression = selectClause.getAggregatedSelectExpression();
+-		implicitResultTransformer = aggregatedSelectExpression == null
+-				? null
+-				: aggregatedSelectExpression.getResultTransformer();
++        if (aggregatedSelectExpression == null) {
++            queryViewObject = null;
++            implicitResultTransformer = null;
++        }
++        else {
++            queryViewObject = aggregatedSelectExpression.getResultClass();
++            implicitResultTransformer = aggregatedSelectExpression.getResultTransformer();
++        }
++        
+ 		queryReturnAliases = selectClause.getQueryReturnAliases();
+ 
+ 		List collectionFromElements = selectClause.getCollectionFromElements();
+@@ -374,6 +375,10 @@ public class QueryLoader extends BasicLoader {
+ //		}
+ 	}
+ 
++    public Class<?> getQueryViewObject() {
++        return queryViewObject;
++    }
++
+ 	protected boolean upgradeLocks() {
+ 		return true;
+ 	}
+diff --git a/entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java b/entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java
+index aca398a..99c9b52 100755
+--- a/entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java
++++ b/entitymanager/src/main/java/org/hibernate/ejb/AbstractEntityManagerImpl.java
+@@ -24,67 +24,7 @@
+  */
+ package org.hibernate.ejb;
+ 
+-import java.io.IOException;
+-import java.io.ObjectInputStream;
+-import java.io.ObjectOutputStream;
+-import java.io.Serializable;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.HashMap;
+-import java.util.List;
+-import java.util.Map;
+-import javax.persistence.CacheRetrieveMode;
+-import javax.persistence.CacheStoreMode;
+-import javax.persistence.EntityManager;
+-import javax.persistence.EntityNotFoundException;
+-import javax.persistence.EntityTransaction;
+-import javax.persistence.FlushModeType;
+-import javax.persistence.LockModeType;
+-import javax.persistence.LockTimeoutException;
+-import javax.persistence.NoResultException;
+-import javax.persistence.NonUniqueResultException;
+-import javax.persistence.OptimisticLockException;
+-import javax.persistence.PersistenceContextType;
+-import javax.persistence.PersistenceException;
+-import javax.persistence.PessimisticLockException;
+-import javax.persistence.PessimisticLockScope;
+-import javax.persistence.Query;
+-import javax.persistence.QueryTimeoutException;
+-import javax.persistence.TransactionRequiredException;
+-import javax.persistence.Tuple;
+-import javax.persistence.TupleElement;
+-import javax.persistence.TypedQuery;
+-import javax.persistence.criteria.CriteriaBuilder;
+-import javax.persistence.criteria.CriteriaQuery;
+-import javax.persistence.criteria.Selection;
+-import javax.persistence.metamodel.Metamodel;
+-import javax.persistence.spi.PersistenceUnitTransactionType;
+-import javax.transaction.Status;
+-import javax.transaction.Synchronization;
+-import javax.transaction.SystemException;
+-import javax.transaction.TransactionManager;
+-
+-import org.slf4j.Logger;
+-import org.slf4j.LoggerFactory;
+-
+-import org.hibernate.AssertionFailure;
+-import org.hibernate.CacheMode;
+-import org.hibernate.FlushMode;
+-import org.hibernate.HibernateException;
+-import org.hibernate.LockMode;
+-import org.hibernate.LockOptions;
+-import org.hibernate.MappingException;
+-import org.hibernate.ObjectDeletedException;
+-import org.hibernate.ObjectNotFoundException;
+-import org.hibernate.QueryException;
+-import org.hibernate.SQLQuery;
+-import org.hibernate.Session;
+-import org.hibernate.StaleObjectStateException;
+-import org.hibernate.StaleStateException;
+-import org.hibernate.Transaction;
+-import org.hibernate.TransientObjectException;
+-import org.hibernate.TypeMismatchException;
+-import org.hibernate.UnresolvableObjectException;
++import org.hibernate.*;
+ import org.hibernate.cfg.Environment;
+ import org.hibernate.ejb.criteria.CriteriaQueryCompiler;
+ import org.hibernate.ejb.criteria.ValueHandlerFactory;
+@@ -106,8 +46,31 @@ import org.hibernate.transaction.synchronization.BeforeCompletionManagedFlushChe
+ import org.hibernate.transaction.synchronization.CallbackCoordinator;
+ import org.hibernate.transaction.synchronization.ExceptionMapper;
+ import org.hibernate.transform.BasicTransformerAdapter;
++import org.hibernate.type.Type;
+ import org.hibernate.util.JTAHelper;
+ import org.hibernate.util.ReflectHelper;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
++
++import javax.persistence.*;
++import javax.persistence.NonUniqueResultException;
++import javax.persistence.OptimisticLockException;
++import javax.persistence.PessimisticLockException;
++import javax.persistence.Query;
++import javax.persistence.QueryTimeoutException;
++import javax.persistence.criteria.CriteriaBuilder;
++import javax.persistence.criteria.CriteriaQuery;
++import javax.persistence.criteria.Selection;
++import javax.persistence.metamodel.Metamodel;
++import javax.persistence.spi.PersistenceUnitTransactionType;
++import javax.transaction.Status;
++import javax.transaction.SystemException;
++import javax.transaction.TransactionManager;
++import java.io.IOException;
++import java.io.ObjectInputStream;
++import java.io.ObjectOutputStream;
++import java.io.Serializable;
++import java.util.*;
+ 
+ /**
+  * @author <a href="mailto:gavin@hibernate.org">Gavin King</a>
+@@ -279,17 +242,24 @@ public abstract class AbstractEntityManagerImpl implements HibernateEntityManage
+ 	public <T> TypedQuery<T> createQuery(String jpaqlString, Class<T> resultClass) {
+ 		try {
+ 			org.hibernate.Query hqlQuery = getSession().createQuery( jpaqlString );
+-			if ( hqlQuery.getReturnTypes().length != 1 ) {
+-				throw new IllegalArgumentException( "Cannot create TypedQuery for query with more than one return" );
+-			}
+-			if ( !resultClass.isAssignableFrom( hqlQuery.getReturnTypes()[0].getReturnedClass() ) ) {
+-				throw new IllegalArgumentException(
+-						"Type specified for TypedQuery [" +
+-								resultClass.getName() +
+-								"] is incompatible with query return type [" +
+-								hqlQuery.getReturnTypes()[0].getReturnedClass() + "]"
+-				);
+-			}
++            Class<?> queryResultClass = hqlQuery.getQueryViewObject();
++            if (queryResultClass == null ) {
++
++                Type[] returnTypes = hqlQuery.getReturnTypes();
++                if ( returnTypes.length != 1 ) {
++                    throw new IllegalArgumentException( "Cannot create TypedQuery for query with more than one return" );
++                }
++
++                queryResultClass =  returnTypes[0].getReturnedClass();
++            }
++            if ( !resultClass.isAssignableFrom(queryResultClass) ) {
++                throw new IllegalArgumentException(
++                        "Type specified for TypedQuery [" +
++                                resultClass.getName() +
++                                "] is incompatible with query return type [" +
++                                queryResultClass + "]"
++                );
++            }
+ 			return new QueryImpl<T>( hqlQuery, this );
+ 		}
+ 		catch ( HibernateException he ) {
+@@ -1266,7 +1236,7 @@ public abstract class AbstractEntityManagerImpl implements HibernateEntityManage
+ 		else if ( e instanceof org.hibernate.PessimisticLockException ) {
+ 			org.hibernate.PessimisticLockException ple = ( org.hibernate.PessimisticLockException ) e;
+ 			if ( lockOptions != null && lockOptions.getTimeOut() > -1 ) {
+-				// assume lock timeout occurred if a timeout or NO WAIT was specified 
++				// assume lock timeout occurred if a timeout or NO WAIT was specified
+ 				pe = new LockTimeoutException( ple.getMessage(), ple, ple.getEntity() );
+ 			}
+ 			else {
+diff --git a/entitymanager/src/test/java/org/hibernate/ejb/test/ItemDto.java b/entitymanager/src/test/java/org/hibernate/ejb/test/ItemDto.java
+new file mode 100644
+index 0000000..7fe8c51
+--- /dev/null
++++ b/entitymanager/src/test/java/org/hibernate/ejb/test/ItemDto.java
+@@ -0,0 +1,22 @@
++package org.hibernate.ejb.test;
++
++/**
++ * @author Vladimir Klyushnikov
++ */
++public class ItemDto {
++    private String name;
++    private String descr;
++
++    public ItemDto(String name, String descr) {
++        this.name = name;
++        this.descr = descr;
++    }
++
++    public String getName() {
++        return name;
++    }
++
++    public String getDescr() {
++        return descr;
++    }
++}
+diff --git a/entitymanager/src/test/java/org/hibernate/ejb/test/query/TypedQueryTest.java b/entitymanager/src/test/java/org/hibernate/ejb/test/query/TypedQueryTest.java
+new file mode 100644
+index 0000000..cb7624a
+--- /dev/null
++++ b/entitymanager/src/test/java/org/hibernate/ejb/test/query/TypedQueryTest.java
+@@ -0,0 +1,87 @@
++package org.hibernate.ejb.test.query;
++
++import org.hibernate.ejb.test.*;
++
++import javax.persistence.EntityManager;
++import java.util.List;
++
++/**
++ * @author Vladimir Klyushnikov
++ */
++public class TypedQueryTest extends TestCase {
++
++    public void testViewObject() throws Exception {
++        final Item item = new Item("Defice", "iPad");
++        EntityManager em = getOrCreateEntityManager();
++        em.getTransaction().begin();
++        em.persist(item);
++        assertTrue(em.contains(item));
++        em.getTransaction().commit();
++
++        List<ItemDto> list = em.createQuery("select " +
++                "new org.hibernate.ejb.test.ItemDto(i.name, i.descr) " +
++                "from Item i",
++                ItemDto.class).getResultList();
++        assertEquals(1, list.size());
++        assertEquals(item.getName(), list.get(0).getName());
++        assertEquals(item.getDescr(), list.get(0).getDescr());
++    }
++
++    public void testExceptionOnInvalidViewObjectResultType() throws Exception {
++
++        EntityManager em = getOrCreateEntityManager();
++        try {
++            em.createQuery("select " +
++                    "new org.hibernate.ejb.test.ItemDto(i.name, i.descr) " +
++                    "from Item i",
++                    Item.class);
++            fail("The query should fail due to an invalid resultClass parameter");
++        } catch (IllegalArgumentException e) {
++            // success
++        }
++    }
++
++    public void testSingleResultQuery() throws Exception {
++        final Item item = new Item("Defice", "iPad");
++        
++        EntityManager em = getOrCreateEntityManager();
++        em.getTransaction().begin();
++        em.persist(item);
++        assertTrue(em.contains(item));
++        em.getTransaction().commit();
++
++        long result = em.createQuery("select count(*) from Item", Long.class).getSingleResult();
++        assertEquals(1l, result);
++    }
++
++    public void testExceptionOnInvalidSingleResultType() throws Exception {
++        EntityManager em = getOrCreateEntityManager();
++        try {
++            em.createQuery("select count(*) from Item", ItemDto.class);
++            
++            fail("The query should fail due to an invalid resultClass parameter");
++        } catch (IllegalArgumentException e) {
++            // success
++        }
++    }
++
++    public void testExceptionOnMultipleResults() throws Exception {
++        EntityManager em = getOrCreateEntityManager();
++        try {
++            em.createQuery("select i.name, i.descr from Item i", ItemDto.class);
++
++            fail("The query should fail due to a multiple results in query");
++        } catch (IllegalArgumentException e) {
++            // success
++        }
++    }
++
++    @Override
++    protected Class<?>[] getAnnotatedClasses() {
++        return new Class[]{
++                Item.class,
++                Distributor.class,
++                Wallet.class
++        };
++    }
++}
+-- 
+1.7.0.2.msysgit.0
+

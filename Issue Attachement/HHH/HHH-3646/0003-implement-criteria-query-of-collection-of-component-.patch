@@ -1,0 +1,490 @@
+diff --git a/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java b/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java
+index f9557c9..2a33b0d 100644
+--- a/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java
++++ b/project/core/src/main/java/org/hibernate/hql/ast/util/SessionFactoryHelper.java
+@@ -235,7 +235,7 @@ public class SessionFactoryHelper {
+ 	 * @param role The collection role for whcih to retrieve the property mapping.
+ 	 * @return The property mapping.
+ 	 */
+-	private PropertyMapping getCollectionPropertyMapping(String role) {
++        public PropertyMapping getCollectionPropertyMapping(String role) {
+ 		return ( PropertyMapping ) collectionPropertyMappingByRole.get( role );
+ 	}
+ 
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/ComponentCollectionCriteriaInfoProvider.java b/project/core/src/main/java/org/hibernate/loader/criteria/ComponentCollectionCriteriaInfoProvider.java
+new file mode 100644
+index 0000000..0cc16aa
+--- /dev/null
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/ComponentCollectionCriteriaInfoProvider.java
+@@ -0,0 +1,60 @@
++package org.hibernate.loader.criteria;
++
++import java.io.Serializable;
++import java.util.Map;
++import java.util.HashMap;
++
++import org.hibernate.persister.collection.QueryableCollection;
++import org.hibernate.persister.entity.PropertyMapping;
++import org.hibernate.type.ComponentType;
++import org.hibernate.type.Type;
++
++/**
++ * @author David Mansfield
++ */
++
++class ComponentCollectionCriteriaInfoProvider implements CriteriaInfoProvider {
++    QueryableCollection persister;
++    Map /* <String,Type> */ subTypes = new HashMap /* <String,Type> */();
++
++    ComponentCollectionCriteriaInfoProvider(QueryableCollection persister) {
++	this.persister = persister;
++	if (!persister.getElementType().isComponentType()) {
++	    throw new IllegalArgumentException("persister for role "+persister.getRole()+" is not a collection-of-component");
++	}
++
++	ComponentType componentType = (ComponentType)persister.getElementType();
++	String[] names = componentType.getPropertyNames();
++	Type[] types = componentType.getSubtypes();
++
++	for (int i = 0; i < names.length; i++) {
++	    subTypes.put(names[i], types[i]);
++	}
++
++    }
++
++    public String getName() {
++	return persister.getRole();
++    }
++
++    public Serializable[] getSpaces() {
++	return persister.getCollectionSpaces();
++    }
++
++    public PropertyMapping getPropertyMapping() {
++	return (PropertyMapping)persister;
++    }
++
++    public Type getType(String relativePath) {
++	// TODO: can a component have a nested component? then we may need to do something more here...
++	if (relativePath.indexOf('.') >= 0) 
++	    throw new IllegalArgumentException("dotted paths not handled (yet?!) for collection-of-component");
++
++	Type type = (Type)subTypes.get(relativePath);
++	
++	if (type == null) 
++	    throw new IllegalArgumentException("property "+relativePath+" not found in component of collection "+getName());
++	
++	return type;
++    }
++}
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaInfoProvider.java b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaInfoProvider.java
+new file mode 100644
+index 0000000..1358754
+--- /dev/null
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaInfoProvider.java
+@@ -0,0 +1,17 @@
++package org.hibernate.loader.criteria;
++
++import java.io.Serializable;
++
++import org.hibernate.persister.entity.PropertyMapping;
++import org.hibernate.type.Type;
++
++/**
++ * @author David Mansfield
++ */
++
++interface CriteriaInfoProvider {
++    String getName();
++    Serializable[] getSpaces();
++    PropertyMapping getPropertyMapping();
++    Type getType(String relativePath);
++}
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+index decd822..1e2e634 100644
+--- a/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaJoinWalker.java
+@@ -41,6 +41,7 @@ import org.hibernate.loader.AbstractEntityJoinWalker;
+ import org.hibernate.persister.entity.Joinable;
+ import org.hibernate.persister.entity.OuterJoinLoadable;
+ import org.hibernate.persister.entity.Queryable;
++import org.hibernate.persister.collection.CollectionPersister;
+ import org.hibernate.type.AssociationType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.TypeFactory;
+@@ -184,19 +185,55 @@ public class CriteriaJoinWalker extends AbstractEntityJoinWalker {
+ 			( (Queryable) getPersister() ).filterFragment( getAlias(), getLoadQueryInfluencers().getEnabledFilters() );
+ 	}
+ 	
+-	protected String generateTableAlias(int n, String path, Joinable joinable) {
+-		if ( joinable.consumesEntityAlias() ) {
+-			final Criteria subcriteria = translator.getCriteria(path);
+-			String sqlAlias = subcriteria==null ? null : translator.getSQLAlias(subcriteria);
+-			if (sqlAlias!=null) {
+-				userAliasList.add( subcriteria.getAlias() ); //alias may be null
+-				return sqlAlias; //EARLY EXIT
++    	protected String generateTableAlias(int n, String path, Joinable joinable) {
++
++		// it's complicated as to when to return the sqlAlias designated by the 'path'.
++		// the issue is that for a collection-of-entity, the walker navigates the same
++		// path twice, once for the collection, once for the entity.  the Joinable will
++		// be different for each, and the collection Joinable (probably a BasicCollectionPersister)
++		// will _NOT_ consume the alias, and also should _NOT_ assign an SQL alias.
++		// the second call for the same 'path' will be with the entity persister, and it should
++		// provide the sqlAlias.
++		//
++		// however, for collection-of-component or collection-of-value, the path will not
++		// be navigated twice, and the collection persister must supply the sqlAlias.
++		// note: the logic of whether to add to the userAliasList is still based SOLELY
++		// on the consumesEntityAlias logic.
++
++		boolean checkForSqlAlias = joinable.consumesEntityAlias();
++
++		if ( !checkForSqlAlias && joinable.isCollection() ) {
++			CollectionPersister collectionPersister = (CollectionPersister)joinable;
++			Type elementType = collectionPersister.getElementType();
++			if ( elementType.isComponentType() || !elementType.isEntityType() ) {
++				checkForSqlAlias = true;
+ 			}
+-			else {
+-				userAliasList.add(null);
++		}
++
++		String sqlAlias = null;
++
++		if ( checkForSqlAlias ) {
++			// if there's a composite primary key in the path, properties accessed through
++			// parts of the key will go through an "invisible" property named "_identifierMapper"
++			// (see org.hibernate.cfg.HbmBinder).  this path element will NOT be 
++			// part of the criteria path, however, so criteria which restrict these properties
++			// will not be found via lookup unless we "cleanup" the path.
++			String criteriaPath = path.replace("_identifierMapper.", "");
++
++			final Criteria subcriteria = translator.getCriteria(criteriaPath);
++			sqlAlias = subcriteria==null ? null : translator.getSQLAlias(subcriteria);
++
++			if ( joinable.consumesEntityAlias() ) {
++				userAliasList.add( sqlAlias==null ? null : subcriteria.getAlias() );
+ 			}
+ 		}
+-		return super.generateTableAlias( n + translator.getSQLAliasCount(), path, joinable );
++
++		if (sqlAlias == null) {
++			sqlAlias = super.generateTableAlias( n + translator.getSQLAliasCount(), path, joinable );
++		}
++
++		return sqlAlias;
++
+ 	}
+ 
+ 	protected String generateRootAlias(String tableName) {
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+index 5bf4351..414c324 100644
+--- a/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/CriteriaQueryTranslator.java
+@@ -55,6 +55,8 @@ import org.hibernate.persister.entity.Loadable;
+ import org.hibernate.persister.entity.PropertyMapping;
+ import org.hibernate.persister.entity.Queryable;
+ import org.hibernate.type.AssociationType;
++import org.hibernate.type.CollectionType;
++import org.hibernate.type.ComponentType;
+ import org.hibernate.type.Type;
+ import org.hibernate.type.NullableType;
+ import org.hibernate.util.ArrayHelper;
+@@ -74,7 +76,8 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 	private final String rootSQLAlias;
+ 	private int aliasCount = 0;
+ 
+-	private final Map criteriaEntityNames = new LinkedHashMap();
++	private final Map /* <Criteria, CriteriaInfoProvider> */ criteriaInfoMap = new LinkedHashMap();
++	private final Map /* <String, CriteriaInfoProvider> */ nameCriteriaInfoMap = new LinkedHashMap();
+ 	private final Map criteriaSQLAliasMap = new HashMap();
+ 	private final Map aliasCriteriaMap = new HashMap();
+ 	private final Map associationPathCriteriaMap = new LinkedHashMap();
+@@ -82,6 +85,7 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 	private final Map withClauseMap = new HashMap();
+ 	
+ 	private final SessionFactoryImplementor sessionFactory;
++	private final SessionFactoryHelper helper;
+ 
+ 	public CriteriaQueryTranslator(
+ 			final SessionFactoryImplementor factory,
+@@ -102,6 +106,7 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 		this.rootEntityName = rootEntityName;
+ 		this.sessionFactory = factory;
+ 		this.rootSQLAlias = rootSQLAlias;
++		this.helper = new SessionFactoryHelper(factory);
+ 		createAliasCriteriaMap();
+ 		createAssociationPathCriteriaMap();
+ 		createCriteriaEntityNameMap();
+@@ -135,10 +140,10 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 
+ 	public Set getQuerySpaces() {
+ 		Set result = new HashSet();
+-		Iterator iter = criteriaEntityNames.values().iterator();
++		Iterator iter = criteriaInfoMap.values().iterator();
+ 		while ( iter.hasNext() ) {
+-			String entityName = ( String ) iter.next();
+-			result.addAll( Arrays.asList( getFactory().getEntityPersister( entityName ).getQuerySpaces() ) );
++			CriteriaInfoProvider info = ( CriteriaInfoProvider )iter.next();
++			result.addAll( Arrays.asList( info.getSpaces() ) );
+ 		}
+ 		return result;
+ 	}
+@@ -214,34 +219,58 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 	}
+ 
+ 	private void createCriteriaEntityNameMap() {
+-		criteriaEntityNames.put( rootCriteria, rootEntityName );
++		// initialize the rootProvider first
++		CriteriaInfoProvider rootProvider = new EntityCriteriaInfoProvider(( Queryable ) sessionFactory.getEntityPersister( rootEntityName ) );
++		criteriaInfoMap.put( rootCriteria, rootProvider);
++		nameCriteriaInfoMap.put ( rootProvider.getName(), rootProvider );
++
+ 		Iterator iter = associationPathCriteriaMap.entrySet().iterator();
+ 		while ( iter.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) iter.next();
+-			criteriaEntityNames.put(
++			CriteriaInfoProvider info = getPathInfo((String)me.getKey());
++
++			criteriaInfoMap.put(
+ 					me.getValue(), //the criteria instance
+-			        getPathEntityName( ( String ) me.getKey() )
++					info
+ 			);
++
++			nameCriteriaInfoMap.put( info.getName(), info );
+ 		}
+ 	}
+ 
+-	private String getPathEntityName(String path) {
+-		Queryable persister = ( Queryable ) sessionFactory.getEntityPersister( rootEntityName );
++	private CriteriaInfoProvider getPathInfo(String path) {
+ 		StringTokenizer tokens = new StringTokenizer( path, "." );
+ 		String componentPath = "";
++
++		// start with the 'rootProvider'
++		CriteriaInfoProvider provider = ( CriteriaInfoProvider )nameCriteriaInfoMap.get( rootEntityName );
++
+ 		while ( tokens.hasMoreTokens() ) {
+ 			componentPath += tokens.nextToken();
+-			Type type = persister.toType( componentPath );
++			Type type = provider.getType( componentPath );
+ 			if ( type.isAssociationType() ) {
++				// CollectionTypes are always also AssociationTypes - but there's not always an associated entity...
+ 				AssociationType atype = ( AssociationType ) type;
+-				persister = ( Queryable ) sessionFactory.getEntityPersister(
+-						atype.getAssociatedEntityName( sessionFactory )
+-				);
++				CollectionType ctype = type.isCollectionType() ? (CollectionType)type : null;
++				Type elementType = (ctype != null) ? ctype.getElementType( sessionFactory ) : null;
++				// is the association a collection of components or value-types? (i.e a colloction of valued types?)
++				if ( ctype != null  && elementType.isComponentType() ) {
++					provider = new ComponentCollectionCriteriaInfoProvider( helper.getCollectionPersister(ctype.getRole()) );
++				}
++				else if ( ctype != null && !elementType.isEntityType() ) {
++					provider = new ScalarCollectionCriteriaInfoProvider( helper, ctype.getRole() );
++				}
++				else {
++					provider = new EntityCriteriaInfoProvider(( Queryable ) sessionFactory.getEntityPersister(
++											  atype.getAssociatedEntityName( sessionFactory )
++											  ));
++				}
++				
+ 				componentPath = "";
+ 			}
+ 			else if ( type.isComponentType() ) {
+ 				if (!tokens.hasMoreTokens()) {
+-					throw new QueryException("Criteria objects cannot be created directly on components.  Create a criteria on owning entity and use a dotted property to access component property: "+path);
++					throw new QueryException("Criteria objects cannot be created directly on components.  Create a criteria on owning entity and use a dotted property to access component property");
+ 				} else {
+ 					componentPath += '.';
+ 				}
+@@ -250,7 +279,8 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 				throw new QueryException( "not an association: " + componentPath );
+ 			}
+ 		}
+-		return persister.getEntityName();
++		
++		return provider;
+ 	}
+ 
+ 	public int getSQLAliasCount() {
+@@ -259,13 +289,13 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 
+ 	private void createCriteriaSQLAliasMap() {
+ 		int i = 0;
+-		Iterator criteriaIterator = criteriaEntityNames.entrySet().iterator();
++		Iterator criteriaIterator = criteriaInfoMap.entrySet().iterator();
+ 		while ( criteriaIterator.hasNext() ) {
+ 			Map.Entry me = ( Map.Entry ) criteriaIterator.next();
+ 			Criteria crit = ( Criteria ) me.getKey();
+ 			String alias = crit.getAlias();
+ 			if ( alias == null ) {
+-				alias = ( String ) me.getValue(); // the entity name
++				alias = (( CriteriaInfoProvider ) me.getValue()).getName(); // the entity name
+ 			}
+ 			criteriaSQLAliasMap.put( crit, StringHelper.generateAlias( alias, i++ ) );
+ 		}
+@@ -407,7 +437,7 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 	}
+ 
+ 	public String getEntityName(Criteria criteria) {
+-		return ( String ) criteriaEntityNames.get( criteria );
++		return (( CriteriaInfoProvider ) criteriaInfoMap.get( criteria )).getName();
+ 	}
+ 
+ 	public String getColumn(Criteria criteria, String propertyName) {
+@@ -560,7 +590,8 @@ public class CriteriaQueryTranslator implements CriteriaQuery {
+ 
+ 	private PropertyMapping getPropertyMapping(String entityName)
+ 			throws MappingException {
+-		return ( PropertyMapping ) sessionFactory.getEntityPersister( entityName );
++		CriteriaInfoProvider info = ( CriteriaInfoProvider )nameCriteriaInfoMap.get(entityName);
++		return info.getPropertyMapping();
+ 	}
+ 
+ 	//TODO: use these in methods above
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/EntityCriteriaInfoProvider.java b/project/core/src/main/java/org/hibernate/loader/criteria/EntityCriteriaInfoProvider.java
+new file mode 100644
+index 0000000..23c2839
+--- /dev/null
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/EntityCriteriaInfoProvider.java
+@@ -0,0 +1,35 @@
++package org.hibernate.loader.criteria;
++
++import java.io.Serializable;
++
++import org.hibernate.persister.entity.PropertyMapping;
++import org.hibernate.persister.entity.Queryable;
++import org.hibernate.type.Type;
++
++/**
++ * @author David Mansfield
++ */
++
++class EntityCriteriaInfoProvider implements CriteriaInfoProvider {
++    Queryable persister;
++
++    EntityCriteriaInfoProvider(Queryable persister) {
++	this.persister = persister;
++    }
++
++    public String getName() {
++	return persister.getEntityName();
++    }
++
++    public Serializable[] getSpaces() {
++	return persister.getQuerySpaces();
++    }
++
++    public PropertyMapping getPropertyMapping() {
++	return (PropertyMapping)persister;
++    }
++
++    public Type getType(String relativePath) {
++	return persister.toType(relativePath);
++    }
++}
+diff --git a/project/core/src/main/java/org/hibernate/loader/criteria/ScalarCollectionCriteriaInfoProvider.java b/project/core/src/main/java/org/hibernate/loader/criteria/ScalarCollectionCriteriaInfoProvider.java
+new file mode 100644
+index 0000000..5ce5200
+--- /dev/null
++++ b/project/core/src/main/java/org/hibernate/loader/criteria/ScalarCollectionCriteriaInfoProvider.java
+@@ -0,0 +1,44 @@
++package org.hibernate.loader.criteria;
++
++import java.io.Serializable;
++
++import org.hibernate.hql.ast.util.SessionFactoryHelper;
++import org.hibernate.persister.collection.QueryableCollection;
++import org.hibernate.persister.entity.PropertyMapping;
++import org.hibernate.type.ComponentType;
++import org.hibernate.type.Type;
++
++/**
++ * @author David Mansfield
++ */
++
++class ScalarCollectionCriteriaInfoProvider implements CriteriaInfoProvider {
++    String role;
++    QueryableCollection persister;
++    SessionFactoryHelper helper;
++
++    ScalarCollectionCriteriaInfoProvider(SessionFactoryHelper helper, String role) {
++	this.role = role;
++	this.helper = helper;
++	this.persister = helper.requireQueryableCollection(role);
++    }
++
++    public String getName() {
++	return role;
++    }
++
++    public Serializable[] getSpaces() {
++	return persister.getCollectionSpaces();
++    }
++
++    public PropertyMapping getPropertyMapping() {
++	return helper.getCollectionPropertyMapping(role);
++    }
++
++    public Type getType(String relativePath) {
++	//not sure what things are going to be passed here, how about 'id', maybe 'index' or 'key' or 'elements' ???
++	// todo: wtf!
++	return getPropertyMapping().toType(relativePath);
++    }
++
++}
+diff --git a/project/documentation/manual/src/main/docbook/en-US/content/query_criteria.xml b/project/documentation/manual/src/main/docbook/en-US/content/query_criteria.xml
+index a8b4204..64ff3d3 100644
+--- a/project/documentation/manual/src/main/docbook/en-US/content/query_criteria.xml
++++ b/project/documentation/manual/src/main/docbook/en-US/content/query_criteria.xml
+@@ -247,7 +247,7 @@ while ( iter.hasNext() ) {
+     
+     </sect1>
+      
+-    <sect1 id="querycriteria-components" revision="1">
++    <sect1 id="querycriteria-components" revision="2">
+ 	<title>Components</title>
+ 	<para>
+ 		To add a restriction against a property of an embedded component, the component property
+@@ -261,6 +261,38 @@ while ( iter.hasNext() ) {
+ 			.add(Restrictions.eq("fullName.lastName", "Cattington"))
+ 			.list();]]>
+ 	</programlisting>
++	<para>
++		Note: this does not apply when querying collections of components, for that see below 
++		<xref linkend="querycriteria-collections"/>
++	</para>
++    </sect1>
++    
++    <sect1 id="querycriteria-collections" revision="1">
++	<title>Collections</title>
++	<para>
++		When using criteria against collections, there are two distinct cases.  One is if
++		the collection contains entities (eg. <literal>&lt;one-to-many/&gt;</literal> 
++		or <literal>&lt;many-to-many/&gt;</literal>) or components 
++		(<literal>&lt;composite-element/&gt;</literal> ),
++		and the second is if the collection contains scalar values 
++		(<literal>&lt;element/&gt;</literal>).
++		In the first case, the syntax is as given above in the section 
++		<xref linkend="querycriteria-associations"/> where we restrict the <literal>kittens</literal>
++		collection. Essentially we create a <literal>Criteria</literal> object against the collection
++		property and restrict the entity or component properties using that instance.
++	</para>
++	<para>
++		For queryng a collection of basic values, we still create the <literal>Criteria</literal>
++		object against the collection, but to reference the value, we use the special property 
++		&quot;elements&quot;.  For an indexed collection, we can also reference the index property using
++		the special property &quot;indices&quot;.
++	</para>
++	<programlisting><![CDATA[
++		List cats = session.createCriteria(Cat.class)
++			.createCriteria("nickNames")
++				.add(Restrictions.eq("elements", "BadBoy"))
++			.list();]]>
++	</programlisting>
+     </sect1>
+     
+     <sect1 id="querycriteria-examples">

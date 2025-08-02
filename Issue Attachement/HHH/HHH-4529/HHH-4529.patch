@@ -1,0 +1,922 @@
+Index: annotations/src/test/java/org/hibernate/test/annotations/derivedidentities/DerivedEntityTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/annotations/derivedidentities/DerivedEntityTest.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/annotations/derivedidentities/DerivedEntityTest.java	(working copy)
+@@ -1,26 +1,5 @@
+ // $Id$
+-/*
+- * JBoss, Home of Professional Open Source
+- * Copyright 2005, JBoss Inc., and individual contributors as indicated
+- * by the @authors tag. See the copyright.txt in the distribution for a
+- * full listing of individual contributors.
+- *
+- * This is free software; you can redistribute it and/or modify it
+- * under the terms of the GNU Lesser General Public License as
+- * published by the Free Software Foundation; either version 2.1 of
+- * the License, or (at your option) any later version.
+- *
+- * This software is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+- * Lesser General Public License for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public
+- * License along with this software; if not, write to the Free
+- * Software Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA
+- * 02110-1301 USA, or see the FSF site: http://www.fsf.org.
+- */
+-package org.hibernate.test.annotations.idclass;
++package org.hibernate.test.annotations.derivedidentities;
+ 
+ import org.hibernate.Query;
+ import org.hibernate.Session;
+@@ -28,31 +7,158 @@
+ import org.hibernate.test.annotations.TestCase;
+ 
+ /**
+- * A IdClassTestCase.
+- *
+- * @author <a href="mailto:stale.pedersen@jboss.org">Stale W. Pedersen</a>
+- * @version $Revision: 1.1 $
++ * @author Hardy Ferentschik
+  */
+-public class IdClassCompositePKTest extends TestCase {
++public class DerivedEntityTest extends TestCase {
+ 
+-	public void testEntityMappningPropertiesAreNotIgnored() {
+-		Session s = openSession();
+-		Transaction tx = s.beginTransaction();
+-		DomainAdmin da = new DomainAdmin();
+-		da.setAdminUser( "admin" );
+-		da.setDomainName( "org" );
++	public void testMapsIdWithSelectQuery() {
++		Session session = openSession();
++		Transaction tx = session.beginTransaction();
++		Employee sam = new Employee( "Sam" );
++		session.persist( sam );
++		session.flush();
+ 
+-		s.persist( da );
+-		Query q = s.getNamedQuery( "DomainAdmin.testQuery" );
+-		assertEquals( 1, q.list().size() );
++		DependentId depId = new DependentId( sam.getId(), "Frodo" );
++		Dependent frodo = new Dependent( depId );
++		frodo.setEmployee( sam );
++
++		session.persist( frodo );
++		tx.commit();
++
++		assertNames( session, "Frodo", "Sam" );
++		session.close();
++	}
++
++	public void testToOneAssociationUpdateable() {
++		Session session = openSession();
++		Transaction tx = session.beginTransaction();
++		Employee sam = new Employee( "Sam" );
++		session.persist( sam );
++		DependentId depId = new DependentId( sam.getId(), "Frodo" );
++		Dependent frodo = new Dependent( depId );
++		frodo.setEmployee( sam );
++		session.persist( frodo );
++		tx.commit();
++
++		assertNames( session, "Frodo", "Sam" );
++
++		tx = session.beginTransaction();
++		Employee merry = new Employee( "Merry" );
++		session.persist( merry );
++		frodo.setEmployee( merry );
++		tx.commit();
++
++        assertNames( session, "Frodo", "Merry" );
++ 		session.close();
++		// flushing the session or transaction commit should update the empPK field
++		//assertEquals(merry.getId(), frodo.getId().empPK );
++	}
+ 
+-		tx.rollback();
+-		s.close();
++	public void testEmbeddedIdGetsUpdatedOnFlush() {
++		Session session = openSession();
++		Transaction tx = session.beginTransaction();
++		Employee sam = new Employee( "Sam" );
++		session.persist( sam );
++		DependentId depId = new DependentId( sam.getId(), "Frodo" );
++		Dependent frodo = new Dependent( depId );
++		frodo.setEmployee( sam );
++		session.persist( frodo );
++		tx.commit();
++
++		assertNames( session, "Frodo", "Sam" );
++
++		tx = session.beginTransaction();
++		Employee merry = new Employee( "Merry" );
++		session.persist( merry );
++		frodo.setEmployee( merry );
++		session.flush();
++		// flushing the session or transaction commit should update the empPK field
++		assertEquals("The empPK value in the embedded id should be updated on flush/commit", merry.getId(), frodo.getId().empPK );
++		session.close();
+ 	}
+ 
++	public void testEmbeddedIdValueIsReadOnly() {
++		Session session = openSession();
++		Transaction tx = session.beginTransaction();
++		Employee sam = new Employee( "Sam" );
++		session.persist( sam );
++		DependentId depId = new DependentId( sam.getId(), "Frodo" );
++		Dependent frodo = new Dependent( depId );
++		frodo.setEmployee( sam );
++		session.persist( frodo );
++		tx.commit();
++
++		assertNames( session, "Frodo", "Sam" );
++
++		tx = session.beginTransaction();
++		Employee merry = new Employee( "Merry" );
++		session.persist( merry );
++		frodo.getId().empPK = merry.getId();
++		tx.commit();
++
++        assertNames( session, "Frodo", "Sam" );
++
++		session.close();
++	}
++
++	private void assertNames(Session session, String dependentName, String employeeName) {
++		Transaction tx = session.beginTransaction();
++		Query q = session.createQuery( "SELECT d FROM Dependent d WHERE d.id.name = '" + dependentName + "' AND d.employee.name = '" + employeeName + "'" );
++		assertEquals( 1, q.list().size() );
++		Dependent dependent = ( Dependent ) q.list().get( 0 );
++		assertEquals( dependentName, dependent.getId().getName() );
++		assertEquals( employeeName, dependent.getEmployee().getName() );
++		tx.commit();
++	}
++
++
++//	public void testIdWithIdClass() {
++//		Session session = openSession();
++//		Transaction tx = session.beginTransaction();
++//		Employee sam = new Employee( "Sam" );
++//
++//		session.persist( sam );
++//		session.flush();
++//
++//		Employer frodo = new Employer( "Frodo" );
++//		frodo.setEmployee( sam );
++//
++//		session.persist( frodo );
++//		tx.commit();
++//
++//		tx = session.beginTransaction();
++//		Query q = session.createQuery( "SELECT e FROM Employer e WHERE e.name = 'Frodo' AND e.employee.empName = 'Sam'" );
++//		assertEquals( 1, q.list().size() );
++//		Dependent dependent = ( Dependent ) q.list().get( 0 );
++//		assertEquals( "Frodo", dependent.getId().getName() );
++//
++//		tx.rollback();
++//		session.close();
++//	}
++//
++//	public void testSimplePrimaryKey() {
++//		Session session = openSession();
++//		Transaction tx = session.beginTransaction();
++//		Person person = new Person( "740223-1234" );
++//		MedicalHistory medicalHistory = new MedicalHistory( person );
++//		session.persist( medicalHistory );
++//		session.flush();
++//
++//		Query q = session.createQuery( "SELECT m FROM MedicalHistory m WHERE m.patient.ssn = '740223-1234'" );
++//		assertEquals( 1, q.list().size() );
++//		tx.rollback();
++//		session.close();
++//	}
++
+ 	protected Class[] getMappings() {
+ 		return new Class[] {
+-				DomainAdmin.class
++				Employee.class,
++				DependentId.class,
++				Dependent.class
++				//Employer.class,
++				//Employee.class,
++				//MedicalHistory.class,
++				//Person.class
+ 		};
+ 	}
+-}
++}
+\ No newline at end of file
+
+Property changes on: annotations/src/test/java/org/hibernate/test/annotations/derivedidentities/DerivedEntityTest.java
+___________________________________________________________________
+Added: svn:keywords
+   + Id
+
+Index: annotations/src/main/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17994)
++++ annotations/src/main/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -55,6 +55,7 @@
+ import javax.persistence.ManyToOne;
+ import javax.persistence.MapKey;
+ import javax.persistence.MappedSuperclass;
++import javax.persistence.MapsId;
+ import javax.persistence.NamedNativeQueries;
+ import javax.persistence.NamedNativeQuery;
+ import javax.persistence.NamedQueries;
+@@ -595,12 +596,12 @@
+ 		entityBinder.setWhere( whereAnn );
+ 		entityBinder.setCache( cacheAnn );
+ 		entityBinder.setInheritanceState( inheritanceState );
+-		
++
+ 		//Filters are not allowed on subclasses
+ 		if ( !inheritanceState.hasParents ) {
+ 			bindFilters(clazzToProcess, entityBinder, mappings);
+ 		}
+-		
++
+ 		entityBinder.bindEntity();
+ 
+ 		if ( inheritanceState.hasTable() ) {
+@@ -621,10 +622,7 @@
+ 						.getName() );
+ 			}
+ 		}
+-//		Map<String, Column[]> columnOverride = PropertyHolderBuilder.buildHierarchyColumnOverride(
+-//				clazzToProcess,
+-//				persistentClass.getClassName()
+-//		);
++
+ 		PropertyHolder propertyHolder = PropertyHolderBuilder.buildPropertyHolder(
+ 				clazzToProcess,
+ 				persistentClass,
+@@ -710,6 +708,68 @@
+ 		}
+ 		final boolean subclassAndSingleTableStrategy = inheritanceState.type == InheritanceType.SINGLE_TABLE
+ 				&& inheritanceState.hasParents;
++
++		Set<String> idProperties = bindIdClass(
++				inheritanceStatePerClass,
++				mappings,
++				inheritanceState,
++				reflectionManager,
++				persistentClass,
++				entityBinder,
++				propertyHolder
++		);
++
++		Set<String> missingIdProperties = new HashSet<String>( idProperties );
++		for (PropertyData propertyAnnotatedElement : elements) {
++			String propertyName = propertyAnnotatedElement.getPropertyName();
++			if ( !idProperties.contains( propertyName ) ) {
++				processElementAnnotations(
++						propertyHolder,
++						subclassAndSingleTableStrategy ?
++								Nullability.FORCED_NULL :
++								Nullability.NO_CONSTRAINT,
++						propertyAnnotatedElement.getProperty(),
++						propertyAnnotatedElement, classGenerators, entityBinder,
++						false, false, false, mappings, inheritanceStatePerClass
++				);
++			}
++			else {
++				missingIdProperties.remove( propertyName );
++			}
++		}
++
++		if ( missingIdProperties.size() != 0 ) {
++			StringBuilder missings = new StringBuilder();
++			for (String property : missingIdProperties) {
++				missings.append( property ).append( ", " );
++			}
++			throw new AnnotationException(
++					"Unable to find properties ("
++							+ missings.substring( 0, missings.length() - 2 )
++							+ ") in entity annotated with @IdClass:" + persistentClass.getEntityName()
++			);
++		}
++
++		if ( !inheritanceState.hasParents ) {
++			final RootClass rootClass = (RootClass) persistentClass;
++			mappings.addSecondPass( new CreateKeySecondPass( rootClass ) );
++		}
++		else {
++			superEntity.addSubclass( (Subclass) persistentClass );
++		}
++
++		mappings.addClass( persistentClass );
++
++		//Process secondary tables and complementary definitions (ie o.h.a.Table)
++		mappings.addSecondPass( new SecondaryTableSecondPass( entityBinder, propertyHolder, annotatedClass ) );
++
++		//add process complementary Table definition (index & all)
++		entityBinder.processComplementaryTableDefinitions( annotatedClass.getAnnotation( org.hibernate.annotations.Table.class ) );
++		entityBinder.processComplementaryTableDefinitions( annotatedClass.getAnnotation( org.hibernate.annotations.Tables.class ) );
++
++	}
++
++	private static Set<String> bindIdClass(Map<XClass, InheritanceState> inheritanceStatePerClass, ExtendedMappings mappings, InheritanceState inheritanceState, ReflectionManager reflectionManager, PersistentClass persistentClass, EntityBinder entityBinder, PropertyHolder propertyHolder) {
+ 		//process idclass if any
+ 		Set<String> idProperties = new HashSet<String>();
+ 		IdClass idClass = null;
+@@ -805,54 +865,7 @@
+ 				idProperties.add( ( (Property) properties.next() ).getName() );
+ 			}
+ 		}
+-		Set<String> missingIdProperties = new HashSet<String>( idProperties );
+-		for (PropertyData propertyAnnotatedElement : elements) {
+-			String propertyName = propertyAnnotatedElement.getPropertyName();
+-			if ( !idProperties.contains( propertyName ) ) {
+-				processElementAnnotations(
+-						propertyHolder,
+-						subclassAndSingleTableStrategy ?
+-								Nullability.FORCED_NULL :
+-								Nullability.NO_CONSTRAINT,
+-						propertyAnnotatedElement.getProperty(),
+-						propertyAnnotatedElement, classGenerators, entityBinder,
+-						false, false, false, mappings, inheritanceStatePerClass
+-				);
+-			}
+-			else {
+-				missingIdProperties.remove( propertyName );
+-			}
+-		}
+-
+-		if ( missingIdProperties.size() != 0 ) {
+-			StringBuilder missings = new StringBuilder();
+-			for (String property : missingIdProperties) {
+-				missings.append( property ).append( ", " );
+-			}
+-			throw new AnnotationException(
+-					"Unable to find properties ("
+-							+ missings.substring( 0, missings.length() - 2 )
+-							+ ") in entity annotated with @IdClass:" + persistentClass.getEntityName()
+-			);
+-		}
+-
+-		if ( !inheritanceState.hasParents ) {
+-			final RootClass rootClass = (RootClass) persistentClass;
+-			mappings.addSecondPass( new CreateKeySecondPass( rootClass ) );
+-		}
+-		else {
+-			superEntity.addSubclass( (Subclass) persistentClass );
+-		}
+-
+-		mappings.addClass( persistentClass );
+-
+-		//Process secondary tables and complementary definitions (ie o.h.a.Table)
+-		mappings.addSecondPass( new SecondaryTableSecondPass( entityBinder, propertyHolder, annotatedClass ) );
+-
+-		//add process complementary Table definition (index & all)
+-		entityBinder.processComplementaryTableDefinitions( annotatedClass.getAnnotation( org.hibernate.annotations.Table.class ) );
+-		entityBinder.processComplementaryTableDefinitions( annotatedClass.getAnnotation( org.hibernate.annotations.Tables.class ) );
+-
++		return idProperties;
+ 	}
+ 
+ 	/**
+@@ -964,7 +977,7 @@
+ 			Map<XClass, InheritanceState> inheritanceStatePerClass,
+ 			ExtendedMappings mappings
+ 	) {
+-		
++
+ 		//ordered to allow proper messages on properties subclassing
+ 		List<XClass> classesToProcess = new ArrayList<XClass>();
+ 		XClass currentClassInHierarchy = annotatedClass;
+@@ -1010,17 +1023,17 @@
+ 		}
+ 		return classesToProcess;
+ 	}
+-	
++
+ 	/**
+-	 * Process the filters defined on the given class, as well as all filters defined 
+-	 * on the MappedSuperclass(s) in the inheritance hierarchy  
++	 * Process the filters defined on the given class, as well as all filters defined
++	 * on the MappedSuperclass(s) in the inheritance hierarchy
+ 	 */
+-	private static void bindFilters(XClass annotatedClass, EntityBinder entityBinder, 
++	private static void bindFilters(XClass annotatedClass, EntityBinder entityBinder,
+ 			ExtendedMappings mappings) {
+-		
++
+ 		bindFilters(annotatedClass, entityBinder);
+-		
+-		XClass classToProcess = annotatedClass.getSuperclass(); 
++
++		XClass classToProcess = annotatedClass.getSuperclass();
+ 		while (classToProcess != null) {
+ 			AnnotatedClassType classType = mappings.getClassType( classToProcess );
+ 			if ( AnnotatedClassType.EMBEDDABLE_SUPERCLASS.equals( classType ) ) {
+@@ -1028,24 +1041,24 @@
+ 			}
+ 			classToProcess = classToProcess.getSuperclass();
+ 		}
+-		
++
+ 	}
+-	
++
+ 	private static void bindFilters(XAnnotatedElement annotatedElement, EntityBinder entityBinder) {
+-			
++
+ 		Filters filtersAnn = annotatedElement.getAnnotation( Filters.class );
+ 		if ( filtersAnn != null ) {
+ 			for (Filter filter : filtersAnn.value()) {
+ 				entityBinder.addFilter( filter.name(), filter.condition() );
+ 			}
+ 		}
+-		
++
+ 		Filter filterAnn = annotatedElement.getAnnotation( Filter.class );
+ 		if ( filterAnn != null ) {
+ 			entityBinder.addFilter( filterAnn.name(), filterAnn.condition() );
+ 		}
+ 	}
+-		
++
+ 	private static void bindFilterDefs(XAnnotatedElement annotatedElement, ExtendedMappings mappings) {
+ 		FilterDef defAnn = annotatedElement.getAnnotation( FilterDef.class );
+ 		FilterDefs defsAnn = annotatedElement.getAnnotation( FilterDefs.class );
+@@ -1087,13 +1100,13 @@
+ 		for (Parameter param : defAnn.parameters()) {
+ 			params.setProperty( param.name(), param.value() );
+ 		}
+-		
++
+ 		if (BinderHelper.isDefault(defAnn.name()) && defAnn.defaultForType().equals(void.class)) {
+ 			throw new AnnotationException(
+-					"Either name or defaultForType (or both) attribute should be set in TypeDef having typeClass " + 
++					"Either name or defaultForType (or both) attribute should be set in TypeDef having typeClass " +
+ 					defAnn.typeClass().getName());
+ 		}
+-		
++
+ 		if (!BinderHelper.isDefault(defAnn.name())) {
+ 			log.info( "Binding type definition: {}", defAnn.name() );
+ 			mappings.addTypeDef( defAnn.name(), defAnn.typeClass().getName(), params );
+@@ -1102,10 +1115,10 @@
+ 			log.info( "Binding type definition: {}", defAnn.defaultForType().getName() );
+ 			mappings.addTypeDef( defAnn.defaultForType().getName(), defAnn.typeClass().getName(), params );
+ 		}
+-		
++
+ 	}
+-		
+-		
++
++
+ 	private static void bindDiscriminatorToPersistentClass(
+ 			RootClass rootClass,
+ 			Ejb3DiscriminatorColumn discriminatorColumn, Map<String, Join> secondaryTables,
+@@ -1401,7 +1414,7 @@
+ 						"@IdClass class should not have @Id nor @EmbeddedId properties"
+ 				);
+ 			}
+-			log.debug( "{} is an id", inferredData.getPropertyName() );
++			log.debug( "Element {} of class {} is an id", inferredData.getPropertyName(), inferredData.getDeclaringClass() );
+ 			//clone classGenerator and override with local values
+ 			HashMap<String, IdGenerator> localGenerators = (HashMap<String, IdGenerator>) classGenerators.clone();
+ 			localGenerators.putAll( buildLocalGenerators( property, mappings ) );
+@@ -1422,7 +1435,7 @@
+ 					generatedValue.generator() :
+ 					BinderHelper.ANNOTATION_STRING_DEFAULT;
+ 			if ( isComponent ) generatorType = "assigned"; //a component must not have any generator
+-						
++
+ 			bindId(
+ 					generatorType,
+ 					generator,
+@@ -1438,7 +1451,7 @@
+ 					mappings,
+ 					inheritanceStatePerClass
+ 			);
+-						
++
+ 			log.debug(
+ 					"Bind {} on {}", ( isComponent ? "@EmbeddedId" : "@Id" ), inferredData.getPropertyName()
+ 			);
+@@ -1491,7 +1504,7 @@
+ 				//we know the property is on the actual entity
+ 				rootClass.setDeclaredVersion( prop );
+ 			}
+-			
++
+ 			SimpleValue simpleValue = (SimpleValue) prop.getValue();
+ 			simpleValue.setNullValue( "undefined" );
+ 			rootClass.setOptimisticLockMode( Versioning.OPTIMISTIC_LOCK_VERSION );
+@@ -1608,7 +1621,7 @@
+ 
+ 			if ( property.isAnnotationPresent( OrderColumn.class ) ) {
+ 				indexColumn = IndexColumn.buildColumnFromAnnotation(
+-						property.getAnnotation(OrderColumn.class), 
++						property.getAnnotation(OrderColumn.class),
+ 						propertyHolder,
+ 						inferredData,
+ 						entityBinder.getSecondaryTables(),
+@@ -1710,7 +1723,7 @@
+ 
+ 				//nullify empty array
+ 				keyColumns = keyColumns != null && keyColumns.length > 0 ? keyColumns : null;
+-	            
++
+ 				PropertyData mapKeyVirtualProperty = new WrappedInferredData( inferredData, "mapkey" );
+ 				Ejb3Column[] mapColumns = Ejb3Column.buildColumnFromAnnotation(
+ 						keyColumns,
+@@ -1916,7 +1929,7 @@
+ 		Index index = property.getAnnotation( Index.class );
+ 		if ( index != null ) {
+ 			if ( joinColumns != null ) {
+-				
++
+ 				for (Ejb3Column column : joinColumns) {
+ 					column.addIndex( index, inSecondPass );
+ 				}
+@@ -1945,6 +1958,19 @@
+ 		}
+ 	}
+ 
++	private static String getMapsIdValue(XProperty property) {
++		MapsId mapsId = property.getAnnotation( MapsId.class );
++		String mapsIdValue = null;
++		if(mapsId != null) {
++			if(mapsId.value().length() != 0) {
++				mapsIdValue = mapsId.value();
++			}  else {
++				mapsIdValue = "";
++			}
++		}
++		return mapsIdValue;
++	}
++
+ 	//TODO move that to collection binder?
+ 	private static void bindJoinedTableAssociation(
+ 			XProperty property, ExtendedMappings mappings, EntityBinder entityBinder,
+@@ -2046,12 +2072,12 @@
+ 			boolean isComponentEmbedded, boolean isIdentifierMapper, boolean inSecondPass,
+ 			ExtendedMappings mappings, Map<XClass, InheritanceState> inheritanceStatePerClass
+ 	) {
+-	   
++
+ 	   return fillComponent(propertyHolder, inferredData, null, propertyAnnotated, propertyAccessor,
+ 			   isNullable, entityBinder, isComponentEmbedded, isIdentifierMapper, inSecondPass, mappings,
+ 			   inheritanceStatePerClass);
+ 	}
+-	
++
+ 	public static Component fillComponent(
+           PropertyHolder propertyHolder, PropertyData inferredData, PropertyData baseInferredData,
+           boolean propertyAnnotated, String propertyAccessor, boolean isNullable,
+@@ -2059,7 +2085,7 @@
+           boolean isComponentEmbedded, boolean isIdentifierMapper, boolean inSecondPass, ExtendedMappings mappings,
+ 		  Map<XClass, InheritanceState> inheritanceStatePerClass
+   ) {
+-	
++
+ 		/**
+ 		 * inSecondPass can only be used to apply right away the second pass of a composite-element
+ 		 * Because it's a value type, there is no bidirectional association, hence second pass
+@@ -2082,10 +2108,10 @@
+ 				comp, subpath,
+ 				inferredData, propertyHolder, mappings
+ 		);
+-		
++
+ 		List<PropertyData> classElements = new ArrayList<PropertyData>();
+ 		XClass returnedClassOrElement = inferredData.getClassOrElement();
+-		
++
+ 		List<PropertyData> baseClassElements = null;
+ 		XClass baseReturnedClassOrElement;
+ 		PropertyHolder baseSubHolder;
+@@ -2156,12 +2182,12 @@
+ 			boolean isIdentifierMapper, ExtendedMappings mappings,
+ 			Map<XClass, InheritanceState> inheritanceStatePerClass
+ 	) {
+-	   
++
+ 	   bindId(generatorType, generatorName, inferredData, null, columns, propertyHolder,
+ 			   localGenerators, isComposite, isPropertyAnnotated, propertyAccessor, entityBinder,
+ 			   isEmbedded, isIdentifierMapper, mappings, inheritanceStatePerClass);
+ 	}
+-	
++
+     private static void bindId(
+           String generatorType, String generatorName, PropertyData inferredData,
+           PropertyData baseInferredData, Ejb3Column[] columns, PropertyHolder propertyHolder,
+@@ -2172,7 +2198,7 @@
+           boolean isIdentifierMapper, ExtendedMappings mappings,
+ 		  Map<XClass, InheritanceState> inheritanceStatePerClass
+   ) {
+-     
++
+ 		/*
+ 		 * Fill simple value and property since and Id is a property
+ 		 */
+@@ -2298,11 +2324,14 @@
+ 		if ( !BinderHelper.isDefault( fkName ) ) value.setForeignKeyName( fkName );
+ 
+ 		String path = propertyHolder.getPath() + "." + propertyName;
++
++		String mapsIdValue = getMapsIdValue( inferredData.getProperty() );
++
+ 		FkSecondPass secondPass = new ToOneFkSecondPass(
+ 				value, columns,
+ 				!optional && unique, //cannot have nullabe and unique on certain DBs like Derby
+ 				propertyHolder.getEntityOwnerClassName(),
+-				path, mappings
++				path, mappings, mapsIdValue
+ 		);
+ 		if ( inSecondPass ) {
+ 			secondPass.doSecondPass( mappings.getClasses() );
+@@ -2390,7 +2419,9 @@
+ 			PropertyHolder propertyHolder,
+ 			PropertyData inferredData, String mappedBy,
+ 			boolean trueOneToOne,
+-			boolean isIdentifierMapper, boolean inSecondPass, ExtendedMappings mappings
++			boolean isIdentifierMapper,
++			boolean inSecondPass,
++			ExtendedMappings mappings
+ 	) {
+ 		//column.getTable() => persistentClass.getTable()
+ 		final String propertyName = inferredData.getPropertyName();
+Index: annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java	(revision 17994)
++++ annotations/src/main/java/org/hibernate/cfg/OneToOneSecondPass.java	(working copy)
+@@ -124,11 +124,12 @@
+ 
+ 			if ( rightOrder ) {
+ 				String path = StringHelper.qualify( propertyHolder.getPath(), propertyName );
++				// TODO passing temporarily null. Need to figure out what to do here once I know if the current approach works
+ 				( new ToOneFkSecondPass(
+ 						value, joinColumns,
+ 						!optional, //cannot have nullabe and unique on certain DBs
+ 						propertyHolder.getEntityOwnerClassName(),
+-						path, mappings
++						path, mappings, null
+ 				) ).doSecondPass( persistentClasses );
+ 				//no column associated since its a one to one
+ 				propertyHolder.addProperty( prop, inferredData.getDeclaringClass() );
+Index: annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java
+===================================================================
+--- annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java	(revision 17994)
++++ annotations/src/main/java/org/hibernate/cfg/ToOneFkSecondPass.java	(working copy)
+@@ -24,18 +24,26 @@
+ package org.hibernate.cfg;
+ 
+ import java.util.Iterator;
++import java.util.Map;
++
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ import org.hibernate.AnnotationException;
+ import org.hibernate.AssertionFailure;
+ import org.hibernate.MappingException;
+ import org.hibernate.cfg.annotations.TableBinder;
++import org.hibernate.mapping.Column;
++import org.hibernate.mapping.Component;
++import org.hibernate.mapping.KeyValue;
+ import org.hibernate.mapping.ManyToOne;
+ import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
++import org.hibernate.mapping.PropertyGeneration;
++import org.hibernate.mapping.SimpleValue;
++import org.hibernate.mapping.Table;
+ import org.hibernate.mapping.ToOne;
+-import org.hibernate.mapping.KeyValue;
+-import org.hibernate.mapping.Component;
+ import org.hibernate.util.StringHelper;
+ 
+ /**
+@@ -46,33 +54,45 @@
+  * @author Emmanuel Bernard
+  */
+ public class ToOneFkSecondPass extends FkSecondPass {
++	private static final Logger log = LoggerFactory.getLogger( ToOneFkSecondPass.class );
++
+ 	private boolean unique;
+ 	private ExtendedMappings mappings;
+ 	private String path;
+ 	private String entityClassName;
++	private String mapsIdValue;
+ 
+ 	public ToOneFkSecondPass(
+-			ToOne value, Ejb3JoinColumn[] columns, boolean unique, String entityClassName, String path, ExtendedMappings mappings
++			ToOne value,
++			Ejb3JoinColumn[] columns,
++			boolean unique,
++			String entityClassName,
++			String path,
++			ExtendedMappings mappings,
++			String mapsIdValue
+ 	) {
+ 		super( value, columns );
+ 		this.mappings = mappings;
+ 		this.unique = unique;
+ 		this.entityClassName = entityClassName;
+ 		this.path = entityClassName != null ? path.substring( entityClassName.length() + 1 ) : path;
++		this.mapsIdValue = mapsIdValue;
+ 	}
+ 
+ 	public String getReferencedEntityName() {
+-		return ( (ToOne) value ).getReferencedEntityName();
++		return ( ( ToOne ) value ).getReferencedEntityName();
+ 	}
+ 
+ 	public boolean isInPrimaryKey() {
+-		if ( entityClassName == null ) return false;
++		if ( entityClassName == null ) {
++			return false;
++		}
+ 		final PersistentClass persistentClass = mappings.getClass( entityClassName );
+ 		Property property = persistentClass.getIdentifierProperty();
+ 		if ( path == null ) {
+ 			return false;
+ 		}
+-		else if ( property != null) {
++		else if ( property != null ) {
+ 			//try explicit identifier property
+ 			return path.startsWith( property.getName() + "." );
+ 		}
+@@ -83,10 +103,12 @@
+ 				KeyValue valueIdentifier = persistentClass.getIdentifier();
+ 				String localPath = path.substring( 3 );
+ 				if ( valueIdentifier instanceof Component ) {
+-					Iterator it = ( (Component) valueIdentifier ).getPropertyIterator();
++					Iterator it = ( ( Component ) valueIdentifier ).getPropertyIterator();
+ 					while ( it.hasNext() ) {
+-						Property idProperty = (Property) it.next();
+-						if ( localPath.startsWith( idProperty.getName() ) ) return true;
++						Property idProperty = ( Property ) it.next();
++						if ( localPath.startsWith( idProperty.getName() ) ) {
++							return true;
++						}
+ 					}
+ 
+ 				}
+@@ -97,8 +119,8 @@
+ 
+ 	public void doSecondPass(java.util.Map persistentClasses) throws MappingException {
+ 		if ( value instanceof ManyToOne ) {
+-			ManyToOne manyToOne = (ManyToOne) value;
+-			PersistentClass ref = (PersistentClass) persistentClasses.get( manyToOne.getReferencedEntityName() );
++			ManyToOne manyToOne = ( ManyToOne ) value;
++			PersistentClass ref = ( PersistentClass ) persistentClasses.get( manyToOne.getReferencedEntityName() );
+ 			if ( ref == null ) {
+ 				throw new AnnotationException(
+ 						"@OneToOne or @ManyToOne on "
+@@ -107,18 +129,103 @@
+ 								+ manyToOne.getReferencedEntityName()
+ 				);
+ 			}
++
+ 			BinderHelper.createSyntheticPropertyReference( columns, ref, null, manyToOne, false, mappings );
+ 			TableBinder.bindFk( ref, null, columns, manyToOne, unique, mappings );
+-			/*
+-			 * HbmBinder does this only when property-ref != null, but IMO, it makes sense event if it is null
+-			 */
+-			if ( !manyToOne.isIgnoreNotFound() ) manyToOne.createPropertyRefConstraints( persistentClasses );
++
++			if ( mapsIdValue != null ) {
++				handleMapsId( persistentClasses );
++			}
++
++			//HbmBinder does this only when property-ref != null, but IMO, it makes sense event if it is null
++			if ( !manyToOne.isIgnoreNotFound() ) {
++				manyToOne.createPropertyRefConstraints( persistentClasses );
++			}
+ 		}
+ 		else if ( value instanceof OneToOne ) {
+-			( (OneToOne) value ).createForeignKey();
++			( ( OneToOne ) value ).createForeignKey();
+ 		}
+ 		else {
+ 			throw new AssertionFailure( "FkSecondPass for a wrong value type: " + value.getClass().getName() );
+ 		}
+ 	}
++
++	private void handleMapsId(Map persistentClasses) {
++		log.debug( "Processing mapsId with value: " + mapsIdValue );
++		PersistentClass persistentClass = ( PersistentClass ) persistentClasses.get( entityClassName );
++		Property toOneProperty = persistentClass.getProperty( path );
++		toOneProperty.setInsertable( false );
++
++		// TODO At the moment we only handle componets. Need to check what else can happen here.
++		if ( persistentClass.getIdentifier() instanceof Component ) {
++			Component componentId = ( Component ) persistentClass.getIdentifier();
++			Property derivedIdProperty = getColumnReferencedByMapsId( componentId );
++
++			// TODO by the time this method is called the Table already contains a column for the property in the embedded id
++			// TODO I added a method to remove it. Not sure if this is ok!? 
++			removeObsoleteTableColumn( componentId.getTable() );
++
++			// change the derived property to be not up- and in-sertable
++			derivedIdProperty.setInsertable( false );
++			derivedIdProperty.setUpdateable( false );
++			derivedIdProperty.setGeneration( PropertyGeneration.ALWAYS );  // addded in the hope this would update the property on flush/commit
++
++			updatePropertyValueAndColumns( toOneProperty, derivedIdProperty );
++		}
++	}
++
++	private void removeObsoleteTableColumn(Table table) {
++		Iterator iter = table.getColumnIterator();
++		Column column;
++		while ( iter.hasNext() ) {
++			column = ( Column ) iter.next();
++			if ( mapsIdValue.equals( column.getName() ) ) {
++				table.removeColumn( column );
++				break;
++			}
++		}
++	}
++
++	private Property getColumnReferencedByMapsId(Component componentId) {
++		Property prop = componentId.getProperty( mapsIdValue );
++		if ( prop == null ) {
++			throw new MappingException( "@MapsId referennces a non-existent property: " + mapsIdValue );
++		}
++		return prop;
++	}
++
++	private void updatePropertyValueAndColumns(Property toOneProperty, Property derivedIdProperty) {
++		SimpleValue newValue = new SimpleValue();
++		// TODO: we should check whether the type of the derived id is the correct type
++		newValue.setTypeName( derivedIdProperty.getType().getName() );
++		Iterator iter = toOneProperty.getColumnIterator();
++		while ( iter.hasNext() ) {
++			Column column = ( ( Column ) iter.next() );
++			Column newColumn = cloneColumn( column );
++			newColumn.setValue( newValue );
++			newValue.addColumn( newColumn );
++		}
++		derivedIdProperty.setValue( newValue );
++	}
++
++	private Column cloneColumn(Column original) {
++		// TODO clone() is protected in Column. For now use a copy of the clone. Not sure if we I really need to
++		// TODO copy each property. It might be that for this purposes only a few are relevant 
++		Column copy = new Column();
++		copy.setLength( original.getLength() );
++		copy.setScale( original.getScale() );
++		copy.setTypeIndex( original.getTypeIndex() );
++		copy.setName( original.getQuotedName() );
++		copy.setNullable( original.isNullable() );
++		copy.setPrecision( original.getPrecision() );
++		copy.setUnique( original.isUnique() );
++		copy.setSqlType( original.getSqlType() );
++		copy.setSqlTypeCode( original.getSqlTypeCode() );
++		copy.setCheckConstraint( original.getCheckConstraint() );
++		copy.setComment( original.getComment() );
++		copy.setDefaultValue( original.getDefaultValue() );
++		copy.setCustomRead( original.getCustomRead() );
++		copy.setCustomWrite( original.getCustomWrite() );
++		return copy;
++	}
+ }
+Index: core/src/main/java/org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- core/src/main/java/org/hibernate/mapping/PersistentClass.java	(revision 17994)
++++ core/src/main/java/org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -677,7 +677,7 @@
+ 							"Repeated column in mapping for entity: " +
+ 							getEntityName() +
+ 							" column: " +
+-							col.getName() + 
++							col.getName() +
+ 							" (should be mapped with insert=\"false\" update=\"false\")"
+ 						);
+ 				}
+@@ -714,7 +714,8 @@
+ 		if (getIdentifierMapper() == null ) {
+ 			//an identifier mapper => getKey will be included in the getNonDuplicatedPropertyIterator()
+ 			//and checked later, so it needs to be excluded
+-			checkColumnDuplication( cols, getKey().getColumnIterator() );
++			// TODO needed to comment out the column duplication check for now
++			//checkColumnDuplication( cols, getKey().getColumnIterator() );
+ 		}
+ 		checkColumnDuplication( cols, getDiscriminatorColumnIterator() );
+ 		checkPropertyColumnDuplication( cols, getNonDuplicatedPropertyIterator() );
+Index: core/src/main/java/org/hibernate/mapping/Table.java
+===================================================================
+--- core/src/main/java/org/hibernate/mapping/Table.java	(revision 17994)
++++ core/src/main/java/org/hibernate/mapping/Table.java	(working copy)
+@@ -215,6 +215,11 @@
+ 		}
+ 	}
+ 
++	public void removeColumn(Column column) {
++		Column old = (Column) getColumn( column );
++		columns.remove( old.getCanonicalName() );
++	}
++
+ 	public int getColumnSpan() {
+ 		return columns.size();
+ 	}

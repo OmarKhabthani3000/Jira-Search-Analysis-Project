@@ -1,0 +1,145 @@
+--------------------------------------------------------------------------------------------------
+Entity:
+
+public class Article extends IdEntity {
+
+    // 文章属性，置顶等
+    public enum ArticleAttribute {
+
+        Top("置顶"), Hot("热门"), DefaultDisplay("分类默认显示");
+
+        private ArticleAttribute(String msg) {
+            this.msg = msg;
+        }
+
+        private final String msg;
+
+        public String getMsg() {
+            return msg;
+        }
+
+        @Override
+        public String toString() {
+            return this.getMsg();
+        }
+
+    }
+
+    // 文章状态
+    public enum ArticleStatus {
+
+        Available("可用"), NoComment("禁止评论（留言）"), Hidden("隐藏"), Delete("删除");
+
+        private ArticleStatus(String msg) {
+            this.msg = msg;
+        }
+
+        private final String msg;
+
+        public String getMsg() {
+            return msg;
+        }
+
+        @Override
+        public String toString() {
+            return this.getMsg();
+        }
+    }
+
+    @NotEmpty
+    private String title;
+
+    private String keywords;
+
+    private String summary;
+
+    @NotEmpty
+    private String content;
+	
+	private Set<ArticleAttribute> articleAttributes;
+
+    private ArticleStatus articleStatus;
+	
+	@ElementCollection(targetClass = ArticleAttribute.class)
+    @CollectionTable(name = "W_ARTICLE_ATTRIBUTE", joinColumns = @JoinColumn(name = "ARTICLE_ID"))
+    @Column(name = "ARTICLE_ATTRIBUTE", nullable = false)
+    @Enumerated(EnumType.STRING)
+    public Set<ArticleAttribute> getArticleAttributes() {
+        return articleAttributes;
+    }
+	
+	@Enumerated(EnumType.STRING)
+    public ArticleStatus getArticleStatus() {
+        return articleStatus;
+    }
+	
+	//...more
+	
+}
+-----------------------------------------------------------------------------------------------------
+Service:
+
+articleRepository.findOne(Specifications.where(buildArticleStatusSpecification())
+                .and(ArticleSpecifications.attribute(Article.ArticleAttribute.DefaultDisplay)));
+-----------------------------------------------------------------------------------------------------
+Specifications:
+
+private final static class ArticleSpecifications {
+
+        public static Specification<Article> status(final Article.ArticleStatus... articleStatuses) {
+            return new Specification<Article>() {
+                @Override
+                public Predicate toPredicate(Root<Article> root, CriteriaQuery<?> cq, CriteriaBuilder cb) {
+                    return articleStatuses != null && articleStatuses.length > 0 ? root.get("articleStatus").in(articleStatuses) : null;
+                }
+            };
+        }
+
+        public static Specification<Article> attribute(final Article.ArticleAttribute... articleAttributes) {
+            return new Specification<Article>() {
+                @Override
+                public Predicate toPredicate(Root<Article> root, CriteriaQuery<?> cq, CriteriaBuilder cb) {
+                    if (articleAttributes != null) {
+                        final Path articleAttributesPath = root.get("articleAttributes");
+                        Predicate[] predicates = new Predicate[articleAttributes.length];
+                        for (int i = 0; i < articleAttributes.length; i++) {
+                            predicates[i] = cb.isMember(articleAttributes[i], articleAttributesPath);
+                        }
+                        return cb.or(predicates);
+                    }
+                    return null;
+                }
+            };
+        }
+
+        public static Specification<Article> channel(final Channel channel) {
+            return new Specification<Article>() {
+                @Override
+                public Predicate toPredicate(Root<Article> root, CriteriaQuery<?> cq, CriteriaBuilder cb) {
+                    return channel != null ? cb.equal(root.get("channel"), channel) : null;
+                }
+            };
+        }
+    }
+-----------------------------------------------------------------------------------------------------
+Generated query:
+
+SELECT article0_.id AS id1_1_, article0_.add_time AS add_time2_1_, article0_.article_status AS article_3_1_, article0_.author AS author4_1_, article0_.channel_id AS channel13_1_, article0_.content AS content5_1_, article0_.keywords AS keywords6_1_, article0_.last_modify_time AS last_mod7_1_, article0_.link AS link8_1_, article0_.summary AS summary9_1_, article0_.tags AS tags10_1_, article0_.title AS title11_1_, article0_.view_count AS view_co12_1_
+FROM w_article article0_
+WHERE (article0_.article_status IN (?, ?)) AND (? IN (
+SELECT articleatt1_.article_attribute
+FROM w_article_attribute articleatt1_
+WHERE article0_.id=articleatt1_.article_id))
+
+it is correct!
+
+Final sql:
+SELECT article0_.id AS id1_1_, article0_.add_time AS add_time2_1_, article0_.article_status AS article_3_1_, article0_.author AS author4_1_, article0_.channel_id AS channel13_1_, article0_.content AS content5_1_, article0_.keywords AS keywords6_1_, article0_.last_modify_time AS last_mod7_1_, article0_.link AS link8_1_, article0_.summary AS summary9_1_, article0_.tags AS tags10_1_, article0_.title AS title11_1_, article0_.view_count AS view_co12_1_
+FROM w_article article0_
+WHERE (article0_.article_status IN ('Available', 'NoComment')) AND ('ACED00057E720032636E2E65617379706173732E7766616C74682E656E746974792E41727469636C652441727469636C6541747472696275746500000000000000001200007872000E6A6176612E6C616E672E456E756D0000000000000000120000787074000E44656661756C74446973706C6179' IN (
+SELECT articleatt1_.article_attribute
+FROM w_article_attribute articleatt1_
+WHERE article0_.id=articleatt1_.article_id))
+
+
+	

@@ -1,0 +1,415 @@
+Index: hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	(revision 19013)
++++ hibernate-search/src/main/java/org/hibernate/search/impl/SearchFactoryImpl.java	Wed Mar 31 21:06:41 BST 2010
+@@ -89,6 +89,8 @@
+ import org.hibernate.search.util.PluginLoader;
+ import org.hibernate.util.StringHelper;
+ import org.slf4j.Logger;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.LogErrorHandler;
+ 
+ /**
+  * @author Emmanuel Bernard
+@@ -689,4 +691,13 @@
+ 		return dirProviderData.get( provider ).exclusiveIndexUsage;
+ 	}
+ 
++    public ErrorHandler createErrorHandler() {
++        String errorHandlerClassName = configurationProperties.getProperty( Environment.ERROR_HANDLER );
++        if ( StringHelper.isEmpty( errorHandlerClassName ) ) {
++            return new LogErrorHandler();
+-}
++        }
++
++        return PluginLoader.instanceFromName( ErrorHandler.class, errorHandlerClassName, SearchFactoryImpl.class, "Error Handler" );
++    }
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/LuceneBackendQueueProcessor.java	Wed Mar 31 21:08:01 BST 2010
+@@ -34,6 +34,8 @@
+ import org.hibernate.search.store.IndexShardingStrategy;
+ import org.hibernate.search.util.LoggerFactory;
+ import org.slf4j.Logger;
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.impl.ErrorContextBuilder;
+ 
+ /**
+  * Apply the operations to Lucene directories.
+@@ -75,8 +77,12 @@
+ 			}
+ 			//this Runnable splits tasks in more runnables and then runs them:
+ 			processors.runAll( sync );
+-		} catch (InterruptedException e) {
+-			log.error( "Index update task has been interrupted", e );
++		} catch ( Exception e ) {
++            ErrorContextBuilder builder = new ErrorContextBuilder();
++            builder.errorThatOccurred( e ).addAllWorkThatFailed ( queue );
++            final ErrorHandler errorHandler = searchFactoryImplementor.createErrorHandler();
++            errorHandler.handle( builder.createErrorContext() );
++
+ 		}
+ 	}
+ 	
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	Wed Mar 31 21:09:59 BST 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextBuilder.java	Wed Mar 31 21:09:59 BST 2010
+@@ -0,0 +1,58 @@
++package org.hibernate.search.exception.impl;
++
++import java.util.ArrayList;
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.exception.ErrorContext;
++
++
++public class ErrorContextBuilder {
++
++    private LuceneWork operationAtFault;
++
++    private Throwable th;
++
++
++    private List<LuceneWork> failingOperations;
++
++    public ErrorContextBuilder() {
++        failingOperations = new ArrayList<LuceneWork>();
++    }
++
++    public ErrorContextBuilder primaryFailure( LuceneWork operationAtFault ) {
++        this.operationAtFault = operationAtFault;
++        return this;
++
++    }
++
++    public ErrorContextBuilder errorThatOccurred( Throwable th ) {
++        this.th = th;
++        return this;
++    }
++
++    public ErrorContextBuilder subsequentFailure( LuceneWork operation ) {
++        failingOperations.add( operation );
++        return this;
++    }
++
++    public ErrorContextBuilder addAllWorkThatFailed( List<LuceneWork> worksThatFailed ) {
++        failingOperations.addAll( worksThatFailed );
++        return this;
++    }
++
++    public boolean containsPrimaryFailure() {
++        return operationAtFault != null;
++    }
++
++    public ErrorContext createErrorContext() {
++        ErrorContextImpl context = new ErrorContextImpl();
++        context.setOperationAtFault( operationAtFault) ;
++        context.setThrowable( th );
++        context.setFailingOperations( failingOperations );
++        return context;
++
++    }
++
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java	(revision 19121)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/Workspace.java	Wed Mar 31 21:38:54 BST 2010
+@@ -236,4 +236,8 @@
+ 		}
+ 	}
+ 
++    public SearchFactoryImplementor getSearchFactory() {
++        return searchFactoryImplementor;
+-}
++    }
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/engine/SearchFactoryImplementor.java	Wed Mar 31 21:43:59 BST 2010
+@@ -38,6 +38,7 @@
+ import org.hibernate.search.filter.FilterCachingStrategy;
+ import org.hibernate.search.store.DirectoryProvider;
+ import org.hibernate.search.store.optimization.OptimizerStrategy;
++import org.hibernate.search.exception.ErrorHandler;
+ 
+ /**
+  * Interface which gives access to the different directory providers and their configuration.
+@@ -93,4 +94,6 @@
+ 	Similarity getSimilarity(DirectoryProvider<?> directoryProvider);
+ 
+ 	boolean isExclusiveIndexUsageEnabled(DirectoryProvider<?> provider);
++
++    ErrorHandler createErrorHandler();
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java	(revision 19121)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPQueueProcessor.java	Thu Apr 01 06:35:06 BST 2010
+@@ -27,7 +27,6 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.concurrent.ExecutorService;
+-
+ import org.apache.lucene.index.IndexWriter;
+ import org.slf4j.Logger;
+ 
+@@ -36,6 +35,9 @@
+ import org.hibernate.search.backend.impl.lucene.works.LuceneWorkVisitor;
+ import org.hibernate.search.util.LoggerFactory;
+ 
++import org.hibernate.search.exception.ErrorHandler;
++import org.hibernate.search.exception.ErrorContext;
++import org.hibernate.search.exception.impl.ErrorContextBuilder;
+ /**
+  * A Runnable containing a unit of changes to be applied to a specific index.
+  * After creation, use addWork(LuceneWork) to fill the changes queue and then
+@@ -87,31 +89,41 @@
+ 			return;
+ 		}
+ 		log.debug( "Opening an IndexWriter for update" );
+-		try {
++        ErrorHandler handler = workspace.getSearchFactory().createErrorHandler();
+-			IndexWriter indexWriter = workspace.getIndexWriter( batchmode );
++      	IndexWriter indexWriter = workspace.getIndexWriter( batchmode );
++        ErrorContextBuilder builder = new ErrorContextBuilder();
+-			try {
+-				for ( LuceneWork lw : workOnWriter ) {
++        try {
++            for ( LuceneWork lw : workOnWriter ) {
++                try {
+-					lw.getWorkDelegate( worker ).performWork( lw, indexWriter );
++                    lw.getWorkDelegate( worker ).performWork( lw, indexWriter );
++                } catch ( Exception e ) {
++                    if ( !builder.containsPrimaryFailure() ) {
++                        builder.primaryFailure( lw ).errorThatOccurred( e );
++                    } else {
++                        builder.subsequentFailure( lw );
+-				}
++                    }
++                }
++            }
+-				workspace.commitIndexWriter();
+-				performOptimizations();
+-			}
+-			finally {
+-				if ( ! exclusiveIndexUsage ) workspace.closeIndexWriter();
++            workspace.commitIndexWriter();
++            performOptimizations();
++        }
++        finally {
++            if ( ! exclusiveIndexUsage ) workspace.closeIndexWriter();
+-			}
+-		}
+-		catch (Throwable tw) {
+-			//needs to be attempted even for out of memory errors, therefore we catch Throwable
+-			log.error( "Unexpected error in Lucene Backend: ", tw );
++
++            ErrorContext errorContext = builder.createErrorContext();
++            if ( errorContext.hasErrors() ) {
++           	    handler.handle( errorContext );
+-			try {
+-				workspace.closeIndexWriter();
+-			}
+-			finally {
+-				workspace.forceLockRelease();
+-			}
+-		}
+-	}
+-	
++                try {
++				    workspace.closeIndexWriter();
++			    }
++			    finally {
++				    workspace.forceLockRelease();
++			    }
++			}
++		}
++
++	}
++	
+ 	private void performOptimizations() {
+ 		//TODO next line is assuming the OptimizerStrategy will need an IndexWriter;
+ 		// would be nicer to have the strategy put an OptimizeWork on the queue,
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	Wed Mar 31 21:10:55 BST 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/impl/ErrorContextImpl.java	Wed Mar 31 21:10:55 BST 2010
+@@ -0,0 +1,53 @@
++package org.hibernate.search.exception.impl;
++
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.exception.ErrorContext;
++
++
++class ErrorContextImpl implements ErrorContext {
++
++    private List<LuceneWork> failingOperations;
++
++    private LuceneWork operationAtFault;
++
++    private Throwable throwable;
++
++    public List<LuceneWork> getFailingOperations() {
++        if (failingOperations == null) {
++            failingOperations = new ArrayList<LuceneWork>();
++        }
++        return Collections.unmodifiableList(failingOperations);
++    }
++
++    public LuceneWork getOperationAtFault() {
++        return this.operationAtFault;
++    }
++
++    public Throwable getThrowable() {
++        return this.throwable;
++    }
++
++
++    public void setFailingOperations( List<LuceneWork> failingOperations ) {
++        this.failingOperations = failingOperations;
++    }
++
++    public void setThrowable( Throwable th ) {
++        this.throwable = th;
++    }
++
++    public void setOperationAtFault(LuceneWork operationAtFault) {
++        this.operationAtFault = operationAtFault;
++    }
++
++
++    public boolean hasErrors() {
++        return  failingOperations != null || failingOperations.size() > 0;
++    }
++
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/backend/impl/lucene/PerDPResources.java	Wed Mar 24 20:05:41 GMT 2010
+@@ -75,5 +75,9 @@
+ 		}
+ 		executor.shutdown();
+ 	}
+-	
++
++    public SearchFactoryImplementor getSearchFactory() {
++        return workspace.getSearchFactory();
+-}
++    }
++	
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	Wed Mar 31 21:10:40 BST 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorContext.java	Wed Mar 31 21:10:40 BST 2010
+@@ -0,0 +1,17 @@
++package org.hibernate.search.exception;
++
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++
++
++public interface ErrorContext {
++
++    List<LuceneWork> getFailingOperations();
++
++    LuceneWork getOperationAtFault();
++
++    Throwable getThrowable();
++
++    boolean hasErrors();
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	Wed Mar 31 17:51:01 BST 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/ErrorHandler.java	Wed Mar 31 17:51:01 BST 2010
+@@ -0,0 +1,7 @@
++package org.hibernate.search.exception;
++
++
++public interface ErrorHandler {
++
++    void handle( ErrorContext context );
++}
+Index: hibernate-search/src/main/java/org/hibernate/search/Environment.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/Environment.java	(revision 19002)
++++ hibernate-search/src/main/java/org/hibernate/search/Environment.java	Wed Mar 31 21:01:20 BST 2010
+@@ -115,5 +115,7 @@
+ 	 *
+ 	 */
+ 	public static final String MODEL_MAPPING = "hibernate.search.model_mapping";
+-	
++
++    public static final String ERROR_HANDLER = "hibernate.search.error.handler";
++	
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java	Wed Mar 31 21:10:31 BST 2010
++++ hibernate-search/src/main/java/org/hibernate/search/exception/LogErrorHandler.java	Wed Mar 31 21:10:31 BST 2010
+@@ -0,0 +1,48 @@
++package org.hibernate.search.exception;
++
++import java.util.List;
++
++import org.hibernate.search.backend.LuceneWork;
++import org.hibernate.search.util.LoggerFactory;
++import org.slf4j.Logger;
++
++
++public class LogErrorHandler implements ErrorHandler {
++
++    private static final Logger log = LoggerFactory.make();
++
++    public void handle( ErrorContext context ) {
++        final List<LuceneWork> failingOperations = context.getFailingOperations();
++        final LuceneWork primaryFailure = context.getOperationAtFault();
++        final Throwable exceptionThatOccurred = context.getThrowable();
++
++        if ( exceptionThatOccurred != null) {
++            log.error( "Exception occurred " , exceptionThatOccurred);
++        }
++        if ( primaryFailure != null ) {
++            log.error( "Primary Failure: " + printFailureMessage(primaryFailure) );
++        }
++
++        if ( !failingOperations.isEmpty() ) {
++            log.error( "Subsequent failures " );
++
++            for( LuceneWork workThatFailed: failingOperations ) {
++                log.error( printFailureMessage(workThatFailed) );
++            }
++        }
++
++    }
++
++    private String printFailureMessage( LuceneWork workThatFailed ) {
++        StringBuilder message = new StringBuilder();
++                    message.append( " Entity " )
++                        .append( workThatFailed.getEntityClass().getName() )
++                        .append( " " )
++                        .append( " Id " ).append( workThatFailed.getIdInString() )
++                        .append( " " ).append( " Work Type " )
++                        .append( " " ).append( workThatFailed.getClass().getName() )
++                        .append( "\n");
++
++        return message.toString();
++    }
++}

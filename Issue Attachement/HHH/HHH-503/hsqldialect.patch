@@ -1,0 +1,51 @@
+diff -Naur hibernate-3.0.3/src/org/hibernate/dialect/HSQLDialect.java hibernate-3.0.3-patch/src/org/hibernate/dialect/HSQLDialect.java
+--- hibernate-3.0.3/src/org/hibernate/dialect/HSQLDialect.java	Sun May  8 17:10:30 2005
++++ hibernate-3.0.3-patch/src/org/hibernate/dialect/HSQLDialect.java	Thu May 19 11:27:30 2005
+@@ -1,6 +1,7 @@
+ //$Id: HSQLDialect.java,v 1.25 2005/04/13 04:44:34 oneovthafew Exp $
+ package org.hibernate.dialect;
+ 
++import java.sql.SQLException;
+ import java.sql.Types;
+ 
+ import org.hibernate.Hibernate;
+@@ -9,7 +10,9 @@
+ import org.hibernate.dialect.function.StandardSQLFunction;
+ import org.hibernate.dialect.function.VarArgsSQLFunction;
+ import org.hibernate.exception.ErrorCodeConverter;
++import org.hibernate.exception.JDBCExceptionHelper;
+ import org.hibernate.exception.SQLExceptionConverter;
++import org.hibernate.exception.TemplatedViolatedConstraintNameExtracter;
+ import org.hibernate.exception.ViolatedConstraintNameExtracter;
+ 
+ /**
+@@ -231,4 +234,29 @@
+ 			return integrityViolationCodes;
+ 		}
+ 	}
++
++	public ViolatedConstraintNameExtracter getViolatedConstraintNameExtracter() {
++        return EXTRACTER;
++	}
++
++	private static ViolatedConstraintNameExtracter EXTRACTER = new TemplatedViolatedConstraintNameExtracter() {
++
++		/**
++		 * Extract the name of the violated constraint from the given SQLException.
++		 *
++		 * @param sqle The exception that was the result of the constraint violation.
++		 * @return The extracted constraint name.
++		 */
++		public String extractConstraintName(SQLException sqle) {
++			String constraintName = null;
++			
++			int errorCode = JDBCExceptionHelper.extractErrorCode(sqle);
++			if ( errorCode == -104 ) {
++				constraintName = extractUsingTemplate( "constraint violation: ", " in statement [", sqle.getMessage() );
++			}
++
++			return constraintName;
++		}
++
++	};
+ }

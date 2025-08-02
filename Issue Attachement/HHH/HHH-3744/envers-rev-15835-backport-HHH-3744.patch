@@ -1,0 +1,127 @@
+Index: src/main/java/org/hibernate/envers/event/AuditEventListener.java
+===================================================================
+--- src/main/java/org/hibernate/envers/event/AuditEventListener.java	(revision 15834)
++++ src/main/java/org/hibernate/envers/event/AuditEventListener.java	(revision 15835)
+@@ -57,6 +57,7 @@
+ import org.hibernate.event.PreCollectionUpdateEvent;
+ import org.hibernate.event.PreCollectionUpdateEventListener;
+ import org.hibernate.persister.entity.EntityPersister;
++import org.hibernate.proxy.HibernateProxy;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -64,6 +65,8 @@
+ public class AuditEventListener implements PostInsertEventListener, PostUpdateEventListener,
+         PostDeleteEventListener, PreCollectionUpdateEventListener, PreCollectionRemoveEventListener,
+         PostCollectionRecreateEventListener, Initializable {
++	private static final long serialVersionUID = -2499904286323112715L;
++
+     private AuditConfiguration verCfg;
+ 
+     private void generateBidirectionalCollectionChangeWorkUnits(AuditSync verSync, EntityPersister entityPersister,
+@@ -93,7 +96,14 @@
+                     if (newValue != null) {
+                         // relDesc.getToEntityName() doesn't always return the entity name of the value - in case
+                         // of subclasses, this will be root class, no the actual class. So it can't be used here.
+-                        String toEntityName = session.guessEntityName(newValue);
++                        String toEntityName;
++                        if(newValue instanceof HibernateProxy) {
++                    	    HibernateProxy hibernateProxy = (HibernateProxy) newValue;
++                    	    toEntityName = session.bestGuessEntityName(newValue);
++                    	    newValue = hibernateProxy.getHibernateLazyInitializer().getImplementation();
++                    	} else {
++                    		toEntityName =  session.guessEntityName(newValue);
++                    	}
+ 
+                         IdMapper idMapper = verCfg.getEntCfg().get(toEntityName).getIdMapper();
+ 
+@@ -102,8 +112,15 @@
+                     }
+ 
+                     if (oldValue != null) {
+-                        String toEntityName = session.guessEntityName(oldValue);
+-
++                    	String toEntityName;
++                    	if(oldValue instanceof HibernateProxy) {
++                    	    HibernateProxy hibernateProxy = (HibernateProxy) oldValue;
++                    	    toEntityName = session.bestGuessEntityName(oldValue);
++                    	    oldValue = hibernateProxy.getHibernateLazyInitializer().getImplementation();
++                    	} else {
++                    		toEntityName =  session.guessEntityName(oldValue);
++                    	}
++                        
+                         IdMapper idMapper = verCfg.getEntCfg().get(toEntityName).getIdMapper();
+ 
+                         Serializable id = (Serializable) idMapper.mapToIdFromEntity(oldValue);
+Index: src/main/java/org/hibernate/envers/entities/mapper/SubclassPropertyMapper.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/SubclassPropertyMapper.java	(revision 15834)
++++ src/main/java/org/hibernate/envers/entities/mapper/SubclassPropertyMapper.java	(revision 15835)
+@@ -79,7 +79,9 @@
+         if (parentCollectionChanges == null) {
+             return mainCollectionChanges;
+         } else {
+-            parentCollectionChanges.addAll(mainCollectionChanges);
++        	if(mainCollectionChanges != null) {
++                parentCollectionChanges.addAll(mainCollectionChanges);
++        	}
+ 			return parentCollectionChanges;
+         }
+     }
+Index: src/main/java/org/hibernate/envers/entities/mapper/id/SingleIdMapper.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/id/SingleIdMapper.java	(revision 15834)
++++ src/main/java/org/hibernate/envers/entities/mapper/id/SingleIdMapper.java	(revision 15835)
+@@ -33,6 +33,7 @@
+ 
+ import org.hibernate.property.Getter;
+ import org.hibernate.property.Setter;
++import org.hibernate.proxy.HibernateProxy;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -77,8 +78,13 @@
+             return null;
+         }
+ 
+-        Getter getter = ReflectionTools.getGetter(data.getClass(), propertyData);
+-        return getter.get(data);
++        if(data instanceof HibernateProxy) {
++        	HibernateProxy hibernateProxy = (HibernateProxy) data;
++        	return hibernateProxy.getHibernateLazyInitializer().getIdentifier();
++        } else {
++        	Getter getter = ReflectionTools.getGetter(data.getClass(), propertyData);
++            return getter.get(data);
++        }
+     }
+ 
+     public void mapToMapFromId(Map<String, Object> data, Object obj) {
+@@ -91,8 +97,13 @@
+         if (obj == null) {
+             data.put(propertyData.getName(), null);
+         } else {
+-            Getter getter = ReflectionTools.getGetter(obj.getClass(), propertyData);
+-            data.put(propertyData.getName(), getter.get(obj));
++            if(obj instanceof HibernateProxy) {
++            	HibernateProxy hibernateProxy = (HibernateProxy)obj;
++            	data.put(propertyData.getName(), hibernateProxy.getHibernateLazyInitializer().getIdentifier());
++            } else {
++            	Getter getter = ReflectionTools.getGetter(obj.getClass(), propertyData);
++            	data.put(propertyData.getName(), getter.get(obj));
++            }
+         }
+     }
+ 
+Index: src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java
+===================================================================
+--- src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java	(revision 15834)
++++ src/main/java/org/hibernate/envers/synchronization/work/PersistentCollectionChangeWorkUnit.java	(revision 15835)
+@@ -46,7 +46,7 @@
+                                               Serializable snapshot, Serializable id) {
+         super(entityName, verCfg, null);
+ 
+-        referencingPropertyName = role.substring(entityName.length() + 1);
++        referencingPropertyName = role.substring(role.lastIndexOf(".") + 1);
+ 
+         collectionChanges = verCfg.getEntCfg().get(getEntityName()).getPropertyMapper()
+                 .mapCollectionChanges(referencingPropertyName, collection, snapshot, id);

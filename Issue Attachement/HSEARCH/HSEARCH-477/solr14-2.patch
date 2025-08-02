@@ -1,0 +1,421 @@
+Index: hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java
+===================================================================
+--- hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java	(revision 19129)
++++ hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/SolrAnalyzerTest.java	(working copy)
+@@ -174,6 +174,13 @@
+ 		tokens = AnalyzerUtils.tokensFromAnalysis( analyzer, "name", text );
+ 		AnalyzerUtils.assertTokensEqual( tokens, new String[] { "foo", "bar" } );
+ 
++        // CharStramFactories test
++        analyzer = fts.getSearchFactory().getAnalyzer("mapping_char_analyzer");
++        text = "coração";
++        tokens = AnalyzerUtils.tokensFromAnalysis( analyzer, "name", text );
++         AnalyzerUtils.assertTokensEqual( tokens, new String[] { "coracao" } );
++        
++
+ 		fts.close();
+ 	}
+ 
+Index: hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/Team.java
+===================================================================
+--- hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/Team.java	(revision 19129)
++++ hibernate-search/src/test/java/org/hibernate/search/test/analyzer/solr/Team.java	(working copy)
+@@ -24,16 +24,15 @@
+  */
+ package org.hibernate.search.test.analyzer.solr;
+ 
+-import javax.persistence.Entity;
+-import javax.persistence.GeneratedValue;
+-import javax.persistence.Id;
+ 
+-import org.apache.solr.analysis.HTMLStripStandardTokenizerFactory;
+-import org.apache.solr.analysis.HTMLStripWhitespaceTokenizerFactory;
++import org.apache.solr.analysis.HTMLStripCharFilterFactory;
+ import org.apache.solr.analysis.ISOLatin1AccentFilterFactory;
+ import org.apache.solr.analysis.LengthFilterFactory;
+ import org.apache.solr.analysis.LowerCaseFilterFactory;
+ import org.apache.solr.analysis.LowerCaseTokenizerFactory;
++import org.apache.solr.analysis.MappingCharFilterFactory;
++import org.apache.solr.analysis.PatternTokenizerFactory;
++import org.apache.solr.analysis.PhoneticFilterFactory;
+ import org.apache.solr.analysis.PorterStemFilterFactory;
+ import org.apache.solr.analysis.ShingleFilterFactory;
+ import org.apache.solr.analysis.SnowballPorterFilterFactory;
+@@ -43,12 +42,10 @@
+ import org.apache.solr.analysis.SynonymFilterFactory;
+ import org.apache.solr.analysis.TrimFilterFactory;
+ import org.apache.solr.analysis.WordDelimiterFilterFactory;
+-import org.apache.solr.analysis.PhoneticFilterFactory;
+-import org.apache.solr.analysis.PatternTokenizerFactory;
+-
+ import org.hibernate.search.annotations.Analyzer;
+ import org.hibernate.search.annotations.AnalyzerDef;
+ import org.hibernate.search.annotations.AnalyzerDefs;
++import org.hibernate.search.annotations.CharFilterDef;
+ import org.hibernate.search.annotations.DocumentId;
+ import org.hibernate.search.annotations.Field;
+ import org.hibernate.search.annotations.Indexed;
+@@ -56,149 +53,178 @@
+ import org.hibernate.search.annotations.TokenFilterDef;
+ import org.hibernate.search.annotations.TokenizerDef;
+ 
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++
+ /**
+  * @author Emmanuel Bernard
+  */
+ @Entity
+ @Indexed
+ @AnalyzerDefs({
+-		@AnalyzerDef(name = "customanalyzer",
+-				tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = ISOLatin1AccentFilterFactory.class),
+-						@TokenFilterDef(factory = LowerCaseFilterFactory.class),
+-						@TokenFilterDef(factory = StopFilterFactory.class, params = {
+-								@Parameter(name = "words",
+-										value = "org/hibernate/search/test/analyzer/solr/stoplist.properties"),
+-								@Parameter(name = "ignoreCase", value = "true")
+-						}),
+-						@TokenFilterDef(factory = SnowballPorterFilterFactory.class, params = {
+-								@Parameter(name = "language", value = "English")
+-						})
+-				}),
++        @AnalyzerDef(name = "customanalyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = ISOLatin1AccentFilterFactory.class),
++                        @TokenFilterDef(factory = LowerCaseFilterFactory.class),
++                        @TokenFilterDef(factory = StopFilterFactory.class, params = {
++                                @Parameter(name = "words",
++                                        value = "org/hibernate/search/test/analyzer/solr/stoplist.properties"),
++                                @Parameter(name = "ignoreCase", value = "true")
++                        }),
++                        @TokenFilterDef(factory = SnowballPorterFilterFactory.class, params = {
++                                @Parameter(name = "language", value = "English")
++                        })
++                }),
+ 
+-		@AnalyzerDef(name = "pattern_analyzer",
+-				tokenizer = @TokenizerDef(factory = PatternTokenizerFactory.class, params = {
+-						@Parameter(name = "pattern", value = ",")
+-				})),
++        @AnalyzerDef(name = "pattern_analyzer",
++                tokenizer = @TokenizerDef(factory = PatternTokenizerFactory.class, params = {
++                        @Parameter(name = "pattern", value = ",")
++                })),
+ 
+-		@AnalyzerDef(name = "standard_analyzer",
+-				tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = StandardFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "standard_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = StandardFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "html_standard_analyzer",
+-				tokenizer = @TokenizerDef(factory = HTMLStripStandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = StandardFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "html_standard_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++                },
++                filters = {
++                        @TokenFilterDef(factory = StandardFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "html_whitespace_analyzer",
+-				tokenizer = @TokenizerDef(factory = HTMLStripWhitespaceTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = StandardFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "html_whitespace_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "trim_analyzer",
+-				tokenizer = @TokenizerDef(factory = LowerCaseTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = InsertWhitespaceFilterFactory.class),
+-						@TokenFilterDef(factory = TrimFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "trim_analyzer",
++                tokenizer = @TokenizerDef(factory = LowerCaseTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = InsertWhitespaceFilterFactory.class),
++                        @TokenFilterDef(factory = TrimFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "length_analyzer",
+-				tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = LengthFilterFactory.class, params = {
+-								@Parameter(name = "min", value = "3"),
+-								@Parameter(name = "max", value = "5")
+-						})
+-				}),
++        @AnalyzerDef(name = "length_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = LengthFilterFactory.class, params = {
++                                @Parameter(name = "min", value = "3"),
++                                @Parameter(name = "max", value = "5")
++                        })
++                }),
+ 
+-		@AnalyzerDef(name = "porter_analyzer",
+-				tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = PorterStemFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "porter_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = PorterStemFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "word_analyzer",
+-				tokenizer = @TokenizerDef(factory = HTMLStripStandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = WordDelimiterFilterFactory.class, params = {
+-								@Parameter(name = "splitOnCaseChange", value = "1")
+-						})
+-				}),
++        @AnalyzerDef(name = "word_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++                },
++                filters = {
++                        @TokenFilterDef(factory = WordDelimiterFilterFactory.class, params = {
++                                @Parameter(name = "splitOnCaseChange", value = "1")
++                        })
++                }),
+ 
+-		@AnalyzerDef(name = "synonym_analyzer",
+-				tokenizer = @TokenizerDef(factory = HTMLStripStandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = SynonymFilterFactory.class, params = {
+-								@Parameter(name = "synonyms",
+-										value = "org/hibernate/search/test/analyzer/solr/synonyms.properties")
+-						})
+-				}),
++        @AnalyzerDef(name = "synonym_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++                },
++                filters = {
++                        @TokenFilterDef(factory = SynonymFilterFactory.class, params = {
++                                @Parameter(name = "synonyms",
++                                        value = "org/hibernate/search/test/analyzer/solr/synonyms.properties")
++                        })
++                }),
+ 
+-		@AnalyzerDef(name = "shingle_analyzer",
+-				tokenizer = @TokenizerDef(factory = HTMLStripStandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = ShingleFilterFactory.class)
+-				}),
++        @AnalyzerDef(name = "shingle_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++                },
++                filters = {
++                        @TokenFilterDef(factory = ShingleFilterFactory.class)
++                }),
+ 
+-		@AnalyzerDef(name = "phonetic_analyzer",
+-				tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
+-				filters = {
+-						@TokenFilterDef(factory = PhoneticFilterFactory.class, params = {
+-								@Parameter(name = "encoder", value = "Metaphone"),
+-								@Parameter(name = "inject", value = "false")
+-						})
+-				})
++        @AnalyzerDef(name = "phonetic_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                filters = {
++                        @TokenFilterDef(factory = PhoneticFilterFactory.class, params = {
++                                @Parameter(name = "encoder", value = "Metaphone"),
++                                @Parameter(name = "inject", value = "false")
++                        })
++                }),
++        @AnalyzerDef(name = "html_char_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = HTMLStripCharFilterFactory.class)
++
++                }),
++        @AnalyzerDef(name = "mapping_char_analyzer",
++                tokenizer = @TokenizerDef(factory = StandardTokenizerFactory.class),
++                charFilters = {
++                        @CharFilterDef(factory = MappingCharFilterFactory.class, params = {
++                                @Parameter(name = "mapping", value = "org/hibernate/search/test/analyzer/solr/mapping-chars.properties")
++                        })
++                })
+ })
+ public class Team {
+-	@Id
+-	@DocumentId
+-	@GeneratedValue
+-	private Integer id;
++    @Id
++    @DocumentId
++    @GeneratedValue
++    private Integer id;
+ 
+-	@Field
+-	private String name;
++    @Field
++    private String name;
+ 
+-	@Field
+-	private String location;
++    @Field
++    private String location;
+ 
+-	@Field
+-	@Analyzer(definition = "customanalyzer")
+-	private String description;
++    @Field
++    @Analyzer(definition = "customanalyzer")
++    private String description;
+ 
+-	public Integer getId() {
+-		return id;
+-	}
++    public Integer getId() {
++        return id;
++    }
+ 
+-	public void setId(Integer id) {
+-		this.id = id;
+-	}
++    public void setId(Integer id) {
++        this.id = id;
++    }
+ 
+-	public String getName() {
+-		return name;
+-	}
++    public String getName() {
++        return name;
++    }
+ 
+-	public void setName(String name) {
+-		this.name = name;
+-	}
++    public void setName(String name) {
++        this.name = name;
++    }
+ 
+-	public String getLocation() {
+-		return location;
+-	}
++    public String getLocation() {
++        return location;
++    }
+ 
+-	public void setLocation(String location) {
+-		this.location = location;
+-	}
++    public void setLocation(String location) {
++        this.location = location;
++    }
+ 
+-	public String getDescription() {
+-		return description;
+-	}
++    public String getDescription() {
++        return description;
++    }
+ 
+-	public void setDescription(String description) {
+-		this.description = description;
+-	}
++    public void setDescription(String description) {
++        this.description = description;
++    }
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/annotations/AnalyzerDef.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/annotations/AnalyzerDef.java	(revision 19149)
++++ hibernate-search/src/main/java/org/hibernate/search/annotations/AnalyzerDef.java	(working copy)
+@@ -61,4 +61,6 @@
+ 	 * @return Filters used. The filters are applied in the defined order
+ 	 */
+ 	TokenFilterDef[] filters() default { };
++
++    CharFilterDef[] charFilters() default {};
+ }
+Index: hibernate-search/src/main/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java
+===================================================================
+--- hibernate-search/src/main/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java	(revision 19129)
++++ hibernate-search/src/main/java/org/hibernate/search/impl/SolrAnalyzerBuilder.java	(working copy)
+@@ -29,16 +29,14 @@
+ import java.util.Collections;
+ 
+ import org.apache.lucene.analysis.Analyzer;
++import org.apache.solr.analysis.CharFilterFactory;
+ import org.apache.solr.analysis.TokenizerChain;
+ import org.apache.solr.analysis.TokenFilterFactory;
+ import org.apache.solr.analysis.TokenizerFactory;
+ import org.apache.solr.util.plugin.ResourceLoaderAware;
+ import org.apache.solr.common.ResourceLoader;
+ 
+-import org.hibernate.search.annotations.AnalyzerDef;
+-import org.hibernate.search.annotations.TokenizerDef;
+-import org.hibernate.search.annotations.TokenFilterDef;
+-import org.hibernate.search.annotations.Parameter;
++import org.hibernate.search.annotations.*;
+ import org.hibernate.search.SearchException;
+ import org.hibernate.search.util.HibernateSearchResourceLoader;
+ 
+@@ -62,10 +60,13 @@
+ 	public static Analyzer buildAnalyzer(AnalyzerDef analyzerDef) {
+ 		TokenizerDef token = analyzerDef.tokenizer();
+ 		TokenizerFactory tokenFactory = ( TokenizerFactory ) instantiate( token.factory() );
++
+ 		tokenFactory.init( getMapOfParameters( token.params() ) );
+ 
+ 		final int length = analyzerDef.filters().length;
++        final int charLength = analyzerDef.charFilters().length;
+ 		TokenFilterFactory[] filters = new TokenFilterFactory[length];
++        CharFilterFactory[] charFilters = new CharFilterFactory[charLength];
+ 		ResourceLoader resourceLoader = new HibernateSearchResourceLoader();
+ 		for ( int index = 0 ; index < length ; index++ ) {
+ 			TokenFilterDef filterDef = analyzerDef.filters()[index];
+@@ -75,9 +76,19 @@
+ 				((ResourceLoaderAware)filters[index]).inform( resourceLoader );
+ 			}
+ 		}
+-		return new TokenizerChain(tokenFactory, filters);
+-	}
++        for ( int index = 0 ; index < charFilters.length ; index++ ) {
++			CharFilterDef charFilterDef = analyzerDef.charFilters()[index];
++			charFilters[index] = (CharFilterFactory) instantiate( charFilterDef.factory() );
++			charFilters[index].init( getMapOfParameters( charFilterDef.params() ) );
++			if ( charFilters[index] instanceof ResourceLoaderAware ) {
++				((ResourceLoaderAware)charFilters[index]).inform( resourceLoader );
++			}
++		}
++		return new TokenizerChain(charFilters, tokenFactory, filters);
+ 
++    }
++
++
+ 	private static Object instantiate(Class clazz) {
+ 		try {
+ 			return clazz.newInstance();

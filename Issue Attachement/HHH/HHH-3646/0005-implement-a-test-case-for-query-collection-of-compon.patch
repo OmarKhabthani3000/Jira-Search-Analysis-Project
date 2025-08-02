@@ -1,0 +1,232 @@
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java b/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+index e232897..51971d5 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/CriteriaQueryTest.java
+@@ -5,6 +5,7 @@ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+ import java.util.HashSet;
++import java.util.HashMap;
+ 
+ import junit.framework.Test;
+ 
+@@ -920,5 +921,68 @@ public class CriteriaQueryTest extends FunctionalTestCase {
+ 		session.close();
+ 		
+ 	}
++
++	public void testCriteriaCollectionOfComponent() {
++		Session session = openSession();
++		Transaction t = session.beginTransaction();
++
++		Student gavin = new Student();
++		gavin.setName("Gavin King");
++		gavin.setStudentNumber(232);
++
++		Map/*<String,StudentAddress>*/ addresses = new HashMap/*<String,StudentAddress>*/();
++		StudentAddress addr = new StudentAddress();
++		addr.setLine1("101 Main St.");
++		addr.setCity("Anytown");
++		addr.setState("NY");
++		addr.setZip("10016");
++		addresses.put("HOME", addr);
++		
++		addr = new StudentAddress();
++		addr.setLine1("202 Spring St.");
++		addr.setCity("Springfield");
++		addr.setState("MA");
++		addr.setZip("99999");
++		addresses.put("SCHOOL", addr);
++	       
++		gavin.setAddresses(addresses);
++		session.persist(gavin);
++
++		Student xam = new Student();
++		xam.setName("Max Rydahl Andersen");
++		xam.setStudentNumber(101);
++
++		addresses = new HashMap/*<String,StudentAddress>*/();
++		addr = new StudentAddress();
++		addr.setLine1("123 3rd Ave");
++		addr.setCity("New York");
++		addr.setState("NY");
++		addr.setZip("10004");
++		addresses.put("HOME", addr);
++
++		xam.setAddresses(addresses);
++		session.persist(xam);
++
++		session.flush();
++		session.clear();
++
++		// search on a component property
++		List results = session.createCriteria(Student.class)
++		    .createCriteria("addresses")
++		    .add(Restrictions.eq("state", "MA"))
++		    .list();
++
++		assertEquals(1, results.size());
++
++		gavin = (Student)results.get(0);
++		assertEquals(2, gavin.getAddresses().keySet().size());
++
++		session.delete(gavin);
++		session.delete(xam);
++		
++		t.commit();
++		session.close();
++		
++	}
+ }
+ 
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml b/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
+index 51e9281..9579349 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/Enrolment.hbm.xml
+@@ -26,7 +26,18 @@
+ 			<key column="studentId"/>
+ 			<one-to-many class="Enrolment"/>
+ 		</set>
+-        <many-to-one name="preferredCourse" column="preferredCourseCode"/>
++	        <many-to-one name="preferredCourse" column="preferredCourseCode"/>
++		<map name="addresses" table="studentAddresses">
++			<key column="studentId" />
++			<map-key type="string" column="addressType" />
++			<composite-element class="org.hibernate.test.criteria.StudentAddress" >
++				<property name="line1" />
++				<property name="line2" />
++				<property name="city" />
++				<property name="state" />
++				<property name="zip" />
++			</composite-element>
++		</map>
+ 	</class>
+ 	
+ 	<class name="Enrolment">
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/Student.java b/project/testsuite/src/test/java/org/hibernate/test/criteria/Student.java
+index ac9134e..fa0de3a 100644
+--- a/project/testsuite/src/test/java/org/hibernate/test/criteria/Student.java
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/Student.java
+@@ -3,6 +3,7 @@ package org.hibernate.test.criteria;
+ 
+ import java.util.HashSet;
+ import java.util.Set;
++import java.util.Map;
+ 
+ /**
+  * @author Gavin King
+@@ -12,6 +13,7 @@ public class Student {
+ 	private String name;
+ 	private Course preferredCourse;
+ 	private Set enrolments = new HashSet();
++	private Map/*<String,StudentAddress>*/ addresses;
+ 
+ 	public String getName() {
+ 		return name;
+@@ -44,4 +46,12 @@ public class Student {
+ 	public void setEnrolments(Set employments) {
+ 		this.enrolments = employments;
+ 	}
++
++	public Map/*<String,StudentAddress>*/ getAddresses()  {
++		return addresses;
++	}
++
++	public void setAddresses(Map/*<String,StudentAddress>*/ addresses) {
++		this.addresses = addresses;
++	}
+ }
+diff --git a/project/testsuite/src/test/java/org/hibernate/test/criteria/StudentAddress.java b/project/testsuite/src/test/java/org/hibernate/test/criteria/StudentAddress.java
+new file mode 100644
+index 0000000..64e1dd1
+--- /dev/null
++++ b/project/testsuite/src/test/java/org/hibernate/test/criteria/StudentAddress.java
+@@ -0,0 +1,87 @@
++package org.hibernate.test.criteria;
++
++public class StudentAddress {
++	private String line1;
++	private String line2;
++	private String city;
++	private String state;
++	private String zip;
++
++	public String getLine1() {
++		return line1;
++	}
++	public void setLine1(String line1) {
++		this.line1 = line1;
++	}
++	public String getLine2() {
++		return line2;
++	}
++	public void setLine2(String line2) {
++		this.line2 = line2;
++	}
++	public String getCity() {
++		return city;
++	}
++	public void setCity(String city) {
++		this.city = city;
++	}
++	public String getState() {
++		return state;
++	}
++	public void setState(String state) {
++		this.state = state;
++	}
++	public String getZip() {
++		return zip;
++	}
++	public void setZip(String zip) {
++		this.zip = zip;
++	}
++	// @Override
++	public int hashCode() {
++		final int prime = 31;
++		int result = 1;
++		result = prime * result + ((city == null) ? 0 : city.hashCode());
++		result = prime * result + ((line1 == null) ? 0 : line1.hashCode());
++		result = prime * result + ((line2 == null) ? 0 : line2.hashCode());
++		result = prime * result + ((state == null) ? 0 : state.hashCode());
++		result = prime * result + ((zip == null) ? 0 : zip.hashCode());
++		return result;
++	}
++	// @Override
++	public boolean equals(Object obj) {
++		if (this == obj)
++			return true;
++		if (obj == null)
++			return false;
++		if (getClass() != obj.getClass())
++			return false;
++		StudentAddress other = (StudentAddress) obj;
++		if (city == null) {
++			if (other.city != null)
++				return false;
++		} else if (!city.equals(other.city))
++			return false;
++		if (line1 == null) {
++			if (other.line1 != null)
++				return false;
++		} else if (!line1.equals(other.line1))
++			return false;
++		if (line2 == null) {
++			if (other.line2 != null)
++				return false;
++		} else if (!line2.equals(other.line2))
++			return false;
++		if (state == null) {
++			if (other.state != null)
++				return false;
++		} else if (!state.equals(other.state))
++			return false;
++		if (zip == null) {
++			if (other.zip != null)
++				return false;
++		} else if (!zip.equals(other.zip))
++			return false;
++		return true;
++	}
++}
+\ No newline at end of file

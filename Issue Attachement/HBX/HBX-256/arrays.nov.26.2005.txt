@@ -1,0 +1,106 @@
+Index: java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java,v
+retrieving revision 1.25
+diff -u -r1.25 Cfg2HbmTool.java
+--- java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	6 Oct 2005 11:09:35 -0000	1.25
++++ java/org/hibernate/tool/hbm2x/Cfg2HbmTool.java	27 Nov 2005 01:26:27 -0000
+@@ -20,9 +20,11 @@
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.Formula;
+ import org.hibernate.mapping.ManyToOne;
++import org.hibernate.mapping.OneToMany;
+ import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.SimpleValue;
++import org.hibernate.mapping.Value;
+ import org.hibernate.tool.hbm2x.visitor.HBMTagForPersistentClassVisitor;
+ import org.hibernate.tool.hbm2x.visitor.HBMTagForValueVisitor;
+ 
+@@ -82,12 +84,16 @@
+ 	}
+ 
+     public boolean isOneToMany(Property property) {
+-        if(property.getValue() instanceof Collection) {
+-            return ( (Collection)property.getValue() ).isOneToMany();
+-        } 
+-        else {
+-            return false;
++        return isOneToMany(property.getValue());
++    }
++
++    public boolean isOneToMany(Value value) {
++        if(value instanceof Collection) {
++            return ( (Collection)value ).isOneToMany();
++        }else if(value instanceof OneToMany){
++        	return true;
+         }
++        return false;
+     }
+ 
+ 	public boolean isCollection(Property property) {
+Index: velocity/hbm/primitive-array.hbm.vm
+===================================================================
+RCS file: /cvsroot/hibernate/HibernateExt/tools/src/velocity/hbm/primitive-array.hbm.vm,v
+retrieving revision 1.1
+diff -u -r1.1 primitive-array.hbm.vm
+--- velocity/hbm/primitive-array.hbm.vm	11 May 2005 12:51:48 -0000	1.1
++++ velocity/hbm/primitive-array.hbm.vm	27 Nov 2005 01:26:28 -0000
+@@ -1 +1,21 @@
+-<!-- NYI primitive-array -->
+\ No newline at end of file
++#set( $value = $property.value )
++#set( $table = ${value.getElement().getTable().getName()} )
++#set( $dependentValue = ${value.getKey()} )
++
++<primitive-array name="$property.name" table="$table">
++	<key>
++       #foreach($column in ${dependentValue.getColumnIterator()})
++         #parse("hbm/column.hbm.vm")
++	   #end
++	</key>
++	<index>
++       #foreach($column in ${value.getIndex().getColumnIterator()})
++         #parse("hbm/column.hbm.vm")
++	   #end
++	</index>
++	<element type="${value.getElementClass()}" >
++       #foreach($column in ${value.getElement().getColumnIterator()})
++         #parse("hbm/column.hbm.vm")
++	   #end
++	</element>
++</primitive-array>
+\ No newline at end of file
+Index: velocity/hbm/array.hbm.vm
+===================================================================
+RCS file: velocity/hbm/array.hbm.vm
+diff -N velocity/hbm/array.hbm.vm
+--- /dev/null	1 Jan 1970 00:00:00 -0000
++++ velocity/hbm/array.hbm.vm	1 Jan 1970 00:00:00 -0000
+@@ -0,0 +1,26 @@
++#set( $value = $property.value )
++#set( $fetch = ${value.getFetchMode().toString().toLowerCase()} )
++#set( $dependentValue = ${value.getKey()} )
++
++#if(${c2h.isOneToMany(${value.getElement()})})
++#set( $toManyElement = 'one-to-many' )
++#set( $toManyClass = ${value.getElement().getAssociatedClass().getEntityName()} )
++#else
++## many-to-one not valid
++#set( $toManyElement = 'many-to-many' )
++#set( $toManyClass = ${value.getElement().getType().getAssociatedEntityName()} )
++#end
++
++<array name="$property.name" cascade="$property.cascade" fetch="$fetch" >
++    <key> 
++       #foreach($column in ${dependentValue.getColumnIterator()})
++         #parse("hbm/column.hbm.vm")
++	   #end
++	</key>
++    <list-index>
++       #foreach($column in ${value.getIndex().getColumnIterator()})
++         #parse("hbm/column.hbm.vm")
++	   #end
++    </list-index>
++	<$toManyElement class="$toManyClass" />
++</array>

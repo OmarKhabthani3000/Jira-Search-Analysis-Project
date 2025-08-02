@@ -1,0 +1,222 @@
+ .../org/hibernate/id/enhanced/TableGenerator.java  | 40 ++++++++++----
+ .../test/multitenancy/schema/Invoice.java          | 61 ++++++++++++++++++++++
+ .../schema/SchemaBasedMultiTenancyTest.java        | 23 ++++++++
+ 3 files changed, 113 insertions(+), 11 deletions(-)
+
+diff --git a/hibernate-core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java b/hibernate-core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java
+index 565f2bf..0ea4280 100644
+--- a/hibernate-core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java
++++ b/hibernate-core/src/main/java/org/hibernate/id/enhanced/TableGenerator.java
+@@ -30,6 +30,7 @@ import java.sql.ResultSet;
+ import java.sql.SQLException;
+ import java.sql.Types;
+ import java.util.Collections;
++import java.util.HashMap;
+ import java.util.Map;
+ import java.util.Properties;
+ 
+@@ -56,6 +57,7 @@ import org.hibernate.internal.util.config.ConfigurationHelper;
+ import org.hibernate.jdbc.AbstractReturningWork;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.type.Type;
++import org.jetbrains.annotations.Nullable;
+ 
+ /**
+  * An enhanced version of table-based id generation.
+@@ -132,7 +134,7 @@ import org.hibernate.type.Type;
+  */
+ public class TableGenerator implements PersistentIdentifierGenerator, Configurable {
+ 
+-    private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, TableGenerator.class.getName());
++	private static final CoreMessageLogger LOG = Logger.getMessageLogger(CoreMessageLogger.class, TableGenerator.class.getName());
+ 
+ 	public static final String CONFIG_PREFER_SEGMENT_PER_ENTITY = "prefer_entity_table_as_segment_value";
+ 
+@@ -176,9 +178,13 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 	private String insertQuery;
+ 	private String updateQuery;
+ 
+-	private Optimizer optimizer;
+ 	private long accessCount = 0;
+ 
++	private String optimizationStrategy;
++	private int explicitInitialValue;
++	private final Map<String, Optimizer> optimizerPerTenant = new HashMap<String, Optimizer>();
++
++
+ 	@Override
+ 	public Object generatorKey() {
+ 		return tableName;
+@@ -271,6 +277,22 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 	 * @return Out optimizer.
+ 	 */
+ 	public final Optimizer getOptimizer() {
++		return getOptimizer(null);
++	}
++
++	public final Optimizer getOptimizer(@Nullable String tenant) {
++		Optimizer optimizer = optimizerPerTenant.get(tenant);
++		if (optimizer != null) {
++			return optimizer;
++		}
++		synchronized (optimizerPerTenant) {
++			optimizer = optimizerPerTenant.get(tenant);
++			if (optimizer == null) {
++				optimizer = OptimizerFactory.buildOptimizer(optimizationStrategy, identifierType.getReturnedClass(),
++						incrementSize,explicitInitialValue);
++				optimizerPerTenant.put(tenant, optimizer);
++			}
++		}
+ 		return optimizer;
+ 	}
+ 
+@@ -310,13 +332,8 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 		final String defaultOptimizerStrategy = incrementSize <= 1
+ 				? OptimizerFactory.StandardOptimizerDescriptor.NONE.getExternalName()
+ 				: defaultPooledOptimizerStrategy;
+-		final String optimizationStrategy = ConfigurationHelper.getString( OPT_PARAM, params, defaultOptimizerStrategy );
+-		optimizer = OptimizerFactory.buildOptimizer(
+-				optimizationStrategy,
+-				identifierType.getReturnedClass(),
+-				incrementSize,
+-				ConfigurationHelper.getInt( INITIAL_PARAM, params, -1 )
+-		);
++		optimizationStrategy = ConfigurationHelper.getString( OPT_PARAM, params, defaultOptimizerStrategy );
++		explicitInitialValue = ConfigurationHelper.getInt(INITIAL_PARAM, params, -1);
+ 	}
+ 
+ 	/**
+@@ -411,7 +428,7 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 	protected String determineDefaultSegmentValue(Properties params) {
+ 		boolean preferSegmentPerEntity = ConfigurationHelper.getBoolean( CONFIG_PREFER_SEGMENT_PER_ENTITY, params, false );
+ 		String defaultToUse = preferSegmentPerEntity ? params.getProperty( TABLE ) : DEF_SEGMENT_VALUE;
+-        LOG.usingDefaultIdGeneratorSegmentValue(tableName, segmentColumnName, defaultToUse);
++		LOG.usingDefaultIdGeneratorSegmentValue(tableName, segmentColumnName, defaultToUse);
+ 		return defaultToUse;
+ 	}
+ 
+@@ -464,6 +481,7 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 				.getServiceRegistry()
+ 				.getService( JdbcServices.class )
+ 				.getSqlStatementLogger();
++		final Optimizer optimizer = getOptimizer(session.getTenantIdentifier());
+ 		return optimizer.generate(
+ 				new AccessCallback() {
+ 					@Override
+@@ -502,7 +520,7 @@ public class TableGenerator implements PersistentIdentifierGenerator, Configurab
+ 												selectRS.close();
+ 											}
+ 											catch ( SQLException e ) {
+-											    LOG.unableToReadOrInitHiValue(e);
++												LOG.unableToReadOrInitHiValue(e);
+ 												throw e;
+ 											}
+ 											finally {
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/Invoice.java b/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/Invoice.java
+new file mode 100644
+index 0000000..cb5c220
+--- /dev/null
++++ b/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/Invoice.java
+@@ -0,0 +1,61 @@
++/*
++ * Hibernate, Relational Persistence for Idiomatic Java
++ *
++ * Copyright (c) 2011, Red Hat Inc. or third-party contributors as
++ * indicated by the @author tags or express copyright attribution
++ * statements applied by the authors.  All third-party contributions are
++ * distributed under license by Red Hat Inc.
++ *
++ * This copyrighted material is made available to anyone wishing to use, modify,
++ * copy, or redistribute it subject to the terms and conditions of the GNU
++ * Lesser General Public License, as published by the Free Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
++ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
++ * for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License
++ * along with this distribution; if not, write to:
++ * Free Software Foundation, Inc.
++ * 51 Franklin Street, Fifth Floor
++ * Boston, MA  02110-1301  USA
++ */
++package org.hibernate.test.multitenancy.schema;
++
++import org.hibernate.annotations.GenericGenerator;
++import org.hibernate.annotations.Parameter;
++import org.hibernate.id.enhanced.TableGenerator;
++
++import javax.persistence.Entity;
++import javax.persistence.GeneratedValue;
++import javax.persistence.GenerationType;
++import javax.persistence.Id;
++
++/**
++ * @author Steve Ebersole
++ */
++@Entity
++public class Invoice {
++	@Id
++	@GeneratedValue(strategy = GenerationType.TABLE, generator = "number_sequence")
++	@GenericGenerator(name = "number_sequence",
++			strategy = "org.hibernate.id.enhanced.TableGenerator",
++			parameters = {
++					@Parameter(name = TableGenerator.SEGMENT_VALUE_PARAM, value = "customer"),
++					@Parameter(name = TableGenerator.INCREMENT_PARAM, value = "5"),
++					@Parameter(name = TableGenerator.OPT_PARAM, value = "pooled")
++			})
++	private Long id;
++
++	public Invoice() {
++	}
++
++	public Long getId() {
++		return id;
++	}
++
++	public void setId(Long id) {
++		this.id = id;
++	}
++}
+diff --git a/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/SchemaBasedMultiTenancyTest.java b/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/SchemaBasedMultiTenancyTest.java
+index 5ddcfc1..9821c12 100644
+--- a/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/SchemaBasedMultiTenancyTest.java
++++ b/hibernate-core/src/test/java/org/hibernate/test/multitenancy/schema/SchemaBasedMultiTenancyTest.java
+@@ -80,6 +80,7 @@ public class SchemaBasedMultiTenancyTest extends BaseUnitTestCase {
+ 		cfg.setProperty( Environment.CACHE_REGION_FACTORY, CachingRegionFactory.class.getName() );
+ 		cfg.setProperty( Environment.GENERATE_STATISTICS, "true" );
+ 		cfg.addAnnotatedClass( Customer.class );
++		cfg.addAnnotatedClass( Invoice.class );
+ 
+ 		cfg.buildMappings();
+ 		RootClass meta = (RootClass) cfg.getClassMapping( Customer.class.getName() );
+@@ -293,6 +294,28 @@ public class SchemaBasedMultiTenancyTest extends BaseUnitTestCase {
+ 		session.close();
+ 	}
+ 
++
++	@Test
++	public void testTableIdentifiers() {
++		Session session = getNewSession("jboss");
++		session.beginTransaction();
++		Invoice orderJboss = new Invoice();
++		session.save( orderJboss );
++		Assert.assertEquals(Long.valueOf(1), orderJboss.getId());
++		session.getTransaction().commit();
++		session.close();
++
++		session = getNewSession("acme");
++		session.beginTransaction();
++		Invoice orderAcme = new Invoice();
++		session.save( orderAcme );
++		Assert.assertEquals(Long.valueOf(1), orderAcme.getId());
++		session.getTransaction().commit();
++		session.close();
++
++		sessionFactory.getStatisticsImplementor().clear();
++	}
++
+ 	protected Session getNewSession(String tenant) {
+ 		return sessionFactory.withOptions().tenantIdentifier( tenant ).openSession();
+ 	}

@@ -1,0 +1,96 @@
+Index: E:/projects/hibernate3/src/org/hibernate/criterion/SubqueryExpression.java
+===================================================================
+--- E:/projects/hibernate3/src/org/hibernate/criterion/SubqueryExpression.java	(revision 11379)
++++ E:/projects/hibernate3/src/org/hibernate/criterion/SubqueryExpression.java	(working copy)
+@@ -18,55 +18,56 @@
+  * @author Gavin King
+  */
+ public abstract class SubqueryExpression implements Criterion {
+-	
++
+ 	private CriteriaImpl criteriaImpl;
+ 	private String quantifier;
+ 	private String op;
+ 	private QueryParameters params;
+ 	private Type[] types;
+-	
++
+ 	protected Type[] getTypes() {
+ 		return types;
+ 	}
+-	
++
+ 	protected SubqueryExpression(String op, String quantifier, DetachedCriteria dc) {
+ 		this.criteriaImpl = dc.getCriteriaImpl();
+ 		this.quantifier = quantifier;
+ 		this.op = op;
+ 	}
+-	
++
+ 	protected abstract String toLeftSqlString(Criteria criteria, CriteriaQuery outerQuery);
+ 
+ 	public String toSqlString(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+-		
+-		final SessionImplementor session = ( (CriteriaImpl) criteria ).getSession(); //ugly!
++
++    final SessionImplementor session = getSession(criteria);
++
+ 		final SessionFactoryImplementor factory = session.getFactory();
+-		
++
+ 		final OuterJoinLoadable persister = (OuterJoinLoadable) factory.getEntityPersister( criteriaImpl.getEntityOrClassName() );
+-		CriteriaQueryTranslator innerQuery = new CriteriaQueryTranslator( 
+-				factory, 
+-				criteriaImpl, 
+-				criteriaImpl.getEntityOrClassName(), //implicit polymorphism not supported (would need a union) 
++		CriteriaQueryTranslator innerQuery = new CriteriaQueryTranslator(
++				factory,
++				criteriaImpl,
++				criteriaImpl.getEntityOrClassName(), //implicit polymorphism not supported (would need a union)
+ 				criteriaQuery.generateSQLAlias(),
+ 				criteriaQuery
+ 			);
+-		
++
+ 		params = innerQuery.getQueryParameters(); //TODO: bad lifecycle....
+ 		types = innerQuery.getProjectedTypes();
+-		
++
+ 		//String filter = persister.filterFragment( innerQuery.getRootSQLALias(), session.getEnabledFilters() );
+-		
++
+ 		String sql = new Select( factory.getDialect() )
+ 			.setWhereClause( innerQuery.getWhereCondition() )
+ 			.setGroupByClause( innerQuery.getGroupBy() )
+ 			.setSelectClause( innerQuery.getSelect() )
+ 			.setFromClause(
+-					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
++					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +
+ 					persister.fromJoinFragment( innerQuery.getRootSQLALias(), true, false )
+ 				)
+ 			.toStatementString();
+-		
++
+ 		final StringBuffer buf = new StringBuffer()
+ 			.append( toLeftSqlString(criteria, criteriaQuery) );
+ 		if (op!=null) buf.append(' ').append(op).append(' ');
+@@ -75,7 +76,17 @@
+ 			.toString();
+ 	}
+ 
+-	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery) 
++  private SessionImplementor getSession(Criteria criteria) {
++    if (criteria instanceof CriteriaImpl) {
++      return ( (CriteriaImpl) criteria ).getSession(); //ugly!
++    } else if (criteria instanceof CriteriaImpl.Subcriteria) {
++      return getSession( ((CriteriaImpl.Subcriteria) criteria).getParent());
++    } else {
++      throw new IllegalStateException("Unknown session implementation.");
++    }
++  }
++
++	public TypedValue[] getTypedValues(Criteria criteria, CriteriaQuery criteriaQuery)
+ 	throws HibernateException {
+ 		Type[] types = params.getPositionalParameterTypes();
+ 		Object[] values = params.getPositionalParameterValues();

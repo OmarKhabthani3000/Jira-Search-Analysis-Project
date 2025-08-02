@@ -1,0 +1,259 @@
+### Eclipse Workspace Patch 1.0
+#P hibernate-annotations-3.4.0
+Index: src/java/org/hibernate/cfg/OneToOneSecondPass.java
+===================================================================
+--- src/java/org/hibernate/cfg/OneToOneSecondPass.java	(revision 17263)
++++ src/java/org/hibernate/cfg/OneToOneSecondPass.java	(working copy)
+@@ -87,6 +87,7 @@
+ 		);
+ 		PropertyBinder binder = new PropertyBinder();
+ 		binder.setName( propertyName );
++		binder.setNodeName( BinderHelper.getNodeName( targetEntity ) );
+ 		binder.setValue( value );
+ 		binder.setCascade( cascadeStrategy );
+ 		binder.setPropertyAccessorName( inferredData.getDefaultAccess() );
+Index: src/java/org/hibernate/cfg/annotations/EntityBinder.java
+===================================================================
+--- src/java/org/hibernate/cfg/annotations/EntityBinder.java	(revision 17263)
++++ src/java/org/hibernate/cfg/annotations/EntityBinder.java	(working copy)
+@@ -154,7 +154,11 @@
+ 	public void bindEntity() {
+ 		persistentClass.setAbstract( annotatedClass.isAbstract() );
+ 		persistentClass.setClassName( annotatedClass.getName() );
+-		persistentClass.setNodeName( name );
++		if( BinderHelper.hasNodeName( annotatedClass ) ){
++		   persistentClass.setNodeName( BinderHelper.getNodeName( annotatedClass ) );
++		} else {
++		   persistentClass.setNodeName( name );
++		}
+ 		//persistentClass.setDynamic(false); //no longer needed with the Entity name refactoring?
+ 		persistentClass.setEntityName( annotatedClass.getName() );
+ 		bindDiscriminatorValue();
+Index: src/java/org/hibernate/cfg/BinderHelper.java
+===================================================================
+--- src/java/org/hibernate/cfg/BinderHelper.java	(revision 17263)
++++ src/java/org/hibernate/cfg/BinderHelper.java	(working copy)
+@@ -17,10 +17,13 @@
+ import org.hibernate.MappingException;
+ import org.hibernate.annotations.AnyMetaDef;
+ import org.hibernate.annotations.AnyMetaDefs;
++import org.hibernate.annotations.ElementNode;
+ import org.hibernate.annotations.MetaValue;
++import org.hibernate.annotations.Node;
+ import org.hibernate.annotations.common.reflection.XAnnotatedElement;
+ import org.hibernate.annotations.common.reflection.XClass;
+ import org.hibernate.annotations.common.reflection.XPackage;
++import org.hibernate.annotations.common.reflection.XProperty;
+ import org.hibernate.cfg.annotations.EntityBinder;
+ import org.hibernate.cfg.annotations.Nullability;
+ import org.hibernate.cfg.annotations.TableBinder;
+@@ -553,4 +556,60 @@
+ 		log.info( "Binding Any Meta definition: {}", defAnn.name() );
+ 		mappings.addAnyMetaDef( defAnn );
+ 	}
++	
++	public static boolean isEmbeddedXML(XAnnotatedElement property){
++		if (property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			return node.embedXML();
++		}
++       return true;		
++	}
++	
++	/**
++	 * Guess if an element of a collection si annotated to be used in @see EntityMode.Dom4j
++	 * @param property
++	 * @return false by default, true if the embedXML is true 
++	 */
++	public static boolean isElementNodeEmbeddedXML(XAnnotatedElement property){
++		if(property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			ElementNode elementNode = node.element();
++			return elementNode.embedXML();
++		}
++		return false; 
++	}
++	
++	public static String getElementNodeName(XAnnotatedElement property){
++		if(property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			ElementNode elementNode = node.element();
++			return elementNode.name();
++		}
++		return null; 
++	}
++	
++	public static String getNodeName(XAnnotatedElement property){
++		if(property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			if(!"".equals(node.name())) return node.name();
++		}
++		return null;
++	}
++
++	public static boolean hasElementNodeName(XAnnotatedElement property) {
++		if(property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			ElementNode elementNode = node.element();
++			return ! "".equals(elementNode.name());
++		}
++		return false;
++	}
++
++	public static boolean hasNodeName(XAnnotatedElement property) {
++		if(property.isAnnotationPresent(org.hibernate.annotations.Node.class)){
++			Node node = property.getAnnotation(org.hibernate.annotations.Node.class);
++			return ! "".equals(node.name());
++		}
++		return false;
++	}
+ }
+Index: src/java/org/hibernate/annotations/Node.java
+===================================================================
+--- src/java/org/hibernate/annotations/Node.java	(revision 0)
++++ src/java/org/hibernate/annotations/Node.java	(revision 0)
+@@ -0,0 +1,20 @@
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.ElementType.TYPE;
++import java.lang.annotation.Retention;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++import java.lang.annotation.Target;
++
++/**
++ * Defines a node Node(name=, embedXml=true|false) for DOM4J
++ *
++ * @author Arturo Frappé Muñoz
++ */
++@Target({METHOD, FIELD, TYPE}) @Retention(RUNTIME)
++public @interface Node {
++	String name() default "";
++	boolean embedXML() default true;
++	ElementNode element() default @ElementNode();
++}
+Index: src/java/org/hibernate/cfg/annotations/PropertyBinder.java
+===================================================================
+--- src/java/org/hibernate/cfg/annotations/PropertyBinder.java	(revision 17263)
++++ src/java/org/hibernate/cfg/annotations/PropertyBinder.java	(working copy)
+@@ -39,6 +39,7 @@
+ 	private boolean insertable = true;
+ 	private boolean updatable = true;
+ 	private String cascade;
++	private String nodeName;
+ 	/*
+ 	 * property can be null
+ 	 * prefer propertyName to property.getName() since some are overloaded
+@@ -59,6 +60,10 @@
+ 		this.name = name;
+ 	}
+ 
++	public void setNodeName(String nodeName){
++		this.nodeName = nodeName;
++	}
++	
+ 	public void setReturnedClassName(String returnedClassName) {
+ 		this.returnedClassName = returnedClassName;
+ 	}
+@@ -123,6 +128,7 @@
+ 		setValue( propertyValue );
+ 		Property prop = make();
+ 		holder.addProperty( prop, columns );
++		if(nodeName!=null)	prop.setNodeName(nodeName);
+ 		return prop;
+ 	}
+ 
+@@ -131,7 +137,11 @@
+ 		log.debug( "Building property " + name );
+ 		Property prop = new Property();
+ 		prop.setName( name );
+-		prop.setNodeName( name );
++		if(nodeName!=null){
++		   prop.setNodeName( nodeName );
++		} else {
++		   prop.setNodeName( name );	
++		}
+ 		prop.setValue( value );
+ 		prop.setLazy( lazy );
+ 		prop.setCascade( cascade );
+Index: src/java/org/hibernate/cfg/annotations/CollectionBinder.java
+===================================================================
+--- src/java/org/hibernate/cfg/annotations/CollectionBinder.java	(revision 17263)
++++ src/java/org/hibernate/cfg/annotations/CollectionBinder.java	(working copy)
+@@ -441,6 +441,7 @@
+ 		//property building
+ 		PropertyBinder binder = new PropertyBinder();
+ 		binder.setName( propertyName );
++		binder.setNodeName( BinderHelper.getNodeName( property ) );
+ 		binder.setValue( collection );
+ 		binder.setCascade( cascadeStrategy );
+ 		if ( cascadeStrategy != null && cascadeStrategy.indexOf( "delete-orphan" ) >= 0 ) {
+@@ -625,7 +626,16 @@
+ 		collection.setElement( oneToMany );
+ 		oneToMany.setReferencedEntityName( collectionType.getName() );
+ 		oneToMany.setIgnoreNotFound( ignoreNotFound );
+-
++        collection.setEmbedded( BinderHelper.isEmbeddedXML( property ) );
++        oneToMany.setEmbedded( BinderHelper.isElementNodeEmbeddedXML( property ) );
++        boolean hasElementNodeName = BinderHelper.hasElementNodeName( property );
++        if( hasElementNodeName ) 
++        	collection.setElementNodeName( BinderHelper.getElementNodeName( property ) );
++        boolean hasNodeName = BinderHelper.hasNodeName( property );
++        if(hasNodeName) 
++        	collection.setNodeName( BinderHelper.getNodeName( property ) );
++        
++        
+ 		String assocClass = oneToMany.getReferencedEntityName();
+ 		PersistentClass associatedClass = (PersistentClass) persistentClasses.get( assocClass );
+ 		String orderBy = buildOrderByClauseFromHql( hqlOrderBy, associatedClass, collection.getRole() );
+Index: src/java/org/hibernate/cfg/AnnotationBinder.java
+===================================================================
+--- src/java/org/hibernate/cfg/AnnotationBinder.java	(revision 17263)
++++ src/java/org/hibernate/cfg/AnnotationBinder.java	(working copy)
+@@ -1775,6 +1775,7 @@
+ 
+ 		PropertyBinder binder = new PropertyBinder();
+ 		binder.setName( inferredData.getPropertyName() );
++		binder.setNodeName( BinderHelper.getNodeName( inferredData.getProperty() ) );
+ 		binder.setValue( comp );
+ 		binder.setProperty( inferredData.getProperty() );
+ 		binder.setPropertyAccessorName( inferredData.getDefaultAccess() );
+@@ -1944,6 +1945,7 @@
+ 			value.setReferencedEntityName( targetEntity.getName() );
+ 		}
+ 		defineFetchingStrategy( value, inferredData.getProperty() );
++		value.setEmbedded( BinderHelper.isEmbeddedXML( inferredData.getProperty() ) );
+ 		//value.setFetchMode( fetchMode );
+ 		value.setIgnoreNotFound( ignoreNotFound );
+ 		value.setCascadeDeleteEnabled( cascadeOnDelete );
+Index: src/java/org/hibernate/annotations/ElementNode.java
+===================================================================
+--- src/java/org/hibernate/annotations/ElementNode.java	(revision 0)
++++ src/java/org/hibernate/annotations/ElementNode.java	(revision 0)
+@@ -0,0 +1,25 @@
++/**
++ * 
++ */
++package org.hibernate.annotations;
++
++import static java.lang.annotation.ElementType.FIELD;
++import static java.lang.annotation.ElementType.METHOD;
++import static java.lang.annotation.RetentionPolicy.RUNTIME;
++
++import java.lang.annotation.Retention;
++import java.lang.annotation.Target;
++
++/**
++ * Defines the properties of a contained element inside a collection.
++ * 
++ * @author Arturo Frappé Muñoz
++ * 
++ * 
++ * 
++ */
++@Target({METHOD, FIELD}) @Retention(RUNTIME)
++public @interface ElementNode {
++     String name() default "";
++     boolean embedXML() default false;
++}

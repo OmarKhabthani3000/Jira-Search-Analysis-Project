@@ -1,0 +1,222 @@
+diff -r -w original/src/net/sf/hibernate/tool/hbm2java/AbstractRenderer.java mainline/src/net/sf/hibernate/tool/hbm2java/AbstractRenderer.java
+43a44,50
+> 
+> 
+>     private static final String USE_GENERATED_CLASSES_ONLY = "use-generated-classes-only";
+>     protected boolean isUseGeneratedClassesOnly () {
+>         return properties.containsKey(USE_GENERATED_CLASSES_ONLY)
+>             && properties.getProperty(USE_GENERATED_CLASSES_ONLY).equals("true");
+>     }
+diff -r -w original/src/net/sf/hibernate/tool/hbm2java/BasicRenderer.java mainline/src/net/sf/hibernate/tool/hbm2java/BasicRenderer.java
+43,44c43,45
+<         String modifiers = classMapping.getModifiers();
+<         if(classMapping.shouldBeAbstract() && (classScope.indexOf("abstract")==-1)) {
+---
+>         // String modifiers = classMapping.getModifiers(); // not used!
+>         if(classMapping.shouldBeAbstract() && (classScope.indexOf("abstract")==-1)
+>             && !isUseGeneratedClassesOnly()) {
+51c52,53
+<         	writer.print(" extends " + javaTool.getExtends(classMapping));
+---
+>         	writer.print(" extends " + javaTool.getExtends(classMapping, class2classmap,
+>                     isUseGeneratedClassesOnly(), savedToPackage));
+67,68c69,70
+<         	doFields(classMapping, class2classmap, propWriter);		
+<         	doConstructors(savedToClass, classMapping, class2classmap, propWriter);
+---
+>         	doFields(classMapping, class2classmap, propWriter, savedToPackage);
+>         	doConstructors(savedToClass, classMapping, class2classmap, propWriter, savedToPackage);
+73c75,76
+<         int fieldTypes = doFieldAccessors(classMapping, class2classmap, propWriter, vetoSupport, changeSupport);
+---
+>         int fieldTypes = doFieldAccessors(classMapping, class2classmap, propWriter,
+>                 vetoSupport, changeSupport, savedToPackage);
+104c107
+< 	 * @param propWriter
+---
+> 	 * @param writer
+160c163,164
+< 	public void doConstructors(String savedToClass, ClassMapping classMapping, Map class2classmap, PrintWriter writer) {
+---
+> 	public void doConstructors(String savedToClass, ClassMapping classMapping, Map class2classmap,
+>                                PrintWriter writer, String savedToPackage) {
+167c171,172
+< 		fullCons += javaTool.fieldsAsParameters(allFieldsForFullConstructor, classMapping, class2classmap);
+---
+> 		fullCons += javaTool.fieldsAsParameters(allFieldsForFullConstructor, classMapping, class2classmap,
+>                 isUseGeneratedClassesOnly(), savedToPackage);
+211c216,221
+< 		        minCons = minCons + JavaTool.shortenType(JavaTool.getTrueTypeName(field, class2classmap), classMapping.getImports()) + " " + field.getFieldName();
+---
+> 		        minCons = minCons +
+>                         JavaTool.shortenType(
+>                                 JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage),
+>                                 classMapping.getImports()) +
+>                         " " +
+>                         field.getFieldName();
+244c254
+< 	public void doFields(ClassMapping classMapping, Map class2classmap, PrintWriter writer) {
+---
+> 	public void doFields(ClassMapping classMapping, Map class2classmap, PrintWriter writer, String savedToPackage) {
+257,258c267,272
+< 		    	"    " + fieldScope + " " + 
+< 		    	JavaTool.shortenType( JavaTool.getTrueTypeName(field, class2classmap), classMapping.getImports() ) + 
+---
+> 		    	"    " +
+>                     fieldScope +
+>                     " " +
+>                     JavaTool.shortenType(
+>                         JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage),
+>                         classMapping.getImports() ) +
+343c357,358
+<     											String changeSupport) {
+---
+>     											String changeSupport,
+>                                 String savedToPackage) {
+357c372,379
+<             writer.print("    " + getAccessScope + " " + JavaTool.shortenType(JavaTool.getTrueTypeName(field, class2classmap),classMapping.getImports()) + " " + field.getGetterSignature());
+---
+>             writer.print("    " +
+>                     getAccessScope +
+>                     " " +
+>                     JavaTool.shortenType(
+>                             JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage),
+>                             classMapping.getImports()) +
+>                     " " +
+>                     field.getGetterSignature());
+381c403,413
+<             writer.print("    " + setAccessScope + " void set" + field.getAccessorName() + StringHelper.OPEN_PAREN + JavaTool.shortenType(JavaTool.getTrueTypeName(field, class2classmap),classMapping.getImports()) + " " + field.getFieldName() + ")");
+---
+>             writer.print("    " +
+>                     setAccessScope +
+>                     " void set" +
+>                     field.getAccessorName() +
+>                     StringHelper.OPEN_PAREN +
+>                     JavaTool.shortenType(
+>                             JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage),
+>                             classMapping.getImports()) +
+>                     " " +
+>                     field.getFieldName() +
+>                     ")");
+diff -r -w original/src/net/sf/hibernate/tool/hbm2java/ClassMapping.java mainline/src/net/sf/hibernate/tool/hbm2java/ClassMapping.java
+39c39
+<    private String superClass = null;
+---
+>    private ClassName superClass = null;
+104c104
+<             this.superClass = mySuperClass.getName();
+---
+>             this.superClass = mySuperClass;
+382a383,386
+>        return superClass == null ? null : superClass.getName();
+>     }
+> 
+>     public ClassName getSuperClassClassName() {
+diff -r -w original/src/net/sf/hibernate/tool/hbm2java/FinderRenderer.java mainline/src/net/sf/hibernate/tool/hbm2java/FinderRenderer.java
+92c92,94
+<         writer.println("/** Automatically generated Finder class for " + savedToClass  + ".\n" +
+                       " * @author Hibernate FinderGenerator " +
+                       " **/");
+---
+>         writer.println("/** Automatically generated Finder class for " + savedToClass  + ".\n" +
+>                        " * @author Hibernate FinderGenerator " +
+>                        " **/");
+108c110
+<         doFinders(classMapping, class2classmap, propWriter);
+---
+>         doFinders(classMapping, class2classmap, propWriter, savedToPackage);
+129c131
+<     public void doFinders(ClassMapping classMapping, Map class2classmap, PrintWriter writer) {
+---
+>     public void doFinders(ClassMapping classMapping, Map class2classmap, PrintWriter writer, String savedToPackage) {
+144c146,148
+<                             "(Session session, " + JavaTool.getTrueTypeName(field, class2classmap) + " " + field.getFieldName() + ") "
+---
+>                             "(Session session, " +
+>                             JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage) +
+>                             " " + field.getFieldName() + ") "
+149c153,154
+<                             "(" + JavaTool.getTrueTypeName(field, class2classmap) + " " + field.getFieldName() + ") "
+---
+>                             "(" + JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly(), savedToPackage) +
+>                             " " + field.getFieldName() + ") "
+215c220,221
+<             msb.addParam(JavaTool.getTrueTypeName(foreignField, class2classmap) + " " + foreignField.getFieldName());
+---
+>             msb.addParam(JavaTool.getTrueTypeName(foreignField, class2classmap, isUseGeneratedClassesOnly(), savedToPackage) +
+>                     " " + foreignField.getFieldName());
+diff -r -w original/src/net/sf/hibernate/tool/hbm2java/JavaTool.java mainline/src/net/sf/hibernate/tool/hbm2java/JavaTool.java
+52a53,56
+>      * If <param name="use-generated-classes-only"> is set in the config.xml,
+>      * and the designated field's type has a generated-class, then use that as
+>      * the field's type -- OVERRIDING any proxies!?!
+> 	 *
+57c61,64
+< 	static public String getTrueTypeName(FieldProperty field, Map class2classmap) {
+---
+> 	static public String getTrueTypeName(FieldProperty field,
+>                                          Map class2classmap,
+>                                          boolean isUseGeneratedClassesOnly,
+>                                          String savedToPackage) {
+68a76,79
+>             if (isUseGeneratedClassesOnly && cmap.getMetaAsString("generated-class") != null) {
+>                 return getGeneratedClassWithPackage(cmap, savedToPackage);
+>             }
+>             // TODO HB-700: is it right for genclass to override proxy? for now, yes.
+75a87
+> 	/* NO LONGER USED!
+86a99
+>     */
+131d143
+< 	public boolean hasExtends(ClassMapping cmap) { return getExtends(cmap)!=null; } 
+133c145,162
+< 		public String getExtends(ClassMapping cmap) {
+---
+>     /**
+>      * Substitute the package name (if any) into the generated name.
+>      * @param cmap
+>      * @param savedToPackage
+>      * @return
+>      */
+>     static private String getGeneratedClassWithPackage (ClassMapping cmap, String savedToPackage) {
+>         String genClass = cmap.getGeneratedName();
+>         if (savedToPackage != null && savedToPackage.length() > 0) {
+>             genClass = savedToPackage + "." + genClass.substring(genClass.lastIndexOf(".")+1);
+>         }
+>         return genClass;
+>     }
+> 
+> 	public boolean hasExtends(ClassMapping cmap) { return getExtends(cmap, null, false, null)!=null; }
+> 
+> 		public String getExtends(ClassMapping cmap, Map class2classmap, boolean isUseGeneratedClassesOnly,
+>                                  String savedToPackage) {
+136c165,179
+< 				extendz = cmap.getSuperClass();
+---
+>                 ClassName extendzClassName = cmap.getSuperClassClassName();
+>                 extendz = extendzClassName.getName();
+> 
+>                 if (isUseGeneratedClassesOnly) {
+>                     String extendzFullName = extendzClassName.getFullyQualifiedName();
+>                     // we want the generated-class of the superclass if any
+>                     if (class2classmap.containsKey(extendzFullName)) {
+>                         // will be "" if no such meta
+>                         ClassMapping extender = (ClassMapping)class2classmap.get(extendzFullName);
+>                         String genExtendz = getGeneratedClassWithPackage(extender, savedToPackage);
+>                         if (genExtendz.length() > 0) {
+>                             extendz = genExtendz;
+>                         }
+>                     }
+>                 }
+180c223,224
+< 	public String fieldsAsParameters(List fieldslist, ClassMapping classMapping, Map class2classmap) {
+---
+> 	public String fieldsAsParameters(List fieldslist, ClassMapping classMapping, Map class2classmap,
+>                                      boolean isUseGeneratedClassesOnly, String savedToPackage) {
+184c228,230
+< 						buf.append(JavaTool.shortenType(JavaTool.getTrueTypeName(field, class2classmap), classMapping.getImports()) + " " + field.getFieldName());
+---
+> 						buf.append(JavaTool.shortenType(
+>                                 JavaTool.getTrueTypeName(field, class2classmap, isUseGeneratedClassesOnly, savedToPackage),
+>                                 classMapping.getImports()) + " " + field.getFieldName());
+Only in original/src: velocity

@@ -1,0 +1,714 @@
+diff -ruN hibernate-2.1/src/hibernate.properties hibernate-2.1-mssql-locking/src/hibernate.properties
+--- hibernate-2.1/src/hibernate.properties	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/src/hibernate.properties	Sun Feb 29 19:19:01 2004
+@@ -115,7 +115,15 @@
+ 
+ ## MS SQL Server
+ 
++## without pessimistic locking
+ #hibernate.dialect net.sf.hibernate.dialect.SQLServerDialect
++
++## version 6 and 7 with pessimistic locking
++#hibernate.dialect net.sf.hibernate.dialect.SQLServer6Dialect
++
++## MS SQL Server 2000 (version 8) with pessimistic locking
++#hibernate.dialect net.sf.hibernate.dialect.SQLServer8Dialect
++
+ #hibernate.connection.username sa
+ #hibernate.connection.password sa
+ 
+diff -ruN hibernate-2.1/src/net/sf/hibernate/dialect/Dialect.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/Dialect.java
+--- hibernate-2.1/src/net/sf/hibernate/dialect/Dialect.java	Wed Feb  4 22:46:31 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/Dialect.java	Sun Feb 29 19:10:47 2004
+@@ -17,6 +17,7 @@
+ import net.sf.hibernate.util.ReflectHelper;
+ import net.sf.hibernate.util.StringHelper;
+ import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.MappingException;
+ import net.sf.hibernate.type.Type;
+ import net.sf.hibernate.engine.Mapping;
+@@ -533,11 +534,37 @@
+ 	public boolean hasDataTypeInIdentityColumn() {
+ 		return true;
+ 	}
++	
++	/**
++	 * Whether this dialect supports lock hints behind table names like
++	 * MS SQL Server 6, 7 and 8 (aka MS SQL Server 2000).
++	 * 
++	 * @see #appendLockHint(LockMode, String)
++	 * 
++	 * @return boolean
++	 * 
++	 * @author <a href="http://sourceforge.net/users/heschulz">Helge Schulz</a>
++	 */
++	public boolean supportsLockHints() {
++		return false;
++	}
++	
++	/**
++	 * Method <code>appendLockHint</code> appends according to the given
++	 * lock mode a lock hint behind the given table name, if this dialect
++	 * needs this. MS SQL Server for example doesn't support the
++	 * standard "<code>select ... for update</code>" syntax and use a
++	 * special "<code>select ... from TABLE as ALIAS with (updlock, rowlock)
++	 * where ...</code>" syntax instead.
++	 * 
++	 * @param  tableName name of table to append lock hint
++	 * 
++	 * @return String
++	 *  
++	 * @author <a href="http://sourceforge.net/users/heschulz">Helge Schulz</a>
++	 */
++	public String appendLockHint(LockMode mode, String tableName) {
++		return tableName;
++	}
++	
+ }
+-
+-
+-
+-
+-
+-
+-
+diff -ruN hibernate-2.1/src/net/sf/hibernate/dialect/SQLServer6Dialect.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServer6Dialect.java
+--- hibernate-2.1/src/net/sf/hibernate/dialect/SQLServer6Dialect.java	Thu Jan  1 01:00:00 1970
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServer6Dialect.java	Sun Feb 29 19:10:47 2004
+@@ -0,0 +1,36 @@
++//$Id: SQLServer6Dialect.java,v $
++package net.sf.hibernate.dialect;
++
++import net.sf.hibernate.LockMode;
++
++/**
++ * A dialect for Microsoft SQL Server 6 and 7 with support of pessimistic
++ * row locking via table locking hints.
++ * 
++ * @author Helge Schulz
++ */
++public class SQLServer6Dialect extends SQLServerDialect {
++
++	/*
++	 * @see net.sf.hibernate.dialect.Dialect#supportsTableLockHints()
++	 *
++	 * Intentional no Javadoc comment to copy description from base class
++	 */
++	public boolean supportsLockHints() {
++		return true;
++	}
++
++	/*
++	 * @see net.sf.hibernate.dialect.Dialect#appendLockHint(net.sf.hibernate.LockMode, java.lang.String)
++	 * 
++	 * Intentional no Javadoc comment to copy description from base class
++	 */
++	public String appendLockHint(LockMode mode, String tableName) {
++		if (mode.greaterThan(LockMode.READ)) {
++			return tableName + " updlock";
++		} else {
++			return tableName;
++		}
++	}
++
++}
+diff -ruN hibernate-2.1/src/net/sf/hibernate/dialect/SQLServer8Dialect.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServer8Dialect.java
+--- hibernate-2.1/src/net/sf/hibernate/dialect/SQLServer8Dialect.java	Thu Jan  1 01:00:00 1970
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServer8Dialect.java	Sun Feb 29 19:10:47 2004
+@@ -0,0 +1,36 @@
++//$Id: SQLServer8Dialect.java,v $
++package net.sf.hibernate.dialect;
++
++import net.sf.hibernate.LockMode;
++
++/**
++ * A dialect for Microsoft SQL Server 8 (aka MS SQL Server 2000) with
++ * support of pessimistic row locking via table locking hints.
++ * 
++ * @author Helge Schulz
++ */
++public class SQLServer8Dialect extends SQLServerDialect {
++
++	/*
++	 * @see net.sf.hibernate.dialect.Dialect#supportsTableLockHints()
++	 *
++	 * Intentional no Javadoc comment to copy description from base class
++	 */
++	public boolean supportsLockHints() {
++		return true;
++	}
++
++	/*
++	 * @see net.sf.hibernate.dialect.Dialect#appendLockHint(net.sf.hibernate.LockMode, java.lang.String)
++	 * 
++	 * Intentional no Javadoc comment to copy description from base class
++	 */
++	public String appendLockHint(LockMode mode, String tableName) {
++		if (mode.greaterThan(LockMode.READ)) {
++			return tableName + " with (updlock, rowlock)";
++		} else {
++			return tableName;
++		}
++	}
++
++}
+diff -ruN hibernate-2.1/src/net/sf/hibernate/dialect/SQLServerDialect.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServerDialect.java
+--- hibernate-2.1/src/net/sf/hibernate/dialect/SQLServerDialect.java	Wed Feb  4 22:46:31 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/dialect/SQLServerDialect.java	Sun Feb 29 19:10:47 2004
+@@ -2,7 +2,12 @@
+ package net.sf.hibernate.dialect;
+ 
+ /**
+- * A dialect for Microsoft SQL Server 2000
++ * A dialect for Microsoft SQL Server without pessimistic locking
++ * 
++ * To activate pessimistic locking, use SQLServer6Dialect on
++ * MS SQL Server 6+7 and SQLServer8Dialect on MS SQL Server 8
++ * (aka MS SQL Server 2000). 
++ * 
+  * @author Gavin King
+  */
+ public class SQLServerDialect extends SybaseDialect {
+diff -ruN hibernate-2.1/src/net/sf/hibernate/hql/QueryTranslator.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/hql/QueryTranslator.java
+--- hibernate-2.1/src/net/sf/hibernate/hql/QueryTranslator.java	Sun Feb 29 19:09:32 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/hql/QueryTranslator.java	Sun Feb 29 19:10:47 2004
+@@ -833,7 +833,7 @@
+ 		logQuery(queryString, sqlString);
+ 		return list(session, queryParameters, getQuerySpaces(), actualReturnTypes);
+ 	}
+-
++	
+ 	/**
+ 	 * The Method <code>prepareQueryStatement</code> prepares a query
+ 	 * statement with given query parameters and session.
+@@ -1069,20 +1069,25 @@
+ 		return lockModeArray;
+ 	}
+ 
+-	protected String applyLocks(String sql, Map lockModes, Dialect dialect) throws QueryException {
++	protected String applyLocks(String sql, Map lockModes, Dialect dialect)
++		throws QueryException {
+ 		// can't cache this stuff either (per-invocation)
+-		if ( lockModes==null || lockModes.size()==0 ) {
++		if (lockModes == null || lockModes.size() == 0) {
+ 			return sql;
+-		}
+-		else {
++		} else {
+ 			Map aliasedLockModes = new HashMap();
+ 			Iterator iter = lockModes.entrySet().iterator();
+-			while ( iter.hasNext() ) {
++			while (iter.hasNext()) {
+ 				Map.Entry me = (Map.Entry) iter.next();
+-				aliasedLockModes.put( getAliasName( (String) me.getKey() ), me.getValue() );
+-			}
+-			return sql + new ForUpdateFragment(aliasedLockModes).toFragmentString(dialect);
+-
++				aliasedLockModes.put(
++					getAliasName((String) me.getKey()),
++					me.getValue());
++			}
++			if (dialect.supportsLockHints()) {
++				return insertLockHints(sql, aliasedLockModes, dialect);
++			} else {
++				return sql + new ForUpdateFragment(aliasedLockModes).toFragmentString(dialect);
++			}			
+ 		}
+ 	}
+ 
+diff -ruN hibernate-2.1/src/net/sf/hibernate/id/TableGenerator.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/id/TableGenerator.java
+--- hibernate-2.1/src/net/sf/hibernate/id/TableGenerator.java	Wed Feb  4 22:46:31 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/id/TableGenerator.java	Sun Feb 29 19:10:47 2004
+@@ -13,6 +13,7 @@
+ import org.apache.commons.logging.LogFactory;
+ 
+ import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.LockMode;
+ import net.sf.hibernate.dialect.Dialect;
+ import net.sf.hibernate.engine.SessionImplementor;
+ import net.sf.hibernate.type.Type;
+@@ -66,7 +67,8 @@
+ 		if ( schemaName!=null && tableName.indexOf(StringHelper.DOT)<0 ) 
+ 			tableName = schemaName + '.' + tableName;
+ 		
+-		query = "select " + columnName + " from " + tableName;
++		query = "select " + columnName + " from "
++			+ dialect.appendLockHint(LockMode.UPGRADE, tableName);
+ 		if ( dialect.supportsForUpdate() ) query += " for update";
+ 		update = "update " + tableName + " set " + columnName + " = ? where " + columnName + " = ?";
+ 	}
+diff -ruN hibernate-2.1/src/net/sf/hibernate/loader/CriteriaLoader.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/loader/CriteriaLoader.java
+--- hibernate-2.1/src/net/sf/hibernate/loader/CriteriaLoader.java	Wed Feb  4 22:46:31 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/loader/CriteriaLoader.java	Sun Feb 29 19:10:47 2004
+@@ -182,10 +182,10 @@
+ 	protected String applyLocks(String sqlSelectString, Map lockModes, Dialect dialect) throws QueryException {
+ 		if ( lockModes==null || lockModes.size()==0 ) {
+ 			return sqlSelectString;
+-		}
+-		else {
++		} else if (dialect.supportsLockHints()) {
++			return insertLockHints(sql, lockModes, dialect);
++      } else {
+ 			return sqlSelectString + new ForUpdateFragment(lockModes).toFragmentString(dialect);
+-
+ 		}
+ 	}
+ 
+diff -ruN hibernate-2.1/src/net/sf/hibernate/loader/Loader.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/loader/Loader.java
+--- hibernate-2.1/src/net/sf/hibernate/loader/Loader.java	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/loader/Loader.java	Sun Feb 29 19:10:47 2004
+@@ -7,6 +7,7 @@
+ import java.sql.SQLException;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+@@ -1019,4 +1020,67 @@
+ 			StringHelper.UNDERSCORE;
+ 	}
+ 	
++	/**
++	 * The Method <code>insertLockHints</code> inserts lock hints according
++	 * to given lock modes behind table names in the SQL "from" clause.
++	 * This is for SQL dialects only, which don't support the
++	 * "for update [of &lt;table alias names&gt]" syntax like MS SQL
++	 * Server.
++	 * 
++	 * @param sql       existing SQL string
++	 * @param lockModes map of lock modes (maps table name to lock mode)
++	 * @param dialect   SQL dialect
++	 * 
++	 * @return String   transformed SQL string
++	 * 
++ 	 * @author <a href="http://sourceforge.net/users/heschulz">Helge Schulz</a>
++	 */
++	protected static String insertLockHints(
++		String  sql,
++		Map     lockModes,
++		Dialect dialect) {
++
++		StringBuffer updateSql  = new StringBuffer(sql);
++		Iterator     iter       = lockModes.entrySet().iterator();
++		int          fromIndex  = updateSql.indexOf(" from ");
++		int          whereIndex = updateSql.indexOf(" where ");
++
++		if (fromIndex < 0) {			
++			throw new AssertionFailure("No 'from' clause in SQL string '"
++				+ updateSql.toString() + "' to insert lock hints.");
++		}
++		if (whereIndex < 0) {
++			whereIndex = updateSql.length();
++		}
++		Map.Entry lockEntry;
++		String    oldTableFragment;
++		String    newTableFragment;
++		int       tableFragmentIndex;
++
++		while (iter.hasNext()) {
++			lockEntry        = (Map.Entry) iter.next();
++			oldTableFragment = (String) lockEntry.getKey();
++			newTableFragment = dialect.appendLockHint(
++				(LockMode) lockEntry.getValue(),
++				oldTableFragment);
++
++			if (!oldTableFragment.equals(newTableFragment)) {
++				tableFragmentIndex = updateSql.indexOf(
++					oldTableFragment, fromIndex);
++
++				if ((tableFragmentIndex < 0) ||
++					 (tableFragmentIndex > whereIndex)) {
++					throw new AssertionFailure("Can't find table name/alias '"
++						+ oldTableFragment + "' in frome clause of SQL string '"
++						+ updateSql.toString() + "' to insert lock hint.");
++				}
++				updateSql.replace(
++					tableFragmentIndex,
++					tableFragmentIndex + oldTableFragment.length(),
++					newTableFragment);
++			}
++		}
++		return updateSql.toString();
++	}
++
+ }
+diff -ruN hibernate-2.1/src/net/sf/hibernate/persister/AbstractEntityPersister.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/AbstractEntityPersister.java
+--- hibernate-2.1/src/net/sf/hibernate/persister/AbstractEntityPersister.java	Wed Feb  4 22:46:31 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/AbstractEntityPersister.java	Sun Feb 29 19:10:47 2004
+@@ -888,19 +888,19 @@
+ 	}
+ 	
+ 	protected void initLockers() {
+-		String lockString = generateLockString();
++		String lockString = generateLockString(LockMode.READ);
+ 		lockers.put(LockMode.READ, lockString);
+ 		String lockExclusiveString = getDialect().supportsForUpdate() ? 
+ 			lockString + " for update" : 
+-			lockString;
++         generateLockString(LockMode.UPGRADE);
+ 		lockers.put(LockMode.UPGRADE, lockExclusiveString);
+ 		String lockExclusiveNowaitString = getDialect().supportsForUpdateNowait() ? 
+ 			lockString + " for update nowait" : 
+-			lockExclusiveString;
++         generateLockString(LockMode.UPGRADE_NOWAIT);
+ 		lockers.put(LockMode.UPGRADE_NOWAIT, lockExclusiveNowaitString);
+ 	}
+ 	
+-	protected abstract String generateLockString();
++	protected abstract String generateLockString(LockMode mode);
+ 
+ 	private boolean initHasCollections() {
+ 		return initHasCollections(propertyTypes);
+diff -ruN hibernate-2.1/src/net/sf/hibernate/persister/EntityPersister.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/EntityPersister.java
+--- hibernate-2.1/src/net/sf/hibernate/persister/EntityPersister.java	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/EntityPersister.java	Sun Feb 29 19:10:47 2004
+@@ -116,7 +116,7 @@
+ 		
+ 		String selectForUpdate = factory.getDialect().supportsForUpdate() ?
+ 			generateSelectForUpdateString() :
+-			generateSelectString();
++			generateSelectString(LockMode.UPGRADE);
+ 		
+ 		loaders.put(
+ 			LockMode.UPGRADE,
+@@ -125,7 +125,7 @@
+ 		
+ 		String selectForUpdateNowait = factory.getDialect().supportsForUpdateNowait() ?
+ 		generateSelectForUpdateNowaitString() :
+-		selectForUpdate;
++		generateSelectString(LockMode.UPGRADE_NOWAIT);
+ 		
+ 		loaders.put(
+ 			LockMode.UPGRADE_NOWAIT,
+@@ -292,8 +292,15 @@
+ 	 * Generate the SQL that selects a row by id
+ 	 */
+ 	protected String generateSelectString() {
++		return generateSelectString(LockMode.READ);
++	}
++
++	/**
++	 * Generate the SQL that selects a row by id
++	 */
++	protected String generateSelectString(LockMode mode) {
+ 		SimpleSelect select = new SimpleSelect()
+-			.setTableName( getTableName() )
++			.setTableName( factory.getDialect().appendLockHint(mode, getTableName()) )
+ 			.addColumns( getIdentifierColumnNames() )
+ 			.addColumns(subclassColumnClosure, subclassColumnAliasClosure)
+ 			.addColumns(subclassFormulaClosure, subclassFormulaAliasClosure);
+@@ -366,10 +373,10 @@
+ 	/**
+ 	 * Generate the SQL that pessimistic locks a row by id (and version)
+ 	 */
+-	protected String generateLockString() {
++	protected String generateLockString(LockMode mode) {
+ 		//TODO: code duplication here - see NEP
+ 		SimpleSelect select = new SimpleSelect()
+-			.setTableName( getTableName() )
++			.setTableName( factory.getDialect().appendLockHint(mode, getTableName()) )
+ 			.addColumn( getIdentifierColumnNames()[0] )
+ 			.addCondition( getIdentifierColumnNames(), "=?" );
+ 		if ( isVersioned() ) {
+diff -ruN hibernate-2.1/src/net/sf/hibernate/persister/NormalizedEntityPersister.java hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/NormalizedEntityPersister.java
+--- hibernate-2.1/src/net/sf/hibernate/persister/NormalizedEntityPersister.java	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/src/net/sf/hibernate/persister/NormalizedEntityPersister.java	Sun Feb 29 19:10:47 2004
+@@ -299,10 +299,10 @@
+ 	/**
+ 	 * Generate the SQL that pessimistic locks a row by id (and version)
+ 	 */
+-	protected String generateLockString() {
++	protected String generateLockString(LockMode mode) {
+ 		//TODO: code duplication here - see EP
+ 		SimpleSelect select = new SimpleSelect()
+-			.setTableName(qualifiedTableName)
++			.setTableName(factory.getDialect().appendLockHint(mode, qualifiedTableName))
+ 			.addColumn( super.getIdentifierColumnNames()[0] )
+ 			.addCondition( super.getIdentifierColumnNames(), "=?" );
+ 		if ( isVersioned() ) {
+diff -ruN hibernate-2.1/test/org/hibernate/test/AllTests.java hibernate-2.1-mssql-locking/test/org/hibernate/test/AllTests.java
+--- hibernate-2.1/test/org/hibernate/test/AllTests.java	Wed Feb  4 22:46:32 2004
++++ hibernate-2.1-mssql-locking/test/org/hibernate/test/AllTests.java	Sun Feb 29 19:11:18 2004
+@@ -25,6 +25,7 @@
+ 		suite.addTest( ODMGTest.suite() );
+ 		suite.addTest( MultiTableTest.suite() );
+ 		suite.addTest(QueryByExampleTest.suite());
++		suite.addTest(LockingTest.suite());
+ 		
+ 		return suite;
+ 	}
+diff -ruN hibernate-2.1/test/org/hibernate/test/LockingCounter.hbm.xml hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingCounter.hbm.xml
+--- hibernate-2.1/test/org/hibernate/test/LockingCounter.hbm.xml	Thu Jan  1 01:00:00 1970
++++ hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingCounter.hbm.xml	Sun Feb 29 19:11:18 2004
+@@ -0,0 +1,13 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping SYSTEM "http://hibernate.sourceforge.net/hibernate-mapping-2.0.dtd">
++<hibernate-mapping>
++
++    <class name="org.hibernate.test.LockingCounter">
++        <id name="id">
++            <generator class="hilo"/>
++        </id>
++        <property name="testId" unique="true"/>
++        <property name="value"/>
++    </class>   
++
++</hibernate-mapping>
+diff -ruN hibernate-2.1/test/org/hibernate/test/LockingCounter.java hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingCounter.java
+--- hibernate-2.1/test/org/hibernate/test/LockingCounter.java	Thu Jan  1 01:00:00 1970
++++ hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingCounter.java	Sun Feb 29 19:11:18 2004
+@@ -0,0 +1,57 @@
++/*
++ * LockingCounter.java - Persistent counter for locking test
++ * 
++ * Project: Hibernate
++ * 
++ * License: Lesser GNU Public License (LGPL)
++ *
++ * Copyright (C) 2004 Helge Schulz
++ *
++ * $Log: $
++ */
++ 
++package org.hibernate.test;
++
++/**
++ * The class <code>LockingCounter</code> implements a persistent counter
++ * for class <code>LockingTest</code>.
++ * 
++ * @author <a href="http://sourceforge.net/users/heschulz">Helge Schulz</a>
++ */
++public class LockingCounter {
++	
++	private long id;
++	private long testId;
++	private long value;
++	
++	public LockingCounter() {
++		id     = 0;
++		testId = 0;
++		value  = 0;
++	}
++
++	public long getId() {
++		return id;
++	}
++
++	public long getTestId() {
++		return testId;
++	}
++
++	public long getValue() {
++		return value;
++	}
++
++	public void setId(long l) {
++		id = l;
++	}
++
++	public void setTestId(long l) {
++		testId = l;
++	}
++
++	public void setValue(long l) {
++		value = l;
++	}
++
++}
+diff -ruN hibernate-2.1/test/org/hibernate/test/LockingTest.java hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingTest.java
+--- hibernate-2.1/test/org/hibernate/test/LockingTest.java	Thu Jan  1 01:00:00 1970
++++ hibernate-2.1-mssql-locking/test/org/hibernate/test/LockingTest.java	Sun Feb 29 19:11:18 2004
+@@ -0,0 +1,191 @@
++/*
++ * LockingTest.java - Hibernate locking test
++ * 
++ * Project: Hibernate
++ * 
++ * License: Lesser GNU Public License (LGPL)
++ *
++ * Copyright (C) 2004 Helge Schulz
++ *
++ * $Log: $
++ */
++ 
++package org.hibernate.test;
++
++import java.sql.Connection;
++
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.LockMode;
++import net.sf.hibernate.Session;
++import net.sf.hibernate.SessionFactory;
++import net.sf.hibernate.Transaction;
++import junit.framework.Test;
++import junit.framework.TestSuite;
++
++/**
++ * Class <code>LockingTest</code> tests pessimistic row locking.
++ * 
++ * @author <a href="http://sourceforge.net/users/heschulz">Helge Schulz</a>
++ */
++public class LockingTest extends TestCase {
++
++	/**
++	 * @see org.hibernate.test.TestCase#getMappings()
++	 */
++	protected String[] getMappings() {
++		return new String[] { "LockingCounter.hbm.xml" };
++	}
++
++	public static Test suite() {
++		return new TestSuite(LockingTest.class);
++	}
++	
++	/**
++	 * Constructor <code>LockingTest</code> creates the locking test
++	 * with given name.
++	 * 
++	 * @param testName
++	 */
++	public LockingTest(String testName) {
++		super(testName);
++	}
++	
++	public void testLocking() throws Exception {
++
++		// check database support of pessimistic locking
++
++		if (!getDialect().supportsForUpdate() &&
++			 !getDialect().supportsLockHints()) {
++			System.out.println("Locking test omitted, because"
++				+ " pessimistic locking not supported.");
++			return;
++		}
++		final int rounds    = 1000;
++		final int delaySlow = 100;
++		final int delayMid  = 10;
++		final int delayFast = 1;
++		
++		Session        s  = openSession();
++		SessionFactory f  = getSessions();
++
++		s.connection().setTransactionIsolation(
++			Connection.TRANSACTION_READ_COMMITTED);
++
++		Transaction    tx = s.beginTransaction();
++		LockingCounter c  = new LockingCounter();
++		
++		s.save(c);
++		s.flush();
++		tx.commit();
++		s.close();
++		
++		class TestThread extends Thread {
++
++			private Session s;
++			private Long    counterId;
++			private long    lastValue;
++			private int     delay;
++			private boolean noException = false;
++
++			public TestThread(long newId, int newDelay, SessionFactory sf)
++				throws HibernateException {
++
++				s         = sf.openSession();
++				counterId = new Long(newId);
++				lastValue = 0;
++				delay     = newDelay;
++			}
++			
++			public boolean getNoException() {
++				return noException;
++			}
++			
++			public long getLastValue() {
++				return lastValue;
++			}
++
++			public void run() {
++				LockingCounter c;
++				LockingCounter counter;
++				Transaction    tx = null;
++				try {
++					for (int i = 0; i < (rounds / delay); i++) {
++						
++						// reconnect to invalidate cache
++						
++						s.disconnect();
++						s.reconnect();
++						s.connection().setTransactionIsolation(
++							Connection.TRANSACTION_READ_COMMITTED);
++							
++						// transaction
++
++						tx = s.beginTransaction();
++
++						counter = (LockingCounter) s.load(
++							LockingCounter.class, counterId, LockMode.UPGRADE);
++							
++						/*
++						 * Without the following refresh this test fails!
++						 * 
++						 * I think there is a thread race condition inside the
++						 * cache code of s.load *not* to submit always a
++						 * 'select ... for update' after session reconnect.
++						 * 
++						 * Helge
++						 */
++						s.refresh(counter, LockMode.UPGRADE);
++						
++						sleep(delay);
++						lastValue = counter.getValue() + 1;
++						counter.setValue(lastValue);
++						c = new LockingCounter();
++						c.setTestId(lastValue);
++						s.save(c);
++						tx.commit();
++					}
++					s.close();
++					noException = true;
++				} catch (Exception ex) {
++					if (tx != null) {
++						try {
++							tx.rollback();
++						} catch (HibernateException e) {
++							// ignore
++						}
++					}
++					ex.printStackTrace();
++				}
++			}
++		}
++		
++		long       id   = c.getId();
++		TestThread slow = new TestThread(id, delaySlow, f);
++		TestThread mid  = new TestThread(id, delayMid, f);
++		TestThread fast = new TestThread(id, delayFast, f);
++		
++		slow.start();
++		mid.start();
++		fast.start();
++			
++		slow.join();
++		mid.join();
++		fast.join();
++
++		assertTrue("Slow thread failed", slow.getNoException());
++		assertTrue("Mid thread failed", mid.getNoException());
++		assertTrue("Fast thread failed", fast.getNoException());
++		
++		long lastValue = slow.getLastValue();
++		if (mid.getLastValue() > lastValue) {
++			lastValue = mid.getLastValue();
++		}
++		if (fast.getLastValue() > lastValue) {
++			lastValue = fast.getLastValue();
++		}
++		assertEquals("last counter value",
++			(rounds / delaySlow) + (rounds / delayMid) + (rounds / delayFast),
++			lastValue);
++	}
++
++}

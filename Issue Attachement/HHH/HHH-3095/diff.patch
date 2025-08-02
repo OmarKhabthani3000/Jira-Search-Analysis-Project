@@ -1,0 +1,191 @@
+--- HbmBinder.java	2009-06-24 00:54:30.000000000 -0500
++++ HbmBinder_New.java	2009-11-03 12:16:50.000000000 -0600
+@@ -1029,7 +1029,49 @@
+ 			final Mappings mappings) throws MappingException {
+ 
+ 		Table table = simpleValue.getTable();
++		//one-to-many node that acts as a many-to-many node with a unique constraint
++                //if the collection is mapped as a many-to-many, Hibernate internally treats it as a many-to-one class
+ 
++		if("one-to-many".equals(node.getName()) && "ManyToOne".equals(simpleValue.getClass().getSimpleName())){
++			String classNodeValue = node.attributeValue("class");
++			Iterator iter = mappings.getClass(getClassName(classNodeValue,mappings)).getIdentifierProperty().getValue().getColumnIterator();
++			int count = 0;
++			while ( iter.hasNext() ) {
++				//get an indentifier column from the class that makes up the collection
++        			Column columnIdentifier = (Column) iter.next();
++				Column column = new Column();
++				column.setValue( simpleValue );
++				column.setTypeIndex( count++ );
++				//set the variables as done by the method bindColumn
++				column.setLength(columnIdentifier.getLength());
++				column.setScale(columnIdentifier.getScale());
++				column.setPrecision(columnIdentifier.getPrecision());
++				column.setNullable(isNullable);
++				column.setUnique(columnIdentifier.isUnique());
++				column.setCheckConstraint(columnIdentifier.getCheckConstraint());
++				column.setDefaultValue(columnIdentifier.getDefaultValue());
++				column.setSqlType(columnIdentifier.getSqlType());
++				column.setComment(columnIdentifier.getComment());
++				// end of setting the variables as done by the bindColumn
++				// get the name of the identifier column
++				String logicalColumnName = mappings.getNamingStrategy().logicalColumnName(
++							columnIdentifier.getName(), propertyPath);
++				column.setName( mappings.getNamingStrategy().columnName(logicalColumnName ) );
++				if ( table != null ) { //which is always true in the second pass
++				        table.addColumn( column ); 
++					mappings.addColumnBinding( logicalColumnName, column, table );
++				}
++                                simpleValue.addColumn( column );
++				// column index
++				bindIndex( null, table, column, mappings );
++				bindIndex( node.attribute( "index" ), table, column, mappings );
++				//column unique-key
++				bindUniqueKey( null, table, column, mappings );
++				bindUniqueKey( node.attribute( "unique-key" ), table, column, mappings );
++			}
++		}
++		
++                else{
+ 		// COLUMN(S)
+ 		Attribute columnAttribute = node.attribute( "column" );
+ 		if ( columnAttribute == null ) {
+@@ -1097,7 +1139,7 @@
+ 			bindIndex( node.attribute( "index" ), table, column, mappings );
+ 			bindUniqueKey( node.attribute( "unique-key" ), table, column, mappings );
+ 		}
+-
++                }
+ 		if ( autoColumn && simpleValue.getColumnSpan() == 0 ) {
+ 			Column column = new Column();
+ 			column.setValue( simpleValue );
+@@ -1378,8 +1420,7 @@
+ 
+ 		// FETCH STRATEGY
+ 
+-		initOuterJoinFetchSetting( node, collection );
+-
++		initOuterJoinFetchSetting( node, collection,mappings );
+ 		if ( "subselect".equals( node.attributeValue("fetch") ) ) {
+ 			collection.setSubselectLoadable(true);
+ 			collection.getOwner().setSubselectLoadableCollections(true);
+@@ -1557,7 +1598,7 @@
+ 			boolean isNullable, Mappings mappings) throws MappingException {
+ 
+ 		bindColumnsOrFormula( node, manyToOne, path, isNullable, mappings );
+-		initOuterJoinFetchSetting( node, manyToOne );
++		initOuterJoinFetchSetting( node, manyToOne, mappings );
+ 		initLaziness( node, manyToOne, mappings, true );
+ 
+ 		Attribute ukName = node.attribute( "property-ref" );
+@@ -1640,7 +1681,7 @@
+ 				ForeignKeyDirection.FOREIGN_KEY_FROM_PARENT :
+ 				ForeignKeyDirection.FOREIGN_KEY_TO_PARENT );
+ 
+-		initOuterJoinFetchSetting( node, oneToOne );
++		initOuterJoinFetchSetting( node, oneToOne, mappings );
+ 		initLaziness( node, oneToOne, mappings, true );
+ 
+ 		oneToOne.setEmbedded( "true".equals( node.attributeValue( "embed-xml" ) ) );
+@@ -1954,15 +1995,18 @@
+ 		return typeNode.getValue();
+ 	}
+ 
+-	private static void initOuterJoinFetchSetting(Element node, Fetchable model) {
++
++	private static void initOuterJoinFetchSetting(Element node, Fetchable model, Mappings mappings) {
+ 		Attribute fetchNode = node.attribute( "fetch" );
+ 		final FetchMode fetchStyle;
+ 		boolean lazy = true;
+ 		if ( fetchNode == null ) {
+ 			Attribute jfNode = node.attribute( "outer-join" );
+ 			if ( jfNode == null ) {
+-				if ( "many-to-many".equals( node.getName() ) ) {
+-					//NOTE SPECIAL CASE:
++			        //if a node is a many-to-many OR a node is a one-to-many but needs to be treated as a many-to-many with a unique constraint
++				if ( "many-to-many".equals( node.getName() )   || ("one-to-many".equals( node.getName() ) && "ManyToOne".equals(model.getClass().getSimpleName()))  ){
++
++				//NOTE SPECIAL CASE:a
+ 					// default to join and non-lazy for the "second join"
+ 					// of the many-to-many
+ 					lazy = false;
+@@ -1999,7 +2043,6 @@
+ 		model.setFetchMode( fetchStyle );
+ 		model.setLazy(lazy);
+ 	}
+-
+ 	private static void makeIdentifier(Element node, SimpleValue model, Mappings mappings) {
+ 
+ 		// GENERATOR
+@@ -2383,14 +2426,60 @@
+ 			referenced.addProperty( ib );
+ 		}
+ 	}
+-
++        public static void setUpManyToMany(Element node, Collection collection,
++	        java.util.Map persistentClasses, Mappings mappings, java.util.Map inheritedMetas, Attribute tableNode) {
++                String tableName;
++                tableName = mappings.getNamingStrategy().tableName( tableNode.getValue() );
++                //Reading attributes for a many-to-many. These lines are from the original Hibernate code.
++                Attribute schemaNode = node.attribute( "schema" );
++                String schema = schemaNode == null ?mappings.getSchemaName() : schemaNode.getValue();
++                Attribute catalogNode = node.attribute( "catalog" );
++                String catalog = catalogNode == null ?mappings.getCatalogName() : catalogNode.getValue();
++                Table table = mappings.addTable(
++                                                schema,
++                                                catalog,
++                                                tableName,
++                                                getSubselect( node ),
++                                                false
++                                               );
++                collection.setCollectionTable( table );
++                bindComment(table, node);
++                collection.setElement(null);
++                log.info(
++                        "Converting one-to-many to many-to-many : Mapping collection: " + collection.getRole() +
++                        "-> " + collection.getCollectionTable().getName()
++                        );
++        }
+ 	/**
+ 	 * Called for all collections
+ 	 */
+ 	public static void bindCollectionSecondPass(Element node, Collection collection,
+ 			java.util.Map persistentClasses, Mappings mappings, java.util.Map inheritedMetas)
+ 			throws MappingException {
+-
++                //Check whether a given collection is of type one-to-many.
++                if ( collection.isOneToMany() ) {
++                        //Get the one-to-many node which was previously parsed from the mapping file
++                        Element oneToManyNode = node.element( "one-to-many" );
++                        //Get the attribute table from a given node
++                        Attribute tableNode = node.attribute( "table" );
++                        //explicitTableName : stores the value of the attribute tableNode if present
++                        String explicitTableName = null;
++                        //If there is a tableNode then get the value of the node and convert it to a lowercase for a comparision
++                        if ( tableNode != null ) {
++                                explicitTableName = mappings.getNamingStrategy().tableName( tableNode.getValue() ).toLowerCase();
++                        }
++                        //Get the name of the class (which comprises the collection) from a one-to-many tag,
++                        //then get the name of the table for that class and convert it to a lower case for a comparision
++                        String implicitTableName = mappings.getClass( getClassName(oneToManyNode.attributeValue("class"),mappings))!=null?
++                                                   mappings.getClass(getClassName(oneToManyNode.attributeValue("class"),mappings)).getTable().getName()
++                                                   .toLowerCase():null;
++                        //if the user given name of the collection table is not same as the one computed by original Hibernate
++                        //then the collection must be treated as a many-to-many with a unique constraint, and
++                        //hence the type of the collection which was previously one-to-many is changed
++                        if(explicitTableName != null && implicitTableName!= null && !explicitTableName.equals(implicitTableName)){
++                                setUpManyToMany(node, collection, persistentClasses, mappings, inheritedMetas, tableNode);
++                        }
++                }
+ 		if ( collection.isOneToMany() ) {
+ 			OneToMany oneToMany = (OneToMany) collection.getElement();
+ 			String assocClass = oneToMany.getReferencedEntityName();
+@@ -2459,7 +2548,7 @@
+ 						mappings
+ 					);
+ 			}
+-			else if ( "many-to-many".equals( name ) ) {
++			else if ( "many-to-many".equals( name ) || ("one-to-many".equals(name) && !collection.isOneToMany()) ) {
+ 				ManyToOne element = new ManyToOne( collection.getCollectionTable() );
+ 				collection.setElement( element );
+ 				bindManyToOne(

@@ -1,0 +1,170 @@
+==== //depot/Tony/hibernate/org/hibernate/Criteria.java#2 - c:\depot\Tony\hibernate\org\hibernate\Criteria.java ====
+@@ -92,6 +92,14 @@
+ 	public Criteria addHaving(Criterion criterion);
+ 
+ 	/**
++	 * Appends SQL to the end of the query.
++	 *
++	 * @param sql the string to append 
++	 * @return Criteria
++	 */
++	public Criteria appendSQL(String sql);
++
++	/**
+ 	 * Specify an association fetching strategy for a
+ 	 * one-to-many, many-to-one or one-to-one association, or
+ 	 * for a collection of values.
+==== //depot/Tony/hibernate/org/hibernate/criterion/SubqueryExpression.java#2 - c:\depot\Tony\hibernate\org\hibernate\criterion\SubqueryExpression.java ====
+@@ -61,6 +61,7 @@
+ 			.setWhereClause( innerQuery.getWhereCondition() )
+ 			.setGroupByClause( innerQuery.getGroupBy() )
+ 			.setHavingClause( innerQuery.getHaving() )
++			.setAppendedClauses( innerQuery.getAppended() )
+ 			.setSelectClause( innerQuery.getSelect() )
+ 			.setFromClause(
+ 					persister.fromTableFragment( innerQuery.getRootSQLALias() ) +   
+==== //depot/Tony/hibernate/org/hibernate/impl/CriteriaImpl.java#3 - c:\depot\Tony\hibernate\org\hibernate\impl\CriteriaImpl.java ====
+@@ -39,6 +39,7 @@
+ 	private List criterionEntries = new ArrayList();
+ 	private List orderEntries = new ArrayList();
+ 	private List havingEntries = new ArrayList();
++	private StringBuffer appendedSQL = new StringBuffer();
+ 	private ProjectionList projectionList = Projections.projectionList();
+ 	private Map projectionCriteria = new HashMap();
+ 	private Map fetchModes = new HashMap();
+@@ -132,6 +133,11 @@
+ 			return this;
+ 		}
+ 
++		public Criteria appendSQL(String sql) {
++			CriteriaImpl.this.appendSQL(sql);
++			return this;
++		}
++
+ 		public Criteria setCacheable(boolean cacheable) {
+ 			CriteriaImpl.this.setCacheable(cacheable);
+ 			return this;
+@@ -360,6 +366,10 @@
+ 		return havingEntries.iterator();
+ 	}
+ 
++	public String getAppendedSQL() {
++		return appendedSQL.toString();
++	}
++
+ 	public String toString() {
+ 		return "CriteriaImpl(" + 
+ 			entityOrClassName + ":" + 
+@@ -385,6 +395,16 @@
+ 		return this;
+ 	}
+ 
++	public Criteria appendSQL(String sql) {
++		if (appendedSQL.length() == 0) {
++			appendedSQL.append(sql);
++		}
++		else {
++			appendedSQL.append(' ').append(sql);
++		}
++		return this;
++	}
++
+ 	public FetchMode getFetchMode(String path) {
+ 		return (FetchMode) fetchModes.get(path);
+ 	}
+==== //depot/Tony/hibernate/org/hibernate/loader/AbstractEntityJoinWalker.java#3 - c:\depot\Tony\hibernate\org\hibernate\loader\AbstractEntityJoinWalker.java ====
+@@ -64,11 +64,12 @@
+ 		final String orderByString,
+ 		final String groupByString,
+ 		final String havingString,
++		final String appendedString,
+ 		final LockMode lockMode)
+ 	throws MappingException {
+ 		walkEntityTree( persister, getAlias() );
+ 		persisters = new Loadable[0];
+-		initStatementString(projectionString, whereString, orderByString, groupByString, havingString, lockMode);
++		initStatementString(projectionString, whereString, orderByString, groupByString, havingString, appendedString, lockMode);
+ 	}
+ 
+ 	private void initStatementString(
+@@ -76,7 +77,7 @@
+ 		final String orderBy,
+ 		final LockMode lockMode)
+ 	throws MappingException {
+-		initStatementString(null, condition, orderBy, "", "", lockMode);
++		initStatementString(null, condition, orderBy, "", "", "", lockMode);
+ 	}
+ 	
+ 	private void initStatementString(
+@@ -85,6 +86,7 @@
+ 			final String orderBy,
+ 			final String groupBy,
+ 			final String having,
++			final String appended,
+ 			final LockMode lockMode)
+ 		throws MappingException {
+ 
+@@ -111,7 +113,8 @@
+ 			)
+ 			.setOrderByClause( orderBy( associations, orderBy ) )
+ 			.setGroupByClause(groupBy)
+-			.setHavingClause(having);
++			.setHavingClause(having)
++			.setAppendedClauses(appended);
+ 
+ 		if ( getFactory().getSettings().isCommentsEnabled() ) {
+ 			select.setComment( getComment() );
+==== //depot/Tony/hibernate/org/hibernate/loader/criteria/CriteriaJoinWalker.java#2 - c:\depot\Tony\hibernate\org\hibernate\loader\criteria\CriteriaJoinWalker.java ====
+@@ -78,6 +78,7 @@
+ 					translator.getOrderBy(),
+ 					translator.getGroupBy(),
+ 					translator.getHaving(),
++					translator.getAppended(),
+ 					LockMode.NONE 
+ 				);
+ 		}
+==== //depot/Tony/hibernate/org/hibernate/loader/criteria/CriteriaQueryTranslator.java#3 - c:\depot\Tony\hibernate\org\hibernate\loader\criteria\CriteriaQueryTranslator.java ====
+@@ -299,6 +299,10 @@
+ 		return condition.toString();
+ 	}
+ 
++	public String getAppended() {
++		return rootCriteria.getAppendedSQL();
++	}
++
+ 	public String getSelect() {
+ 		Projection proj = rootCriteria.getProjection();
+ 		return proj.toSqlString(
+==== //depot/Tony/hibernate/org/hibernate/sql/Select.java#2 - c:\depot\Tony\hibernate\org\hibernate\sql\Select.java ====
+@@ -20,6 +20,7 @@
+ 	private String orderByClause;
+ 	private String havingClause;
+ 	private String groupByClause;
++	private String appendedClauses;
+ 	private String comment;
+ 	private LockMode lockMode;
+ 	public final Dialect dialect;
+@@ -73,6 +74,10 @@
+ 			buf.append(" order by ").append(orderByClause);
+ 		}
+ 		
++		if ( StringHelper.isNotEmpty(appendedClauses) ) {
++			buf.append(' ').append(appendedClauses);
++		}
++		
+ 		if (lockMode!=null) {
+ 			buf.append( dialect.getForUpdateString(lockMode) );
+ 		}
+@@ -114,6 +119,12 @@
+ 		return this;
+ 	}
+ 
++	public Select setAppendedClauses(String appendedClauses) {
++		this.appendedClauses = appendedClauses;
++		this.guesstimatedBufferSize += appendedClauses.length();
++		return this;
++	}
++
+ 	public Select setOuterJoins(String outerJoinsAfterFrom, String outerJoinsAfterWhere) {
+ 		this.outerJoinsAfterFrom = outerJoinsAfterFrom;
+ 

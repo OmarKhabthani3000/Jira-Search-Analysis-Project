@@ -1,0 +1,87 @@
+Index: AbstractEntityTuplizer.java
+===================================================================
+--- AbstractEntityTuplizer.java	(revision 10874)
++++ AbstractEntityTuplizer.java	(working copy)
+@@ -5,10 +5,12 @@
+ import java.util.Iterator;
+ import java.util.Map;
+ import java.util.Set;
++import java.lang.reflect.Method;
+ 
+ import org.hibernate.EntityMode;
+ import org.hibernate.HibernateException;
+ import org.hibernate.MappingException;
++import org.hibernate.cfg.Environment;
+ import org.hibernate.tuple.Instantiator;
+ import org.hibernate.tuple.VersionProperty;
+ import org.hibernate.tuple.StandardProperty;
+@@ -22,6 +24,7 @@
+ import org.hibernate.property.Getter;
+ import org.hibernate.property.Setter;
+ import org.hibernate.proxy.ProxyFactory;
++import org.hibernate.proxy.HibernateProxy;
+ import org.hibernate.type.AbstractComponentType;
+ import org.hibernate.type.ComponentType;
+ 
+@@ -46,7 +49,7 @@
+ 	protected final int propertySpan;
+ 	protected final boolean hasCustomAccessors;
+ 	private final Instantiator instantiator;
+-	private final ProxyFactory proxyFactory;
++	private ProxyFactory proxyFactory;
+ 	private final AbstractComponentType identifierMapperType;
+ 
+ 
+@@ -132,11 +135,13 @@
+         instantiator = buildInstantiator( mappingInfo );
+ 
+ 		if ( entityMetamodel.isLazy() ) {
+-			proxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
+-			if (proxyFactory == null) {
+-				entityMetamodel.setLazy( false );
+-			}
+-		}
++            if ( Environment.useLazyProxyFactory() ) {
++                proxyFactory = new LazyProxyFactory( mappingInfo );
++            }
++            else {
++                proxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
++            }
++        }
+ 		else {
+ 			proxyFactory = null;
+ 		}
+@@ -407,4 +412,33 @@
+ 		return getClass().getName() + '(' + getEntityMetamodel().getName() + ')';
+ 	}
+ 
++
++    // wrapper class to handle lazy building of the proxy factory
++    class LazyProxyFactory implements ProxyFactory
++    {
++        private final PersistentClass mappingInfo;
++
++        private ProxyFactory realProxyFactory;
++
++        public LazyProxyFactory( PersistentClass mappingInfo )
++        {
++            this.mappingInfo = mappingInfo;
++            realProxyFactory = null;
++        }
++
++        public void postInstantiate( String entityName, Class persistentClass, Set interfaces, Method getIdentifierMethod, Method setIdentifierMethod, AbstractComponentType componentIdType ) throws HibernateException
++        {
++            // do nothing
++        }
++
++        public HibernateProxy getProxy( Serializable id, SessionImplementor session ) throws HibernateException
++        {
++            if ( realProxyFactory == null )
++            {
++                realProxyFactory = buildProxyFactory( mappingInfo, idGetter, idSetter );
++            }
++
++            return realProxyFactory.getProxy( id, session );
++        }
++    }
+ }

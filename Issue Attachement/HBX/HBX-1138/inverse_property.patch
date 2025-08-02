@@ -1,0 +1,292 @@
+Index: tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java
+===================================================================
+--- tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(revision 17381)
++++ tools/src/java/org/hibernate/tool/hbm2x/pojo/EntityPOJOClass.java	(working copy)
+@@ -3,9 +3,11 @@
+ import java.io.Serializable;
+ import java.util.ArrayList;
+ import java.util.Enumeration;
++import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.Map;
+ import java.util.Properties;
+ import java.util.Set;
+ import java.util.StringTokenizer;
+@@ -22,7 +24,6 @@
+ import org.hibernate.mapping.OneToMany;
+ import org.hibernate.mapping.OneToOne;
+ import org.hibernate.mapping.PersistentClass;
+-import org.hibernate.mapping.PrimaryKey;
+ import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.RootClass;
+ import org.hibernate.mapping.Selectable;
+@@ -468,7 +469,72 @@
+ 
+ 		return true;
+ 	}
++	
++	/**
++	 * Get the inverse property of the given property.  An inverse property is
++	 * the property from the class on the opposing side of a relationship which 
++	 * shares the same relationship
++	 * @param cfg
++	 * @param property
++	 * @return The inverse property; or null, if the property is not a relationship
++	 * or does not have an inverse property.
++	 */
++	public Property getInverseProperty(Configuration cfg, Property property) {
++		Value value = property.getValue();
++		if(value instanceof ManyToOne) {
++			return getManyToOneInverseProperty(cfg, (ManyToOne)value);
++		}
++		if(value instanceof OneToOne) {
++			return getOneToOneInverseProperty(cfg, (OneToOne)value);
++		}
++		if (value instanceof Collection) {
++			Collection collection= (Collection) value;
++			Value toMany = collection.getElement();
++			if(toMany instanceof ToOne) {
++				return getManyToManyInverseProperty(cfg, collection);
++			}
++			else if(toMany instanceof OneToMany){
++				return getOneToManyInverseProperty(cfg, collection);				
++			}
++		}
++		return null;
++	}
++	
++	/**
++	 * Create a Map of Columns to Table
++	 * @param value The relationship value for which to obtain columns 
++	 * @return A Map<Column,Table>
++	 */
++	static private Map getColumns(Value value) {
++		Iterator it = value.getColumnIterator();
++		Map columns = new HashMap();
++		while ( it.hasNext() ) {
++			Column column= (Column)it.next();
++			columns.put( column, column.getValue().getTable() );
++		}
++		return columns;
++	}
+ 
++	/**
++	 * Check column equality, including Table
++	 * @param joinColumns
++	 * @param value
++	 * @return
++	 */
++	static private boolean hasEqualColumns(Map joinColumns, Value value) {
++		if ( joinColumns.size() != value.getColumnSpan() ) {
++			return false;
++		}
++		for(Iterator it = value.getColumnIterator(); it.hasNext(); ) {
++			Column column = (Column)it.next();
++			Table table= (Table)joinColumns.get(column);
++			if(!column.getValue().getTable().equals(table)) {
++				return false;
++			}
++		}
++		return true;
++	}	
++
+ 	public String generateOneToOneAnnotation(Property property, Configuration cfg) {
+ 		OneToOne oneToOne = (OneToOne)property.getValue();
+ 
+@@ -563,7 +629,7 @@
+ 	public String generateCollectionAnnotation(Property property, Configuration cfg) {
+ 		StringBuffer annotation = new StringBuffer();
+ 		Value value = property.getValue();
+-		if ( value != null && value instanceof Collection) {
++		if (value instanceof Collection) {
+ 			Collection collection = (Collection) value;
+ 			if ( collection.isOneToMany() ) {
+ 				String mappedBy = null;
+@@ -637,123 +703,96 @@
+ 	}
+ 
+ 	private String getManyToManyMappedBy(Configuration cfg, Collection collection) {
+-		String mappedBy;
+-		Iterator joinColumnsIt = collection.getKey().getColumnIterator();
+-		Set joinColumns = new HashSet();
+-		while ( joinColumnsIt.hasNext() ) {
+-			joinColumns.add( joinColumnsIt.next() );
+-		}
++		Property manyProperty = getManyToManyInverseProperty(cfg, collection);
++		return manyProperty!=null ?manyProperty.getName() :"unresolved";
++	}
++
++	private Property getManyToManyInverseProperty(Configuration cfg, Collection collection) {
++		Map joinColumns = getColumns(collection.getKey());
+ 		ManyToOne manyToOne = (ManyToOne) collection.getElement();
+ 		PersistentClass pc = cfg.getClassMapping( manyToOne.getReferencedEntityName() );
+-		Iterator properties = pc.getPropertyClosureIterator();
+-		//TODO we should check the table too
+-		boolean isOtherSide = false;
+-		mappedBy = "unresolved";
+-		while ( ! isOtherSide && properties.hasNext() ) {
+-			Property collectionProperty = (Property) properties.next();
++		for(Iterator properties = pc.getPropertyClosureIterator(); properties.hasNext(); ) {
++			Property collectionProperty = (Property)properties.next();
+ 			Value collectionValue = collectionProperty.getValue();
+-			if ( collectionValue != null && collectionValue instanceof Collection ) {
++			if ( collectionValue instanceof Collection ) {
+ 				Collection realCollectionValue = (Collection) collectionValue;
+ 				if ( ! realCollectionValue.isOneToMany() ) {
+-					if ( joinColumns.size() == realCollectionValue.getElement().getColumnSpan() ) {
+-						isOtherSide = true;
+-						Iterator it = realCollectionValue.getElement().getColumnIterator();
+-						while ( it.hasNext() ) {
+-							Object column = it.next();
+-							if (! joinColumns.contains( column ) ) {
+-								isOtherSide = false;
+-								break;
+-							}
+-						}
+-						if (isOtherSide) {
+-							mappedBy = collectionProperty.getName();
+-						}
++					if(hasEqualColumns(joinColumns, realCollectionValue.getElement())) {
++						return collectionProperty;
+ 					}
+ 				}
+ 			}
+ 		}
+-		return mappedBy;
++		return null;
+ 	}
+ 
+ 	private String getOneToManyMappedBy(Configuration cfg, Collection collection) {
+-		String mappedBy;
+-		Iterator joinColumnsIt = collection.getKey().getColumnIterator();
+-		Set joinColumns = new HashSet();
+-		while ( joinColumnsIt.hasNext() ) {
+-			joinColumns.add( joinColumnsIt.next() );
+-		}
++		Property manyProperty = getOneToManyInverseProperty(cfg, collection);
++		return manyProperty!=null ?manyProperty.getName() :"unresolved";
++	}
++
++	private Property getOneToManyInverseProperty(Configuration cfg, Collection collection) {
++		Map joinColumns = getColumns(collection.getKey());
+ 		OneToMany oneToMany = (OneToMany) collection.getElement();
+ 		PersistentClass pc = cfg.getClassMapping( oneToMany.getReferencedEntityName() );
+-		Iterator properties = pc.getPropertyClosureIterator();
+-		//TODO we should check the table too
+-		boolean isOtherSide = false;
+-		mappedBy = "unresolved";
+-		while ( ! isOtherSide && properties.hasNext() ) {
+-			Property manyProperty = (Property) properties.next();
++		for(Iterator properties = pc.getPropertyClosureIterator(); properties.hasNext(); ) {
++			Property manyProperty = (Property)properties.next();
+ 			Value manyValue = manyProperty.getValue();
+-			if ( manyValue != null && manyValue instanceof ManyToOne ) {
+-				if ( joinColumns.size() == manyValue.getColumnSpan() ) {
+-					isOtherSide = true;
+-					Iterator it = manyValue.getColumnIterator();
+-					while ( it.hasNext() ) {
+-						Object column = it.next();
+-						if (! joinColumns.contains( column ) ) {
+-							isOtherSide = false;
+-							break;
+-						}
+-					}
+-					if (isOtherSide) {
+-						mappedBy = manyProperty.getName();
+-					}
++			if ( manyValue instanceof ManyToOne ) {
++				if( hasEqualColumns(joinColumns, manyValue)) {
++					return manyProperty;
+ 				}
+-
+ 			}
+ 		}
+-		return mappedBy;
++		return null;
+ 	}
+ 
+ 	private String getOneToOneMappedBy(Configuration cfg, OneToOne oneToOne) {
+-		String mappedBy;
+-		Iterator joinColumnsIt = oneToOne.getColumnIterator();
+-		Set joinColumns = new HashSet();
+-		while ( joinColumnsIt.hasNext() ) {
+-			joinColumns.add( joinColumnsIt.next() );
++		Property property= getOneToOneInverseProperty(cfg, oneToOne);
++		return property!=null ?property.getName() :"unresolved";
++	}
++
++	private Property getManyToOneInverseProperty(Configuration cfg, ManyToOne manyToOne) {
++		PersistentClass pc = cfg.getClassMapping( manyToOne.getReferencedEntityName() );
++		String referencedPropertyName = manyToOne.getReferencedPropertyName();
++		if ( referencedPropertyName != null ) {
++			return pc.getReferencedProperty( referencedPropertyName );
+ 		}
++		
++		Map joinColumns = getColumns(manyToOne);
++		for (Iterator properties = pc.getPropertyClosureIterator(); properties.hasNext(); ) {
++			Property manyProperty = (Property)properties.next();
++			Value manyValue = manyProperty.getValue();
++			if ( manyValue instanceof Collection ) {
++				Value element= ((Collection)manyValue).getKey();
++				if(hasEqualColumns(joinColumns, element)) {
++					return manyProperty;
++				}
++			}
++		}
++		return null;
++	}
++
++	private Property getOneToOneInverseProperty(Configuration cfg, OneToOne oneToOne) {
+ 		PersistentClass pc = cfg.getClassMapping( oneToOne.getReferencedEntityName() );
+ 		String referencedPropertyName = oneToOne.getReferencedPropertyName();
+-		if ( referencedPropertyName != null )
+-			return referencedPropertyName;
+-
+-		Iterator properties = pc.getPropertyClosureIterator();
+-		//TODO we should check the table too
+-		boolean isOtherSide = false;
+-		mappedBy = "unresolved";
+-
+-
+-		while ( ! isOtherSide && properties.hasNext() ) {
+-			Property oneProperty = (Property) properties.next();
+-			Value manyValue = oneProperty.getValue();
+-			if ( manyValue != null && ( manyValue instanceof OneToOne || manyValue instanceof ManyToOne ) ) {
+-				if ( joinColumns.size() == manyValue.getColumnSpan() ) {
+-					isOtherSide = true;
+-					Iterator it = manyValue.getColumnIterator();
+-					while ( it.hasNext() ) {
+-						Object column = it.next();
+-						if (! joinColumns.contains( column ) ) {
+-							isOtherSide = false;
+-							break;
+-						}
+-					}
+-					if (isOtherSide) {
+-						mappedBy = oneProperty.getName();
+-					}
++		if ( referencedPropertyName != null ) {
++			return pc.getReferencedProperty( referencedPropertyName );
++		}
++		
++		Map joinColumns = getColumns(oneToOne);
++		for (Iterator properties = pc.getPropertyClosureIterator(); properties.hasNext(); ) {
++			Property oneProperty = (Property)properties.next();
++			Value oneValue = oneProperty.getValue();
++			if ( oneValue instanceof OneToOne ) {
++				if(hasEqualColumns(joinColumns, oneValue)) {
++					return oneProperty;
+ 				}
+-
+ 			}
+ 		}
+-		return mappedBy;
++		return null;
+ 	}
+-
++	
+ 	public boolean isSubclass() {
+ 		return clazz.getSuperclass()!=null;
+ 	}

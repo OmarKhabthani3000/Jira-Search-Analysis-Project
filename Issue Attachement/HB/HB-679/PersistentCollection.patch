@@ -1,0 +1,193 @@
+Index: Bag.java
+===================================================================
+retrieving revision 1.16.2.10
+diff -u -r1.16.2.10 Bag.java
+--- Bag.java	26 Jan 2004 23:04:06 -0000	1.16.2.10
++++ Bag.java	2 Feb 2004 10:53:25 -0000
+@@ -130,10 +130,10 @@
+ 	}
+ 	
+ 	public Collection getOrphans(Serializable snapshot) throws HibernateException {
+-		ArrayList result = new ArrayList( (java.util.List) snapshot );
+-		PersistentCollection.identityRemoveAll( result, bag, getSession() );
+-		return result;
++	    java.util.List sn = (java.util.List) snapshot;
++	    return PersistentCollection.identityRemoveAll( sn, bag, getSession() );
+ 	}
++	
+ 	
+ 	/**
+ 	 * @see PersistentCollection#disassemble(CollectionPersister persister)
+Index: List.java
+===================================================================
+retrieving revision 1.17.2.8
+diff -u -r1.17.2.8 List.java
+--- List.java	26 Jan 2004 04:57:08 -0000	1.17.2.8
++++ List.java	2 Feb 2004 10:53:26 -0000
+@@ -7,6 +7,7 @@
+ import java.sql.SQLException;
+ import java.util.Iterator;
+ import java.util.Collection;
++import java.util.LinkedList;
+ import java.util.ListIterator;
+ import java.util.ArrayList;
+ 
+@@ -38,10 +39,8 @@
+ 	}
+ 	
+ 	public Collection getOrphans(Serializable snapshot) throws HibernateException {
+-		java.util.List sn = (java.util.List) snapshot;
+-		ArrayList result = new ArrayList(sn);
+-		PersistentCollection.identityRemoveAll( result, list, getSession() );
+-		return result;
++	    java.util.List sn = (java.util.List) snapshot;
++	    return PersistentCollection.identityRemoveAll( sn, list, getSession() );
+ 	}
+ 	
+ 	public boolean equalsSnapshot(Type elementType) throws HibernateException {
+Index: Map.java
+===================================================================
+retrieving revision 1.17.2.10
+diff -u -r1.17.2.10 Map.java
+--- Map.java	26 Jan 2004 04:57:08 -0000	1.17.2.10
++++ Map.java	2 Feb 2004 10:53:26 -0000
+@@ -41,9 +41,7 @@
+ 	
+ 	public Collection getOrphans(Serializable snapshot) throws HibernateException {
+ 		java.util.Map sn = (java.util.Map) snapshot;
+-		ArrayList result = new ArrayList( sn.values() );
+-		PersistentCollection.identityRemoveAll( result, map.values(), getSession() );
+-		return result;
++		return PersistentCollection.identityRemoveAll( sn.values(), map.values(), getSession() );
+ 	}
+ 	
+ 	public boolean equalsSnapshot(Type elementType) throws HibernateException {
+Index: PersistentCollection.java
+===================================================================
+retrieving revision 1.20.2.17
+diff -u -r1.20.2.17 PersistentCollection.java
+--- PersistentCollection.java	26 Jan 2004 04:57:08 -0000	1.20.2.17
++++ PersistentCollection.java	2 Feb 2004 10:53:26 -0000
+@@ -7,6 +7,7 @@
+ import java.sql.SQLException;
+ import java.util.ArrayList;
+ import java.util.Collection;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.ListIterator;
+@@ -738,13 +739,51 @@
+ 		
+ 	}
+ 	
+-	static void identityRemoveAll(List list, Collection collection, SessionImplementor session) 
+-	throws HibernateException {
+-		
+-		Iterator iter = collection.iterator();
+-		while ( iter.hasNext() ) PersistentCollection.identityRemove( list, iter.next(), session );
++	
++	static Collection identityRemoveAll(Collection oldElements, Collection currentElements, SessionImplementor session) 
++	throws HibernateException 
++	{
++	    // short-circuit(s)
++	    if( currentElements.size() == 0 ) // no new elements, the old list contains only Orphans
++	        return oldElements;
++	    
++	    if( oldElements.size() == 0) // no old elements, so no Orphans neither
++	        return oldElements;
++	    
++	    // create the collection holding the Orphans
++	    Collection res = new ArrayList();
++	    
++	    // collect EntityIdentifier(s) of the *current* elements - add them into a HashSet for fast access
++	    java.util.Set currentIds = new HashSet();
++	    for(Iterator it=currentElements.iterator(); it.hasNext(); ) 
++	    {
++	        Object current = it.next();
++	        if( current!=null && session.isSaved(current) )
++	            currentIds.add( session.getEntityIdentifierIfNotUnsaved(current) );
++	    }
++	    
++	    // iterate over the *old* list
++	    for(Iterator it=oldElements.iterator(); it.hasNext(); )
++	    {
++	        Object old = it.next();
++	        Object id = session.getEntityIdentifierIfNotUnsaved(old);
++	        
++	        if( ! currentIds.contains(id) )
++	            res.add(old);
++	    }
++	    
++	    return res;
+ 	}
+-
++	
++	
++	
++//	static void identityRemoveAll(List list, Collection collection, SessionImplementor session) 
++//	throws HibernateException {
++//	    
++//	    Iterator iter = collection.iterator();
++//	    while ( iter.hasNext() ) PersistentCollection.identityRemove( list, iter.next(), session );
++//	}
++	
+ 	static void identityRemove(Collection list, Object object, SessionImplementor session) 
+ 	throws HibernateException {
+ 		
+@@ -762,7 +801,6 @@
+ 			
+ 		}
+ 	}
+-	
+ }
+ 
+ 
+Index: Set.java
+===================================================================
+retrieving revision 1.21.2.12
+diff -u -r1.21.2.12 Set.java
+--- Set.java	26 Jan 2004 04:57:08 -0000	1.21.2.12
++++ Set.java	2 Feb 2004 10:53:26 -0000
+@@ -1,22 +1,22 @@
+ package net.sf.hibernate.collection;
+ 
+-import java.util.ArrayList;
+-import java.util.Collection;
+-import java.util.HashMap;
+-import java.util.Iterator;
+-import java.util.HashSet;
+ import java.io.Serializable;
+ import java.sql.PreparedStatement;
+ import java.sql.ResultSet;
+ import java.sql.SQLException;
+-
+-import org.odmg.DSet;
++import java.util.ArrayList;
++import java.util.Collection;
++import java.util.HashMap;
++import java.util.HashSet;
++import java.util.Iterator;
+ 
+ import net.sf.hibernate.HibernateException;
+ import net.sf.hibernate.engine.SessionImplementor;
+-import net.sf.hibernate.util.LinkedHashCollectionHelper;
+ import net.sf.hibernate.type.Type;
++import net.sf.hibernate.util.LinkedHashCollectionHelper;
++
++import org.odmg.DSet;
+ 
+ 
+ /**
+@@ -43,10 +43,8 @@
+ 	}
+ 	
+ 	public Collection getOrphans(Serializable snapshot) throws HibernateException {
+-		java.util.Map sn = (java.util.Map) snapshot;
+-		ArrayList result = new ArrayList( sn.keySet() );
+-		PersistentCollection.identityRemoveAll( result, set, getSession() );
+-		return result;
++	    java.util.Map sn = (java.util.Map) snapshot;
++	    return PersistentCollection.identityRemoveAll( sn.keySet(), set, getSession() );
+ 	}
+ 	
+ 	public boolean equalsSnapshot(Type elementType) throws HibernateException {

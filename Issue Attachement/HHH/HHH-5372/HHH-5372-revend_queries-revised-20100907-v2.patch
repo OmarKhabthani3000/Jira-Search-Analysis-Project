@@ -1,0 +1,1126 @@
+Index: src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/configuration/AuditConfiguration.java	(working copy)
+@@ -99,7 +99,7 @@
+         
+         revisionInfoQueryCreator = revInfoCfgResult.getRevisionInfoQueryCreator();
+         revisionInfoNumberReader = revInfoCfgResult.getRevisionInfoNumberReader();
+-        entCfg = new EntitiesConfigurator().configure(cfg, reflectionManager, globalCfg, auditEntCfg,
++        entCfg = new EntitiesConfigurator().configure(cfg, this, reflectionManager, 
+                 revInfoCfgResult.getRevisionInfoXmlMapping(), revInfoCfgResult.getRevisionInfoRelationMapping());
+     }
+ 
+Index: src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/configuration/EntitiesConfigurator.java	(working copy)
+@@ -55,8 +55,7 @@
+  * @author Adam Warski (adam at warski dot org)
+  */
+ public class EntitiesConfigurator {
+-    public EntitiesConfigurations configure(Configuration cfg, ReflectionManager reflectionManager,
+-                                            GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
++    public EntitiesConfigurations configure(Configuration cfg, AuditConfiguration auditCfg, ReflectionManager reflectionManager,
+                                             Document revisionInfoXmlMapping, Element revisionInfoRelationMapping) {
+         // Creating a name register to capture all audit entity names created.
+         AuditEntityNameRegister auditEntityNameRegister = new AuditEntityNameRegister();
+@@ -74,7 +73,7 @@
+ 
+             // Collecting information from annotations on the persistent class pc
+             AnnotationsMetadataReader annotationsMetadataReader =
+-                    new AnnotationsMetadataReader(globalCfg, reflectionManager, pc);
++                    new AnnotationsMetadataReader(auditCfg.getGlobalCfg(), reflectionManager, pc);
+             ClassAuditingData auditData = annotationsMetadataReader.getAuditData();
+ 
+             classesAuditingData.addClassAuditingData(pc, auditData);
+@@ -83,9 +82,11 @@
+         // Now that all information is read we can update the calculated fields.
+         classesAuditingData.updateCalculatedFields();
+ 
+-        AuditMetadataGenerator auditMetaGen = new AuditMetadataGenerator(cfg, globalCfg, verEntCfg,
+-                revisionInfoRelationMapping, auditEntityNameRegister);
++        AuditMetadataGenerator auditMetaGen = new AuditMetadataGenerator(cfg,
++				auditCfg, revisionInfoRelationMapping, auditEntityNameRegister);
+ 
++        AuditEntitiesConfiguration audEntCfg = auditCfg.getAuditEntCfg();
++        
+         // First pass
+         for (Map.Entry<PersistentClass, ClassAuditingData> pcDatasEntry : classesAuditingData.getAllClassAuditedData()) {
+             PersistentClass pc = pcDatasEntry.getKey();
+@@ -94,7 +95,7 @@
+             EntityXmlMappingData xmlMappingData = new EntityXmlMappingData();
+             if (auditData.isAudited()) {
+                 if (!StringTools.isEmpty(auditData.getAuditTable().value())) {
+-                    verEntCfg.addCustomAuditTableName(pc.getEntityName(), auditData.getAuditTable().value());
++                	audEntCfg.addCustomAuditTableName(pc.getEntityName(), auditData.getAuditTable().value());
+                 }
+ 
+                 auditMetaGen.generateFirstPass(pc, auditData, xmlMappingData, true);
+Index: src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/configuration/metadata/AuditMetadataGenerator.java	(working copy)
+@@ -28,6 +28,7 @@
+ import java.util.Map;
+ 
+ import org.dom4j.Element;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.GlobalConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.configuration.metadata.reader.ClassAuditingData;
+@@ -61,6 +62,7 @@
+     private static final Logger log = LoggerFactory.getLogger(AuditMetadataGenerator.class);
+ 
+     private final Configuration cfg;
++    private final AuditConfiguration auditCfg;
+     private final GlobalConfiguration globalCfg;
+     private final AuditEntitiesConfiguration verEntCfg;
+     private final Element revisionInfoRelationMapping;
+@@ -84,13 +86,13 @@
+     // Map entity name -> (join descriptor -> element describing the "versioned" join)
+     private final Map<String, Map<Join, Element>> entitiesJoins;
+ 
+-    public AuditMetadataGenerator(Configuration cfg, GlobalConfiguration globalCfg,
+-                                  AuditEntitiesConfiguration verEntCfg,
++    public AuditMetadataGenerator(Configuration cfg,AuditConfiguration auditCfg,
+                                   Element revisionInfoRelationMapping,
+                                   AuditEntityNameRegister auditEntityNameRegister) {
+         this.cfg = cfg;
+-        this.globalCfg = globalCfg;
+-        this.verEntCfg = verEntCfg;
++        this.auditCfg = auditCfg;
++        this.globalCfg = auditCfg.getGlobalCfg();
++        this.verEntCfg = auditCfg.getAuditEntCfg();
+         this.revisionInfoRelationMapping = revisionInfoRelationMapping;
+ 
+         this.basicMetadataGenerator = new BasicMetadataGenerator();
+@@ -486,7 +488,10 @@
+         return globalCfg;
+     }
+ 
+-    AuditEntitiesConfiguration getVerEntCfg() {
++	AuditConfiguration getAuditConfiguration() {
++		return auditCfg;
++	}
++   AuditEntitiesConfiguration getVerEntCfg() {
+         return verEntCfg;
+     }
+ 
+@@ -539,4 +544,5 @@
+ 	public Map<String, EntityConfiguration> getNotAuditedEntitiesConfigurations() {
+ 		return notAuditedEntitiesConfigurations;
+ 	}
++
+ }
+Index: src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/configuration/metadata/CollectionMetadataGenerator.java	(working copy)
+@@ -32,9 +32,11 @@
+ import java.util.Set;
+ import java.util.TreeMap;
+ import java.util.TreeSet;
++
+ import javax.persistence.JoinColumn;
+ 
+ import org.dom4j.Element;
++import org.hibernate.MappingException;
+ import org.hibernate.envers.ModificationStore;
+ import org.hibernate.envers.RelationTargetAuditMode;
+ import org.hibernate.envers.configuration.metadata.reader.PropertyAuditingData;
+@@ -45,8 +47,19 @@
+ import org.hibernate.envers.entities.mapper.PropertyMapper;
+ import org.hibernate.envers.entities.mapper.SinglePropertyMapper;
+ import org.hibernate.envers.entities.mapper.id.IdMapper;
+-import org.hibernate.envers.entities.mapper.relation.*;
+-import org.hibernate.envers.entities.mapper.relation.component.*;
++import org.hibernate.envers.entities.mapper.relation.BasicCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.CommonCollectionMapperData;
++import org.hibernate.envers.entities.mapper.relation.ListCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.MapCollectionMapper;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.entities.mapper.relation.ToOneIdMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleDummyComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleMapKeyIdComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleMapKeyPropertyComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleRelatedComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleSimpleComponentMapper;
++import org.hibernate.envers.entities.mapper.relation.component.MiddleStraightComponentMapper;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.ListProxy;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.MapProxy;
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.SetProxy;
+@@ -54,11 +67,9 @@
+ import org.hibernate.envers.entities.mapper.relation.lazy.proxy.SortedSetProxy;
+ import org.hibernate.envers.entities.mapper.relation.query.OneAuditEntityQueryGenerator;
+ import org.hibernate.envers.entities.mapper.relation.query.RelationQueryGenerator;
++import org.hibernate.envers.tools.MappingTools;
+ import org.hibernate.envers.tools.StringTools;
+ import org.hibernate.envers.tools.Tools;
+-import org.hibernate.envers.tools.MappingTools;
+-
+-import org.hibernate.MappingException;
+ import org.hibernate.mapping.Collection;
+ import org.hibernate.mapping.IndexedCollection;
+ import org.hibernate.mapping.OneToMany;
+@@ -183,9 +194,8 @@
+         MiddleComponentData indexComponentData = addIndex(null, null);
+ 
+         // Generating the query generator - it should read directly from the related entity.
+-        RelationQueryGenerator queryGenerator = new OneAuditEntityQueryGenerator(mainGenerator.getGlobalCfg(),
+-                mainGenerator.getVerEntCfg(), referencingIdData, referencedEntityName,
+-                referencedIdMapping.getIdMapper());
++        RelationQueryGenerator queryGenerator = new OneAuditEntityQueryGenerator(mainGenerator.getAuditConfiguration()
++        		, referencingIdData, referencedEntityName, referencedIdData);
+ 
+         // Creating common mapper data.
+         CommonCollectionMapperData commonCollectionMapperData = new CommonCollectionMapperData(
+@@ -332,8 +342,9 @@
+         // Creating a query generator builder, to which additional id data will be added, in case this collection
+         // references some entities (either from the element or index). At the end, this will be used to build
+         // a query generator to read the raw data collection from the middle table.
+-        QueryGeneratorBuilder queryGeneratorBuilder = new QueryGeneratorBuilder(mainGenerator.getGlobalCfg(),
+-                mainGenerator.getVerEntCfg(), referencingIdData, auditMiddleEntityName);
++		QueryGeneratorBuilder queryGeneratorBuilder = new QueryGeneratorBuilder(
++				mainGenerator.getAuditConfiguration(), referencingIdData,
++				auditMiddleEntityName);
+ 
+         // Adding the XML mapping for the referencing entity, if the relation isn't inverse.
+         if (middleEntityXml != null) {
+Index: src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java
+===================================================================
+--- src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/configuration/metadata/QueryGeneratorBuilder.java	(working copy)
+@@ -26,12 +26,15 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.hibernate.envers.configuration.GlobalConfiguration;
+-import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.MappingException;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+-import org.hibernate.envers.entities.mapper.relation.query.*;
+-import org.hibernate.MappingException;
++import org.hibernate.envers.entities.mapper.relation.query.OneEntityQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.RelationQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.ThreeEntityQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.TwoEntityOneAuditedQueryGenerator;
++import org.hibernate.envers.entities.mapper.relation.query.TwoEntityQueryGenerator;
+ 
+ /**
+  * Builds query generators, for reading collection middle tables, along with any related entities.
+@@ -39,16 +42,13 @@
+  * @author Adam Warski (adam at warski dot org)
+  */
+ public final class QueryGeneratorBuilder {
+-    private final GlobalConfiguration globalCfg;
+-    private final AuditEntitiesConfiguration verEntCfg;
++    private final AuditConfiguration auditCfg;
+     private final MiddleIdData referencingIdData;
+     private final String auditMiddleEntityName;
+     private final List<MiddleIdData> idDatas;
+ 
+-    QueryGeneratorBuilder(GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
+-                          MiddleIdData referencingIdData, String auditMiddleEntityName) {
+-        this.globalCfg = globalCfg;
+-        this.verEntCfg = verEntCfg;
++    QueryGeneratorBuilder(AuditConfiguration auditCfg, MiddleIdData referencingIdData, String auditMiddleEntityName) {
++    	this.auditCfg = auditCfg;
+         this.referencingIdData = referencingIdData;
+         this.auditMiddleEntityName = auditMiddleEntityName;
+ 
+@@ -61,14 +61,14 @@
+ 
+     RelationQueryGenerator build(MiddleComponentData... componentDatas) {
+         if (idDatas.size() == 0) {
+-            return new OneEntityQueryGenerator(verEntCfg, auditMiddleEntityName, referencingIdData,
++            return new OneEntityQueryGenerator(auditCfg, auditMiddleEntityName, referencingIdData,
+                     componentDatas);
+         } else if (idDatas.size() == 1) {
+             if (idDatas.get(0).isAudited()) {
+-                return new TwoEntityQueryGenerator(globalCfg, verEntCfg, auditMiddleEntityName, referencingIdData,
++                return new TwoEntityQueryGenerator(auditCfg, auditMiddleEntityName, referencingIdData,
+                         idDatas.get(0), componentDatas);
+             } else {
+-                return new TwoEntityOneAuditedQueryGenerator(verEntCfg, auditMiddleEntityName, referencingIdData,
++                return new TwoEntityOneAuditedQueryGenerator(auditCfg, auditMiddleEntityName, referencingIdData,
+                         idDatas.get(0), componentDatas);
+             }
+         } else if (idDatas.size() == 2) {
+@@ -77,7 +77,7 @@
+                 throw new MappingException("Ternary relations using @Audited(targetAuditMode = NOT_AUDITED) are not supported.");
+             }
+ 
+-            return new ThreeEntityQueryGenerator(globalCfg, verEntCfg, auditMiddleEntityName, referencingIdData,
++            return new ThreeEntityQueryGenerator(auditCfg, auditMiddleEntityName, referencingIdData,
+                     idDatas.get(0), idDatas.get(1), componentDatas);
+         } else {
+             throw new IllegalStateException("Illegal number of related entities.");
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneAuditEntityQueryGenerator.java	(working copy)
+@@ -25,18 +25,16 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+-import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+-import org.hibernate.envers.entities.mapper.id.IdMapper;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from an audit entity.
+  * @author Adam Warski (adam at warski dot org)
+@@ -44,12 +42,11 @@
+ public final class OneAuditEntityQueryGenerator implements RelationQueryGenerator {
+     private final String queryString;
+     private final MiddleIdData referencingIdData;
+-
+-    public OneAuditEntityQueryGenerator(GlobalConfiguration globalCfg, AuditEntitiesConfiguration verEntCfg,
+-                                           MiddleIdData referencingIdData, String referencedEntityName,
+-                                           IdMapper referencedIdMapper) {
++    
++    public OneAuditEntityQueryGenerator(AuditConfiguration auditCfg, MiddleIdData referencingIdData
++    								, String referencedEntityName, MiddleIdData referencedIdData) {
+         this.referencingIdData = referencingIdData;
+-
++        AuditEntitiesConfiguration verEntCfg = auditCfg.getAuditEntCfg();
+         /*
+          * The query that we need to create:
+          *   SELECT new list(e) FROM versionsReferencedEntity e
+@@ -57,8 +54,14 @@
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     e.id_ref_ing = :id_ref_ing AND
+          * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id = e.id) AND
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidTimeAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
+          * (only non-deleted entities)
+          *     e.revision_type != DEL
+          */
+@@ -75,20 +78,12 @@
+         // e.id_ref_ed = :id_ref_ed
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, null, true);
+ 
+-        // SELECT max(e.revision) FROM versionsReferencedEntity e2
+-        QueryBuilder maxERevQb = qb.newSubQueryBuilder(versionsReferencedEntityName, "e2");
+-        maxERevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxERevQbParameters = maxERevQb.getRootParameters();
+-        // e2.revision <= :revision
+-        maxERevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // e2.id = e.id
+-        referencedIdMapper.addIdsEqualToQuery(maxERevQbParameters,
+-                "e." + originalIdPropertyName, "e2." + originalIdPropertyName);
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addEntityAtRevisionRestriction(auditCfg, qb, revisionPropertyPath, 
++        		verEntCfg.getRevisionEndFieldName(), true, referencedIdData, 
++				revisionPropertyPath, originalIdPropertyName, "e", "e2");
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
+-
+         // e.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), false, "!=", "delrevisiontype");
+ 
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/OneEntityQueryGenerator.java	(working copy)
+@@ -25,7 +25,9 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+@@ -34,8 +36,6 @@
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from a relation middle-table only.
+  * @author Adam Warski (adam at warski dot org)
+@@ -44,20 +44,30 @@
+     private final String queryString;
+     private final MiddleIdData referencingIdData;
+ 
+-    public OneEntityQueryGenerator(AuditEntitiesConfiguration verEntCfg,
++    public OneEntityQueryGenerator(AuditConfiguration auditCfg,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleComponentData... componentDatas) {
+         this.referencingIdData = referencingIdData;
++        
++        AuditEntitiesConfiguration verEntCfg = auditCfg.getAuditEntCfg();
+ 
+         /*
+          * The query that we need to create:
+          *   SELECT new list(ee) FROM middleEntity ee WHERE
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.originalId.id_ref_ing = :id_ref_ing AND
++         *     
+          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidTimeAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         * 
++         *     AND
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL
+          */
+@@ -71,22 +81,15 @@
+         Parameters rootParameters = qb.getRootParameters();
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+-        // SELECT max(ee2.revision) FROM middleEntity ee2
+-        QueryBuilder maxRevQb = qb.newSubQueryBuilder(versionsMiddleEntityName, "ee2");
+-        maxRevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxRevQbParameters = maxRevQb.getRootParameters();
+-        // ee2.revision <= :revision
+-        maxRevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // ee2.originalId.* = ee.originalId.*        
++        
+         String eeOriginalIdPropertyPath = "ee." + originalIdPropertyName;
+-        String ee2OriginalIdPropertyPath = "ee2." + originalIdPropertyName;
+-        referencingIdData.getPrefixedMapper().addIdsEqualToQuery(maxRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        for (MiddleComponentData componentData : componentDatas) {
+-            componentData.getComponentMapper().addMiddleEqualToQuery(maxRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        }
+-        // ee.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, "=", maxRevQb);       
++
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addAssociationAtRevisionRestriction(qb, revisionPropertyPath, 
++         		verEntCfg.getRevisionEndFieldName(), true,referencingIdData, versionsMiddleEntityName, 
++         		eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++         
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+ 
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/QueryGeneratorTools.java	(working copy)
+@@ -1,75 +0,0 @@
+-/*
+- * Hibernate, Relational Persistence for Idiomatic Java
+- *
+- * Copyright (c) 2008, Red Hat Middleware LLC or third-party contributors as
+- * indicated by the @author tags or express copyright attribution
+- * statements applied by the authors.  All third-party contributions are
+- * distributed under license by Red Hat Middleware LLC.
+- *
+- * This copyrighted material is made available to anyone wishing to use, modify,
+- * copy, or redistribute it subject to the terms and conditions of the GNU
+- * Lesser General Public License, as published by the Free Software Foundation.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+- * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License
+- * for more details.
+- *
+- * You should have received a copy of the GNU Lesser General Public License
+- * along with this distribution; if not, write to:
+- * Free Software Foundation, Inc.
+- * 51 Franklin Street, Fifth Floor
+- * Boston, MA  02110-1301  USA
+- */
+-package org.hibernate.envers.entities.mapper.relation.query;
+-
+-import org.hibernate.envers.configuration.GlobalConfiguration;
+-import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+-import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+-import org.hibernate.envers.tools.query.Parameters;
+-import org.hibernate.envers.tools.query.QueryBuilder;
+-
+-/**
+- * @author Adam Warski (adam at warski dot org)
+- */
+-public class QueryGeneratorTools {
+-    public static void addEntityAtRevision(GlobalConfiguration globalCfg, QueryBuilder qb, Parameters rootParameters,
+-                                           MiddleIdData idData, String revisionPropertyPath, String originalIdPropertyName,
+-                                           String alias1, String alias2) {
+-        // SELECT max(e.revision) FROM versionsReferencedEntity e2
+-        QueryBuilder maxERevQb = qb.newSubQueryBuilder(idData.getAuditEntityName(), alias2);
+-        maxERevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxERevQbParameters = maxERevQb.getRootParameters();
+-        // e2.revision <= :revision
+-        maxERevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // e2.id_ref_ed = e.id_ref_ed
+-        idData.getOriginalMapper().addIdsEqualToQuery(maxERevQbParameters,
+-                alias1 + "." + originalIdPropertyName, alias2 +"." + originalIdPropertyName);
+-
+-        // e.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere("e." + revisionPropertyPath, false, globalCfg.getCorrelatedSubqueryOperator(), maxERevQb);
+-    }
+-
+-    public static void addAssociationAtRevision(QueryBuilder qb, Parameters rootParameters,
+-                                                MiddleIdData referencingIdData, String versionsMiddleEntityName,
+-                                                String eeOriginalIdPropertyPath, String revisionPropertyPath,
+-                                                String originalIdPropertyName, MiddleComponentData... componentDatas) {
+-        // SELECT max(ee2.revision) FROM middleEntity ee2
+-        QueryBuilder maxEeRevQb = qb.newSubQueryBuilder(versionsMiddleEntityName, "ee2");
+-        maxEeRevQb.addProjection("max", revisionPropertyPath, false);
+-        // WHERE
+-        Parameters maxEeRevQbParameters = maxEeRevQb.getRootParameters();
+-        // ee2.revision <= :revision
+-        maxEeRevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
+-        // ee2.originalId.* = ee.originalId.*
+-        String ee2OriginalIdPropertyPath = "ee2." + originalIdPropertyName;
+-        referencingIdData.getPrefixedMapper().addIdsEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        for (MiddleComponentData componentData : componentDatas) {
+-            componentData.getComponentMapper().addMiddleEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
+-        }
+-
+-        // ee.revision = (SELECT max(...) ...)
+-        rootParameters.addWhere(revisionPropertyPath, "=", maxEeRevQb);
+-    }
+-}
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/ThreeEntityQueryGenerator.java	(working copy)
+@@ -25,8 +25,9 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+-import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+@@ -35,8 +36,6 @@
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from a relation middle-table and a two related versions entity.
+  * @author Adam Warski (adam at warski dot org)
+@@ -45,13 +44,14 @@
+     private final String queryString;
+     private final MiddleIdData referencingIdData;
+ 
+-    public ThreeEntityQueryGenerator(GlobalConfiguration globalCfg,
+-                                     AuditEntitiesConfiguration verEntCfg,
++    public ThreeEntityQueryGenerator(AuditConfiguration auditCfg,
+                                      String versionsMiddleEntityName,
+                                      MiddleIdData referencingIdData,
+                                      MiddleIdData referencedIdData,
+                                      MiddleIdData indexIdData,
+                                      MiddleComponentData... componentDatas) {
++        AuditEntitiesConfiguration verEntCfg = auditCfg.getAuditEntCfg();
++        
+         this.referencingIdData = referencingIdData;
+ 
+         /*
+@@ -65,14 +65,48 @@
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.id_ref_ing = :id_ref_ing AND
+          * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id_ref_ed = e.id_ref_ed) AND
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidTimeAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         *     
+          * (selecting f entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     f.revision = (SELECT max(f2.revision) FROM versionsIndexEntity f2
+-         *       WHERE f2.revision <= :revision AND f2.id_ref_ed = f.id_ref_ed) AND
++         *       WHERE f2.revision <= :revision AND f2.id_ref_ed = f.id_ref_ed)
++         *     
++         *   --> for ValidTimeAuditStrategy:
++         *     f.revision <= :revision and (f.endRevision > :revision or f.endRevision is null)
++         *     
++         *     AND
++         *     
+          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidTimeAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *     
++        and (
++            strtestent1_.REVEND>? 
++            or strtestent1_.REVEND is null
++        ) 
++        and (
++            strtestent1_.REVEND>? 
++            or strtestent1_.REVEND is null
++        ) 
++        and (
++            ternarymap0_.REVEND>? 
++            or ternarymap0_.REVEND is null
++        )
++         *       
++         *       
++         *       
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL AND
+          *     e.revision_type != DEL AND
+@@ -80,7 +114,6 @@
+          */
+         String revisionPropertyPath = verEntCfg.getRevisionNumberPath();
+         String originalIdPropertyName = verEntCfg.getOriginalIdPropName();
+-
+         String eeOriginalIdPropertyPath = "ee." + originalIdPropertyName;
+ 
+         // SELECT new list(ee) FROM middleEntity ee
+@@ -99,18 +132,24 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+-                originalIdPropertyName, "e", "e2");
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addEntityAtRevisionRestriction(auditCfg, qb, "e." + revisionPropertyPath, 
++        		"e." + auditCfg.getAuditEntCfg().getRevisionEndFieldName(), false, 
++        		referencedIdData, revisionPropertyPath, originalIdPropertyName, "e", "e2");
++        
++        // (selecting f entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addEntityAtRevisionRestriction(auditCfg, qb, "e." + revisionPropertyPath, 
++        		"e." + auditCfg.getAuditEntCfg().getRevisionEndFieldName(), false, 
++        		referencedIdData, revisionPropertyPath, originalIdPropertyName, "f", "f2");
+ 
+-        // f.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, indexIdData, revisionPropertyPath,
+-                originalIdPropertyName, "f", "f2");
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addAssociationAtRevisionRestriction(qb, revisionPropertyPath, 
++        		auditCfg.getAuditEntCfg().getRevisionEndFieldName(), true, referencingIdData, versionsMiddleEntityName, 
++        		eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+-
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+         // e.revision_type != DEL
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityOneAuditedQueryGenerator.java	(working copy)
+@@ -26,6 +26,7 @@
+ import java.util.Collections;
+ 
+ import org.hibernate.envers.RevisionType;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+@@ -44,12 +45,13 @@
+     private final String queryString;
+     private final MiddleIdData referencingIdData;
+ 
+-    public TwoEntityOneAuditedQueryGenerator(
+-                                   AuditEntitiesConfiguration verEntCfg,
++    public TwoEntityOneAuditedQueryGenerator(AuditConfiguration auditCfg,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleIdData referencedIdData,
+                                    MiddleComponentData... componentDatas) {
++        AuditEntitiesConfiguration verEntCfg = auditCfg.getAuditEntCfg();
++        
+         this.referencingIdData = referencingIdData;
+ 
+         /*
+@@ -60,9 +62,17 @@
+          *     ee.id_ref_ed = e.id_ref_ed AND
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.id_ref_ing = :id_ref_ing AND
++         *     
+          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidTimeAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *
++         *     AND
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL
+          */
+@@ -83,9 +93,11 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addAssociationAtRevisionRestriction(qb, revisionPropertyPath, 
++        		auditCfg.getAuditEntCfg().getRevisionEndFieldName(), true,referencingIdData, versionsMiddleEntityName, 
++        		eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java
+===================================================================
+--- src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/entities/mapper/relation/query/TwoEntityQueryGenerator.java	(working copy)
+@@ -25,8 +25,9 @@
+ 
+ import java.util.Collections;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+-import org.hibernate.envers.configuration.GlobalConfiguration;
++import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.id.QueryParameterData;
+ import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
+@@ -35,8 +36,6 @@
+ import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import org.hibernate.Query;
+-
+ /**
+  * Selects data from a relation middle-table and a related versions entity.
+  * @author Adam Warski (adam at warski dot org)
+@@ -45,12 +44,13 @@
+     private final String queryString;
+     private final MiddleIdData referencingIdData;
+ 
+-    public TwoEntityQueryGenerator(GlobalConfiguration globalCfg,
+-                                   AuditEntitiesConfiguration verEntCfg,
++    public TwoEntityQueryGenerator(AuditConfiguration auditCfg,
+                                    String versionsMiddleEntityName,
+                                    MiddleIdData referencingIdData,
+                                    MiddleIdData referencedIdData,
+                                    MiddleComponentData... componentDatas) {
++        AuditEntitiesConfiguration verEntCfg = auditCfg.getAuditEntCfg();
++        
+         this.referencingIdData = referencingIdData;
+ 
+         /*
+@@ -61,12 +61,25 @@
+          *     ee.id_ref_ed = e.id_ref_ed AND
+          * (only entities referenced by the association; id_ref_ing = id of the referencing entity)
+          *     ee.id_ref_ing = :id_ref_ing AND
++         *     
+          * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
+-         *       WHERE e2.revision <= :revision AND e2.id_ref_ed = e.id_ref_ed) AND
+-         * (the association at revision :revision)
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidTimeAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         *     
++          * (the association at revision :revision)
++         *   --> for DefaultAuditStrategy:
+          *     ee.revision = (SELECT max(ee2.revision) FROM middleEntity ee2
+-         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*) AND
++         *       WHERE ee2.revision <= :revision AND ee2.originalId.* = ee.originalId.*)
++         *       
++         *   --> for ValidTimeAuditStrategy:
++         *     ee.revision <= :revision and (ee.endRevision > :revision or ee.endRevision is null)
++         *     
+          * (only non-deleted entities and associations)
+          *     ee.revision_type != DEL AND
+          *     e.revision_type != DEL
+@@ -88,13 +101,17 @@
+         // ee.originalId.id_ref_ing = :id_ref_ing
+         referencingIdData.getPrefixedMapper().addNamedIdEqualsToQuery(rootParameters, originalIdPropertyName, true);
+ 
+-        // e.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addEntityAtRevision(globalCfg, qb, rootParameters, referencedIdData, revisionPropertyPath,
+-                originalIdPropertyName, "e", "e2");
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addEntityAtRevisionRestriction(auditCfg, qb, "e." + revisionPropertyPath, 
++        		"e." + auditCfg.getAuditEntCfg().getRevisionEndFieldName(), false, 
++        		referencedIdData, revisionPropertyPath, originalIdPropertyName, "e", "e2");
+ 
+-        // ee.revision = (SELECT max(...) ...)
+-        QueryGeneratorTools.addAssociationAtRevision(qb, rootParameters, referencingIdData, versionsMiddleEntityName,
+-                eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
++        // (with ee association at revision :revision)
++        // --> based on auditStrategy (see above)
++        auditCfg.getAuditStrategy().addAssociationAtRevisionRestriction(qb, revisionPropertyPath, 
++        		auditCfg.getAuditEntCfg().getRevisionEndFieldName(), true, referencingIdData, versionsMiddleEntityName, 
++        		eeOriginalIdPropertyPath, revisionPropertyPath, originalIdPropertyName, componentDatas);
+ 
+         // ee.revision_type != DEL
+         rootParameters.addWhereWithNamedParam(verEntCfg.getRevisionTypePropName(), "!=", "delrevisiontype");
+Index: src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java
+===================================================================
+--- src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/query/impl/AbstractAuditQuery.java	(working copy)
+@@ -86,10 +86,14 @@
+ 		qb = new QueryBuilder(versionsEntityName, "e");
+ 	}
+     
+-    protected List buildAndExecuteQuery() {
++    protected Query buildQuery() {
+         Query query = qb.toQuery(versionsReader.getSession());
+-
+         setQueryProperties(query);
++        return query;
++    }
++    
++	protected List buildAndExecuteQuery() {
++        Query query = buildQuery();
+ 
+         return query.list();
+     }
+Index: src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java
+===================================================================
+--- src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/query/impl/EntitiesAtRevisionQuery.java	(working copy)
+@@ -24,14 +24,16 @@
+ package org.hibernate.envers.query.impl;
+ 
+ import java.util.ArrayList;
++import java.util.Arrays;
+ import java.util.List;
+ 
++import org.hibernate.Query;
+ import org.hibernate.envers.RevisionType;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
+ import org.hibernate.envers.query.criteria.AuditCriterion;
+ import org.hibernate.envers.reader.AuditReaderImplementor;
+-import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+ /**
+  * @author Adam Warski (adam at warski dot org)
+@@ -56,40 +58,51 @@
+     @SuppressWarnings({"unchecked"})
+     public List list() {
+         /*
+-        The query that should be executed in the versions table:
+-        SELECT e FROM ent_ver e WHERE
+-          (all specified conditions, transformed, on the "e" entity) AND
+-          e.revision_type != DEL AND
+-          e.revision = (SELECT max(e2.revision) FROM ent_ver e2 WHERE
+-            e2.revision <= :revision AND e2.originalId.id = e.originalId.id)
++         * The query that we need to create:
++         *   SELECT new list(e) FROM versionsReferencedEntity e
++         *   WHERE
++         * (all specified conditions, transformed, on the "e" entity) AND
++         * (selecting e entities at revision :revision)
++         *   --> for DefaultAuditStrategy:
++         *     e.revision = (SELECT max(e2.revision) FROM versionsReferencedEntity e2
++         *       WHERE e2.revision <= :revision AND e2.id = e.id) 
++         *     
++         *   --> for ValidTimeAuditStrategy:
++         *     e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)
++         *     
++         *     AND
++         * (only non-deleted entities)
++         *     e.revision_type != DEL
+          */
+-
+-        QueryBuilder maxRevQb = qb.newSubQueryBuilder(versionsEntityName, "e2");
+-
+         AuditEntitiesConfiguration verEntCfg = verCfg.getAuditEntCfg();
+-
+         String revisionPropertyPath = verEntCfg.getRevisionNumberPath();
+         String originalIdPropertyName = verEntCfg.getOriginalIdPropName();
+ 
+-        // SELECT max(e2.revision)
+-        maxRevQb.addProjection("max", revisionPropertyPath, false);
+-        // e2.revision <= :revision
+-        maxRevQb.getRootParameters().addWhereWithParam(revisionPropertyPath, "<=", revision);
+-        // e2.id = e.id
+-        verCfg.getEntCfg().get(entityName).getIdMapper().addIdsEqualToQuery(maxRevQb.getRootParameters(),
+-                "e." + originalIdPropertyName, "e2." + originalIdPropertyName);
++        MiddleIdData referencedIdData = new MiddleIdData(verEntCfg, verCfg.getEntCfg().get(entityName).getIdMappingData(), 
++        		null, entityName, verCfg.getEntCfg().isVersioned(entityName));
+ 
+-        // e.revision_type != DEL AND
+-        qb.getRootParameters().addWhereWithParam(verEntCfg.getRevisionTypePropName(), "<>", RevisionType.DEL);
+-        // e.revision = (SELECT max(...) ...)
+-        qb.getRootParameters().addWhere(revisionPropertyPath, verCfg.getGlobalCfg().getCorrelatedSubqueryOperator(), maxRevQb);
++        // (selecting e entities at revision :revision)
++        // --> based on auditStrategy (see above)
++        verCfg.getAuditStrategy().addEntityAtRevisionRestriction(verCfg, qb, revisionPropertyPath, 
++        		verEntCfg.getRevisionEndFieldName(), true, referencedIdData, 
++				revisionPropertyPath, originalIdPropertyName, "e", "e2");
++        
++         // e.revision_type != DEL
++         qb.getRootParameters().addWhereWithParam(verEntCfg.getRevisionTypePropName(), "<>", RevisionType.DEL);
++
+         // all specified conditions
+         for (AuditCriterion criterion : criterions) {
+             criterion.addToQuery(verCfg, entityName, qb, qb.getRootParameters());
+         }
++        
++        Query query = buildQuery();
++        // add named parameter (only used for ValidAuditTimeStrategy) 
++        List<String> params = Arrays.asList(query.getNamedParameters());
++        if (params.contains("revision")) {
++            query.setParameter("revision", revision);
++        }
++        List queryResult = query.list();
+ 
+-        List queryResult = buildAndExecuteQuery();
+-
+         if (hasProjection) {
+             return queryResult;
+         } else {
+Index: src/main/java/org/hibernate/envers/strategy/AuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/AuditStrategy.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/strategy/AuditStrategy.java	(working copy)
+@@ -1,11 +1,14 @@
+ package org.hibernate.envers.strategy;
+ 
++import java.io.Serializable;
++
+ import org.hibernate.Session;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import java.io.Serializable;
+-
+ /**
+  * Behaviours of different audit strategy for populating audit data.
+  * 
+@@ -36,4 +39,61 @@
+      */
+     void performCollectionChange(Session session, AuditConfiguration auditCfg,
+                                  PersistentCollectionChangeData persistentCollectionChangeData, Object revision);
++    
++
++    /**
++	 * Update the rootQueryBuilder with an extra WHERE clause to restrict the revision for a two-entity relation.
++	 * This WHERE clause depends on the AuditStrategy, as follows:
++	 * <ul>
++	 * <li>For {@link DefaultAuditStrategy} a subquery is created: 
++	 * <p><code>e.revision = (SELECT max(...) ...)</code></p>
++	 * </li>
++	 * <li>for {@link ValidTimeAuditStrategy} the revision-end column is used: 
++	 * <p><code>e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)</code></p>
++	 * </li>
++	 * </ul>
++	 * 
++	 * @param auditCfg the {@link AuditConfiguration}
++     * @param rootQueryBuilder the {@link QueryBuilder} that will be updated
++     * @param revisionProperty property of the revision column
++     * @param revisionEndProperty property of the revisionEnd column (only used for {@link ValidTimeAuditStrategy})
++     * @param addAlias {@code boolean} indicator if a left alias is needed
++     * @param idData id-information for the two-entity relation (only used for {@link DefaultAuditStrategy})
++     * @param revisionPropertyPath path of the revision property (only used for {@link ValidTimeAuditStrategy})
++     * @param originalIdPropertyName name of the id property (only used for {@link ValidTimeAuditStrategy})
++     * @param alias1 an alias used for subquery (only used for {@link ValidTimeAuditStrategy})
++     * @param alias2 an alias used for subquery (only used for {@link ValidTimeAuditStrategy})
++     */
++	void addEntityAtRevisionRestriction(AuditConfiguration auditCfg, QueryBuilder rootQueryBuilder, 
++			String revisionProperty, String revisionEndProperty, boolean addAlias, MiddleIdData idData, 
++			String revisionPropertyPath, String originalIdPropertyName, String alias1, String alias2);
++
++	/**
++	 * Update the rootQueryBuilder with an extra WHERE clause to restrict the revision for a middle-entity 
++	 * association. This WHERE clause depends on the AuditStrategy, as follows:
++	 * <ul>
++	 * <li>For {@link DefaultAuditStrategy} a subquery is created: 
++	 * <p><code>e.revision = (SELECT max(...) ...)</code></p>
++	 * </li>
++	 * <li>for {@link ValidTimeAuditStrategy} the revision-end column is used: 
++	 * <p><code>e.revision <= :revision and (e.endRevision > :revision or e.endRevision is null)</code></p>
++	 * </li>
++	 * </ul>
++	 * 
++	 * @param rootQueryBuilder the {@link QueryBuilder} that will be updated
++     * @param revisionProperty property of the revision column
++     * @param revisionEndProperty property of the revisionEnd column (only used for {@link ValidTimeAuditStrategy})
++     * @param addAlias {@code boolean} indicator if a left alias is needed
++     * @param referencingIdData id-information for the middle-entity association (only used for {@link DefaultAuditStrategy})
++	 * @param versionsMiddleEntityName name of the middle-entity
++	 * @param eeOriginalIdPropertyPath name of the id property (only used for {@link ValidTimeAuditStrategy})
++	 * @param revisionPropertyPath path of the revision property (only used for {@link ValidTimeAuditStrategy})
++	 * @param originalIdPropertyName name of the id property (only used for {@link ValidTimeAuditStrategy})
++	 * @param componentDatas information about the middle-entity relation
++	 */
++	void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty, 
++			String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData, 
++			String versionsMiddleEntityName, String eeOriginalIdPropertyPath, String revisionPropertyPath,
++          String originalIdPropertyName, MiddleComponentData... componentDatas);
++
+ }
+Index: src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/strategy/DefaultAuditStrategy.java	(working copy)
+@@ -1,11 +1,15 @@
+ package org.hibernate.envers.strategy;
+ 
++import java.io.Serializable;
++
+ import org.hibernate.Session;
+ import org.hibernate.envers.configuration.AuditConfiguration;
+ import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.Parameters;
++import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+-import java.io.Serializable;
+-
+ /**
+  * Default strategy is to simply persist the audit data.
+  *
+@@ -22,4 +26,52 @@
+                                         PersistentCollectionChangeData persistentCollectionChangeData, Object revision) {
+         session.save(persistentCollectionChangeData.getEntityName(), persistentCollectionChangeData.getData());
+     }
++
++    
++	public void addEntityAtRevisionRestriction(AuditConfiguration auditCfg, QueryBuilder rootQueryBuilder, String revisionProperty, 
++			String revisionEndProperty, boolean addAlias, MiddleIdData idData, String revisionPropertyPath, 
++			String originalIdPropertyName, String alias1, String alias2) {
++		Parameters rootParameters = rootQueryBuilder.getRootParameters();
++		
++		// create a subquery builder
++        // SELECT max(e.revision) FROM versionsReferencedEntity e2
++        QueryBuilder maxERevQb = rootQueryBuilder.newSubQueryBuilder(idData.getAuditEntityName(), alias2);
++        maxERevQb.addProjection("max", revisionPropertyPath, false);
++        // WHERE
++        Parameters maxERevQbParameters = maxERevQb.getRootParameters();
++        // e2.revision <= :revision
++        maxERevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        // e2.id_ref_ed = e.id_ref_ed
++        idData.getOriginalMapper().addIdsEqualToQuery(maxERevQbParameters,
++                alias1 + "." + originalIdPropertyName, alias2 +"." + originalIdPropertyName);
++		
++		// add subquery to rootParameters
++        String subqueryOperator = auditCfg.getGlobalCfg().getCorrelatedSubqueryOperator();
++		rootParameters.addWhere(revisionProperty, addAlias, subqueryOperator, maxERevQb);
++	}
++
++	public void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty, 
++	          String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData, String versionsMiddleEntityName,
++	          String eeOriginalIdPropertyPath, String revisionPropertyPath,
++	          String originalIdPropertyName, MiddleComponentData... componentDatas) {
++		Parameters rootParameters = rootQueryBuilder.getRootParameters();
++
++    	// SELECT max(ee2.revision) FROM middleEntity ee2
++        QueryBuilder maxEeRevQb = rootQueryBuilder.newSubQueryBuilder(versionsMiddleEntityName, "ee2");
++        maxEeRevQb.addProjection("max", revisionPropertyPath, false);
++        // WHERE
++        Parameters maxEeRevQbParameters = maxEeRevQb.getRootParameters();
++        // ee2.revision <= :revision
++        maxEeRevQbParameters.addWhereWithNamedParam(revisionPropertyPath, "<=", "revision");
++        // ee2.originalId.* = ee.originalId.*
++        String ee2OriginalIdPropertyPath = "ee2." + originalIdPropertyName;
++        referencingIdData.getPrefixedMapper().addIdsEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
++        for (MiddleComponentData componentData : componentDatas) {
++            componentData.getComponentMapper().addMiddleEqualToQuery(maxEeRevQbParameters, eeOriginalIdPropertyPath, ee2OriginalIdPropertyPath);
++        }
++
++		// add subquery to rootParameters
++        rootParameters.addWhere(revisionProperty, addAlias, "=", maxEeRevQb);
++	}
++
+ }
+Index: src/main/java/org/hibernate/envers/strategy/ValidTimeAuditStrategy.java
+===================================================================
+--- src/main/java/org/hibernate/envers/strategy/ValidTimeAuditStrategy.java	(revision 20314)
++++ src/main/java/org/hibernate/envers/strategy/ValidTimeAuditStrategy.java	(working copy)
+@@ -10,6 +10,9 @@
+ import org.hibernate.envers.configuration.AuditEntitiesConfiguration;
+ import org.hibernate.envers.entities.mapper.PersistentCollectionChangeData;
+ import org.hibernate.envers.entities.mapper.id.IdMapper;
++import org.hibernate.envers.entities.mapper.relation.MiddleComponentData;
++import org.hibernate.envers.entities.mapper.relation.MiddleIdData;
++import org.hibernate.envers.tools.query.Parameters;
+ import org.hibernate.envers.tools.query.QueryBuilder;
+ 
+ /**
+@@ -75,6 +78,32 @@
+         session.save(persistentCollectionChangeData.getEntityName(), persistentCollectionChangeData.getData());
+     }
+ 
++	public void addEntityAtRevisionRestriction(AuditConfiguration auditCfg, QueryBuilder rootQueryBuilder, 
++			String revisionProperty,String revisionEndProperty, boolean addAlias,
++            MiddleIdData idData, String revisionPropertyPath, String originalIdPropertyName,
++            String alias1, String alias2) {
++		Parameters rootParameters = rootQueryBuilder.getRootParameters();
++		addRevisionRestriction(rootParameters, revisionProperty, revisionEndProperty, addAlias);
++	}
++	
++	public void addAssociationAtRevisionRestriction(QueryBuilder rootQueryBuilder,  String revisionProperty, 
++		    String revisionEndProperty, boolean addAlias, MiddleIdData referencingIdData, 
++		    String versionsMiddleEntityName, String eeOriginalIdPropertyPath, String revisionPropertyPath,
++		    String originalIdPropertyName, MiddleComponentData... componentDatas) {
++		Parameters rootParameters = rootQueryBuilder.getRootParameters();
++		addRevisionRestriction(rootParameters, revisionProperty, revisionEndProperty, addAlias);
++	}
++    
++    private void addRevisionRestriction(Parameters rootParameters,  
++			String revisionProperty, String revisionEndProperty, boolean addAlias) {
++    	
++		// e.revision <= _revision and (e.endRevision > _revision or e.endRevision is null)
++		Parameters subParm = rootParameters.addSubParameters("or");
++		rootParameters.addWhereWithNamedParam(revisionProperty, addAlias, "<=", "revision");
++		subParm.addWhereWithNamedParam(revisionEndProperty + ".id", addAlias, ">", "revision");
++		subParm.addWhere(revisionEndProperty, addAlias, "is", "null", false);
++	}
++
+     @SuppressWarnings({"unchecked"})
+     private RevisionType getRevisionType(AuditConfiguration auditCfg, Object data) {
+         return (RevisionType) ((Map<String, Object>) data).get(auditCfg.getAuditEntCfg().getRevisionTypePropName());

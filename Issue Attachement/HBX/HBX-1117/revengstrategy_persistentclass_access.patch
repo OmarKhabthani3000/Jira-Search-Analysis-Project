@@ -1,0 +1,206 @@
+Index: tools/src/java/org/hibernate/cfg/JDBCBinder.java
+===================================================================
+--- tools/src/java/org/hibernate/cfg/JDBCBinder.java	(revision 16240)
++++ tools/src/java/org/hibernate/cfg/JDBCBinder.java	(working copy)
+@@ -184,9 +184,17 @@
+ 			bindIncomingForeignKeys(rc, processed, incomingForeignKeys, mapping);
+ 			updatePrimaryKey(rc, pki);
+ 
++			//Give the reverse engineering strategy a last change to modify the created RootClass
++			revengStrategy.finishTableMapping(tableIdentifier, rc);
+ 		}
+ 
+ 	}
++	
++	private void addPropertyToRootClass(PersistentClass rootClass, Property property) {
++		//Give the reverse engineering strategy a last change to modify the property
++		revengStrategy.finishColumnMapping(property);
++		rootClass.addProperty(property);
++	}
+ 
+ 	private void updatePrimaryKey(RootClass rc, PrimaryKeyInfo pki) {
+ 		SimpleValue idValue = (SimpleValue) rc.getIdentifierProperty().getValue();
+@@ -245,10 +253,11 @@
+ 					log.debug("Rev.eng excluded one-to-many or one-to-one for foreignkey " + foreignKey.getName());
+ 				} else if (revengStrategy.isOneToOne(foreignKey)){
+ 					Property property = bindOneToOne(rc, foreignKey.getTable(), foreignKey, processed, false, true);
+-					rc.addProperty(property);
++					
++					addPropertyToRootClass(rc, property);
+ 				} else {
+ 					Property property = bindOneToMany(rc, foreignKey, processed, mapping);
+-					rc.addProperty(property);
++					addPropertyToRootClass(rc, property);
+ 				}
+ 			}
+ 		}
+@@ -677,7 +686,7 @@
+             	log.debug("Rev.eng excluded *-to-one for foreignkey " + foreignKey.getName());
+             } else if (revengStrategy.isOneToOne(foreignKey)){
+ 				Property property = bindOneToOne(rc, foreignKey.getReferencedTable(), foreignKey, processedColumns, true, false);
+-				rc.addProperty(property);
++				addPropertyToRootClass(rc, property);
+ 			} else {
+             	boolean isUnique = isUniqueReference(foreignKey);
+             	String propertyName = revengStrategy.foreignKeyToEntityName(
+@@ -697,7 +706,7 @@
+             			processedColumns
+             	);
+ 
+-            	rc.addProperty(property);
++            	addPropertyToRootClass(rc, property);
+             }
+ 		}
+ 	}
+@@ -723,8 +732,8 @@
+ 						processedColumns,
+ 						mapping
+ 					);
+-
+-				rc.addProperty(property);
++				
++				addPropertyToRootClass(rc, property);
+ 			}
+ 		}
+ 	}
+@@ -761,7 +770,7 @@
+ 		processed.add(column);
+ 		String propertyName = revengStrategy.columnToPropertyName( identifier, column.getName() );
+ 		Property property = bindBasicProperty(makeUnique(rc, propertyName), table, column, processed, mapping);
+-		rc.addProperty(property);
++		addPropertyToRootClass(rc, property);
+ 		rc.setVersion(property);
+ 		rc.setOptimisticLockMode(Versioning.OPTIMISTIC_LOCK_VERSION);
+ 		log.debug("Column " + column.getName() + " will be used for <version>/<timestamp> columns in " + identifier);
+@@ -914,8 +923,7 @@
+ 			}
+ 
+             markAsUseInEquals(property);
+-            pkc.addProperty(property);
+-
++            addPropertyToRootClass(rc, property);
+ 		}
+ 
+ 		return pkc;
+Index: tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java
+===================================================================
+--- tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java	(revision 16240)
++++ tools/src/java/org/hibernate/cfg/reveng/DefaultReverseEngineeringStrategy.java	(working copy)
+@@ -14,7 +14,9 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.hibernate.mapping.Column;
+ import org.hibernate.mapping.ForeignKey;
++import org.hibernate.mapping.PersistentClass;
+ import org.hibernate.mapping.PrimaryKey;
++import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.Table;
+ import org.hibernate.util.StringHelper;
+ 
+@@ -356,6 +358,15 @@
+ 		return null;
+ 	}
+ 
++	@Override
++	public void finishColumnMapping(Property mappedProperty) {
++		// do nothing by default		
++	}
++
++	@Override
++	public void finishTableMapping(TableIdentifier identifier,
++			PersistentClass mappedClass) {
++		// do nothing by default	
++	}
+ 	
+-	
+ }
+Index: tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java
+===================================================================
+--- tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java	(revision 16240)
++++ tools/src/java/org/hibernate/cfg/reveng/DelegatingReverseEngineeringStrategy.java	(working copy)
+@@ -5,6 +5,8 @@
+ import java.util.Properties;
+ 
+ import org.hibernate.mapping.ForeignKey;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.Table;
+ 
+ public class DelegatingReverseEngineeringStrategy implements ReverseEngineeringStrategy {
+@@ -152,6 +154,17 @@
+ 			TableIdentifier referencedTable, List referencedColumnNames,
+ 			boolean uniqueReference) {
+ 		return delegate==null?null:delegate.foreignKeyToInverseEntityName(keyname, fromTable, fromColumnNames, referencedTable, referencedColumnNames, uniqueReference);
++	}
++
++	@Override
++	public void finishColumnMapping(Property mappedProperty) {
++		delegate.finishColumnMapping(mappedProperty);		
++	}
++
++	@Override
++	public void finishTableMapping(TableIdentifier identifier,
++			PersistentClass mappedClass) {
++		delegate.finishTableMapping(identifier, mappedClass);		
+ 	}	
+ 	
+ }
+Index: tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java
+===================================================================
+--- tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java	(revision 16240)
++++ tools/src/java/org/hibernate/cfg/reveng/ReverseEngineeringStrategy.java	(working copy)
+@@ -7,6 +7,8 @@
+ import org.hibernate.cfg.reveng.dialect.MetaDataDialect;
+ import org.hibernate.mapping.ForeignKey;
+ import org.hibernate.mapping.MetaAttribute;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.Table;
+ 
+ public interface ReverseEngineeringStrategy {
+@@ -197,4 +199,17 @@
+ 	public AssociationInfo foreignKeyToAssociationInfo(ForeignKey foreignKey);
+ 	public AssociationInfo foreignKeyToInverseAssociationInfo(ForeignKey foreignKey);
+ 		
++	
++	/**
++	 * Used to give access to a generated Property before writing the associated RootClass to an hbm.xml file
++	 * @param mappedProperty Pre-populated Property
++	 */
++	public void finishColumnMapping(Property mappedProperty);
++	
++	/**
++	 * Used to give access to the generated RootClass before writing it to an hbm.xml file
++	 * @param identifier The table which is being mapped 
++	 * @param mappedClass The pre-populated RootClass
++	 */
++	public void finishTableMapping(TableIdentifier identifier, PersistentClass mappedClass);	
+ }
+Index: tools/src/testsupport/NoopReverseEngineeringStrategy.java
+===================================================================
+--- tools/src/testsupport/NoopReverseEngineeringStrategy.java	(revision 16240)
++++ tools/src/testsupport/NoopReverseEngineeringStrategy.java	(working copy)
+@@ -8,6 +8,8 @@
+ import org.hibernate.cfg.reveng.ReverseEngineeringStrategy;
+ import org.hibernate.cfg.reveng.TableIdentifier;
+ import org.hibernate.mapping.ForeignKey;
++import org.hibernate.mapping.PersistentClass;
++import org.hibernate.mapping.Property;
+ import org.hibernate.mapping.Table;
+ 
+ /**
+@@ -189,4 +191,15 @@
+ 		// TODO Auto-generated method stub
+ 		return null;
+ 	}
++
++	public void finishColumnMapping(Property mappedProperty) {
++		// TODO Auto-generated method stub
++		
++	}
++
++	public void finishTableMapping(TableIdentifier identifier,
++			PersistentClass mappedClass) {
++		// TODO Auto-generated method stub
++		
++	}
+ }

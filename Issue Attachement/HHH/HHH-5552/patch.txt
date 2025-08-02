@@ -1,0 +1,108 @@
+Index: src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java
+===================================================================
+--- src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java	(revision 20346)
++++ src/main/java/org/hibernate/cache/infinispan/InfinispanRegionFactory.java	(working copy)
+@@ -21,6 +21,7 @@
+ import org.hibernate.cache.access.AccessType;
+ import org.hibernate.cache.infinispan.collection.CollectionRegionImpl;
+ import org.hibernate.cache.infinispan.entity.EntityRegionImpl;
++import org.hibernate.cache.infinispan.impl.ClassLoaderInterceptor;
+ import org.hibernate.cache.infinispan.query.QueryResultsRegionImpl;
+ import org.hibernate.cache.infinispan.timestamp.TimestampsRegionImpl;
+ import org.hibernate.cache.infinispan.timestamp.TimestampTypeOverrides;
+@@ -393,7 +394,9 @@
+          manager.defineConfiguration(regionName, templateCacheName, regionCacheCfg);
+          definedConfigurations.add(regionName);
+       }
+-      return manager.getCache(regionName);
++      Cache<?, ?> cache = manager.getCache(regionName);
++      ClassLoaderInterceptor.attach(cache, Thread.currentThread().getContextClassLoader());
++      return cache;
+    }
+ 
+    private Configuration configureTransactionManager(Configuration regionOverrides, String templateCacheName, Properties properties) {
+Index: src/main/java/org/hibernate/cache/infinispan/impl/ClassLoaderInterceptor.java
+===================================================================
+--- src/main/java/org/hibernate/cache/infinispan/impl/ClassLoaderInterceptor.java	(revision 0)
++++ src/main/java/org/hibernate/cache/infinispan/impl/ClassLoaderInterceptor.java	(revision 0)
+@@ -0,0 +1,80 @@
++package org.hibernate.cache.infinispan.impl;
++
++import java.lang.ref.WeakReference;
++import java.security.AccessController;
++import java.security.PrivilegedAction;
++
++import org.infinispan.AdvancedCache;
++import org.infinispan.Cache;
++import org.infinispan.commands.VisitableCommand;
++import org.infinispan.context.InvocationContext;
++import org.infinispan.interceptors.base.CommandInterceptor;
++import org.infinispan.notifications.Listener;
++import org.infinispan.notifications.cachemanagerlistener.annotation.CacheStopped;
++import org.infinispan.notifications.cachemanagerlistener.event.CacheStoppedEvent;
++
++@Listener
++public class ClassLoaderInterceptor extends CommandInterceptor
++{
++   /**
++    * Attaches the specified class loader to the specified cache.
++    * @param cache
++    * @param classLoader
++    */
++   public static void attach(Cache<?, ?> cache, ClassLoader classLoader)
++   {
++      CommandInterceptor interceptor = new ClassLoaderInterceptor(classLoader, cache.getName());
++      cache.getCacheManager().addListener(interceptor);
++      AdvancedCache<?, ?> ac = cache.getAdvancedCache();
++      ac.removeInterceptor(interceptor.getClass());
++      ac.addInterceptor(interceptor, 0);
++   }
++   
++   private final WeakReference<ClassLoader> classLoaderRef;
++   private final String cacheName;
++   
++   private ClassLoaderInterceptor(ClassLoader classLoader, String cacheName)
++   {
++      this.cacheName = cacheName;
++      this.classLoaderRef = new WeakReference<ClassLoader>(classLoader);
++   }
++   
++   @Override
++   protected Object handleDefault(InvocationContext ctx, VisitableCommand command) throws Throwable
++   {
++      ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
++      this.setContextClassLoader(this.classLoaderRef.get());
++      try
++      {
++         return super.handleDefault(ctx, command);
++      }
++      finally
++      {
++         this.setContextClassLoader(classLoader);
++      }
++   }
++   
++   private void setContextClassLoader(final ClassLoader classLoader)
++   {
++      PrivilegedAction<Void> action = new PrivilegedAction<Void>()
++      {
++         @Override
++         public Void run()
++         {
++            Thread.currentThread().setContextClassLoader(classLoader);
++            return null;
++         }
++      };
++      AccessController.doPrivileged(action);
++   }
++   
++   @CacheStopped
++   public void cacheStopped(CacheStoppedEvent event)
++   {
++      if (event.getCacheName().equals(this.cacheName))
++      {
++         this.classLoaderRef.clear();
++         event.getCacheManager().removeListener(this);
++      }
++   }
++}

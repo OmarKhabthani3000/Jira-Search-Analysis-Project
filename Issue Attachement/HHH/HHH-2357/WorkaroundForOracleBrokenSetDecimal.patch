@@ -1,0 +1,35 @@
+Index: src/org/hibernate/type/BigDecimalType.java
+===================================================================
+RCS file: /cvs/hibernate-3.2/src/org/hibernate/type/BigDecimalType.java,v
+retrieving revision 1.1
+diff -u -r1.1 BigDecimalType.java
+--- src/org/hibernate/type/BigDecimalType.java	9 Jan 2007 17:24:31 -0000	1.1
++++ src/org/hibernate/type/BigDecimalType.java	11 Jan 2007 20:45:42 -0000
+@@ -25,7 +25,26 @@
+ 
+ 	public void set(PreparedStatement st, Object value, int index)
+ 	throws HibernateException, SQLException {
+-		st.setBigDecimal(index, (BigDecimal) value);
++		final BigDecimal transformed = transformWorkAroundOracleBug((BigDecimal)value);
++		st.setBigDecimal(index, transformed);
++	}
++	
++	// WORKAROUND for Oracle bug #5527479
++	// see http://www.javalobby.org/java/forums/t88158.html
++	private static BigDecimal transformWorkAroundOracleBug(BigDecimal value) {
++		final BigDecimal original = (BigDecimal)value;
++		BigDecimal transformed = original;
++		if(original.scale() < 0) {
++			final java.math.BigInteger unscaled = original.unscaledValue();
++			final StringBuffer sb = new StringBuffer(unscaled.toString());
++			// add scale 0s
++			final int extraZeros = -original.scale();
++			for(int i = 0; i < extraZeros; ++i)
++				sb.append('0');
++			transformed = new BigDecimal(new java.math.BigInteger(sb.toString()), 0);
++		}
++		// END workaround
++		return transformed;
+ 	}
+ 
+ 	public int sqlType() {

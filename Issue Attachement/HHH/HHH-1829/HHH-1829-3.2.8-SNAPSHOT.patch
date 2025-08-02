@@ -1,0 +1,1389 @@
+Index: src/org/hibernate/action/EntityDeleteAction.java
+===================================================================
+--- src/org/hibernate/action/EntityDeleteAction.java	(revision 17710)
++++ src/org/hibernate/action/EntityDeleteAction.java	(working copy)
+@@ -74,7 +74,7 @@
+ 		}
+ 
+ 		if ( !isCascadeDeleteEnabled && !veto ) {
+-			persister.delete( id, version, instance, session );
++			persister.delete( id, version, instance, state, session );
+ 		}
+ 		
+ 		//postDelete:
+Index: src/org/hibernate/cfg/HbmBinder.java
+===================================================================
+--- src/org/hibernate/cfg/HbmBinder.java	(revision 17710)
++++ src/org/hibernate/cfg/HbmBinder.java	(working copy)
+@@ -942,7 +942,15 @@
+ 
+ 		// KEY
+ 		Element keyNode = node.element( "key" );
+-		SimpleValue key = new DependantValue( table, persistentClass.getIdentifier() );
++		String propertyRef = keyNode.attributeValue("property-ref");
++		KeyValue keyValue;
++		if (propertyRef == null) {
++			keyValue = persistentClass.getIdentifier();
++		} else {
++			keyValue = (KeyValue) persistentClass.getProperty(propertyRef).getValue();
++		}
++		DependantValue key = new DependantValue( table, keyValue);
++		key.setReferencedPropertyName(propertyRef);
+ 		join.setKey( key );
+ 		key.setCascadeDeleteEnabled( "cascade".equals( keyNode.attributeValue( "on-delete" ) ) );
+ 		bindSimpleValue( keyNode, key, false, persistentClass.getEntityName(), mappings );
+Index: src/org/hibernate/hql/ast/exec/AbstractStatementExecutor.java
+===================================================================
+--- src/org/hibernate/hql/ast/exec/AbstractStatementExecutor.java	(revision 17710)
++++ src/org/hibernate/hql/ast/exec/AbstractStatementExecutor.java	(working copy)
+@@ -59,8 +59,8 @@
+ 
+ 	protected String generateIdInsertSelect(Queryable persister, String tableAlias, AST whereClause) {
+ 		Select select = new Select( getFactory().getDialect() );
+-		SelectFragment selectFragment = new SelectFragment()
+-				.addColumns( tableAlias, persister.getIdentifierColumnNames(), persister.getIdentifierColumnNames() );
++		SelectFragment selectFragment = new SelectFragment();
++		persister.addIdentifierColumns(tableAlias, selectFragment);
+ 		select.setSelectClause( selectFragment.toFragmentString().substring( 2 ) );
+ 
+ 		String rootTableName = persister.getTableName();
+@@ -108,8 +108,8 @@
+ 		return insert.toStatementString();
+ 	}
+ 
+-	protected String generateIdSubselect(Queryable persister) {
+-		return "select " + StringHelper.join( ", ", persister.getIdentifierColumnNames() ) +
++	protected String generateIdSubselect(Queryable persister, int j) {
++		return "select " + StringHelper.join( ", ", persister.getIdentifierColumnNames(j) ) +
+ 			        " from " + persister.getTemporaryIdTableName();
+ 	}
+ 
+Index: src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java
+===================================================================
+--- src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	(revision 17710)
++++ src/org/hibernate/hql/ast/exec/MultiTableDeleteExecutor.java	(working copy)
+@@ -49,7 +49,6 @@
+ 
+ 		String[] tableNames = persister.getConstraintOrderedTableNameClosure();
+ 		String[][] columnNames = persister.getContraintOrderedTableKeyColumnClosure();
+-		String idSubselect = generateIdSubselect( persister );
+ 
+ 		deletes = new String[tableNames.length];
+ 		for ( int i = tableNames.length - 1; i >= 0; i-- ) {
+@@ -59,7 +58,7 @@
+ 			//          defining all the needed attributes), then we could then get an array of those
+ 			final Delete delete = new Delete()
+ 					.setTableName( tableNames[i] )
+-					.setWhere( "(" + StringHelper.join( ", ", columnNames[i] ) + ") IN (" + idSubselect + ")" );
++					.setWhere( "(" + StringHelper.join( ", ", columnNames[i] ) + ") IN (" + generateIdSubselect(persister, tableNames.length -i - 1)+ ")" );
+ 			if ( getFactory().getSettings().isCommentsEnabled() ) {
+ 				delete.setComment( "bulk delete" );
+ 			}
+Index: src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java
+===================================================================
+--- src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(revision 17710)
++++ src/org/hibernate/hql/ast/exec/MultiTableUpdateExecutor.java	(working copy)
+@@ -54,7 +54,6 @@
+ 		String[] tableNames = persister.getConstraintOrderedTableNameClosure();
+ 		String[][] columnNames = persister.getContraintOrderedTableKeyColumnClosure();
+ 
+-		String idSubselect = generateIdSubselect( persister );
+ 		List assignmentSpecifications = walker.getAssignmentSpecifications();
+ 
+ 		updates = new String[tableNames.length];
+@@ -64,7 +63,7 @@
+ 			List parameterList = new ArrayList();
+ 			Update update = new Update( getFactory().getDialect() )
+ 					.setTableName( tableNames[tableIndex] )
+-					.setWhere( "(" + StringHelper.join( ", ", columnNames[tableIndex] ) + ") IN (" + idSubselect + ")" );
++					.setWhere( "(" + StringHelper.join( ", ", columnNames[tableIndex] ) + ") IN (" + generateIdSubselect( persister, tableNames.length - tableIndex - 1 ) + ")" );
+ 			if ( getFactory().getSettings().isCommentsEnabled() ) {
+ 				update.setComment( "bulk update" );
+ 			}
+Index: src/org/hibernate/impl/StatelessSessionImpl.java
+===================================================================
+--- src/org/hibernate/impl/StatelessSessionImpl.java	(revision 17710)
++++ src/org/hibernate/impl/StatelessSessionImpl.java	(working copy)
+@@ -109,7 +109,8 @@
+ 		EntityPersister persister = getEntityPersister(entityName, entity);
+ 		Serializable id = persister.getIdentifier(entity, EntityMode.POJO);
+ 		Object version = persister.getVersion(entity, EntityMode.POJO);
+-		persister.delete(id, version, entity, this);
++		Object[] state = persister.getPropertyValues(entity, EntityMode.POJO);
++		persister.delete(id, version, entity, state, this);
+ 	}
+ 
+ 
+Index: src/org/hibernate/mapping/DependantValue.java
+===================================================================
+--- src/org/hibernate/mapping/DependantValue.java	(revision 17710)
++++ src/org/hibernate/mapping/DependantValue.java	(working copy)
+@@ -1,6 +1,8 @@
+ //$Id$
+ package org.hibernate.mapping;
+ 
++import java.util.Iterator;
++
+ import org.hibernate.MappingException;
+ import org.hibernate.type.Type;
+ 
+@@ -15,6 +17,7 @@
+ 	private KeyValue wrappedValue;
+ 	private boolean nullable;
+ 	private boolean updateable;
++	private String referencedPropertyName;
+ 
+ 	public DependantValue(Table table, KeyValue prototype) {
+ 		super(table);
+@@ -47,4 +50,28 @@
+ 	public void setUpdateable(boolean updateable) {
+ 		this.updateable = updateable;
+ 	}
++
++	public void setReferencedPropertyName(String referencedPropertyName) {
++		this.referencedPropertyName = referencedPropertyName;
++	}
++	
++	public void createForeignKeyOfEntity(String entityName) {
++		if (referencedPropertyName != null && wrappedValue instanceof SimpleValue) {
++			SimpleValue sv = (SimpleValue) wrappedValue;
++			sv.getTable().createUniqueKey(sv.getConstraintColumns());
++			ForeignKey foreignKey = getTable().createForeignKey(referencedPropertyName, getConstraintColumns(), entityName, sv.getConstraintColumns());
++			foreignKey.setCascadeDeleteEnabled(isCascadeDeleteEnabled());
++		} else {
++			super.createForeignKeyOfEntity(entityName);
++		}
++	}
++
++	public String getReferencedPropertyName() {
++		return referencedPropertyName;
++	}
++
++	public Iterator getReferencedColumns() {
++		return wrappedValue.getColumnIterator();
++	}
++	
+ }
+Index: src/org/hibernate/mapping/Join.java
+===================================================================
+--- src/org/hibernate/mapping/Join.java	(revision 17710)
++++ src/org/hibernate/mapping/Join.java	(working copy)
+@@ -17,7 +17,7 @@
+ 
+ 	private ArrayList properties = new ArrayList();
+ 	private Table table;
+-	private KeyValue key;
++	private DependantValue key;
+ 	private PersistentClass persistentClass;
+ 	private boolean sequentialSelect;
+ 	private boolean inverse;
+@@ -52,10 +52,10 @@
+ 		this.table = table;
+ 	}
+ 
+-	public KeyValue getKey() {
++	public DependantValue getKey() {
+ 		return key;
+ 	}
+-	public void setKey(KeyValue key) {
++	public void setKey(DependantValue key) {
+ 		this.key = key;
+ 	}
+ 
+Index: src/org/hibernate/mapping/PersistentClass.java
+===================================================================
+--- src/org/hibernate/mapping/PersistentClass.java	(revision 17710)
++++ src/org/hibernate/mapping/PersistentClass.java	(working copy)
+@@ -734,10 +734,10 @@
+ 			temporaryIdTableName = dialect.generateTemporaryTableName( getTable().getName() );
+ 			Table table = new Table();
+ 			table.setName( temporaryIdTableName );
+-			Iterator itr = getTable().getPrimaryKey().getColumnIterator();
+-			while( itr.hasNext() ) {
+-				Column column = (Column) itr.next();
+-				table.addColumn( (Column) column.clone()  );
++			table.addColumns(getTable().getPrimaryKey().getColumnIterator());
++			for (Iterator joins = getJoinIterator(); joins.hasNext(); ) {
++				Join join = (Join) joins.next();
++				table.addColumns(join.getKey().getReferencedColumns());
+ 			}
+ 			temporaryIdTableDDL = table.sqlTemporaryTableCreateString( dialect, mapping );
+ 		}
+Index: src/org/hibernate/mapping/Table.java
+===================================================================
+--- src/org/hibernate/mapping/Table.java	(revision 17710)
++++ src/org/hibernate/mapping/Table.java	(working copy)
+@@ -768,4 +768,11 @@
+ 		return comments.iterator();
+ 	}
+ 
++	public void addColumns(Iterator columnIterator) {
++		while( columnIterator.hasNext() ) {
++			Column column = (Column) columnIterator.next();
++			addColumn( (Column) column.clone()  );
++		}
++	}
++
+ }
+Index: src/org/hibernate/persister/entity/AbstractEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/AbstractEntityPersister.java	(revision 17710)
++++ src/org/hibernate/persister/entity/AbstractEntityPersister.java	(working copy)
+@@ -880,6 +880,10 @@
+ 	public String[] getIdentifierColumnNames() {
+ 		return rootTableKeyColumnNames;
+ 	}
++	
++	public String[] getIdentifierColumnNames(int join) {
++		return getIdentifierColumnNames();
++	}
+ 
+ 	protected int getIdentifierColumnSpan() {
+ 		return identifierColumnSpan;
+@@ -2000,7 +2004,7 @@
+ 			index += 1;
+ 		}
+ 		else if ( id != null ) {
+-			getIdentifierType().nullSafeSet( ps, id, index, session );
++			getIdentifierType(j).nullSafeSet( ps, id, index, session );
+ 			index += getIdentifierColumnSpan();
+ 		}
+ 
+@@ -2489,7 +2493,7 @@
+ 
+ 				// Do the key. The key is immutable so we can use the _current_ object state - not necessarily
+ 				// the state at the time the delete was issued
+-				getIdentifierType().nullSafeSet( delete, id, index, session );
++				getIdentifierType(j).nullSafeSet( delete, id, index, session );
+ 				index += getIdentifierColumnSpan();
+ 
+ 				// We should use the _current_ object state (ie. after any updates that occurred during flush)
+@@ -2625,18 +2629,22 @@
+ 			boolean[] notNull = getPropertiesToInsert( fields );
+ 			id = insert( fields, notNull, generateInsertString( true, notNull ), object, session );
+ 			for ( int j = 1; j < span; j++ ) {
+-				insert( id, fields, notNull, j, generateInsertString( notNull, j ), object, session );
++				insert( getIdentifierForJoin(j,id, fields), fields, notNull, j, generateInsertString( notNull, j ), object, session );
+ 			}
+ 		}
+ 		else {
+ 			// For the case of dynamic-insert="false", use the static SQL
+ 			id = insert( fields, getPropertyInsertability(), getSQLIdentityInsertString(), object, session );
+ 			for ( int j = 1; j < span; j++ ) {
+-				insert( id, fields, getPropertyInsertability(), j, getSQLInsertStrings()[j], object, session );
++				insert( getIdentifierForJoin(j,id, fields), fields, getPropertyInsertability(), j, getSQLInsertStrings()[j], object, session );
+ 			}
+ 		}
+ 		return id;
+ 	}
++	
++	protected Serializable getIdentifierForJoin(int j, Serializable id, Object[] values) {
++		return id;
++	}
+ 
+ 	public void insert(Serializable id, Object[] fields, Object object, SessionImplementor session)
+ 			throws HibernateException {
+@@ -2660,7 +2668,7 @@
+ 	/**
+ 	 * Delete an object
+ 	 */
+-	public void delete(Serializable id, Object version, Object object, SessionImplementor session)
++	public void delete(Serializable id, Object version, Object object, Object[] state, SessionImplementor session)
+ 			throws HibernateException {
+ 		final int span = getTableSpan();
+ 		boolean isImpliedOptimisticLocking = !entityMetamodel.isVersioned() && entityMetamodel.getOptimisticLockMode() > Versioning.OPTIMISTIC_LOCK_VERSION;
+@@ -2689,7 +2697,7 @@
+ 		}
+ 
+ 		for ( int j = span - 1; j >= 0; j-- ) {
+-			delete( id, version, j, object, deleteStrings[j], session, loadedState );
++			delete( getIdentifierForJoin(j, id, state), version, j, object, deleteStrings[j], session, loadedState );
+ 		}
+ 
+ 	}
+@@ -2796,7 +2804,6 @@
+ 	}
+ 
+ 	protected JoinFragment createJoin(String name, boolean innerJoin, boolean includeSubclasses) {
+-		final String[] idCols = StringHelper.qualify( name, getIdentifierColumnNames() ); //all joins join to the pk of the driving table
+ 		final JoinFragment join = getFactory().getDialect().createOuterJoinFragment();
+ 		final int tableSpan = getSubclassTableSpan();
+ 		for ( int j = 1; j < tableSpan; j++ ) { //notice that we skip the first table; it is the driving table!
+@@ -2805,7 +2812,7 @@
+ 			if ( joinIsIncluded ) {
+ 				join.addJoin( getSubclassTableName( j ),
+ 						generateTableAlias( name, j ),
+-						idCols,
++						StringHelper.qualify( name, getJoinColumnNames(j) ),
+ 						getSubclassTableKeyColumns( j ),
+ 						innerJoin && isClassOrSuperclassTable( j ) && !isInverseTable( j ) && !isNullableTable( j ) ?
+ 						JoinFragment.INNER_JOIN : //we can inner join to superclass tables (the row MUST be there)
+@@ -2816,6 +2823,10 @@
+ 		return join;
+ 	}
+ 
++	protected String[] getJoinColumnNames(int j) {
++		return getIdentifierColumnNames();
++	}
++		
+ 	protected JoinFragment createJoin(int[] tableNumbers, String drivingAlias) {
+ 		final String[] keyCols = StringHelper.qualify( drivingAlias, getSubclassTableKeyColumns( tableNumbers[0] ) );
+ 		final JoinFragment jf = getFactory().getDialect().createOuterJoinFragment();
+@@ -3719,6 +3730,10 @@
+ 	public Type getIdentifierType() {
+ 		return entityMetamodel.getIdentifierProperty().getType();
+ 	}
++	
++	public Type getIdentifierType(int j) {
++		return getIdentifierType();
++	}
+ 
+ 	public boolean hasSubselectLoadableCollections() {
+ 		return hasSubselectLoadableCollections;
+@@ -3821,4 +3836,8 @@
+ 	}
+ 	// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ 
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment) {
++		selectFragment.addColumns(tableAlias, getIdentifierColumnNames(), getIdentifierColumnNames());
++	}
++	
+ }
+Index: src/org/hibernate/persister/entity/EntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/EntityPersister.java	(revision 17710)
++++ src/org/hibernate/persister/entity/EntityPersister.java	(working copy)
+@@ -324,7 +324,7 @@
+ 	/**
+ 	 * Delete a persistent instance
+ 	 */
+-	public void delete(Serializable id, Object version, Object object, SessionImplementor session)
++	public void delete(Serializable id, Object version, Object object, Object[] state, SessionImplementor session)
+ 	throws HibernateException;
+ 
+ 	/**
+Index: src/org/hibernate/persister/entity/Loadable.java
+===================================================================
+--- src/org/hibernate/persister/entity/Loadable.java	(revision 17710)
++++ src/org/hibernate/persister/entity/Loadable.java	(working copy)
+@@ -41,6 +41,8 @@
+ 	 */
+ 	public String[] getIdentifierColumnNames();
+ 
++	public String[] getIdentifierColumnNames(int join);
++	
+ 	/**
+ 	 * Get the result set aliases used for the identifier columns, given a suffix
+ 	 */
+Index: src/org/hibernate/persister/entity/Queryable.java
+===================================================================
+--- src/org/hibernate/persister/entity/Queryable.java	(revision 17710)
++++ src/org/hibernate/persister/entity/Queryable.java	(working copy)
+@@ -1,6 +1,8 @@
+ //$Id$
+ package org.hibernate.persister.entity;
+ 
++import org.hibernate.sql.SelectFragment;
++
+ /**
+  * Extends the generic <tt>EntityPersister</tt> contract to add
+  * operations required by the Hibernate Query Language
+@@ -40,7 +42,7 @@
+ 	/**
+ 	 * Get the names of columns used to persist the identifier
+ 	 */
+-	public String[] getIdentifierColumnNames();
++	public String[] getIdentifierColumnNames(int join);
+ 
+ 	/**
+ 	 * Is the inheritence hierarchy described by this persister contained across
+@@ -151,4 +153,6 @@
+ 			return name;
+ 		}
+ 	}
++
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment);
+ }
+Index: src/org/hibernate/persister/entity/SingleTableEntityPersister.java
+===================================================================
+--- src/org/hibernate/persister/entity/SingleTableEntityPersister.java	(revision 17710)
++++ src/org/hibernate/persister/entity/SingleTableEntityPersister.java	(working copy)
+@@ -50,6 +50,7 @@
+ 	private final boolean[] isInverseTable;
+ 	private final boolean[] isNullableTable;
+ 	private final String[][] keyColumnNames;
++	private final int[] keyProperty;
+ 	private final boolean[] cascadeDeleteEnabled;
+ 	private final boolean hasSequentialSelects;
+ 	
+@@ -114,6 +115,7 @@
+ 		qualifiedTableNames = new String[joinSpan];
+ 		isInverseTable = new boolean[joinSpan];
+ 		isNullableTable = new boolean[joinSpan];
++		keyProperty = new int[joinSpan];
+ 		keyColumnNames = new String[joinSpan][];
+ 		final Table table = persistentClass.getRootTable();
+ 		qualifiedTableNames[0] = table.getQualifiedName( 
+@@ -123,6 +125,7 @@
+ 		);
+ 		isInverseTable[0] = false;
+ 		isNullableTable[0] = false;
++		keyProperty[0] = -1;
+ 		keyColumnNames[0] = getIdentifierColumnNames();
+ 		cascadeDeleteEnabled = new boolean[joinSpan];
+ 
+@@ -192,6 +195,13 @@
+ 				Column col = (Column) iter.next();
+ 				keyColumnNames[j][i++] = col.getQuotedName( factory.getDialect() );
+ 			}
++			String referencedPropertyName = join.getKey().getReferencedPropertyName();
++			if (referencedPropertyName == null) {
++				//Use id as reference identifier.
++				keyProperty[j] = -1;
++			} else {
++				keyProperty[j] = getPropertyIndex(referencedPropertyName);
++			}
+ 
+ 			j++;
+ 		}
+@@ -711,4 +721,37 @@
+ 	public String[][] getContraintOrderedTableKeyColumnClosure() {
+ 		return constraintOrderedKeyColumnNames;
+ 	}
++	
++	
++	protected Serializable getIdentifierForJoin(int j, Serializable id, Object[] values) {
++		if (keyProperty[j] == -1)
++			return id;
++		return (Serializable) values[keyProperty[j]];
++	}
++	
++	public Type getIdentifierType(int j) {
++		if (keyProperty[j] == -1)
++			return getIdentifierType();
++		return getPropertyTypes()[keyProperty[j]];
++	}
++	
++	protected String[] getJoinColumnNames(int j) {
++		if (j >= keyProperty.length || keyProperty[j] == -1)
++			return super.getJoinColumnNames(j);
++		return getSubclassPropertyColumnNames(keyProperty[j]);
++	}
++	
++	public String[] getIdentifierColumnNames(int j) {
++		if (keyProperty[j] == -1)
++			return super.getIdentifierColumnNames(j);
++		return getSubclassPropertyColumnNames(keyProperty[j]);
++	}
++	
++	public void addIdentifierColumns(String tableAlias, SelectFragment selectFragment) {
++		super.addIdentifierColumns(tableAlias, selectFragment);
++		for (int j = 1; j < joinSpan; j++) {
++			String[] joinColumnNames = getJoinColumnNames(j);
++			selectFragment.addColumns(tableAlias, joinColumnNames, joinColumnNames);
++		}
++	}
+ }
+Index: test/org/hibernate/test/AllTests.java
+===================================================================
+--- test/org/hibernate/test/AllTests.java	(revision 17710)
++++ test/org/hibernate/test/AllTests.java	(working copy)
+@@ -1,6 +1,7 @@
+ //$Id$
+ package org.hibernate.test;
+ 
++import java.io.File;
+ import java.lang.reflect.Constructor;
+ 
+ import junit.framework.Test;
+@@ -116,6 +117,8 @@
+ import org.hibernate.test.join.OptionalJoinTest;
+ import org.hibernate.test.joinedsubclass.JoinedSubclassTest;
+ import org.hibernate.test.joinfetch.JoinFetchTest;
++import org.hibernate.test.joinpropertyref.JoinNoPropertyRefTest;
++import org.hibernate.test.joinpropertyref.JoinPropertyRefTest;
+ import org.hibernate.test.jpa.cascade.CascadeTest;
+ import org.hibernate.test.jpa.fetch.FetchingTest;
+ import org.hibernate.test.jpa.lock.JPALockTest;
+@@ -506,6 +509,8 @@
+ 			suite.addTest( BasicTableTest.suite() );
+ 			suite.addTest( HiLoTableTest.suite() );
+ 			suite.addTest( PooledTableTest.suite() );
++			suite.addTest( JoinNoPropertyRefTest.suite() );
++			suite.addTest( JoinPropertyRefTest.suite() );
+ 
+ 			return suite;
+ 		}
+Index: test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java	(revision 0)
+@@ -0,0 +1,29 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++
++public class JoinPropertyRefTest extends AbstractJoinTest {
++
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite(JoinPropertyRefTest.class);
++	}
++
++	public JoinPropertyRefTest(String name) {
++		super(name);
++	}
++
++	protected String[] getMappings() {
++		return new String[] { "joinpropertyref/Person.hbm.xml" };
++	}
++
++	protected void setJoinedTableKeyProperty(Person person,
++			PreparedStatement statement) throws SQLException {
++		statement.setString(1, person.getName());
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java	(revision 0)
+@@ -0,0 +1,129 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.io.Serializable;
++import java.sql.Connection;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.Iterator;
++import java.util.List;
++
++import org.hibernate.Transaction;
++import org.hibernate.classic.Session;
++import org.hibernate.test.TestCase;
++
++public abstract class AbstractJoinTest extends TestCase {
++
++	public AbstractJoinTest(String name) {
++		super(name);
++	}
++
++	public final void testSave () throws SQLException {
++		Person person = newPerson("King", "Address");
++		save(person);
++		
++		Session s = openSession();
++		Connection c = s.connection();
++		PreparedStatement statement = null;
++		ResultSet resultSet = null;
++		try {
++			statement = c.prepareStatement("select count(*) from address where address_id = ?");
++			setJoinedTableKeyProperty(person, statement);
++			resultSet = statement.executeQuery();
++			assertTrue(resultSet.next());
++		} finally {
++			if (resultSet != null)
++				try {
++					resultSet.close();
++				} catch (SQLException e1) {
++				}
++			try {
++				statement.close();
++			} catch (SQLException e) {
++			}
++			s.close();
++		}
++		
++		delete(person);
++	}
++
++	protected abstract void setJoinedTableKeyProperty(Person person, PreparedStatement statement) throws SQLException;
++
++	private void delete(Person person) {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.delete(person);
++		s.flush();
++		t.commit();
++		s.close();
++	}
++	
++	public final void testGet () {
++		Serializable id = save(newPerson("p1","a1"));
++		Session s = openSession();
++		Person loaded = (Person) s.get(Person.class, id);
++		s.close();
++
++		delete(loaded);
++	}
++	
++	public final void testFindByHQL () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		assertEquals(1,s.createQuery("from Person where address = ?").setString(0,"a1").list().size());
++		assertEquals(2,s.createQuery("from Person where address like ?").setString(0,"a%").list().size());
++		List all = s.createQuery("from Person").list();
++		assertEquals(3,all.size());
++		
++		for (Iterator i = all.iterator(); i.hasNext();) {
++			delete((Person) i.next());
++		}
++	}
++	
++	public final void testBatchDelete () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		assertEquals(3,s.createQuery("delete from Person").executeUpdate());
++		t.commit();
++		s.close();
++	}
++	
++	public final void testBatchUpdate () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		assertEquals(3,s.createQuery("update Person p set address = 'home'").executeUpdate());
++		t.commit();
++		s.close();
++	}
++
++	private Serializable save(Person person) {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Serializable id = s.save(person);
++		t.commit();
++		s.close();
++		return id;
++	}
++
++	private Person newPerson(String name, String address) {
++		Person person = new Person();
++		person.setName(name);
++		person.setSex('m');
++		person.setCountry("Country");
++		person.setAddress(address);
++		person.setZip("zip");
++		return person;
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/Person.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/Person.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/Person.java	(revision 0)
+@@ -0,0 +1,90 @@
++//$Id: Person.java 7203 2005-06-19 02:01:05Z oneovthafew $
++package org.hibernate.test.joinpropertyref;
++
++
++/**
++ * @author Gavin King
++ */
++public class Person {
++	private long id;
++	private String name;
++	private String address;
++	private String zip;
++	private String country;
++	private char sex;
++	
++	/**
++	 * @return Returns the sex.
++	 */
++	public char getSex() {
++		return sex;
++	}
++	/**
++	 * @param sex The sex to set.
++	 */
++	public void setSex(char sex) {
++		this.sex = sex;
++	}
++	/**
++	 * @return Returns the id.
++	 */
++	public long getId() {
++		return id;
++	}
++	/**
++	 * @param id The id to set.
++	 */
++	public void setId(long id) {
++		this.id = id;
++	}
++	/**
++	 * @return Returns the identity.
++	 */
++	public String getName() {
++		return name;
++	}
++	/**
++	 * @param identity The identity to set.
++	 */
++	public void setName(String identity) {
++		this.name = identity;
++	}
++	public String getSpecies() {
++		return null;
++	}
++
++	/**
++	 * @return Returns the country.
++	 */
++	public String getCountry() {
++		return country;
++	}
++	/**
++	 * @param country The country to set.
++	 */
++	public void setCountry(String country) {
++		this.country = country;
++	}
++	/**
++	 * @return Returns the zip.
++	 */
++	public String getZip() {
++		return zip;
++	}
++	/**
++	 * @param zip The zip to set.
++	 */
++	public void setZip(String zip) {
++		this.zip = zip;
++	}
++	/**
++	 * @param address The address to set.
++	 */
++	public void setAddress(String address) {
++		this.address = address;
++	}
++	
++	public String getAddress() {
++		return address;
++	}
++}
+Index: test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml	(revision 0)
+@@ -0,0 +1,59 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++	
++<!-- 
++
++  This mapping demonstrates 
++
++     (1) a table-per-subclass mapping strategy where subclass data is
++         retrieved by sequential select instead of a join (we do NOT
++         recommend you do this, since it is very vulnerable to N+1
++         problems; users porting applications from TopLink might find
++         this useful for reproducing old behavior)
++         
++     (2) spreading data from a single class across multiple tables
++         (again, we do not recommend you do this; use finer grained
++         classes instead)
++     
++     (3) use of null as a discriminator value
++     
++     (4) recursive associations withing an inheritance tree
++     
++-->
++
++<hibernate-mapping 
++	package="org.hibernate.test.joinpropertyref"
++	default-access="field">
++	
++	<class name="Person" 
++		table="person" 
++		lazy="true">
++		
++		<id name="id" 
++			column="person_id" 
++			unsaved-value="0">
++			<generator class="native"/>
++		</id>
++		
++		<property name="name" 
++			not-null="true"
++			length="80"/>
++		
++		<property name="sex" 
++			not-null="true"
++			update="false"/>
++
++		
++		<join table="address">
++			<key column="address_id"/>
++			<property name="address"/>
++			<property name="zip"/>
++			<property name="country"/>
++		</join>
++		
++	</class>
++	
++
++</hibernate-mapping>
+Index: test/org/hibernate/test/joinpropertyref/Person.hbm.xml
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/Person.hbm.xml	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/Person.hbm.xml	(revision 0)
+@@ -0,0 +1,59 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++	
++<!-- 
++
++  This mapping demonstrates 
++
++     (1) a table-per-subclass mapping strategy where subclass data is
++         retrieved by sequential select instead of a join (we do NOT
++         recommend you do this, since it is very vulnerable to N+1
++         problems; users porting applications from TopLink might find
++         this useful for reproducing old behavior)
++         
++     (2) spreading data from a single class across multiple tables
++         (again, we do not recommend you do this; use finer grained
++         classes instead)
++     
++     (3) use of null as a discriminator value
++     
++     (4) recursive associations withing an inheritance tree
++     
++-->
++
++<hibernate-mapping 
++	package="org.hibernate.test.joinpropertyref"
++	default-access="field">
++	
++	<class name="Person" 
++		table="person" 
++		lazy="true">
++		
++		<id name="id" 
++			column="person_id" 
++			unsaved-value="0">
++			<generator class="native"/>
++		</id>
++		
++		<property name="name" 
++			not-null="true"
++			length="80"/>
++		
++		<property name="sex" 
++			not-null="true"
++			update="false"/>
++
++		
++		<join table="address">
++			<key column="address_id"  foreign-key="bla" property-ref="name"/>
++			<property name="address"/>
++			<property name="zip"/>
++			<property name="country"/>
++		</join>
++		
++	</class>
++	
++
++</hibernate-mapping>
+Index: test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java	(revision 0)
+@@ -0,0 +1,29 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++
++public class JoinNoPropertyRefTest extends AbstractJoinTest {
++
++	
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite(JoinNoPropertyRefTest.class);
++	}
++	
++	public JoinNoPropertyRefTest(String name) {
++		super(name);
++	}
++
++	protected String[] getMappings() {
++		return new String[]{"joinpropertyref/PersonNoPropertyRef.hbm.xml"};
++	}
++
++	protected void setJoinedTableKeyProperty(Person person, PreparedStatement statement) throws SQLException {
++		statement.setLong(1,person.getId());
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/AbstractJoinTest.java	(revision 0)
+@@ -0,0 +1,129 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.io.Serializable;
++import java.sql.Connection;
++import java.sql.PreparedStatement;
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.Iterator;
++import java.util.List;
++
++import org.hibernate.Transaction;
++import org.hibernate.classic.Session;
++import org.hibernate.test.TestCase;
++
++public abstract class AbstractJoinTest extends TestCase {
++
++	public AbstractJoinTest(String name) {
++		super(name);
++	}
++
++	public final void testSave () throws SQLException {
++		Person person = newPerson("King", "Address");
++		save(person);
++		
++		Session s = openSession();
++		Connection c = s.connection();
++		PreparedStatement statement = null;
++		ResultSet resultSet = null;
++		try {
++			statement = c.prepareStatement("select count(*) from address where address_id = ?");
++			setJoinedTableKeyProperty(person, statement);
++			resultSet = statement.executeQuery();
++			assertTrue(resultSet.next());
++		} finally {
++			if (resultSet != null)
++				try {
++					resultSet.close();
++				} catch (SQLException e1) {
++				}
++			try {
++				statement.close();
++			} catch (SQLException e) {
++			}
++			s.close();
++		}
++		
++		delete(person);
++	}
++
++	protected abstract void setJoinedTableKeyProperty(Person person, PreparedStatement statement) throws SQLException;
++
++	private void delete(Person person) {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		s.delete(person);
++		s.flush();
++		t.commit();
++		s.close();
++	}
++	
++	public final void testGet () {
++		Serializable id = save(newPerson("p1","a1"));
++		Session s = openSession();
++		Person loaded = (Person) s.get(Person.class, id);
++		s.close();
++
++		delete(loaded);
++	}
++	
++	public final void testFindByHQL () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		assertEquals(1,s.createQuery("from Person where address = ?").setString(0,"a1").list().size());
++		assertEquals(2,s.createQuery("from Person where address like ?").setString(0,"a%").list().size());
++		List all = s.createQuery("from Person").list();
++		assertEquals(3,all.size());
++		
++		for (Iterator i = all.iterator(); i.hasNext();) {
++			delete((Person) i.next());
++		}
++	}
++	
++	public final void testBatchDelete () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		assertEquals(3,s.createQuery("delete from Person").executeUpdate());
++		t.commit();
++		s.close();
++	}
++	
++	public final void testBatchUpdate () {
++		save(newPerson("p1","a1"));
++		save(newPerson("p2","a2"));
++		save(newPerson("p3","b1"));
++		
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		assertEquals(3,s.createQuery("update Person p set address = 'home'").executeUpdate());
++		t.commit();
++		s.close();
++	}
++
++	private Serializable save(Person person) {
++		Session s = openSession();
++		Transaction t = s.beginTransaction();
++		Serializable id = s.save(person);
++		t.commit();
++		s.close();
++		return id;
++	}
++
++	private Person newPerson(String name, String address) {
++		Person person = new Person();
++		person.setName(name);
++		person.setSex('m');
++		person.setCountry("Country");
++		person.setAddress(address);
++		person.setZip("zip");
++		return person;
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/JoinNoPropertyRefTest.java	(revision 0)
+@@ -0,0 +1,29 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++
++public class JoinNoPropertyRefTest extends AbstractJoinTest {
++
++	
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite(JoinNoPropertyRefTest.class);
++	}
++	
++	public JoinNoPropertyRefTest(String name) {
++		super(name);
++	}
++
++	protected String[] getMappings() {
++		return new String[]{"joinpropertyref/PersonNoPropertyRef.hbm.xml"};
++	}
++
++	protected void setJoinedTableKeyProperty(Person person, PreparedStatement statement) throws SQLException {
++		statement.setLong(1,person.getId());
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/JoinPropertyRefTest.java	(revision 0)
+@@ -0,0 +1,29 @@
++package org.hibernate.test.joinpropertyref;
++
++import java.sql.PreparedStatement;
++import java.sql.SQLException;
++
++import junit.framework.Test;
++
++import org.hibernate.junit.functional.FunctionalTestClassTestSuite;
++
++public class JoinPropertyRefTest extends AbstractJoinTest {
++
++	public static Test suite() {
++		return new FunctionalTestClassTestSuite(JoinPropertyRefTest.class);
++	}
++
++	public JoinPropertyRefTest(String name) {
++		super(name);
++	}
++
++	protected String[] getMappings() {
++		return new String[] { "joinpropertyref/Person.hbm.xml" };
++	}
++
++	protected void setJoinedTableKeyProperty(Person person,
++			PreparedStatement statement) throws SQLException {
++		statement.setString(1, person.getName());
++	}
++
++}
+Index: test/org/hibernate/test/joinpropertyref/Person.hbm.xml
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/Person.hbm.xml	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/Person.hbm.xml	(revision 0)
+@@ -0,0 +1,59 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++	
++<!-- 
++
++  This mapping demonstrates 
++
++     (1) a table-per-subclass mapping strategy where subclass data is
++         retrieved by sequential select instead of a join (we do NOT
++         recommend you do this, since it is very vulnerable to N+1
++         problems; users porting applications from TopLink might find
++         this useful for reproducing old behavior)
++         
++     (2) spreading data from a single class across multiple tables
++         (again, we do not recommend you do this; use finer grained
++         classes instead)
++     
++     (3) use of null as a discriminator value
++     
++     (4) recursive associations withing an inheritance tree
++     
++-->
++
++<hibernate-mapping 
++	package="org.hibernate.test.joinpropertyref"
++	default-access="field">
++	
++	<class name="Person" 
++		table="person" 
++		lazy="true">
++		
++		<id name="id" 
++			column="person_id" 
++			unsaved-value="0">
++			<generator class="native"/>
++		</id>
++		
++		<property name="name" 
++			not-null="true"
++			length="80"/>
++		
++		<property name="sex" 
++			not-null="true"
++			update="false"/>
++
++		
++		<join table="address">
++			<key column="address_id"  foreign-key="bla" property-ref="name"/>
++			<property name="address"/>
++			<property name="zip"/>
++			<property name="country"/>
++		</join>
++		
++	</class>
++	
++
++</hibernate-mapping>
+Index: test/org/hibernate/test/joinpropertyref/Person.java
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/Person.java	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/Person.java	(revision 0)
+@@ -0,0 +1,90 @@
++//$Id: Person.java 7203 2005-06-19 02:01:05Z oneovthafew $
++package org.hibernate.test.joinpropertyref;
++
++
++/**
++ * @author Gavin King
++ */
++public class Person {
++	private long id;
++	private String name;
++	private String address;
++	private String zip;
++	private String country;
++	private char sex;
++	
++	/**
++	 * @return Returns the sex.
++	 */
++	public char getSex() {
++		return sex;
++	}
++	/**
++	 * @param sex The sex to set.
++	 */
++	public void setSex(char sex) {
++		this.sex = sex;
++	}
++	/**
++	 * @return Returns the id.
++	 */
++	public long getId() {
++		return id;
++	}
++	/**
++	 * @param id The id to set.
++	 */
++	public void setId(long id) {
++		this.id = id;
++	}
++	/**
++	 * @return Returns the identity.
++	 */
++	public String getName() {
++		return name;
++	}
++	/**
++	 * @param identity The identity to set.
++	 */
++	public void setName(String identity) {
++		this.name = identity;
++	}
++	public String getSpecies() {
++		return null;
++	}
++
++	/**
++	 * @return Returns the country.
++	 */
++	public String getCountry() {
++		return country;
++	}
++	/**
++	 * @param country The country to set.
++	 */
++	public void setCountry(String country) {
++		this.country = country;
++	}
++	/**
++	 * @return Returns the zip.
++	 */
++	public String getZip() {
++		return zip;
++	}
++	/**
++	 * @param zip The zip to set.
++	 */
++	public void setZip(String zip) {
++		this.zip = zip;
++	}
++	/**
++	 * @param address The address to set.
++	 */
++	public void setAddress(String address) {
++		this.address = address;
++	}
++	
++	public String getAddress() {
++		return address;
++	}
++}
+Index: test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml
+===================================================================
+--- test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml	(revision 0)
++++ test/org/hibernate/test/joinpropertyref/PersonNoPropertyRef.hbm.xml	(revision 0)
+@@ -0,0 +1,59 @@
++<?xml version="1.0"?>
++<!DOCTYPE hibernate-mapping PUBLIC 
++	"-//Hibernate/Hibernate Mapping DTD 3.0//EN"
++	"http://hibernate.sourceforge.net/hibernate-mapping-3.0.dtd">
++	
++<!-- 
++
++  This mapping demonstrates 
++
++     (1) a table-per-subclass mapping strategy where subclass data is
++         retrieved by sequential select instead of a join (we do NOT
++         recommend you do this, since it is very vulnerable to N+1
++         problems; users porting applications from TopLink might find
++         this useful for reproducing old behavior)
++         
++     (2) spreading data from a single class across multiple tables
++         (again, we do not recommend you do this; use finer grained
++         classes instead)
++     
++     (3) use of null as a discriminator value
++     
++     (4) recursive associations withing an inheritance tree
++     
++-->
++
++<hibernate-mapping 
++	package="org.hibernate.test.joinpropertyref"
++	default-access="field">
++	
++	<class name="Person" 
++		table="person" 
++		lazy="true">
++		
++		<id name="id" 
++			column="person_id" 
++			unsaved-value="0">
++			<generator class="native"/>
++		</id>
++		
++		<property name="name" 
++			not-null="true"
++			length="80"/>
++		
++		<property name="sex" 
++			not-null="true"
++			update="false"/>
++
++		
++		<join table="address">
++			<key column="address_id"/>
++			<property name="address"/>
++			<property name="zip"/>
++			<property name="country"/>
++		</join>
++		
++	</class>
++	
++
++</hibernate-mapping>
+Index: test/org/hibernate/test/legacy/CustomPersister.java
+===================================================================
+--- test/org/hibernate/test/legacy/CustomPersister.java	(revision 17710)
++++ test/org/hibernate/test/legacy/CustomPersister.java	(working copy)
+@@ -361,6 +361,12 @@
+ 
+ 		INSTANCES.remove(id);
+ 	}
++	
++	public void delete(Serializable id, Object version, Object object,
++			Object[] state, SessionImplementor session)
++			throws HibernateException {
++		INSTANCES.remove(id);
++	}
+ 
+ 	/**
+ 	 * @see EntityPersister
+@@ -623,4 +629,5 @@
+ 		return null;
+ 	}
+ 
++
+ }

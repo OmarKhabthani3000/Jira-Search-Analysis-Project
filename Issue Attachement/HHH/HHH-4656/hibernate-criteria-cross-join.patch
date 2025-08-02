@@ -1,0 +1,293 @@
+Index: core/src/main/java/org/hibernate/sql/ANSIJoinFragment.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/ANSIJoinFragment.java	(revision 18110)
++++ core/src/main/java/org/hibernate/sql/ANSIJoinFragment.java	(working copy)
+@@ -25,6 +25,7 @@
+ package org.hibernate.sql;
+ 
+ import org.hibernate.AssertionFailure;
++import org.hibernate.util.StringHelper;
+ 
+ /**
+  * An ANSI-style join
+@@ -44,17 +45,20 @@
+ 		String joinString;
+ 		switch (joinType) {
+ 			case INNER_JOIN:
+-				joinString = " inner join ";
++				joinString = "\ninner join ";
+ 				break;
+ 			case LEFT_OUTER_JOIN:
+-				joinString = " left outer join ";
++				joinString = "\nleft outer join ";
+ 				break;
+ 			case RIGHT_OUTER_JOIN:
+-				joinString = " right outer join ";
++				joinString = "\nright outer join ";
+ 				break;
+ 			case FULL_JOIN:
+-				joinString = " full outer join ";
++				joinString = "\nfull outer join ";
+ 				break;
++            case CROSS_JOIN:
++                joinString = "\n, ";
++                break;
+ 			default:
+ 				throw new AssertionFailure("undefined join type");
+ 		}
+@@ -62,24 +66,34 @@
+ 		buffer.append(joinString)
+ 			.append(tableName)
+ 			.append(' ')
+-			.append(alias)
+-			.append(" on ");
++			.append(alias);
++        
++        if (joinType == CROSS_JOIN && StringHelper.isNotEmpty(on))
++        {
++            buffer.append("\n  on ").append(on);
++        }
++        else if (joinType == CROSS_JOIN)
++        {
++            // ignore join conditions to create a cartesian join
++        }
++        else
++        {
++            buffer.append("\n  on ");
+ 
+-
+-		for ( int j=0; j<fkColumns.length; j++) {
+-			/*if ( fkColumns[j].indexOf('.')<1 ) {
+-				throw new AssertionFailure("missing alias");
+-			}*/
+-			buffer.append( fkColumns[j] )
+-				.append('=')
+-				.append(alias)
+-				.append('.')
+-				.append( pkColumns[j] );
+-			if ( j<fkColumns.length-1 ) buffer.append(" and ");
+-		}
+-
+-		addCondition(buffer, on);
+-
++            for ( int j=0; j<fkColumns.length; j++) {
++    			/*if ( fkColumns[j].indexOf('.')<1 ) {
++    				throw new AssertionFailure("missing alias");
++    			}*/
++    			buffer.append( fkColumns[j] )
++    				.append('=')
++    				.append(alias)
++    				.append('.')
++    				.append( pkColumns[j] );
++    			if ( j<fkColumns.length-1 ) buffer.append("\n  and ");
++    		}
++            
++            addCondition(buffer, on);
++        }
+ 	}
+ 
+ 	public String toFromFragmentString() {
+Index: core/src/main/java/org/hibernate/sql/JoinFragment.java
+===================================================================
+--- core/src/main/java/org/hibernate/sql/JoinFragment.java	(revision 18110)
++++ core/src/main/java/org/hibernate/sql/JoinFragment.java	(working copy)
+@@ -57,6 +57,7 @@
+ 	public static final int FULL_JOIN = 4;
+ 	public static final int LEFT_OUTER_JOIN = 1;
+ 	public static final int RIGHT_OUTER_JOIN = 2;
++    public static final int CROSS_JOIN = 8;
+ 
+ 	private boolean hasFilterCondition = false;
+ 	private boolean hasThetaJoins = false;
+Index: annotations/src/test/java/org/hibernate/test/sql/CriteriaCrossJoinTest.java
+===================================================================
+--- annotations/src/test/java/org/hibernate/test/sql/CriteriaCrossJoinTest.java	(revision 0)
++++ annotations/src/test/java/org/hibernate/test/sql/CriteriaCrossJoinTest.java	(revision 0)
+@@ -0,0 +1,187 @@
++package org.hibernate.test.sql;
++
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++import javax.persistence.Entity;
++import javax.persistence.FetchType;
++import javax.persistence.GeneratedValue;
++import javax.persistence.Id;
++import javax.persistence.JoinColumn;
++import javax.persistence.ManyToOne;
++import javax.persistence.OneToMany;
++import javax.persistence.Table;
++
++import org.hibernate.Criteria;
++import org.hibernate.Session;
++import org.hibernate.SessionFactory;
++import org.hibernate.annotations.ForeignKey;
++import org.hibernate.annotations.GenericGenerator;
++import org.hibernate.cfg.AnnotationConfiguration;
++import org.hibernate.engine.LoadQueryInfluencers;
++import org.hibernate.engine.SessionFactoryImplementor;
++import org.hibernate.impl.CriteriaImpl;
++import org.hibernate.impl.SessionFactoryImpl;
++import org.hibernate.loader.criteria.CriteriaJoinWalker;
++import org.hibernate.loader.criteria.CriteriaQueryTranslator;
++import org.hibernate.persister.entity.OuterJoinLoadable;
++import org.hibernate.sql.JoinFragment;
++import org.hibernate.tool.hbm2ddl.SchemaExport;
++
++/**
++ * This patch allows you to do a cartesian product (cross join) in a Criteria 
++ * query, deliberately removing the supplied join conditions, and adding any 
++ * that you like (prefer) via the withClause parameter of 
++ * Criteria.createCriteria. For example, it enables you to do:
++ * 
++ * <code>
++ * Criteria c = session.createCriteria(Project.class);
++ * c.createCriteria("sites", JoinFragment.CROSS_JOIN);
++ * </code>
++ * 
++ * returning a row for every Project and every Site, regardless of whether
++ * they match or not.
++ * 
++ * I need this to implement some complex SQL queries using Criteria. I could
++ * probably use HQL or SQL but I prefer Criteria.
++ * 
++ * The patch includes some changes I made to ANSIJoinFragment's SQL formatting
++ * to make the SQL it generates easier to read, which you may prefer to leave 
++ * out.
++ * 
++ * @author Chris Wilson
++ */
++public class CriteriaCrossJoinTest
++extends org.hibernate.test.annotations.TestCase
++{
++    @Entity
++    @Table(name="project")
++    private static class Project 
++    {
++        @Id
++        @GenericGenerator(name="generator", strategy="increment")
++        @GeneratedValue(generator="generator")
++        public Integer id;
++        
++        @OneToMany
++        @JoinColumn(name="project_id")
++        @ForeignKey(name="fk_project_sites")
++        public Set<Site> sites = new HashSet<Site>(0);
++    }
++    
++    @Entity
++    @Table(name="site")
++    private static class Site
++    {
++        @Id
++        @GenericGenerator(name="generator", strategy="increment")
++        @GeneratedValue(generator="generator")
++        public Integer id;
++        
++        @ManyToOne(fetch=FetchType.LAZY)
++        @JoinColumn(name="project_id")
++        public Project project;
++    }
++    
++    protected Class[] getMappings() {
++        return new Class[]{
++            Project.class,
++            Site.class
++        };
++    }
++        
++    public void test()
++    throws Exception
++    {
++        AnnotationConfiguration conf = new AnnotationConfiguration();
++
++        conf.addAnnotatedClass(Project.class);
++        conf.addAnnotatedClass(Site.class);
++
++        conf.setProperty("hibernate.connection.driver_class",
++            "com.mysql.jdbc.Driver");
++        conf.setProperty("hibernate.connection.url",
++            "jdbc:mysql://localhost/test");
++        conf.setProperty("hibernate.connection.username", "root");
++        conf.setProperty("hibernate.connection.password", "");
++        conf.setProperty("hibernate.dialect",
++            "org.hibernate.dialect.MySQLDialect");
++        SessionFactory fact = conf.buildSessionFactory();
++        
++        SchemaExport exporter = new SchemaExport(conf,
++            ((SessionFactoryImpl)fact).getSettings());
++
++        exporter.setHaltOnError(false);
++        exporter.execute(true, true, true, false);
++
++        exporter.setHaltOnError(true);
++        exporter.execute(true, true, false, true);
++
++        for (Object e : exporter.getExceptions())
++        {
++            throw (Exception) e;
++        }
++        
++        Session session = fact.openSession();
++        
++        Project pa = new Project();
++        Project pb = new Project();
++        Site s1 = new Site();
++        Site s2 = new Site();
++        s1.project = pb;
++        s2.project = pb;
++        session.save(pa);
++        session.save(pb);
++        session.save(s1);
++        session.save(s2);
++        session.flush();
++        
++        Criteria c = session.createCriteria(Project.class);
++        c.createCriteria("sites", JoinFragment.CROSS_JOIN);
++        
++        /** 
++         * copied from:
++         * @see org.hibernate.loader.criteria.CriteriaLoader#CriteriaLoader(OuterJoinLoadable, SessionFactoryImplementor, CriteriaImpl, String, LoadQueryInfluencers)
++         */
++        
++        SessionFactoryImplementor sfi = (SessionFactoryImplementor) fact;
++        CriteriaImpl ci = (CriteriaImpl) c;
++        
++        String entityName = sfi.getImplementors(ci.getEntityOrClassName())[0];
++        
++        CriteriaQueryTranslator translator = new CriteriaQueryTranslator(
++            sfi, ci, entityName, CriteriaQueryTranslator.ROOT_SQL_ALIAS
++        );
++        
++        CriteriaJoinWalker walker = new CriteriaJoinWalker(
++            (OuterJoinLoadable) sfi.getEntityPersister(entityName), 
++            translator,
++            sfi, 
++            ci, 
++            entityName, 
++            new LoadQueryInfluencers()
++        );
++
++        assertEquals("select " +
++                "  this_.id as id4_1_, " +
++                "  criteriacrossjointes1_.id as id5_0_,\n" +
++                "  criteriacrossjointes1_.project_id as project2_5_0_\n" +
++                "from project this_\n" +
++                ", site criteriacrossjointes1_", 
++                walker.getSQLString());
++        
++        List results = new ArrayList();
++        results.add(pa);
++        results.add(pb);
++        results.add(pa);
++        results.add(pb);
++        assertEquals(results, c.list());
++    }
++    
++    public static void main(String[] args)
++    {
++        junit.textui.TestRunner.run(CriteriaCrossJoinTest.class);
++    }
++}

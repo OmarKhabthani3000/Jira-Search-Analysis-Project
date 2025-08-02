@@ -1,0 +1,255 @@
+From 2e03a59f24b27c21228a84277653bb7827997731 Mon Sep 17 00:00:00 2001
+From: Chris Boyle <cmb@corefiling.com>
+Date: Wed, 6 Jan 2016 14:21:32 +0000
+Subject: [PATCH] Ensure a couple of JarInputStreams are closed.
+
+---
+ .../internal/JarFileBasedArchiveDescriptor.java    |  63 ++++-----
+ .../JarInputStreamBasedArchiveDescriptor.java      | 141 +++++++++++----------
+ 2 files changed, 106 insertions(+), 98 deletions(-)
+
+diff --git a/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarFileBasedArchiveDescriptor.java b/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarFileBasedArchiveDescriptor.java
+index eb1212f..8d2054b 100644
+--- a/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarFileBasedArchiveDescriptor.java
++++ b/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarFileBasedArchiveDescriptor.java
+@@ -74,36 +74,41 @@ public class JarFileBasedArchiveDescriptor extends AbstractArchiveDescriptor {
+ 					final InputStream is = new BufferedInputStream( jarFile.getInputStream( zipEntry ) );
+ 					try {
+ 						final JarInputStream jarInputStream = new JarInputStream( is );
+-						ZipEntry subZipEntry = jarInputStream.getNextEntry();
+-						while ( subZipEntry != null ) {
+-							if ( ! subZipEntry.isDirectory() ) {
+-
+-								final String name = extractName( subZipEntry );
+-								final String relativeName = extractRelativeName( subZipEntry );
+-								final InputStreamAccess inputStreamAccess = buildByteBasedInputStreamAccess( name, jarInputStream );
+-
+-								final ArchiveEntry entry = new ArchiveEntry() {
+-									@Override
+-									public String getName() {
+-										return name;
+-									}
+-
+-									@Override
+-									public String getNameWithinArchive() {
+-										return relativeName;
+-									}
+-
+-									@Override
+-									public InputStreamAccess getStreamAccess() {
+-										return inputStreamAccess;
+-									}
+-								};
+-
+-								final ArchiveEntryHandler entryHandler = context.obtainArchiveEntryHandler( entry );
+-								entryHandler.handleEntry( entry, context );
++						try {
++							ZipEntry subZipEntry = jarInputStream.getNextEntry();
++							while ( subZipEntry != null ) {
++								if ( ! subZipEntry.isDirectory() ) {
++
++									final String name = extractName( subZipEntry );
++									final String relativeName = extractRelativeName( subZipEntry );
++									final InputStreamAccess inputStreamAccess = buildByteBasedInputStreamAccess( name, jarInputStream );
++
++									final ArchiveEntry entry = new ArchiveEntry() {
++										@Override
++										public String getName() {
++											return name;
++										}
++
++										@Override
++										public String getNameWithinArchive() {
++											return relativeName;
++										}
++
++										@Override
++										public InputStreamAccess getStreamAccess() {
++											return inputStreamAccess;
++										}
++									};
++
++									final ArchiveEntryHandler entryHandler = context.obtainArchiveEntryHandler( entry );
++									entryHandler.handleEntry( entry, context );
++								}
++
++								subZipEntry = jarInputStream.getNextEntry();
+ 							}
+-
+-							subZipEntry = jarInputStream.getNextEntry();
++						}
++						finally {
++							jarInputStream.close();
+ 						}
+ 					}
+ 					finally {
+diff --git a/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarInputStreamBasedArchiveDescriptor.java b/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarInputStreamBasedArchiveDescriptor.java
+index 5ef66f3..8d46296 100644
+--- a/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarInputStreamBasedArchiveDescriptor.java
++++ b/hibernate-core/src/main/java/org/hibernate/boot/archive/internal/JarInputStreamBasedArchiveDescriptor.java
+@@ -57,90 +57,93 @@ public class JarInputStreamBasedArchiveDescriptor extends AbstractArchiveDescrip
+ 		}
+ 
+ 		try {
+-			JarEntry jarEntry;
+-			while ( ( jarEntry = jarInputStream.getNextJarEntry() ) != null ) {
+-				final String jarEntryName = jarEntry.getName();
+-				if ( getEntryBasePrefix() != null && ! jarEntryName.startsWith( getEntryBasePrefix() ) ) {
+-					continue;
+-				}
++			try {
++				JarEntry jarEntry;
++				while ( ( jarEntry = jarInputStream.getNextJarEntry() ) != null ) {
++					final String jarEntryName = jarEntry.getName();
++					if ( getEntryBasePrefix() != null && ! jarEntryName.startsWith( getEntryBasePrefix() ) ) {
++						continue;
++					}
+ 
+-				if ( jarEntry.isDirectory() ) {
+-					continue;
+-				}
++					if ( jarEntry.isDirectory() ) {
++						continue;
++					}
+ 
+-				if ( jarEntryName.equals( getEntryBasePrefix() ) ) {
+-					// exact match, might be a nested jar entry (ie from jar:file:..../foo.ear!/bar.jar)
+-					//
+-					// This algorithm assumes that the zipped file is only the URL root (including entry), not
+-					// just any random entry
+-					try {
+-						final JarInputStream subJarInputStream = new JarInputStream( jarInputStream );
++					if ( jarEntryName.equals( getEntryBasePrefix() ) ) {
++						// exact match, might be a nested jar entry (ie from jar:file:..../foo.ear!/bar.jar)
++						//
++						// This algorithm assumes that the zipped file is only the URL root (including entry), not
++						// just any random entry
+ 						try {
+-							ZipEntry subZipEntry = jarInputStream.getNextEntry();
+-							while (subZipEntry != null) {
+-								if ( ! subZipEntry.isDirectory() ) {
+-									final String subName = extractName( subZipEntry );
+-									final InputStreamAccess inputStreamAccess = buildByteBasedInputStreamAccess( subName, subJarInputStream );
+-
+-									final ArchiveEntry entry = new ArchiveEntry() {
+-										@Override
+-										public String getName() {
+-											return subName;
+-										}
+-
+-										@Override
+-										public String getNameWithinArchive() {
+-											return subName;
+-										}
+-
+-										@Override
+-										public InputStreamAccess getStreamAccess() {
+-											return inputStreamAccess;
+-										}
+-									};
+-
+-									context.obtainArchiveEntryHandler( entry ).handleEntry( entry, context );
++							final JarInputStream subJarInputStream = new JarInputStream( jarInputStream );
++							try {
++								ZipEntry subZipEntry = jarInputStream.getNextEntry();
++								while (subZipEntry != null) {
++									if ( ! subZipEntry.isDirectory() ) {
++										final String subName = extractName( subZipEntry );
++										final InputStreamAccess inputStreamAccess = buildByteBasedInputStreamAccess( subName, subJarInputStream );
++
++										final ArchiveEntry entry = new ArchiveEntry() {
++											@Override
++											public String getName() {
++												return subName;
++											}
++
++											@Override
++											public String getNameWithinArchive() {
++												return subName;
++											}
++
++											@Override
++											public InputStreamAccess getStreamAccess() {
++												return inputStreamAccess;
++											}
++										};
++
++										context.obtainArchiveEntryHandler( entry ).handleEntry( entry, context );
++									}
++									subZipEntry = jarInputStream.getNextJarEntry();
+ 								}
+-								subZipEntry = jarInputStream.getNextJarEntry();
++							}
++							finally {
++								subJarInputStream.close();
+ 							}
+ 						}
+-						finally {
+-							subJarInputStream.close();
++						catch (Exception e) {
++							throw new ArchiveException( "Error accessing nested jar", e );
+ 						}
+ 					}
+-					catch (Exception e) {
+-						throw new ArchiveException( "Error accessing nested jar", e );
+-					}
+-				}
+-				else {
+-					final String entryName = extractName( jarEntry );
+-					final InputStreamAccess inputStreamAccess
+-							= buildByteBasedInputStreamAccess( entryName, jarInputStream );
++					else {
++						final String entryName = extractName( jarEntry );
++						final InputStreamAccess inputStreamAccess
++								= buildByteBasedInputStreamAccess( entryName, jarInputStream );
+ 
+-					final String relativeName = extractRelativeName( jarEntry );
++						final String relativeName = extractRelativeName( jarEntry );
+ 
+-					final ArchiveEntry entry = new ArchiveEntry() {
+-						@Override
+-						public String getName() {
+-							return entryName;
+-						}
++						final ArchiveEntry entry = new ArchiveEntry() {
++							@Override
++							public String getName() {
++								return entryName;
++							}
+ 
+-						@Override
+-						public String getNameWithinArchive() {
+-							return relativeName;
+-						}
++							@Override
++							public String getNameWithinArchive() {
++								return relativeName;
++							}
+ 
+-						@Override
+-						public InputStreamAccess getStreamAccess() {
+-							return inputStreamAccess;
+-						}
+-					};
++							@Override
++							public InputStreamAccess getStreamAccess() {
++								return inputStreamAccess;
++							}
++						};
+ 
+-					context.obtainArchiveEntryHandler( entry ).handleEntry( entry, context );
++						context.obtainArchiveEntryHandler( entry ).handleEntry( entry, context );
++					}
+ 				}
+ 			}
+-
+-			jarInputStream.close();
++			finally {
++				jarInputStream.close();
++			}
+ 		}
+ 		catch (IOException ioe) {
+ 			throw new ArchiveException(
+-- 
+2.4.3
+

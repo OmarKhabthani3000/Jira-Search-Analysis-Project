@@ -1,0 +1,781 @@
+Index: src/net/sf/hibernate/Query.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Query.java,v
+retrieving revision 1.13
+diff -u -r1.13 Query.java
+--- src/net/sf/hibernate/Query.java	18 May 2003 15:45:13 -0000	1.13
++++ src/net/sf/hibernate/Query.java	25 May 2004 18:51:53 -0000
+@@ -281,6 +281,14 @@
+ 	 * @param val a non-null instance of a persistent enumeration
+ 	 */
+ 	public Query setEnum(String name, Object val) throws MappingException; // use setParameter for null values
++
++    /**
++     * Add a comment to the generated SQL
++     * @param comment a human-readable string
++     */
++    public void setComment(String comment);
++    public String getComment();
++
+ }
+ 
+ 
+Index: src/net/sf/hibernate/Session.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/Session.java,v
+retrieving revision 1.19
+diff -u -r1.19 Session.java
+--- src/net/sf/hibernate/Session.java	13 Jun 2003 10:09:23 -0000	1.19
++++ src/net/sf/hibernate/Session.java	25 May 2004 18:51:53 -0000
+@@ -320,7 +320,8 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public List find(String query, Object[] values, Type[] types) throws HibernateException;
+-	
++	public List find(String query, Object[] values, Type[] types, String comment) throws HibernateException;
++
+ 	/**
+ 	 * Execute a query and return the results in an iterator. If the query has multiple
+ 	 * return values, values will be returned in an array of type <tt>Object[].</tt><br>
+@@ -368,7 +369,8 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public Iterator iterate(String query, Object[] values, Type[] types) throws HibernateException;
+-	
++	public Iterator iterate(String query, Object[] values, Type[] types, String comment) throws HibernateException;
++
+ 	/**
+ 	 * Apply a filter to a persistent collection. A filter is a Hibernate query that may refer to
+ 	 * <tt>this</tt>, the collection element. Filters allow efficient access to very large lazy
+@@ -393,7 +395,7 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public Collection filter(Object collection, String filter, Object value, Type type) throws HibernateException;
+-	
++
+ 	/**
+ 	 * Apply a filter to a persistent collection, binding the given parameters to  "?" placeholders.
+ 	 * A filter is a Hibernate query that may refer to <tt>this</tt>, the collection element.
+@@ -406,7 +408,8 @@
+ 	 * @throws HibernateException
+ 	 */
+ 	public Collection filter(Object collection, String filter, Object[] values, Type[] types) throws HibernateException;
+-	
++	public Collection filter(Object collection, String filter, Object[] values, Type[] types, String comment) throws HibernateException;
++
+ 	/**
+ 	 * Delete all objects returned by the query. Return the number of objects deleted.
+ 	 *
+Index: src/net/sf/hibernate/engine/SessionImplementor.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/engine/SessionImplementor.java,v
+retrieving revision 1.18
+diff -u -r1.18 SessionImplementor.java
+--- src/net/sf/hibernate/engine/SessionImplementor.java	28 Jul 2003 00:34:32 -0000	1.18
++++ src/net/sf/hibernate/engine/SessionImplementor.java	25 May 2004 18:51:54 -0000
+@@ -118,24 +118,26 @@
+ 	/**
+ 	 * Execute a <tt>find()</tt> query
+ 	 */
+-	public List find(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException;
++	public List find(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException;
+ 	/**
+ 	 * Execute an <tt>iterate()</tt> query
+ 	 */
+-	public Iterator iterate(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException;
++	public Iterator iterate(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException;
+ 	/**
+ 	 * Execute a <tt>scroll()</tt> query
+ 	 */
+-	public ScrollableResults scroll(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException;
++	public ScrollableResults scroll(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException;
+ 	
+ 	/**
+ 	 * Execute a filter
+ 	 */
+ 	public List filter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException;
++	public List filter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException;
+ 	/**
+ 	 * Iterate a filter
+ 	 */
+ 	public Iterator iterateFilter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException;
++	public Iterator iterateFilter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException;
+ 	/**
+ 	 * Get the <tt>ClassPersister</tt> for an object
+ 	 */
+Index: src/net/sf/hibernate/hql/QueryTranslator.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/hql/QueryTranslator.java,v
+retrieving revision 1.43
+diff -u -r1.43 QueryTranslator.java
+--- src/net/sf/hibernate/hql/QueryTranslator.java	4 Aug 2003 10:40:56 -0000	1.43
++++ src/net/sf/hibernate/hql/QueryTranslator.java	25 May 2004 18:51:54 -0000
+@@ -796,10 +796,10 @@
+ 		}
+ 	}
+ 	
+-	public Iterator iterate(Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, SessionImplementor session) throws HibernateException, SQLException {
++	public Iterator iterate(Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, SessionImplementor session, String comment) throws HibernateException, SQLException {
+ 		
+ 		PreparedStatement st = prepareQueryStatement( 
+-			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), 
++			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), comment,
+ 			values, types, namedParams, selection, false, session 
+ 		);
+ 		ResultSet rs = getResultSet(st, selection, session);
+@@ -807,11 +807,11 @@
+ 
+ 	}
+ 	
+-	public ScrollableResults scroll(Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, SessionImplementor session) throws HibernateException, SQLException {
++	public ScrollableResults scroll(Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, SessionImplementor session, String comment) throws HibernateException, SQLException {
+ 		
+ 		PreparedStatement st = prepareQueryStatement( 
+-			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), 
+-			values, types, namedParams, selection, true, session 
++			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), comment,
++			values, types, namedParams, selection, true, session
+ 		);
+ 		ResultSet rs = getResultSet(st, selection, session);
+ 		return new ScrollableResultsImpl( rs, st, session, getReturnTypes() );
+@@ -923,9 +923,10 @@
+ 		boolean returnProxies,
+ 		RowSelection selection,
+ 		Map namedParams, 
+-		Map lockModes)
++		Map lockModes,
++        String comment)
+ 		throws SQLException, HibernateException {
+-		return super.find(session, values, types, returnProxies, selection, namedParams, lockModes);
++		return super.find(session, values, types, returnProxies, selection, namedParams, lockModes, comment);
+ 	}
+ 	
+ 	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session) throws SQLException, HibernateException {
+Index: src/net/sf/hibernate/impl/QueryImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/QueryImpl.java,v
+retrieving revision 1.19
+diff -u -r1.19 QueryImpl.java
+--- src/net/sf/hibernate/impl/QueryImpl.java	8 Jun 2003 04:43:50 -0000	1.19
++++ src/net/sf/hibernate/impl/QueryImpl.java	25 May 2004 18:51:54 -0000
+@@ -42,7 +42,8 @@
+ 	
+ 	private final SessionImplementor session;
+ 	private String queryString;
+-	
++    private String comment;
++
+ 	private RowSelection selection;
+ 	private ArrayList values = new ArrayList(4);
+ 	private ArrayList types = new ArrayList(4);
+@@ -61,19 +62,19 @@
+ 	public Iterator iterate() throws HibernateException {
+ 		Map namedParams = new HashMap(namedParameters);
+ 		String query = bindParameterLists(namedParams);
+-		return session.iterate(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes);
++		return session.iterate(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes, getComment());
+ 	}
+ 	
+ 	public ScrollableResults scroll() throws HibernateException {
+ 		Map namedParams = new HashMap(namedParameters);
+ 		String query = bindParameterLists(namedParams);
+-		return session.scroll(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes);
++		return session.scroll(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes, getComment());
+ 	}
+ 	
+ 	public List list() throws HibernateException {
+ 		Map namedParams = new HashMap(namedParameters);
+ 		String query = bindParameterLists(namedParams);
+-		return session.find(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes);
++		return session.find(query, values.toArray(), (Type[]) types.toArray(NO_TYPES), selection, namedParams, lockModes, getComment());
+ 	}
+ 	
+ 	public Query setMaxResults(int maxResults) {
+@@ -452,6 +453,13 @@
+ 		return lockModes;
+ 	}
+ 
++    public void setComment(String comment) {
++        this.comment = comment;
++    }
++
++    public String getComment() {
++        return this.comment;
++    }
+ }
+ 
+ 
+Index: src/net/sf/hibernate/impl/SessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/impl/SessionImpl.java,v
+retrieving revision 1.60
+diff -u -r1.60 SessionImpl.java
+--- src/net/sf/hibernate/impl/SessionImpl.java	1 Aug 2003 13:59:32 -0000	1.60
++++ src/net/sf/hibernate/impl/SessionImpl.java	25 May 2004 18:51:55 -0000
+@@ -1317,12 +1317,16 @@
+ 	public List find(String query, Object value, Type type) throws HibernateException {
+ 		return find( query, new Object[] { value }, new Type[] { type } );
+ 	}
+-	
+-	public List find(String query, Object[] values, Type[] types) throws HibernateException {
+-		return find(query, values, types, null, null, null);
++
++    public List find(String query, Object[] values, Type[] types) throws HibernateException {
++        return find(query, values, types, null, null, null, null);
++    }
++
++	public List find(String query, Object[] values, Type[] types, String comment) throws HibernateException {
++		return find(query, values, types, null, null, null, comment);
+ 	}
+ 	
+-	public List find(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++	public List find(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException {
+ 		
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace( "find: " + query );
+@@ -1340,7 +1344,7 @@
+ 			for ( int i=0; i<q.length; i++ ) {
+ 				List currentResults;
+ 				try {
+-					currentResults = q[i].find(this, values, types, true, selection, namedParams, lockModes);
++					currentResults = q[i].find(this, values, types, true, selection, namedParams, lockModes, comment);
+ 				}
+ 				catch (SQLException sqle) {
+ 					throw new JDBCException("Could not execute query", sqle);
+@@ -1381,12 +1385,16 @@
+ 	public Iterator iterate(String query, Object value, Type type) throws HibernateException {
+ 		return iterate( query, new Object[] { value }, new Type[] { type } );
+ 	}
+-	
+-	public Iterator iterate(String query, Object[] values, Type[] types) throws HibernateException {
+-		return iterate(query, values, types, null, null, null);
++
++    public Iterator iterate(String query, Object[] values, Type[] types) throws HibernateException {
++        return iterate(query, values, types, null, null, null, null);
++    }
++
++	public Iterator iterate(String query, Object[] values, Type[] types, String comment) throws HibernateException {
++		return iterate(query, values, types, null, null, null, comment);
+ 	}
+ 	
+-	public Iterator iterate(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++	public Iterator iterate(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException {
+ 		
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace( "iterate: " + query );
+@@ -1406,7 +1414,7 @@
+ 		for ( int i=0; i<q.length; i++ ) {
+ 			
+ 			try {
+-				result = q[i].iterate(values, types, selection, namedParams, lockModes, this);
++				result = q[i].iterate(values, types, selection, namedParams, lockModes, this, comment);
+ 			}
+ 			catch (SQLException sqle) {
+ 				throw new JDBCException("Could not execute query", sqle);
+@@ -1420,7 +1428,7 @@
+ 		return many ? new JoinedIterator(results) : result;
+ 	}
+ 	
+-	public ScrollableResults scroll(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++	public ScrollableResults scroll(String query, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException {
+ 		
+ 		if ( log.isTraceEnabled() ) {
+ 			log.trace( "scroll: " + query );
+@@ -1432,7 +1440,7 @@
+ 		QueryTranslator q = factory.getShallowQuery( concreteQueries[0] );
+ 		autoFlushIfRequired( q.getQuerySpaces() );
+ 		try {
+-			return q.scroll(values, types, selection, namedParams, lockModes, this);
++			return q.scroll(values, types, selection, namedParams, lockModes, this, comment);
+ 		}
+ 		catch (SQLException sqle) {
+ 			throw new JDBCException("Could not execute query", sqle);
+@@ -3005,19 +3013,23 @@
+ 	}
+ 	
+ 	public Collection filter(Object collection, String filter) throws HibernateException {
+-		return filter(collection, filter, new Object[1], new Type[1], null, null, null);
+-	}
+-	
+-	public Collection filter(Object collection, String filter, Object value, Type type) throws HibernateException {
+-		return filter(collection, filter, new Object[] { null, value }, new Type[] { null, type }, null, null, null);
++		return filter(collection, filter, new Object[1], new Type[1], null, null, null, null);
+ 	}
+-	
+-	public Collection filter(Object collection, String filter, Object[] values, Type[] types) throws HibernateException {
++
++    public Collection filter(Object collection, String filter, Object value, Type type) throws HibernateException {
++        return filter(collection, filter, new Object[] { null, value }, new Type[] { null, type }, null, null, null, null);
++    }
++
++    public Collection filter(Object collection, String filter, Object[] values, Type[] types) throws HibernateException {
++        return filter(collection, filter, values, types, null, null, null, null);
++    }
++
++	public Collection filter(Object collection, String filter, Object[] values, Type[] types, String comment) throws HibernateException {
+ 		Object[] vals = new Object[ values.length + 1 ];
+ 		Type[] typs = new Type[ types.length + 1];
+ 		System.arraycopy(values, 0, vals, 1, values.length);
+ 		System.arraycopy(types, 0, typs, 1, types.length);
+-		return filter(collection, filter, vals, typs, null, null, null);
++		return filter(collection, filter, vals, typs, null, null, null, comment);
+ 	}
+ 	
+ 	/**
+@@ -3062,8 +3074,12 @@
+ 		
+ 		return q;
+ 	}
+-	
+-	public List filter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++
++    public List filter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++        return filter(collection, filter, values, types, selection, namedParams, lockModes, null);
++    }
++
++	public List filter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException {
+ 		
+ 		String[] concreteFilters = QueryTranslator.concreteQueries(filter, factory);
+ 		FilterTranslator[] filters = new FilterTranslator[ concreteFilters.length ];
+@@ -3079,7 +3095,7 @@
+ 			for ( int i=0; i<concreteFilters.length; i++ ) {
+ 				List currentResults;
+ 				try {
+-					currentResults = filters[i].find(this, values, types, true, selection, namedParams, lockModes);
++					currentResults = filters[i].find(this, values, types, true, selection, namedParams, lockModes, comment);
+ 				}
+ 				catch (SQLException sqle) {
+ 					throw new JDBCException("Could not execute query", sqle);
+@@ -3094,8 +3110,12 @@
+ 		return results;
+ 		
+ 	}
+-	
+-	public Iterator iterateFilter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++
++    public Iterator iterateFilter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes) throws HibernateException {
++        return iterateFilter(collection, filter, values, types, selection, namedParams, lockModes, null);
++    }
++
++	public Iterator iterateFilter(Object collection, String filter, Object[] values, Type[] types, RowSelection selection, Map namedParams, Map lockModes, String comment) throws HibernateException {
+ 		
+ 		String[] concreteFilters = QueryTranslator.concreteQueries(filter, factory);
+ 		FilterTranslator[] filters = new FilterTranslator[ concreteFilters.length ];
+@@ -3115,7 +3135,7 @@
+ 		for ( int i=0; i<filters.length; i++ ) {
+ 			
+ 			try {
+-				result = filters[i].iterate(values, types, selection, namedParams, lockModes, this);
++				result = filters[i].iterate(values, types, selection, namedParams, lockModes, this, comment);
+ 			}
+ 			catch (SQLException sqle) {
+ 				throw new JDBCException("Could not execute query", sqle);
+Index: src/net/sf/hibernate/jca/JCASessionImpl.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/jca/JCASessionImpl.java,v
+retrieving revision 1.9
+diff -u -r1.9 JCASessionImpl.java
+--- src/net/sf/hibernate/jca/JCASessionImpl.java	15 Jun 2003 12:45:06 -0000	1.9
++++ src/net/sf/hibernate/jca/JCASessionImpl.java	25 May 2004 18:51:55 -0000
+@@ -187,7 +187,12 @@
+ 	final Type[] types) throws HibernateException {
+ 		return getSession().find(query, values, types);
+ 	}
+-	
++
++    public List find(final String query, final Object[] values,
++    final Type[] types, String comment) throws HibernateException {
++        return getSession().find(query, values, types, comment);
++    }
++
+ 	public Iterator iterate(final String query) throws HibernateException {
+ 		return getSession().iterate(query);
+ 	}
+@@ -201,7 +206,12 @@
+ 	final Type[] types) throws HibernateException {
+ 		return getSession().iterate(query, values, types);
+ 	}
+-	
++
++    public Iterator iterate(final String query, final Object[] values,
++    final Type[] types, String comment) throws HibernateException {
++        return getSession().iterate(query, values, types, comment);
++    }
++
+ 	public Collection filter(final Object collection, final String filter)
+ 	throws HibernateException {
+ 		return getSession().filter(collection, filter);
+@@ -216,7 +226,12 @@
+ 	final Object[] values, final Type[] types) throws HibernateException {
+ 		return getSession().filter(collection, filter, values, types);
+ 	}
+-	
++
++    public Collection filter(final Object collection, final String filter,
++    final Object[] values, final Type[] types, String comment) throws HibernateException {
++        return getSession().filter(collection, filter, values, types, comment);
++    }
++
+ 	public int delete(final String query) throws HibernateException {
+ 		return getSession().delete(query);
+ 	}
+Index: src/net/sf/hibernate/loader/CriteriaLoader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/CriteriaLoader.java,v
+retrieving revision 1.8
+diff -u -r1.8 CriteriaLoader.java
+--- src/net/sf/hibernate/loader/CriteriaLoader.java	18 Jul 2003 04:27:18 -0000	1.8
++++ src/net/sf/hibernate/loader/CriteriaLoader.java	25 May 2004 18:51:55 -0000
+@@ -1,117 +1,117 @@
+-//$Id: CriteriaLoader.java,v 1.8 2003/07/18 04:27:18 oneovthafew Exp $
+-package net.sf.hibernate.loader;
+-
+-import java.sql.ResultSet;
+-import java.sql.SQLException;
+-import java.util.ArrayList;
+-import java.util.Iterator;
+-import java.util.List;
+-
+-import net.sf.hibernate.FetchMode;
+-import net.sf.hibernate.HibernateException;
+-import net.sf.hibernate.engine.RowSelection;
+-import net.sf.hibernate.engine.SessionFactoryImplementor;
+-import net.sf.hibernate.engine.SessionImplementor;
+-import net.sf.hibernate.engine.TypedValue;
+-import net.sf.hibernate.expression.Expression;
+-import net.sf.hibernate.expression.Order;
+-import net.sf.hibernate.impl.CriteriaImpl;
+-import net.sf.hibernate.persister.Loadable;
+-import net.sf.hibernate.type.Type;
+-
+-//TODO: this class depends directly upon CriteriaImpl, in the impl package ... add a CriteriaImplementor interface
+-/**
+- * A <tt>Loader</tt> for <tt>Criteria</tt> queries. Note that criteria queries are
+- * more like multi-object <tt>load()</tt>s than like HQL queries.
+- * 
+- * @author Gavin King
+- */
+-public class CriteriaLoader extends AbstractEntityLoader {
+-	
+-	private CriteriaImpl criteria;
+-	private static final Type[] NO_TYPES = new Type[0];
+-	
+-	public CriteriaLoader(Loadable persister, SessionFactoryImplementor factory, CriteriaImpl criteria) throws HibernateException {
+-		super(persister, factory);
+-		this.criteria = criteria;
+-
+-		StringBuffer condition = new StringBuffer(30);
+-		Iterator iter = criteria.iterateExpressions();
+-		if ( !iter.hasNext() ) condition.append("1=1"); //TODO: fix this ugliness
+-		while ( iter.hasNext() ) {
+-			Expression expr = (Expression) iter.next();
+-			condition.append( expr.toSqlString(factory, criteria.getPersistentClass(), alias) );
+-			if ( iter.hasNext() ) condition.append(" and ");
+-		}
+-		
+-		StringBuffer orderBy = new StringBuffer(30);
+-		iter = criteria.iterateOrderings();
+-		while ( iter.hasNext() ) {
+-			Order ord = (Order) iter.next();
+-			orderBy.append( ord.toSqlString(factory, criteria.getPersistentClass(), alias) );
+-			if ( iter.hasNext() ) orderBy.append(", ");
+-		}
+-		
+-		renderStatement( condition.toString(), orderBy.toString(), factory );
+-		
+-		postInstantiate();
+-
+-	}
+-	
+-	public List list(SessionImplementor session) throws HibernateException, SQLException {
+-		List values = new ArrayList();
+-		List types = new ArrayList();
+-		Iterator iter = criteria.iterateExpressions();
+-		while ( iter.hasNext() ) {
+-			Expression expr = (Expression) iter.next();
+-			TypedValue[] tv = expr.getTypedValues( session.getFactory(), criteria.getPersistentClass() );
+-			for ( int i=0; i<tv.length; i++ ) {
+-				values.add( tv[i].getValue() );
+-				types.add( tv[i].getType() );
+-			}
+-		}
+-		Object[] valueArray = values.toArray();
+-		Type[] typeArray = (Type[]) types.toArray(NO_TYPES);
+-		
+-		RowSelection selection = new RowSelection();
+-		selection.setFirstRow( criteria.getFirstResult() );
+-		selection.setMaxRows( criteria.getMaxResults() );
+-		selection.setTimeout( criteria.getTimeout() );
+-		
+-		return find(session, valueArray, typeArray, true, selection, null, null);
+-	}
+-
+-	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session)
+-		throws SQLException, HibernateException {
+-		
+-		return row[ row.length-1 ];
+-	};
+-	
+-	/**
+-	 * Navigate associations, returning the aliased columns. Adds extra table 
+-	 * table joins to this loader
+-	 */
+-	public String[] toColumns(String pathExpression) {
+-		return null;
+-	}
+-
+-	protected boolean enableJoinedFetch(
+-		boolean mappingDefault,
+-		String path,
+-		String table,
+-		String[] foreignKeyColumns) {
+-		
+-		FetchMode fm = criteria.getFetchMode(path);
+-		if ( fm==null || fm==FetchMode.DEFAULT ) {
+-			return mappingDefault;
+-		}
+-		else {
+-			return fm==FetchMode.EAGER;
+-		}
+-	}
+-
+-	protected boolean useQueryWhereFragment() {
+-		return true;
+-	}
+-
+-}
++//$Id: CriteriaLoader.java,v 1.8 2003/07/18 04:27:18 oneovthafew Exp $
++package net.sf.hibernate.loader;
++
++import java.sql.ResultSet;
++import java.sql.SQLException;
++import java.util.ArrayList;
++import java.util.Iterator;
++import java.util.List;
++
++import net.sf.hibernate.FetchMode;
++import net.sf.hibernate.HibernateException;
++import net.sf.hibernate.engine.RowSelection;
++import net.sf.hibernate.engine.SessionFactoryImplementor;
++import net.sf.hibernate.engine.SessionImplementor;
++import net.sf.hibernate.engine.TypedValue;
++import net.sf.hibernate.expression.Expression;
++import net.sf.hibernate.expression.Order;
++import net.sf.hibernate.impl.CriteriaImpl;
++import net.sf.hibernate.persister.Loadable;
++import net.sf.hibernate.type.Type;
++
++//TODO: this class depends directly upon CriteriaImpl, in the impl package ... add a CriteriaImplementor interface
++/**
++ * A <tt>Loader</tt> for <tt>Criteria</tt> queries. Note that criteria queries are
++ * more like multi-object <tt>load()</tt>s than like HQL queries.
++ * 
++ * @author Gavin King
++ */
++public class CriteriaLoader extends AbstractEntityLoader {
++	
++	private CriteriaImpl criteria;
++	private static final Type[] NO_TYPES = new Type[0];
++	
++	public CriteriaLoader(Loadable persister, SessionFactoryImplementor factory, CriteriaImpl criteria) throws HibernateException {
++		super(persister, factory);
++		this.criteria = criteria;
++
++		StringBuffer condition = new StringBuffer(30);
++		Iterator iter = criteria.iterateExpressions();
++		if ( !iter.hasNext() ) condition.append("1=1"); //TODO: fix this ugliness
++		while ( iter.hasNext() ) {
++			Expression expr = (Expression) iter.next();
++			condition.append( expr.toSqlString(factory, criteria.getPersistentClass(), alias) );
++			if ( iter.hasNext() ) condition.append(" and ");
++		}
++		
++		StringBuffer orderBy = new StringBuffer(30);
++		iter = criteria.iterateOrderings();
++		while ( iter.hasNext() ) {
++			Order ord = (Order) iter.next();
++			orderBy.append( ord.toSqlString(factory, criteria.getPersistentClass(), alias) );
++			if ( iter.hasNext() ) orderBy.append(", ");
++		}
++		
++		renderStatement( condition.toString(), orderBy.toString(), factory );
++		
++		postInstantiate();
++
++	}
++	
++	public List list(SessionImplementor session) throws HibernateException, SQLException {
++		List values = new ArrayList();
++		List types = new ArrayList();
++		Iterator iter = criteria.iterateExpressions();
++		while ( iter.hasNext() ) {
++			Expression expr = (Expression) iter.next();
++			TypedValue[] tv = expr.getTypedValues( session.getFactory(), criteria.getPersistentClass() );
++			for ( int i=0; i<tv.length; i++ ) {
++				values.add( tv[i].getValue() );
++				types.add( tv[i].getType() );
++			}
++		}
++		Object[] valueArray = values.toArray();
++		Type[] typeArray = (Type[]) types.toArray(NO_TYPES);
++		
++		RowSelection selection = new RowSelection();
++		selection.setFirstRow( criteria.getFirstResult() );
++		selection.setMaxRows( criteria.getMaxResults() );
++		selection.setTimeout( criteria.getTimeout() );
++		
++		return find(session, valueArray, typeArray, true, selection, null, null, null);
++	}
++
++	protected Object getResultColumnOrRow(Object[] row, ResultSet rs, SessionImplementor session)
++		throws SQLException, HibernateException {
++		
++		return row[ row.length-1 ];
++	};
++	
++	/**
++	 * Navigate associations, returning the aliased columns. Adds extra table 
++	 * table joins to this loader
++	 */
++	public String[] toColumns(String pathExpression) {
++		return null;
++	}
++
++	protected boolean enableJoinedFetch(
++		boolean mappingDefault,
++		String path,
++		String table,
++		String[] foreignKeyColumns) {
++		
++		FetchMode fm = criteria.getFetchMode(path);
++		if ( fm==null || fm==FetchMode.DEFAULT ) {
++			return mappingDefault;
++		}
++		else {
++			return fm==FetchMode.EAGER;
++		}
++	}
++
++	protected boolean useQueryWhereFragment() {
++		return true;
++	}
++
++}
+Index: src/net/sf/hibernate/loader/Loader.java
+===================================================================
+RCS file: /cvsroot/hibernate/Hibernate2/src/net/sf/hibernate/loader/Loader.java,v
+retrieving revision 1.33
+diff -u -r1.33 Loader.java
+--- src/net/sf/hibernate/loader/Loader.java	9 Jul 2003 03:39:10 -0000	1.33
++++ src/net/sf/hibernate/loader/Loader.java	25 May 2004 18:51:55 -0000
+@@ -98,7 +98,8 @@
+ 		boolean returnProxies,
+ 		final RowSelection selection,
+ 		final Map namedParams,
+-		final Map lockModes
++		final Map lockModes,
++        String comment
+ 	) throws SQLException, HibernateException {
+ 		
+ 		returnProxies = returnProxies && Environment.jvmSupportsProxies();
+@@ -134,7 +135,7 @@
+ 		final List results = new ArrayList(); //new net.sf.hibernate.collections.List(this);
+ 		
+ 		final PreparedStatement st = prepareQueryStatement( 
+-			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), 
++			applyLocks( getSQLString(), lockModes, session.getFactory().getDialect() ), comment,
+ 			values, types, namedParams, selection, false, session
+ 		);
+ 		final ResultSet rs = getResultSet(st, selection, session);
+@@ -459,8 +460,9 @@
+ 	 * Obtain a <tt>PreparedStatement</tt> and bind JDBC-style <tt>?</tt> and named parameters
+ 	 */
+ 	protected final PreparedStatement prepareQueryStatement(
+-		String sql, 
+-		Object[] values, 
++		String sql,
++        String comment,
++		Object[] values,
+ 		Type[] types, 
+ 		Map namedParams, 
+ 		RowSelection selection, 
+@@ -478,7 +480,9 @@
+ 		);
+ 		
+ 		if (useLimit) sql = dialect.getLimitString(sql);
+-		
++
++        sql = preprocessSQL(sql, comment, dialect);
++
+ 		PreparedStatement st = session.getBatcher().prepareQueryStatement(sql, scrollable);
+ 		
+ 		try {
+@@ -585,7 +589,7 @@
+ 		boolean returnProxies
+ 	) throws SQLException, HibernateException {
+ 		return doFind(
+-			session, values, types, optionalObject, optionalID, null, null, returnProxies, null, null, null
++			session, values, types, optionalObject, optionalID, null, null, returnProxies, null, null, null, null
+ 		);
+ 	}
+ 	
+@@ -600,7 +604,7 @@
+ 		final PersistentCollection collection
+ 	) throws SQLException, HibernateException {
+ 		return doFind(
+-			session, new Object[] {id}, new Type[] {type}, null, null, collection, owner, true, null, null, null
++			session, new Object[] {id}, new Type[] {type}, null, null, collection, owner, true, null, null, null, null
+ 		);
+ 	}
+ 	
+@@ -615,10 +619,11 @@
+ 		boolean returnProxies,
+ 		final RowSelection selection,
+ 		final Map namedParams, 
+-		final Map lockModes
++		final Map lockModes,
++        String comment
+ 	) throws SQLException, HibernateException {
+ 		return doFind(
+-			session, values, types, null, null, null, null, returnProxies, selection, namedParams, lockModes
++			session, values, types, null, null, null, null, returnProxies, selection, namedParams, lockModes, comment
+ 		);
+ 	}
+ 	
+@@ -662,7 +667,35 @@
+ 			new Alias(suffix).toUnquotedAliasString( persister.getDiscriminatorColumnName() ) :
+ 			null;
+ 	}
+-	
++
++    /**
++     * Backported method from v2.2 branch use to apply SQL comments
++     */
++    protected String preprocessSQL(String sql, String comment, Dialect dialect)
++    throws HibernateException {
++        if (comment==null) {
++            return sql;
++        }
++        else {
++            if (sql.startsWith("select")) {
++                return new StringBuffer( comment.length() + sql.length() + 5 )
++                    .append("select ")
++                    .append("/*")
++                    .append(comment)
++                    .append("*/ ")
++                    .append(sql.substring("select".length()+1))
++                    .toString();
++            } else {
++                return new StringBuffer( comment.length() + sql.length() + 5 )
++                    .append("/*")
++                    .append(comment)
++                    .append("*/ ")
++                    .append(sql)
++                    .toString();
++            }
++        }
++    }
++
+ }
+ 
+ 

@@ -1,0 +1,122 @@
+==============================
+Simple test Entity with embeddable address
+==============================
+
+@Entity
+public class Customer {
+
+	@Id
+	int customerId;
+	@Column
+	String name;
+	@Column
+	Address address;
+	
+	public Customer(){}
+
+	public int getCustomerId() {
+		return customerId;
+	}
+	public void setCustomerId(int customerId) {
+		this.customerId = customerId;
+	}
+	public String getName() {
+		return name;
+	}
+	public void setName(String name) {
+		this.name = name;
+	}
+	public Address getAddress() {
+		return address;
+	}
+	public void setAddress(Address address) {
+		this.address = address;
+	}
+}
+
+
+@Embeddable
+public class Address {
+	
+	@Column
+	String street;
+	@Column
+	String county;
+	@Column
+	String postCode;
+	
+	public Address() {}
+
+	
+	public String getStreet() {
+		return street;
+	}
+	public void setStreet(String street) {
+		this.street = street;
+	}
+	public String getCounty() {
+		return county;
+	}
+	public void setCounty(String county) {
+		this.county = county;
+	}
+	public String getPostCode() {
+		return postCode;
+	}
+	public void setPostCode(String postCode) {
+		this.postCode = postCode;
+	}
+}
+
+
+===========================================================================================
+Problem Example: update hql statement setting the address field generates sql syntax error
+===========================================================================================
+Java:
+	Address a = new Address();
+	a.setCounty("my county");
+	a.setPostCode("MY1 PC1");
+	a.setStreet("my street");
+	
+	Query qry = session.createQuery("update Customer c set c.address = :address where c.customerId=1");
+	qry.setParameter("address", a);
+	qry.executeUpdate(); 
+
+SQL generated:
+	update Customer set county, postCode, street=('my county', 'MY1 PC1', 'my street') where customerId=1 
+	
+Error cause:
+	...
+	com.mysql.jdbc.exceptions.jdbc4.MySQLSyntaxErrorException: You have an error in your SQL syntax; 
+	check the manual that corresponds to your MySQL server version for the right syntax to use 
+	near ' postCode, street=('my county', 'MY1 PC1', 'my street') where customerId=1' at line 1 
+
+==============================================================================
+Example: select hql queries setting address field in the same way work fine
+==============================================================================
+Java:
+	Address a = new Address();
+	a.setCounty("my county");
+	a.setPostCode("MY1 PC1");
+	a.setStreet("my street"); 
+	
+	Session session = sessionFactory.openSession();
+	Query qry = session.createQuery("from Customer c where c.address = :address");
+	qry.setParameter("address", a);
+	List<Customer> found = qry.list();
+	
+SQL generated:
+	select
+	        customer0_.customerId as customerId22_,
+	        customer0_.county as county22_,
+	        customer0_.postCode as postCode22_,
+	        customer0_.street as street22_,
+	        customer0_.name as name22_ 
+	    from
+	        stephenCustomer customer0_ 
+	    where
+	        (
+	            customer0_.county, customer0_.postCode, customer0_.street
+	        )=(
+	            ?, ?, ?
+        )
